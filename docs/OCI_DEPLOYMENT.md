@@ -13,7 +13,7 @@ make deploy
 The first run is interactive. Enter the ADB TLS DSN, ADB ADMIN password,
 `YOBI_APP` password, OCI Generative AI API-key secret, and a demo-control token. The
 script creates the least-privilege app user if absent, applies checksum migrations,
-verifies `YOBI_APP` plus migrations `001` and `002`, and writes the protected runtime
+verifies `YOBI_APP` plus migrations `001`, `002` and append-only `003`, and writes the protected runtime
 environment before any GenAI smoke request. No secret is echoed.
 
 If `/etc/yobi/yobi.env` already exists, do not recreate it. The same resume command
@@ -60,6 +60,12 @@ Presentation prewarm from the project root:
 
 This reads the protected runtime environment only on the VM and prints safe readiness
 state; secret values are never returned to the local shell.
+
+`deploy/deploy.sh` now builds a release-specific virtual environment before changing
+`/opt/yobi/current`, applies only checksum-safe pending migrations, performs an
+idempotent seed upsert, switches the symlink, and requires both health and readiness.
+If activation fails, it restores the previous complete release link and restarts the
+services. It does not recreate the VM/ADB, broaden IAM, or repeat secure bootstrap.
 
 On the VM:
 

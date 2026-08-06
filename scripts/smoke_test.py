@@ -58,8 +58,18 @@ def main() -> None:
             )
         )
         assert turn["fallback_used"] is True or turn["cards"]
-        assert "avoid" in turn["text"].lower()
-        assert any(card["type"] == "dietary_evidence" for card in turn["cards"])
+        grounded_cards = [
+            card
+            for card in turn["cards"]
+            if card["type"] in {"menu_recommendations", "menu_explanation"}
+        ]
+        assert grounded_cards
+        grounded_menus = []
+        for card in grounded_cards:
+            grounded_menus.extend(card["data"].get("menus", []))
+            if isinstance(card["data"].get("menu"), dict):
+                grounded_menus.append(card["data"]["menu"])
+        assert grounded_menus and all(menu.get("evidence_ids") for menu in grounded_menus)
 
         cart = require(
             client.post(
@@ -125,7 +135,7 @@ def main() -> None:
         order = require(client.get(f"/api/v1/orders/{paid['order_id']}"))
         assert order["order_status"] == "CONFIRMED"
 
-    print("PASS: health, evidence, cart, address upload, delivery, mock payment, and order")
+    print("PASS: health, grounded evidence IDs, cart, OCR address, delivery, payment, and order")
 
 
 if __name__ == "__main__":

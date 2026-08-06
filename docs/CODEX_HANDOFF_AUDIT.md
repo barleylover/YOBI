@@ -279,3 +279,36 @@
 - bootstrap은 현재 checkpoint와 실패 원인을 확인한 뒤 필요한 단계만 수행한다.
 - 실제 provider가 제한되면 deterministic fallback 성공과 실제 GenAI 성공을 별도 결과로 보고한다.
 - 최종 완료 판정은 공개 배포와 Primary Demo E2E 3회 연속 성공까지 유보한다.
+
+## 9. 감사 후 개선 및 최종 판정
+
+이 절은 위 Read-only 감사 스냅샷을 덮어쓰지 않고, 그 감사에서 확인한 결함에
+대한 후속 조치와 최종 증거를 기록한다.
+
+- 기존 상태는 `61686c5` checkpoint로 보존했고 개선은
+  `codex/master-spec-completion` 브랜치에서 진행했다.
+- Responses continuation은 client-managed call/output pairing으로 수정했고,
+  intent별 3~4개 도구만 노출하며 모델 반환 payload를 제한했다. 최종 운영
+  집계는 normal 9, fallback 0, provider response 25, DB-backed tool call 16이다.
+- Master Spec의 14개 tool 역할을 모두 등록했다. 결제 성공을 모델이 만들 수
+  없고, checkout/order 도구는 서버 상태와 사용자 확정을 재검증한다.
+- 결제 직전 Oracle row lock, 현재 가격/옵션/가용성/최소주문/배달비/단일 상점/
+  severe allergy를 재검증하고 변경 시 재확정을 요구한다.
+- append-only Migration 003으로 정규화 service area/category/ingredient/allergen/
+  dietary/option-conflict 구조를 추가했다. 001/002는 변경하지 않았다.
+- Menu 150, review 600, knowledge 150 vector가 모두 존재하며 Oracle hybrid
+  `VECTOR_DISTANCE`를 사용한다. Embedding model은 OCI Cohere가 아니라
+  `yobi-semantic-hash-v1`이라는 제한을 유지한다.
+- Tesseract 영문/한글 provider, 메모리 내 이미지 정규화, session-bound signed
+  candidate token, 호텔 검색 및 직접 주소 입력을 구현했다.
+- Profile PATCH, cart PATCH/DELETE, 인증된 demo reset, 서버 메시지 복원, 실제
+  SSE lifecycle, cart control과 단계 UI를 구현했다.
+- 원자적 release별 virtualenv 배포, activation 후 health/ready 확인과 실패 시
+  symlink rollback을 구현했다.
+- 최종 검증은 Pytest 50, frontend unit 2, retrieval 100, local Playwright 11
+  pass/9 intentional skip이며, 공개 Primary iPhone E2E가 최종 release에서
+  3회 연속 성공했다.
+
+최종 판정: **Master Spec의 MVP acceptance 범위는 통과**. 단, 공개 HTTP/TLS
+부재와 deterministic embedding은 명시된 발표용 경계이며 production-ready 또는
+OCI Cohere embedding 완료로 주장하지 않는다.

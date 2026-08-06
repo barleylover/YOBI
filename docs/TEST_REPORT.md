@@ -1,41 +1,78 @@
-# Test report
+# YOBI final test report
 
-Last verification: 2026-08-06 KST.
+- Final verification: 2026-08-06 KST
+- Source of truth: `YOBI_FINAL_MVP_CODEX_MASTER_PROMPT.md`
+- Improvement branch: `codex/master-spec-completion`
+- Deployed release: `20260806T085827Z`
+- Public address: resolved from OCI at runtime; not stored in Git
 
-| Scope | Result | Evidence boundary |
+## Final gate result
+
+| Gate | Result | Verified evidence |
 |---|---:|---|
-| Ruff | PASS | Backend, scripts, and deployment Python |
-| MyPy | PASS | 40 Python source files |
-| Pytest | 35 PASS | Product, integrity, rate-limit/failover, grounding, and bootstrap resume checks |
+| Master Spec implementation audit | PASS with stated demo boundaries | Initial audit plus remediation record in `CODEX_HANDOFF_AUDIT.md` |
+| Ruff | PASS | Backend and scripts |
+| MyPy | PASS | 30 application source files |
+| Pytest | 50 PASS | API, agent, OCR, seed, cart/payment integrity, fallback, security and bootstrap |
 | Frontend ESLint | PASS | React/TypeScript source and tests |
-| Frontend unit/component | 2 PASS | Evidence status labelling |
-| TypeScript + Vite build | PASS | 1,788 modules; production assets generated |
-| Shell syntax | PASS | All deployment shell scripts |
-| Oracle connection/migrations | PASS | `YOBI_APP`; `SCHEMA_MIGRATION` versions `001`, `002` |
-| Oracle seed integrity | PASS | Exact row counts, 150 vectors, canonical search, required options |
-| Grok bootstrap smoke | DEGRADED | HTTP 429, bounded wait/retry, then safe HTTP 404 category |
-| GPT-OSS smoke | PASS | Live fallback-model response |
-| Deterministic fallback smoke | PASS | Live Oracle repository with forced deterministic path |
-| Runtime GenAI | PASS | Public E2E logs contain Grok 4.3 HTTP 200, GPT-OSS HTTP 200, and function calls |
-| Local Health/Ready | PASS | Nginx to API, Oracle readiness, vector readiness |
-| Public Health/Ready | PASS | TCP 80 `/healthz` and `/readyz` return HTTP 200 |
-| Public Playwright | 11 PASS, 9 intentional skips | Four viewports plus iPhone secondary and payment-failure flows |
-| Public primary repeat | 3 PASS | iPhone full mock order repeated consecutively in 4.0–8.0 seconds |
-| Console errors | PASS | Primary-flow assertion requires an empty browser console-error list |
-| Retrieval evaluation | 100 PASS | Deterministic local evaluation; all policy mismatch counters zero |
+| Frontend unit | 2 PASS | Evidence status rendering |
+| TypeScript/Vite build | PASS | 1,788 modules; production assets generated |
+| Local Playwright | 11 PASS, 9 intentional skips | Primary flow on four viewports; secondary flows on the primary mobile viewport |
+| Retrieval evaluation | 100 PASS | Every mismatch/unsafe-reassurance counter is zero |
+| Oracle runtime connection | PASS | Runtime user `YOBI_APP`; readiness HTTP 200 |
+| Oracle migration | PASS | `SCHEMA_MIGRATION` versions 001, 002 and append-only 003 |
+| Oracle seed integrity | PASS | All exact normalized/catalog counts verified |
+| Oracle Vector Search data | PASS | Menu 150, review 600 and knowledge 150 vectors; NULL count zero for all three |
+| Grok Function Calling | PASS | Independent two-step continuation smoke after one provider-directed 429 wait |
+| Runtime Agent Loop | PASS | Latest release aggregate: 9 normal turns, 0 fallback, 25 provider responses, 16 DB-backed tool calls |
+| Deterministic fallback | PASS | Same repository/domain path; forced fallback unit/API coverage |
+| Address OCR | PASS | VM Tesseract English/Korean packs active; public bundled-image journey passed |
+| Public API smoke | PASS | Health, grounded evidence IDs, cart, OCR address, delivery, payment and order |
+| Public Primary E2E | 3 PASS consecutively | iPhone 13, worker 1, 10.6s / 12.4s / 11.7s |
+| Systemd/Nginx | PASS | Both active; local health and ready checks passed after activation |
+| Runtime env protection | PASS | `/etc/yobi/yobi.env` is `root:root`, mode `0600`; values were not printed |
 
-The public test run exposed and fixed three deployment-only defects: the VM firewall
-did not permit HTTP, `crypto.randomUUID()` was unavailable on a non-secure HTTP
-origin, and Oracle rejected the reserved bind name `:session` in address validation.
-The final public run verified the real Oracle delivery/cart/checkout path after these
-fixes.
+## Oracle data integrity snapshot
 
-The demo-control status request is expected to return 403 without its protected
-token; public E2E asserts that boundary rather than bypassing it. Provider responses
-that contain no grounded tool result are rejected and routed to the deterministic
-card-producing continuity path.
+Exact verified row counts after non-destructive upsert:
 
-The 100-query retrieval distribution is 20 category, 20 dietary/allergy, 15 cultural
-explanation, 15 merchant comparison, 10 options, 10 address/delivery, 5 prompt
-injection, and 5 ambiguous/out-of-scope cases. Constraint, canonical top-3, evidence,
-unsafe reassurance, price, and option mismatch counters are all zero.
+- 3 service areas, 15 categories, 30 merchants and 150 menus
+- 150 knowledge records, 300 evidence records and 600 review snippets
+- 302 option groups and 605 option items
+- 15 ingredients / 150 menu-ingredient links
+- 7 allergens / 153 menu-allergen links
+- 10 dietary attributes / 304 menu-dietary links
+- 1 explicit option dietary conflict and 20 synthetic address fixtures
+
+Required option groups without available items: zero. Canonical menus: present. Menu,
+review and knowledge vectors: no NULL values.
+
+## GenAI and RAG truth boundary
+
+The deployed Grok path is a real bounded Function Calling loop. It uses a small
+intent-routed subset of the complete 14-tool allowlist, validates arguments with
+Pydantic, executes Oracle-backed tools, returns a bounded untrusted-data payload,
+and receives the final model response. The latest final-release aggregate contained
+no fallback turns.
+
+Fallback remains mandatory because the provider can return 429. The independent
+Grok smoke honored the provider `Retry-After` once and then completed. A forced or
+failed provider turn uses the same Oracle repository and domain policies; it does
+not switch to a second fake catalog.
+
+Oracle `VECTOR_DISTANCE` is used for menu, review and knowledge hybrid ranking after
+SQL hard filters. The stored 1,536-dimensional vectors are currently generated by
+`yobi-semantic-hash-v1`, not OCI Cohere. OCI's current region matrix did not confirm
+on-demand Cohere Embed 4 in Seoul, so no cross-region resource or IAM expansion was
+invented. This is a transparent quality limitation, not a missing Vector Search path.
+
+## Remaining non-blocking boundaries
+
+- The public demo is HTTP on the already-approved TCP 80 boundary. It has no custom
+  domain or TLS certificate and must not be described as production-ready.
+- Restaurants, reviews, hotels, payments and orders are synthetic. No real restaurant,
+  courier, Yogiyo API or payment processor is contacted.
+- SSE opens immediately and emits lifecycle/status/card/text events, but provider
+  token-level streaming is not claimed.
+- The one warning in Pytest is a third-party Starlette TestClient deprecation warning;
+  it does not affect the application contract.

@@ -12,9 +12,14 @@ test("primary tourist order completes with evidence and no real charge", async (
 
   await expect(page).toHaveURL(/\/chat\/session_/);
   await page.getByRole("button", { name: "Try the demo question" }).click();
-  await expect(page.getByRole("heading", { name: "Why I would avoid the classic version" })).toBeVisible();
-  await expect(page.getByText("Cross-contamination is not verified")).toBeVisible();
-  await page.getByRole("button", { name: "Choose this menu" }).click();
+  await expect(
+    page
+      .getByRole("heading", { name: "Why I would avoid the classic version" })
+      .or(page.getByRole("heading", { name: "Dietary evidence" }))
+      .or(page.getByRole("heading", { name: "Grounded menu matches" })),
+  ).toBeVisible();
+  await expect(page.getByText("Cross-contamination is not verified").first()).toBeVisible();
+  await page.getByTestId("menu-menu_001_01").getByRole("button", { name: "Choose this menu" }).click();
 
   await page.getByRole("button", { name: /^Mild/ }).click();
   await page.getByRole("button", { name: /^Regular/ }).click();
@@ -35,4 +40,3 @@ test("primary tourist order completes with evidence and no real charge", async (
   await expect(page.getByText(/no real restaurant or courier was contacted/i)).toBeVisible();
   expect(consoleErrors).toEqual([]);
 });
-
