@@ -162,6 +162,7 @@ def test_agent_loop_executes_bounded_function_call(repository, profile_data) -> 
     assert result.tool_results[0][0] == "search_menus"
     assert result.tool_results[0][1]["menus"][0]["menu_id"] == "menu_001_01"
     assert "previous_response_id" not in fake.responses.calls[1]
+    assert "instructions" not in fake.responses.calls[1]
     assert fake.responses.calls[1]["input"][0] == {
         "role": "user",
         "content": "something mild",

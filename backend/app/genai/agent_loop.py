@@ -81,7 +81,6 @@ class AgentLoop:
             response, active_model = self._create_response(
                 client,
                 active_model,
-                instructions=instructions,
                 input=cast(Any, conversation),
                 tools=cast(Any, active_tools),
             )
