@@ -170,3 +170,5 @@ def test_agent_loop_executes_bounded_function_call(repository, profile_data) -> 
     returned = json.loads(fake.responses.calls[1]["input"][2]["output"])
     assert set(returned) == {"untrusted_data"}
     assert returned["untrusted_data"]["menus"][0]["menu_id"] == "menu_001_01"
+    assert "description" not in returned["untrusted_data"]["menus"][0]
+    assert len(fake.responses.calls[1]["input"][2]["output"]) < 4_000

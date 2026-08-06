@@ -72,7 +72,7 @@ class AgentLoop:
                         "type": "function_call_output",
                         "call_id": call.call_id,
                         "output": json.dumps(
-                            {"untrusted_data": self._sanitize_tool_result(result)},
+                            {"untrusted_data": self._compact_tool_result(call.name, result)},
                             ensure_ascii=False,
                         ),
                     }
@@ -128,20 +128,56 @@ class AgentLoop:
         raise RuntimeError("GENAI_NO_MODEL_AVAILABLE")
 
     @staticmethod
+    def _compact_tool_result(name: str, result: dict[str, Any]) -> Any:
+        """Keep provider continuation payloads grounded and within a small token budget."""
+        if name == "search_menus":
+            return {
+                "menus": [
+                    {
+                        key: menu.get(key)
+                        for key in (
+                            "menu_id",
+                            "merchant_id",
+                            "merchant_name",
+                            "name_en",
+                            "name_ko",
+                            "category",
+                            "price",
+                            "spice_level",
+                            "dietary_summary",
+                            "evidence_status",
+                            "match_reasons",
+                            "risk_hints",
+                            "evidence_ids",
+                        )
+                    }
+                    for menu in result.get("menus", [])[:4]
+                    if isinstance(menu, dict)
+                ]
+            }
+        if name == "get_dietary_evidence":
+            return {"evidence": result.get("evidence", [])[:4]}
+        if name == "compare_merchants":
+            return {"merchants": result.get("merchants", [])[:3]}
+        if name == "get_menu_options":
+            return {"option_groups": result.get("option_groups", [])[:6]}
+        return AgentLoop._sanitize_tool_result(result)
+
+    @staticmethod
     def _sanitize_tool_result(value: Any) -> Any:
         """Bound untrusted catalog text before it returns to the model."""
         if isinstance(value, str):
-            return value[:2_000]
+            return value[:500]
         if isinstance(value, list):
-            return [AgentLoop._sanitize_tool_result(item) for item in value[:50]]
+            return [AgentLoop._sanitize_tool_result(item) for item in value[:12]]
         if isinstance(value, dict):
             return {
                 str(key)[:100]: AgentLoop._sanitize_tool_result(item)
-                for key, item in list(value.items())[:100]
+                for key, item in list(value.items())[:40]
             }
         if isinstance(value, (int, float, bool)) or value is None:
             return value
-        return str(value)[:2_000]
+        return str(value)[:500]
 
     def _log_response(self, response: Any) -> None:
         request_id = getattr(response, "_request_id", None)
