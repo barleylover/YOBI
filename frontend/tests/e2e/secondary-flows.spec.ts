@@ -22,7 +22,7 @@ test("abstract request becomes a grounded warm category shortlist", async ({ pag
   await page.getByRole("button", { name: "Show me chicken kalguksu" }).click();
   await expect(page.getByRole("heading", { name: "What this dish will feel like" })).toBeVisible();
   await page.getByText("Evidence sources").click();
-  await expect(page.getByText(/ev_003_01_/)).toBeVisible();
+  await expect(page.getByText("ev_003_01_1 · ev_003_01_2", { exact: true })).toBeVisible();
 });
 
 test("merchant comparison uses shared trade-off axes", async ({ page }, testInfo) => {

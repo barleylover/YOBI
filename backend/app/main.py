@@ -5,6 +5,7 @@ import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from io import BytesIO
+from pathlib import Path
 from time import monotonic
 from typing import Any, Literal
 from uuid import uuid4
@@ -13,7 +14,7 @@ from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, Uplo
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from PIL import Image, UnidentifiedImageError
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging, log_event, safe_session_hash
@@ -22,6 +23,7 @@ from app.dependencies import get_chat_service, get_demo_control, get_repository
 from app.domain.models import (
     AddressCandidate,
     CartItemInput,
+    CartItemUpdate,
     CartPreview,
     Checkout,
     CheckoutCreate,
@@ -29,9 +31,11 @@ from app.domain.models import (
     Order,
     Profile,
     ProfileCreate,
+    ProfileUpdate,
     Session,
     UserMessage,
 )
+from app.services.address_ocr import AddressCandidateTokenCodec, choose_address_ocr
 from app.services.chat_service import ChatService
 from app.services.demo_control import DemoControl, FailureMode
 
@@ -101,19 +105,45 @@ class SessionCreate(BaseModel):
     profile_id: str
 
 
+class ManualAddressInput(BaseModel):
+    hotel_name: str = Field(min_length=1, max_length=200)
+    road_address: str = Field(min_length=3, max_length=500)
+    postal_code: str = Field(default="", max_length=20)
+    city: str = Field(default="Seoul", min_length=1, max_length=120)
+    delivery_hint: str = Field(default="Please confirm the delivery location.", max_length=1000)
+
+
 class AddressConfirm(BaseModel):
-    candidate: AddressCandidate
+    candidate_token: str | None = Field(default=None, max_length=2000)
+    manual: ManualAddressInput | None = None
+
+    @model_validator(mode="after")
+    def require_one_confirmation_source(self) -> AddressConfirm:
+        if (self.candidate_token is None) == (self.manual is None):
+            raise ValueError("Provide exactly one candidate token or manual address")
+        return self
+
+
+class AddressCandidateView(AddressCandidate):
+    candidate_token: str
 
 
 class AddressUploadResult(BaseModel):
-    attachment_hash: str
-    candidates: list[AddressCandidate]
+    candidates: list[AddressCandidateView]
     low_confidence: bool
     notice: str
 
 
+class AddressResolveRequest(BaseModel):
+    text: str = Field(min_length=2, max_length=500)
+
+
 class DemoFailureMode(BaseModel):
     mode: FailureMode
+
+
+class DemoResetRequest(BaseModel):
+    session_id: str
 
 
 def _not_found(code: str) -> HTTPException:
@@ -163,6 +193,24 @@ def create_profile(
 def get_profile(profile_id: str, repository: YobiRepository = Depends(get_repository)) -> Profile:
     profile = repository.get_profile(profile_id)
     if not profile:
+        raise _not_found("PROFILE_NOT_FOUND")
+    return profile
+
+
+@app.patch("/api/v1/profiles/{profile_id}", response_model=Profile)
+def update_profile(
+    profile_id: str,
+    data: ProfileUpdate,
+    repository: YobiRepository = Depends(get_repository),
+) -> Profile:
+    try:
+        profile = repository.update_profile(profile_id, data)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": str(exc)},
+        ) from exc
+    if profile is None:
         raise _not_found("PROFILE_NOT_FOUND")
     return profile
 
@@ -230,12 +278,22 @@ def stream_message(
     chat_service: ChatService = Depends(get_chat_service),
 ) -> StreamingResponse:
     session, profile = _resolve_session_profile(repository, session_id)
-    turn = chat_service.respond(session, profile, data.content)
 
     def events() -> Any:
         yield "event: message_start\ndata: {}\n\n"
         yield "event: status\ndata: {\"text\":\"Checking menu details…\"}\n\n"
-        yield f"event: text_delta\ndata: {json.dumps({'text': turn.text})}\n\n"
+        yield "event: tool_started\ndata: {\"label\":\"Reviewing grounded demo data…\"}\n\n"
+        try:
+            turn = chat_service.respond(session, profile, data.content)
+        except Exception:
+            yield "event: error\ndata: {\"code\":\"CHAT_RESPONSE_FAILED\"}\n\n"
+            return
+        yield "event: tool_completed\ndata: {\"label\":\"Grounded check complete\"}\n\n"
+        if turn.fallback_used:
+            yield "event: warning\ndata: {\"text\":\"Demo continuity mode is active.\"}\n\n"
+        for start in range(0, len(turn.text), 80):
+            chunk = turn.text[start : start + 80]
+            yield f"event: text_delta\ndata: {json.dumps({'text': chunk})}\n\n"
         for card in turn.cards:
             yield f"event: card\ndata: {json.dumps(card.model_dump(mode='json'))}\n\n"
         yield f"event: message_end\ndata: {json.dumps(turn.model_dump(mode='json'))}\n\n"
@@ -270,7 +328,12 @@ def get_menu_evidence(
     return [item.model_dump(mode="json") for item in repository.get_evidence(menu_id)]
 
 
-def _validate_image(data: bytes, content_type: str | None, max_bytes: int) -> None:
+def _validate_image(
+    data: bytes,
+    content_type: str | None,
+    filename: str | None,
+    max_bytes: int,
+) -> None:
     if not data or len(data) > max_bytes:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -281,6 +344,17 @@ def _validate_image(data: bytes, content_type: str | None, max_bytes: int) -> No
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail={"code": "UNSUPPORTED_IMAGE_TYPE"},
+        )
+    extension = Path(filename or "").suffix.lower()
+    expected_extensions = {
+        "image/png": {".png"},
+        "image/jpeg": {".jpg", ".jpeg"},
+        "image/webp": {".webp"},
+    }
+    if extension not in expected_extensions[content_type]:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail={"code": "IMAGE_EXTENSION_MISMATCH"},
         )
     magic_ok = (
         data.startswith(b"\x89PNG\r\n\x1a\n")
@@ -315,20 +389,83 @@ async def upload_address(
     if not repository.get_session(session_id):
         raise _not_found("SESSION_NOT_FOUND")
     data = await file.read(current_settings.max_upload_mb * 1024 * 1024 + 1)
-    _validate_image(data, file.content_type, current_settings.max_upload_mb * 1024 * 1024)
+    _validate_image(
+        data,
+        file.content_type,
+        file.filename,
+        current_settings.max_upload_mb * 1024 * 1024,
+    )
     digest = hashlib.sha256(data).hexdigest()
     filename = (file.filename or "").lower()
-    query = "YOBI Myeongdong Hotel" if "yobi" in filename and "booking" in filename else filename
-    candidates = repository.resolve_address(query, digest)
+    ocr = choose_address_ocr(current_settings)
+    try:
+        extracted_text = ocr.extract_text(data)
+    except RuntimeError:
+        extracted_text = ""
+    parsed_text = ocr.parse_booking_fields(extracted_text)
+    if not parsed_text:
+        parsed_text = (
+            "YOBI Myeongdong Hotel"
+            if "yobi" in filename and "booking" in filename
+            else filename
+        )
+    candidates = ocr.resolve_place_candidates(repository, parsed_text, digest)
+    if extracted_text:
+        candidates = [
+            candidate.model_copy(update={"source": "ocr"})
+            if candidate.confidence < 1.0
+            else candidate
+            for candidate in candidates
+        ]
+    codec = AddressCandidateTokenCodec(current_settings)
+    views = [
+        AddressCandidateView(
+            **candidate.model_dump(),
+            candidate_token=codec.encode(session_id, candidate, digest),
+        )
+        for candidate in candidates
+    ]
     low_confidence = not candidates or candidates[0].confidence < 0.8
     return AddressUploadResult(
-        attachment_hash=digest,
-        candidates=candidates,
+        candidates=views,
         low_confidence=low_confidence,
         notice=(
-            "Canonical demo fallback matched the synthetic booking image metadata. Confirm the address."
+            "The synthetic booking image matched a grounded address candidate. Confirm the address."
             if not low_confidence
-            else "OCR confidence is low. Please review or edit the address manually."
+            else "OCR confidence is low. Review the candidate or enter the address manually."
+        ),
+    )
+
+
+@app.post(
+    "/api/v1/sessions/{session_id}/address/resolve",
+    response_model=AddressUploadResult,
+)
+def resolve_address_text(
+    session_id: str,
+    data: AddressResolveRequest,
+    repository: YobiRepository = Depends(get_repository),
+    current_settings: Settings = Depends(get_settings),
+) -> AddressUploadResult:
+    if not repository.get_session(session_id):
+        raise _not_found("SESSION_NOT_FOUND")
+    candidates = repository.resolve_address(data.text)
+    codec = AddressCandidateTokenCodec(current_settings)
+    views = [
+        AddressCandidateView(
+            **candidate.model_dump(),
+            candidate_token=codec.encode(session_id, candidate, None),
+        )
+        for candidate in candidates
+    ]
+    low_confidence = not candidates or candidates[0].confidence < 0.8
+    return AddressUploadResult(
+        candidates=views,
+        low_confidence=low_confidence,
+        notice=(
+            "We found a synthetic place candidate. Confirm the full road address."
+            if not low_confidence
+            else "No confident place match was found. Enter or edit the address manually."
         ),
     )
 
@@ -338,10 +475,47 @@ def confirm_address(
     session_id: str,
     data: AddressConfirm,
     repository: YobiRepository = Depends(get_repository),
+    current_settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
     if not repository.get_session(session_id):
         raise _not_found("SESSION_NOT_FOUND")
-    return {"address_ref_id": repository.save_address(session_id, data.candidate)}
+    if data.manual is not None:
+        candidate = AddressCandidate(
+            place_id="manual",
+            hotel_name=data.manual.hotel_name,
+            road_address=data.manual.road_address,
+            postal_code=data.manual.postal_code,
+            city=data.manual.city,
+            delivery_hint=data.manual.delivery_hint,
+            confidence=0.5,
+            source="manual",
+            needs_confirmation=True,
+        )
+        return {"address_ref_id": repository.save_address(session_id, candidate)}
+    try:
+        claims = AddressCandidateTokenCodec(current_settings).decode(
+            data.candidate_token or "", session_id
+        )
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "ADDRESS_CANDIDATE_TOKEN_INVALID"},
+        ) from exc
+    stored_candidate = repository.get_address_candidate(str(claims["place_id"]))
+    if stored_candidate is None:
+        raise _not_found("ADDRESS_CANDIDATE_NOT_FOUND")
+    candidate = AddressCandidate(
+        **stored_candidate.model_dump(exclude={"source", "confidence"}),
+        source=claims["source"],
+        confidence=float(claims["confidence"]),
+    )
+    return {
+        "address_ref_id": repository.save_address(
+            session_id,
+            candidate,
+            str(claims["source_image_hash"]) if claims.get("source_image_hash") else None,
+        )
+    }
 
 
 @app.get("/api/v1/sessions/{session_id}/cart", response_model=CartPreview)
@@ -365,6 +539,39 @@ def add_cart_item(
         raise _not_found("MENU_NOT_FOUND") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail={"code": str(exc)}) from exc
+
+
+@app.patch(
+    "/api/v1/sessions/{session_id}/cart/items/{cart_item_id}",
+    response_model=CartPreview,
+)
+def update_cart_item(
+    session_id: str,
+    cart_item_id: str,
+    data: CartItemUpdate,
+    repository: YobiRepository = Depends(get_repository),
+) -> CartPreview:
+    try:
+        return repository.update_cart_item(session_id, cart_item_id, data)
+    except KeyError as exc:
+        raise _not_found("CART_ITEM_NOT_FOUND") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail={"code": str(exc)}) from exc
+
+
+@app.delete(
+    "/api/v1/sessions/{session_id}/cart/items/{cart_item_id}",
+    response_model=CartPreview,
+)
+def delete_cart_item(
+    session_id: str,
+    cart_item_id: str,
+    repository: YobiRepository = Depends(get_repository),
+) -> CartPreview:
+    try:
+        return repository.delete_cart_item(session_id, cart_item_id)
+    except KeyError as exc:
+        raise _not_found("CART_ITEM_NOT_FOUND") from exc
 
 
 @app.patch("/api/v1/sessions/{session_id}/delivery", response_model=CartPreview)
@@ -475,6 +682,19 @@ def demo_status(
         "fallback_mode": control.mode,
         "synthetic_data": True,
     }
+
+
+@app.post("/api/v1/demo/reset", dependencies=[Depends(_demo_authorized)])
+def reset_demo_session(
+    data: DemoResetRequest,
+    repository: YobiRepository = Depends(get_repository),
+    control: DemoControl = Depends(get_demo_control),
+) -> dict[str, str]:
+    if not repository.get_session(data.session_id):
+        raise _not_found("SESSION_NOT_FOUND")
+    repository.reset_session(data.session_id)
+    control.set_mode("normal")
+    return {"session_id": data.session_id, "status": "reset"}
 
 
 @app.post("/api/v1/demo/failure-mode", dependencies=[Depends(_demo_authorized)])

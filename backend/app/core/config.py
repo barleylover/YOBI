@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     llm_max_retries: int = 0
     tool_call_max_steps: int = 6
     max_upload_mb: int = 8
-    address_ocr_provider: Literal["fixture", "tesseract", "rapidocr"] = "fixture"
+    address_ocr_provider: Literal["fixture", "tesseract", "rapidocr"] = "tesseract"
     log_level: str = "INFO"
     demo_control_token: SecretStr = SecretStr("")
     cors_origins: list[str] = Field(default_factory=lambda: ["http://127.0.0.1:5173"])

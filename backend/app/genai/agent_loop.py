@@ -36,11 +36,18 @@ class AgentLoop:
 
     def run(self, user_text: str, dynamic_context: str, registry: ToolRegistry) -> AgentResult:
         client = self.client_factory.build()
+        instructions = f"{SYSTEM_PROMPT}\n\nSession context:\n{dynamic_context}"
+        # Keep the full tool exchange client-side. The legacy OCI endpoint used by the
+        # deployed demo accepts Responses input items, but its stored-response
+        # continuation has proved unreliable in production. This is also an official
+        # Responses API state-management pattern and keeps every function call paired
+        # with its output without depending on provider retention.
+        conversation: list[Any] = [{"role": "user", "content": user_text}]
         response, active_model = self._create_response(
             client,
             self.settings.oci_genai_model,
-            instructions=f"{SYSTEM_PROMPT}\n\nSession context:\n{dynamic_context}",
-            input=user_text,
+            instructions=instructions,
+            input=cast(Any, conversation),
             tools=cast(Any, TOOLS),
         )
         self._log_response(response)
@@ -54,6 +61,7 @@ class AgentLoop:
                 if not text:
                     raise RuntimeError("GENAI_EMPTY_RESPONSE")
                 return AgentResult(text=text, tool_results=tool_results)
+            conversation.extend(response.output)
             outputs = []
             for call in calls:
                 result = registry.execute(call.name, call.arguments)
@@ -68,11 +76,12 @@ class AgentLoop:
                         ),
                     }
                 )
+            conversation.extend(outputs)
             response, active_model = self._create_response(
                 client,
                 active_model,
-                previous_response_id=response.id,
-                input=cast(Any, outputs),
+                instructions=instructions,
+                input=cast(Any, conversation),
                 tools=cast(Any, TOOLS),
             )
             self._log_response(response)

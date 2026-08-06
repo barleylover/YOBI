@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS chat_message (
 CREATE TABLE IF NOT EXISTS merchant (
   merchant_id TEXT PRIMARY KEY,
   service_area TEXT NOT NULL,
+  service_area_id TEXT,
   name_ko TEXT NOT NULL,
   name_en TEXT NOT NULL,
   description TEXT NOT NULL,
@@ -58,6 +59,7 @@ CREATE TABLE IF NOT EXISTS menu (
   menu_id TEXT PRIMARY KEY,
   merchant_id TEXT NOT NULL REFERENCES merchant(merchant_id),
   category TEXT NOT NULL,
+  category_id TEXT,
   name_ko TEXT NOT NULL,
   name_en TEXT NOT NULL,
   description TEXT NOT NULL,
@@ -218,6 +220,23 @@ CREATE TABLE IF NOT EXISTS audit_log (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS menu_knowledge (
+  knowledge_id TEXT PRIMARY KEY,
+  menu_id TEXT NOT NULL REFERENCES menu(menu_id),
+  knowledge_type TEXT NOT NULL,
+  language TEXT NOT NULL,
+  content TEXT NOT NULL,
+  source_type TEXT NOT NULL,
+  source_ref TEXT,
+  license_state TEXT NOT NULL,
+  embedding_text TEXT NOT NULL,
+  embedding_vector_json TEXT,
+  embedding_model TEXT,
+  embedding_dimension INTEGER,
+  embedding_version TEXT,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS explanation_cache (
   cache_key TEXT PRIMARY KEY,
   menu_id TEXT NOT NULL REFERENCES menu(menu_id),
@@ -228,8 +247,51 @@ CREATE TABLE IF NOT EXISTS explanation_cache (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS service_area (
+  service_area_id TEXT PRIMARY KEY, city TEXT NOT NULL, district TEXT NOT NULL,
+  display_name TEXT NOT NULL, active INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS menu_category (
+  category_id TEXT PRIMARY KEY, name_ko TEXT NOT NULL, name_en TEXT NOT NULL,
+  description TEXT NOT NULL, tags_json TEXT NOT NULL,
+  typical_spice_min INTEGER NOT NULL, typical_spice_max INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ingredient (
+  ingredient_id TEXT PRIMARY KEY, name_ko TEXT NOT NULL, name_en TEXT NOT NULL,
+  ingredient_group TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS menu_ingredient (
+  menu_id TEXT NOT NULL REFERENCES menu(menu_id),
+  ingredient_id TEXT NOT NULL REFERENCES ingredient(ingredient_id), status TEXT NOT NULL,
+  source_id TEXT, is_optional INTEGER NOT NULL, PRIMARY KEY(menu_id, ingredient_id)
+);
+CREATE TABLE IF NOT EXISTS allergen (
+  allergen_id TEXT PRIMARY KEY, code TEXT UNIQUE NOT NULL, name_en TEXT NOT NULL, name_ko TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS menu_allergen (
+  menu_id TEXT NOT NULL REFERENCES menu(menu_id),
+  allergen_id TEXT NOT NULL REFERENCES allergen(allergen_id), status TEXT NOT NULL,
+  evidence_id TEXT, cross_contamination_status TEXT NOT NULL,
+  PRIMARY KEY(menu_id, allergen_id)
+);
+CREATE TABLE IF NOT EXISTS dietary_attribute (
+  attribute_id TEXT PRIMARY KEY, code TEXT UNIQUE NOT NULL, display_name TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS menu_dietary_attribute (
+  menu_id TEXT NOT NULL REFERENCES menu(menu_id),
+  attribute_id TEXT NOT NULL REFERENCES dietary_attribute(attribute_id), status TEXT NOT NULL,
+  evidence_id TEXT, PRIMARY KEY(menu_id, attribute_id)
+);
+CREATE TABLE IF NOT EXISTS option_dietary_conflict (
+  option_item_id TEXT NOT NULL REFERENCES menu_option_item(option_item_id), rule_code TEXT NOT NULL,
+  conflict_status TEXT NOT NULL, evidence_id TEXT, PRIMARY KEY(option_item_id, rule_code)
+);
+
 CREATE INDEX IF NOT EXISTS idx_menu_category ON menu(category, availability, price);
 CREATE INDEX IF NOT EXISTS idx_menu_merchant ON menu(merchant_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_subject ON evidence(subject_id, claim_type);
 CREATE INDEX IF NOT EXISTS idx_review_menu ON review_snippet(menu_id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_menu ON menu_knowledge(menu_id, knowledge_type);
+CREATE INDEX IF NOT EXISTS idx_dietary_menu ON menu_dietary_attribute(menu_id, status);
+CREATE INDEX IF NOT EXISTS idx_allergen_menu ON menu_allergen(menu_id, status);
 """

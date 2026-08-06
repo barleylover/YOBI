@@ -35,12 +35,34 @@ tar -C "$ROOT_DIR" -czf "$archive" \
   backend frontend/dist database deploy scripts README.md Makefile .env.example
 
 scp -q -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new "$archive" "$SSH_USER@$host:/tmp/yobi-release.tar.gz"
-ssh -t -i "$SSH_KEY" "$SSH_USER@$host" \
-  "sudo install -d /opt/yobi/releases/$RELEASE_ID && \
-   sudo tar -xzf /tmp/yobi-release.tar.gz -C /opt/yobi/releases/$RELEASE_ID && \
-   sudo ln -sfn /opt/yobi/releases/$RELEASE_ID /opt/yobi/current && \
-   sudo /opt/yobi/current/deploy/install_vm.sh && \
-   sudo chown -R yobi:yobi /opt/yobi/releases/$RELEASE_ID && \
-   rm -f /tmp/yobi-release.tar.gz"
+ssh -t -i "$SSH_KEY" "$SSH_USER@$host" "bash -s -- '$RELEASE_ID'" <<'REMOTE'
+set -euo pipefail
+release_id="$1"
+new_release="/opt/yobi/releases/$release_id"
+old_release="$(readlink -f /opt/yobi/current 2>/dev/null || true)"
 
-printf 'Release %s uploaded and installed. Runtime secrets are still required before service start.\n' "$RELEASE_ID"
+sudo install -d "$new_release"
+sudo tar -xzf /tmp/yobi-release.tar.gz -C "$new_release"
+sudo env YOBI_RELEASE_ROOT="$new_release" "$new_release/deploy/install_vm.sh"
+sudo chown -R yobi:yobi "$new_release"
+
+sudo bash -c "set -a; source /etc/yobi/yobi.env; set +a; '$new_release/venv/bin/python' '$new_release/scripts/migrate.py'"
+sudo bash -c "set -a; source /etc/yobi/yobi.env; set +a; '$new_release/venv/bin/python' '$new_release/scripts/seed_demo.py' --upsert"
+
+sudo ln -sfn "$new_release" /opt/yobi/current
+if ! sudo systemctl daemon-reload \
+  || ! sudo systemctl restart yobi-api nginx \
+  || ! curl --fail --silent --retry 8 --retry-delay 2 http://127.0.0.1/healthz >/dev/null \
+  || ! curl --fail --silent --retry 8 --retry-delay 2 http://127.0.0.1/readyz >/dev/null; then
+  if [[ -n "$old_release" && -d "$old_release" ]]; then
+    sudo ln -sfn "$old_release" /opt/yobi/current
+    sudo systemctl daemon-reload
+    sudo systemctl restart yobi-api nginx
+  fi
+  printf 'Release activation failed; previous current link was restored.\n' >&2
+  exit 1
+fi
+rm -f /tmp/yobi-release.tar.gz
+REMOTE
+
+printf 'Release %s migrated, seeded, activated, and passed local health/ready checks.\n' "$RELEASE_ID"

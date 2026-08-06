@@ -1,5 +1,5 @@
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
-import { Check, ChevronRight, Hotel, ImageUp, Languages, ShoppingBag } from "lucide-react";
+import { Check, ChevronRight, Hotel, ImageUp, Languages, Minus, Plus, ShoppingBag, Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import type { AddressCandidate, CartPreview, MenuSummary, OptionGroup } from "../types";
@@ -8,11 +8,13 @@ interface Props {
   sessionId: string;
   menu: MenuSummary;
   onClose: () => void;
+  onPhaseChange?: (phase: Phase) => void;
 }
 
 type Phase = "options" | "note" | "address" | "delivery" | "review";
+type AddressMode = "upload" | "hotel" | "manual";
 
-export function OrderFlowPanel({ sessionId, menu, onClose }: Props) {
+export function OrderFlowPanel({ sessionId, menu, onClose, onPhaseChange }: Props) {
   const navigate = useNavigate();
   const [phase, setPhase] = useState<Phase>("options");
   const [groups, setGroups] = useState<OptionGroup[]>([]);
@@ -21,6 +23,15 @@ export function OrderFlowPanel({ sessionId, menu, onClose }: Props) {
   const [note, setNote] = useState("As mild as possible, please.");
   const [cart, setCart] = useState<CartPreview | null>(null);
   const [addressCandidates, setAddressCandidates] = useState<AddressCandidate[]>([]);
+  const [addressMode, setAddressMode] = useState<AddressMode>("upload");
+  const [hotelQuery, setHotelQuery] = useState("YOBI Myeongdong Hotel");
+  const [manualAddress, setManualAddress] = useState({
+    hotel_name: "",
+    road_address: "",
+    postal_code: "",
+    city: "Seoul",
+    delivery_hint: "Please leave it at the hotel front desk.",
+  });
   const [addressRefId, setAddressRefId] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -29,6 +40,10 @@ export function OrderFlowPanel({ sessionId, menu, onClose }: Props) {
   useEffect(() => {
     api.getOptions(menu.menu_id).then(setGroups).catch(() => setError("Could not load menu options."));
   }, [menu.menu_id]);
+
+  useEffect(() => {
+    onPhaseChange?.(phase);
+  }, [onPhaseChange, phase]);
 
   const currentGroup = groups[groupIndex];
   const selectedOptionIds = useMemo(() => Object.values(selections), [selections]);
@@ -72,6 +87,34 @@ export function OrderFlowPanel({ sessionId, menu, onClose }: Props) {
     await upload(new File([blob], "yobi-demo-booking.png", { type: "image/png" }));
   }
 
+  async function searchHotel() {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api.resolveAddress(sessionId, hotelQuery);
+      setAddressCandidates(result.candidates);
+      setNotice(result.notice);
+    } catch {
+      setError("We could not match that hotel name. Enter the full road address instead.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveManualAddress() {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api.confirmManualAddress(sessionId, manualAddress);
+      setAddressRefId(result.address_ref_id);
+      setPhase("delivery");
+    } catch {
+      setError("Check the hotel name and road address before continuing.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function chooseAddress(candidate: AddressCandidate) {
     setBusy(true);
     try {
@@ -102,6 +145,33 @@ export function OrderFlowPanel({ sessionId, menu, onClose }: Props) {
       navigate(`/pay/${checkout.checkout_id}`);
     } catch {
       setError("The final cart check failed. Review the required information and retry.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function changeQuantity(cartItemId: string, quantity: number) {
+    if (quantity < 1 || quantity > 10) return;
+    setBusy(true);
+    setError("");
+    try {
+      setCart(await api.updateCartItem(sessionId, cartItemId, quantity));
+    } catch {
+      setError("The cart changed while we were reviewing it. Check the options and retry.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeItem(cartItemId: string) {
+    setBusy(true);
+    setError("");
+    try {
+      const preview = await api.deleteCartItem(sessionId, cartItemId);
+      setCart(preview);
+      if (preview.items.length === 0) setPhase("options");
+    } catch {
+      setError("That item could not be removed. Refresh the cart and retry.");
     } finally {
       setBusy(false);
     }
@@ -170,15 +240,51 @@ export function OrderFlowPanel({ sessionId, menu, onClose }: Props) {
       {phase === "address" && (
         <div className="decision-panel">
           <p className="step-count">Delivery address</p>
-          <h4>Upload your booking screenshot</h4>
-          <p>We extract a hotel and address candidate, then ask you to confirm it. The image is not stored.</p>
-          <label className="upload-zone">
-            <ImageUp size={28} />
-            <strong>Choose booking image</strong>
-            <span>PNG, JPEG or WebP · up to 8MB</span>
-            <input type="file" accept="image/png,image/jpeg,image/webp" onChange={fileChanged} />
-          </label>
-          <button className="secondary-button full" onClick={useDemoBooking} disabled={busy}>Use stable demo booking image</button>
+          <h4>Where should we deliver?</h4>
+          <p>Choose a booking screenshot, search a hotel name, or enter the road address yourself.</p>
+          <div className="address-methods" role="tablist" aria-label="Address entry method">
+            <button className={addressMode === "upload" ? "active" : ""} onClick={() => setAddressMode("upload")}>Booking image</button>
+            <button className={addressMode === "hotel" ? "active" : ""} onClick={() => setAddressMode("hotel")}>Hotel name</button>
+            <button className={addressMode === "manual" ? "active" : ""} onClick={() => setAddressMode("manual")}>Road address</button>
+          </div>
+          {addressMode === "upload" && (
+            <>
+              <label className="upload-zone">
+                <ImageUp size={28} />
+                <strong>Choose booking image</strong>
+                <span>PNG, JPEG or WebP · up to 8MB</span>
+                <input type="file" accept="image/png,image/jpeg,image/webp" onChange={fileChanged} />
+              </label>
+              <button className="secondary-button full" onClick={useDemoBooking} disabled={busy}>Use stable demo booking image</button>
+            </>
+          )}
+          {addressMode === "hotel" && (
+            <div className="address-form">
+              <label>Hotel or stay name
+                <input value={hotelQuery} onChange={(event) => setHotelQuery(event.target.value)} placeholder="e.g. YOBI Myeongdong Hotel" />
+              </label>
+              <button className="primary-button full" onClick={searchHotel} disabled={busy || hotelQuery.trim().length < 2}>Find synthetic address</button>
+            </div>
+          )}
+          {addressMode === "manual" && (
+            <div className="address-form">
+              <label>Hotel or stay name
+                <input value={manualAddress.hotel_name} onChange={(event) => setManualAddress((value) => ({ ...value, hotel_name: event.target.value }))} />
+              </label>
+              <label>Road address
+                <input value={manualAddress.road_address} onChange={(event) => setManualAddress((value) => ({ ...value, road_address: event.target.value }))} placeholder="Full Korean road address" />
+              </label>
+              <div className="address-form-row">
+                <label>Postal code
+                  <input value={manualAddress.postal_code} onChange={(event) => setManualAddress((value) => ({ ...value, postal_code: event.target.value }))} />
+                </label>
+                <label>City
+                  <input value={manualAddress.city} onChange={(event) => setManualAddress((value) => ({ ...value, city: event.target.value }))} />
+                </label>
+              </div>
+              <button className="primary-button full" onClick={saveManualAddress} disabled={busy || !manualAddress.hotel_name.trim() || manualAddress.road_address.trim().length < 3}>Use this address</button>
+            </div>
+          )}
           {notice && <p className="notice-copy">{notice}</p>}
           {addressCandidates.map((candidate) => (
             <article className="address-candidate" key={candidate.place_id}>
@@ -206,8 +312,16 @@ export function OrderFlowPanel({ sessionId, menu, onClose }: Props) {
           <h4>Everything still matches.</h4>
           {cart.items.map((item) => (
             <div className="cart-line" key={item.cart_item_id}>
-              <div><strong>{item.menu_name}</strong><small>Qty {item.quantity} · {item.options.map((option) => option.name_en).join(", ")}</small></div>
-              <strong>₩{item.line_total.toLocaleString()}</strong>
+              <div><strong>{item.menu_name}</strong><small>{item.options.map((option) => option.name_en).join(", ")}</small></div>
+              <div className="cart-line-actions">
+                <div className="quantity-stepper" aria-label={`Quantity for ${item.menu_name}`}>
+                  <button aria-label="Decrease quantity" onClick={() => changeQuantity(item.cart_item_id, item.quantity - 1)} disabled={busy || item.quantity <= 1}><Minus size={14} /></button>
+                  <span>{item.quantity}</span>
+                  <button aria-label="Increase quantity" onClick={() => changeQuantity(item.cart_item_id, item.quantity + 1)} disabled={busy || item.quantity >= 10}><Plus size={14} /></button>
+                </div>
+                <strong>₩{item.line_total.toLocaleString()}</strong>
+                <button className="remove-cart-item" aria-label={`Remove ${item.menu_name}`} onClick={() => removeItem(item.cart_item_id)} disabled={busy}><Trash2 size={15} /></button>
+              </div>
             </div>
           ))}
           <div className="price-row"><span>Items</span><span>₩{cart.subtotal.toLocaleString()}</span></div>
@@ -222,4 +336,3 @@ export function OrderFlowPanel({ sessionId, menu, onClose }: Props) {
     </section>
   );
 }
-

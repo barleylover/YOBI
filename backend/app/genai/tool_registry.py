@@ -4,13 +4,19 @@ import hashlib
 import json
 import logging
 from time import monotonic
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from app.core.logging import log_event
 from app.db.repository import YobiRepository
-from app.domain.models import Profile
+from app.domain.models import (
+    CartItemInput,
+    CartItemUpdate,
+    CheckoutCreate,
+    DeliveryPreferenceInput,
+    Profile,
+)
 
 
 class SearchMenusArgs(BaseModel):
@@ -47,6 +53,38 @@ class ResolveAddressArgs(BaseModel):
 
 class CheckoutIdArgs(BaseModel):
     checkout_id: str = Field(pattern=r"^checkout_[a-f0-9]+$")
+
+
+class UpdateCartArgs(BaseModel):
+    action: Literal[
+        "ADD_ITEM",
+        "CHANGE_QUANTITY",
+        "SELECT_OPTION",
+        "REMOVE_OPTION",
+        "REMOVE_ITEM",
+        "ADD_NOTE",
+        "CLEAR",
+    ]
+    menu_id: str | None = Field(default=None, pattern=r"^menu_[a-zA-Z0-9_]+$")
+    cart_item_id: str | None = Field(default=None, pattern=r"^cartitem_[a-f0-9]+$")
+    quantity: int | None = Field(default=None, ge=1, le=10)
+    option_item_id: str | None = Field(default=None, pattern=r"^oi_[a-zA-Z0-9_]+$")
+    option_item_ids: list[str] = Field(default_factory=list)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class DeliveryPreferenceArgs(BaseModel):
+    address_ref_id: str | None = None
+    handoff_method: Literal["front_desk", "door", "meet_outside"] = "front_desk"
+    cutlery: bool = False
+    ring_bell: bool = False
+    front_desk: bool = True
+    note: str = Field(default="Please leave it at the hotel front desk.", max_length=500)
+
+
+class CreateCheckoutArgs(BaseModel):
+    idempotency_key: str = Field(min_length=8, max_length=100)
+    payment_method: Literal["international_card", "apple_pay_demo", "paypal_demo"]
 
 
 class ToolRegistry:
@@ -87,7 +125,7 @@ class ToolRegistry:
                             "category": menu.category,
                             "match_reasons": menu.match_reasons,
                             "risk_hints": menu.risk_hints,
-                            "source_ids": [menu.menu_id, menu.merchant_id],
+                            "source_ids": [menu.menu_id, menu.merchant_id, *menu.evidence_ids],
                         }
                     )
                     if len(categories) == 4:
@@ -179,18 +217,64 @@ class ToolRegistry:
                     ],
                     "requires_confirmation": True,
                 }
+            elif name == "update_cart":
+                if not self.session_id:
+                    raise ValueError("SESSION_CONTEXT_REQUIRED")
+                cart_args = UpdateCartArgs.model_validate(payload)
+                result = {"cart": self._update_cart(cart_args).model_dump(mode="json")}
+            elif name == "update_delivery_preferences":
+                if not self.session_id:
+                    raise ValueError("SESSION_CONTEXT_REQUIRED")
+                delivery_args = DeliveryPreferenceArgs.model_validate(payload)
+                result = {
+                    "cart": self.repository.update_delivery(
+                        self.session_id,
+                        DeliveryPreferenceInput(
+                            address_ref_id=delivery_args.address_ref_id,
+                            handoff_method=delivery_args.handoff_method,
+                            cutlery=delivery_args.cutlery,
+                            ring_bell=delivery_args.ring_bell,
+                            front_desk=delivery_args.front_desk,
+                            user_note=delivery_args.note,
+                        ),
+                    ).model_dump(mode="json"),
+                    "requires_confirmation": True,
+                }
             elif name == "get_cart_preview":
                 if not self.session_id:
                     raise ValueError("SESSION_CONTEXT_REQUIRED")
                 result = {
                     "cart": self.repository.get_cart(self.session_id).model_dump(mode="json")
                 }
+            elif name == "create_mock_checkout":
+                if not self.session_id:
+                    raise ValueError("SESSION_CONTEXT_REQUIRED")
+                create_args = CreateCheckoutArgs.model_validate(payload)
+                created_checkout = self.repository.create_checkout(
+                    self.session_id,
+                    CheckoutCreate(
+                        idempotency_key=create_args.idempotency_key,
+                        payment_method=create_args.payment_method,
+                    ),
+                )
+                result = {"checkout": created_checkout.model_dump(mode="json")}
             elif name == "get_mock_payment_status":
-                checkout_args = CheckoutIdArgs.model_validate(payload)
-                checkout = self.repository.get_checkout(checkout_args.checkout_id)
-                if checkout is None:
+                status_args = CheckoutIdArgs.model_validate(payload)
+                stored_checkout = self.repository.get_checkout(status_args.checkout_id)
+                if stored_checkout is None:
                     raise ValueError("CHECKOUT_NOT_FOUND")
-                result = {"checkout": checkout.model_dump(mode="json")}
+                result = {"checkout": stored_checkout.model_dump(mode="json")}
+            elif name == "complete_mock_order":
+                complete_args = CheckoutIdArgs.model_validate(payload)
+                completed_checkout = self.repository.get_checkout(complete_args.checkout_id)
+                if completed_checkout is None:
+                    raise ValueError("CHECKOUT_NOT_FOUND")
+                if completed_checkout.status != "SUCCEEDED" or not completed_checkout.order_id:
+                    raise ValueError("PAYMENT_NOT_SUCCEEDED")
+                order = self.repository.get_order(completed_checkout.order_id)
+                if order is None:
+                    raise ValueError("ORDER_NOT_FOUND")
+                result = {"order": order.model_dump(mode="json")}
             else:
                 raise ValueError("UNKNOWN_TOOL")
         except Exception as exc:
@@ -199,6 +283,56 @@ class ToolRegistry:
             raise
         self._audit(name, raw_arguments, result, started, "OK", None)
         return result
+
+    def _update_cart(self, args: UpdateCartArgs) -> Any:
+        if not self.session_id:
+            raise ValueError("SESSION_CONTEXT_REQUIRED")
+        if args.action == "ADD_ITEM":
+            if not args.menu_id:
+                raise ValueError("MENU_ID_REQUIRED")
+            return self.repository.add_cart_item(
+                self.session_id,
+                CartItemInput(
+                    menu_id=args.menu_id,
+                    quantity=args.quantity or 1,
+                    option_item_ids=args.option_item_ids,
+                    user_note=args.note or "",
+                ),
+            )
+        cart = self.repository.get_cart(self.session_id)
+        if args.action == "CLEAR":
+            for line in cart.items:
+                self.repository.delete_cart_item(self.session_id, line.cart_item_id)
+            return self.repository.get_cart(self.session_id)
+        if not args.cart_item_id:
+            raise ValueError("CART_ITEM_ID_REQUIRED")
+        matched_line = next(
+            (item for item in cart.items if item.cart_item_id == args.cart_item_id), None
+        )
+        if matched_line is None:
+            raise ValueError("CART_ITEM_NOT_FOUND")
+        if args.action == "REMOVE_ITEM":
+            return self.repository.delete_cart_item(self.session_id, matched_line.cart_item_id)
+        if args.action == "CHANGE_QUANTITY":
+            if args.quantity is None:
+                raise ValueError("QUANTITY_REQUIRED")
+            update = CartItemUpdate(quantity=args.quantity)
+        elif args.action in {"SELECT_OPTION", "REMOVE_OPTION"}:
+            if not args.option_item_id:
+                raise ValueError("OPTION_ITEM_ID_REQUIRED")
+            current = [str(item["option_item_id"]) for item in matched_line.options]
+            if args.action == "SELECT_OPTION" and args.option_item_id not in current:
+                current.append(args.option_item_id)
+            if args.action == "REMOVE_OPTION":
+                current = [item for item in current if item != args.option_item_id]
+            update = CartItemUpdate(option_item_ids=current)
+        elif args.action == "ADD_NOTE":
+            if args.note is None:
+                raise ValueError("NOTE_REQUIRED")
+            update = CartItemUpdate(user_note=args.note)
+        else:
+            raise ValueError("UNSUPPORTED_CART_ACTION")
+        return self.repository.update_cart_item(self.session_id, matched_line.cart_item_id, update)
 
     def _audit(
         self,

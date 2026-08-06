@@ -37,6 +37,7 @@ export interface MenuSummary {
   evidence_status: EvidenceStatus;
   match_reasons: string[];
   risk_hints: string[];
+  evidence_ids: string[];
   is_synthetic: boolean;
 }
 
@@ -72,6 +73,7 @@ export interface MerchantComparison {
   dietary_status: EvidenceStatus;
   dietary_note: string;
   best_for: string;
+  evidence_ids: string[];
 }
 
 export interface OptionItem {
@@ -122,6 +124,7 @@ export interface AddressCandidate {
   confidence: number;
   source: string;
   needs_confirmation: boolean;
+  candidate_token: string;
 }
 
 export interface CartPreview {
@@ -133,7 +136,7 @@ export interface CartPreview {
     menu_name: string;
     quantity: number;
     unit_price: number;
-    options: Array<{ name_en: string; name_ko: string; price_delta: number }>;
+    options: Array<{ option_item_id: string; name_en: string; name_ko: string; price_delta: number }>;
     line_total: number;
   }>;
   subtotal: number;

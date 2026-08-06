@@ -25,6 +25,16 @@ CATEGORIES = [
     ("Dosirak", "도시락", 1, "a balanced Korean lunch box"),
 ]
 
+SERVICE_AREAS = {
+    "Myeongdong": ("area_myeongdong", "Jung-gu"),
+    "Hongdae": ("area_hongdae", "Mapo-gu"),
+    "Gangnam": ("area_gangnam", "Gangnam-gu"),
+}
+
+
+def _code(value: str) -> str:
+    return "_".join(value.lower().replace("-", " ").split())
+
 MERCHANT_NAMES = [
     ("명동 서울 로제떡볶이", "Seoul Rose Tteokbokki", "creamier and beginner-friendly"),
     ("명동 떡집", "Myeongdong Tteok House", "sweeter sauce and generous portions"),
@@ -132,10 +142,12 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
         merchant_id = f"mer_{merchant_index:03d}"
         name_ko, name_en, flavor = _merchant_name(merchant_index)
         service_area = ("Myeongdong", "Hongdae", "Gangnam")[(merchant_index - 1) % 3]
+        service_area_id = SERVICE_AREAS[service_area][0]
         merchants.append(
             {
                 "merchant_id": merchant_id,
                 "service_area": service_area,
+                "service_area_id": service_area_id,
                 "name_ko": name_ko,
                 "name_en": name_en,
                 "description": f"Synthetic {service_area} demo restaurant with {flavor}.",
@@ -214,6 +226,7 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
                     "menu_id": menu_id,
                     "merchant_id": merchant_id,
                     "category": item["category"],
+                    "category_id": f"category_{_code(item['category'])}",
                     "name_ko": item["name_ko"],
                     "name_en": item["name_en"],
                     "description": item["description"],
@@ -400,19 +413,147 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
                 "postal_code": f"04{500 + hotel_index:03d}",
                 "city": "Seoul",
                 "delivery_hint": "Please leave the order with the hotel front desk.",
-                "fixture_sha256": None,
+                "fixture_sha256": (
+                    "49f7f262d369a904b3b4ae395ec438bb5fcd98581b643dcfa32bbf4bbec08876"
+                    if is_canonical_hotel
+                    else None
+                ),
                 "is_synthetic": 1,
             }
         )
 
+    knowledge = [
+        {
+            "knowledge_id": f"knowledge_{menu['menu_id']}",
+            "menu_id": menu["menu_id"],
+            "knowledge_type": "SYNTHETIC_MENU_GUIDE",
+            "language": "en",
+            "content": f"{menu['description']} {menu['cultural_description']}",
+            "source_type": "SYNTHETIC_CATALOG",
+            "source_ref": menu["menu_id"],
+            "license_state": "SYNTHETIC",
+            "embedding_text": menu["semantic_text"],
+            "updated_at": UPDATED_AT,
+        }
+        for menu in menus
+    ]
+
+    service_areas = [
+        {
+            "service_area_id": identifier,
+            "city": "Seoul",
+            "district": district,
+            "display_name": name,
+            "active": 1,
+        }
+        for name, (identifier, district) in SERVICE_AREAS.items()
+    ]
+    menu_categories = [
+        {
+            "category_id": f"category_{_code(name_en)}",
+            "name_ko": name_ko,
+            "name_en": name_en,
+            "description": description,
+            "tags_json": json.dumps([_code(name_en)]),
+            "typical_spice_min": max(0, spice - 1),
+            "typical_spice_max": min(5, spice + 1),
+        }
+        for name_en, name_ko, spice, description in CATEGORIES
+    ]
+    dietary_codes = sorted(
+        {tag for menu in menus for tag in json.loads(menu["dietary_tags_json"])}
+    )
+    dietary_attributes = [
+        {
+            "attribute_id": f"diet_{code}",
+            "code": code,
+            "display_name": code.replace("_", " ").title(),
+        }
+        for code in dietary_codes
+    ]
+    menu_dietary_attributes = [
+        {
+            "menu_id": menu["menu_id"],
+            "attribute_id": f"diet_{code}",
+            "status": "VERIFIED" if code == "shellfish_sauce_absent" else "PRESENT",
+            "evidence_id": f"ev_{menu['menu_id'][5:8]}_{menu['menu_id'][9:11]}_1",
+        }
+        for menu in menus
+        for code in json.loads(menu["dietary_tags_json"])
+    ]
+    allergen_codes = sorted(
+        {tag for menu in menus for tag in json.loads(menu["allergen_tags_json"])}
+    )
+    allergens = [
+        {
+            "allergen_id": f"allergen_{code}",
+            "code": code,
+            "name_en": code.replace("_", " ").title(),
+            "name_ko": code,
+        }
+        for code in allergen_codes
+    ]
+    menu_allergens = [
+        {
+            "menu_id": menu["menu_id"],
+            "allergen_id": f"allergen_{code}",
+            "status": "RISK_SIGNAL" if code.endswith("risk") else "PRESENT",
+            "evidence_id": f"ev_{menu['menu_id'][5:8]}_{menu['menu_id'][9:11]}_1",
+            "cross_contamination_status": (
+                "UNKNOWN" if code == "cross_contamination_unknown" else "NOT_ASSESSED"
+            ),
+        }
+        for menu in menus
+        for code in json.loads(menu["allergen_tags_json"])
+    ]
+    ingredients = [
+        {
+            "ingredient_id": f"ingredient_{_code(name_en)}",
+            "name_ko": name_ko,
+            "name_en": name_en,
+            "ingredient_group": "synthetic_menu_core",
+        }
+        for name_en, name_ko, _, _ in CATEGORIES
+    ]
+    menu_ingredients = [
+        {
+            "menu_id": menu["menu_id"],
+            "ingredient_id": f"ingredient_{_code(menu['category'])}",
+            "status": "PRESENT",
+            "source_id": f"knowledge_{menu['menu_id']}",
+            "is_optional": 0,
+        }
+        for menu in menus
+    ]
+    option_dietary_conflicts = [
+        {
+            "option_item_id": item["option_item_id"],
+            "rule_code": "shellfish_allergy",
+            "conflict_status": "UNKNOWN_CROSS_CONTAMINATION",
+            "evidence_id": None,
+        }
+        for item in option_items
+        if item["dietary_conflict"]
+    ]
+
     return {
         "merchants": merchants,
         "menus": menus,
+        "knowledge": knowledge,
         "evidence": evidence,
         "reviews": reviews,
         "option_groups": option_groups,
         "option_items": option_items,
         "hotels": hotels,
+        "service_areas": service_areas,
+        "menu_categories": menu_categories,
+        "dietary_attributes": dietary_attributes,
+        "menu_dietary_attributes": menu_dietary_attributes,
+        "allergens": allergens,
+        "menu_allergens": menu_allergens,
+        "ingredients": ingredients,
+        "menu_ingredients": menu_ingredients,
+        "option_dietary_conflicts": option_dietary_conflicts,
     }
 
 

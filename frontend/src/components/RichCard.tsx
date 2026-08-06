@@ -78,7 +78,7 @@ export function RichCard({ card, onChooseMenu, onQuickReply }: Props) {
               <details className="source-drawer">
                 <summary>Why this match</summary>
                 <ul>{menu.match_reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
-                <code>{menu.menu_id} · {menu.merchant_id}</code>
+                <code>{[menu.menu_id, menu.merchant_id, ...menu.evidence_ids].join(" · ")}</code>
               </details>
               <p className="demo-label">Synthetic demo menu · checked 2026-08-06</p>
               <button className="primary-button full" onClick={() => onChooseMenu(menu)}>
@@ -152,6 +152,7 @@ export function RichCard({ card, onChooseMenu, onQuickReply }: Props) {
               </dl>
               <EvidenceBadge status={merchant.dietary_status} />
               <p>{merchant.dietary_note}</p>
+              <details className="source-drawer"><summary>Evidence sources</summary><code>{merchant.evidence_ids.join(" · ") || "Not verified"}</code></details>
               <button
                 className={index === 0 ? "primary-button full" : "secondary-button full"}
                 onClick={() => onQuickReply(index === 0 ? "Choose Seoul Rose Tteokbokki" : `Choose ${merchant.merchant_name}`)}

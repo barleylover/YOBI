@@ -4,6 +4,7 @@ from app.db.sqlite_repository import SQLiteYobiRepository
 from app.domain.models import (
     AddressCandidate,
     CartItemInput,
+    CartItemUpdate,
     CheckoutCreate,
     DeliveryPreferenceInput,
     ProfileCreate,
@@ -67,6 +68,110 @@ def test_checkout_and_order_are_idempotent(
     paid_twice = repository.update_checkout(first.checkout_id, "SUCCEEDED")
     assert paid_once.order_id
     assert paid_once.order_id == paid_twice.order_id
+
+
+def test_cart_is_repriced_from_current_catalog_before_confirmation(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    session_id, _ = _ready_cart(repository, profile_data)
+    before = repository.get_cart(session_id)
+    with repository._connection() as connection:
+        connection.execute(
+            "UPDATE menu SET price = price + 700 WHERE menu_id = ?", ("menu_001_01",)
+        )
+
+    confirmed = repository.confirm_cart(session_id)
+
+    assert confirmed.confirmed is True
+    assert confirmed.subtotal == before.subtotal + 700
+    assert confirmed.items[0].unit_price == before.items[0].unit_price + 700
+
+
+def test_checkout_requires_reconfirmation_when_catalog_changes(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    session_id, _ = _ready_cart(repository, profile_data)
+    repository.confirm_cart(session_id)
+    with repository._connection() as connection:
+        connection.execute(
+            "UPDATE menu SET price = price + 500 WHERE menu_id = ?", ("menu_001_01",)
+        )
+
+    with pytest.raises(ValueError, match="CART_CHANGED_RECONFIRM_REQUIRED"):
+        repository.create_checkout(
+            session_id,
+            CheckoutCreate(
+                idempotency_key="catalog-change-reconfirm",
+                payment_method="international_card",
+            ),
+        )
+
+    refreshed = repository.get_cart(session_id)
+    assert refreshed.confirmed is False
+
+
+def test_confirmation_rejects_unavailable_option(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    session_id, _ = _ready_cart(repository, profile_data)
+    with repository._connection() as connection:
+        connection.execute(
+            "UPDATE menu_option_item SET availability = 'SOLD_OUT' WHERE option_item_id = ?",
+            ("oi_001_01_size_regular",),
+        )
+
+    with pytest.raises(ValueError, match="CART_OPTION_UNAVAILABLE"):
+        repository.confirm_cart(session_id)
+
+
+def test_confirmation_rejects_minimum_order_change(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    session_id, _ = _ready_cart(repository, profile_data)
+    with repository._connection() as connection:
+        connection.execute(
+            "UPDATE merchant SET min_order_amount = 999999 WHERE merchant_id = ?",
+            ("mer_001",),
+        )
+
+    with pytest.raises(ValueError, match="MINIMUM_ORDER_NOT_MET"):
+        repository.confirm_cart(session_id)
+
+
+def test_cart_item_can_be_updated_and_deleted(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    session_id, _ = _ready_cart(repository, profile_data)
+    original = repository.get_cart(session_id)
+    item_id = original.items[0].cart_item_id
+
+    updated = repository.update_cart_item(
+        session_id,
+        item_id,
+        CartItemUpdate(quantity=2, user_note="No disposable cutlery."),
+    )
+
+    assert updated.items[0].quantity == 2
+    assert updated.items[0].line_total == original.items[0].line_total * 2
+    assert updated.confirmed is False
+    emptied = repository.delete_cart_item(session_id, item_id)
+    assert emptied.items == []
+    assert "menu" in emptied.missing_slots
+
+
+def test_cart_rejects_items_from_multiple_merchants(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    session_id, _ = _ready_cart(repository, profile_data)
+
+    with pytest.raises(ValueError, match="CART_MULTIPLE_MERCHANTS"):
+        repository.add_cart_item(
+            session_id,
+            CartItemInput(
+                menu_id="menu_002_01",
+                option_item_ids=["oi_002_01_size_regular"],
+            ),
+        )
 
 
 def test_payment_failure_preserves_cart_and_allows_retry(

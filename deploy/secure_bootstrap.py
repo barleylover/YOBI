@@ -164,7 +164,7 @@ def verify_database(settings: Settings) -> dict[str, object]:
         )
         tables = {str(row[0]) for row in cursor.fetchall()}
     migrations = {version for version, _ in migration_rows}
-    expected_migrations = {"001", "002"}
+    expected_migrations = {"001", "002", "003"}
     if current_user != "YOBI_APP":
         raise RuntimeError("BOOTSTRAP_RUNTIME_USER_MISMATCH")
     if not expected_migrations.issubset(migrations):
@@ -180,7 +180,7 @@ def verify_database(settings: Settings) -> dict[str, object]:
 
 def main() -> None:
     if os.geteuid() != 0:
-        raise SystemExit("Run on yobi-app-01 with sudo /opt/yobi/venv/bin/python ...")
+        raise SystemExit("Run on yobi-app-01 with sudo /opt/yobi/current/venv/bin/python ...")
     resumed = load_runtime_env()
     if resumed:
         print("Protected runtime environment found; resuming without secret prompts.")

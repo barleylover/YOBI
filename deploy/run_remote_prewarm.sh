@@ -18,4 +18,4 @@ host="$(oci compute instance list-vnics --profile "$PROFILE" --region "$REGION" 
 [[ -n "$host" && "$host" != "null" ]] || { printf 'Running YOBI VM was not resolved.\n' >&2; exit 1; }
 
 ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new "$SSH_USER@$host" \
-  "sudo /opt/yobi/venv/bin/python /opt/yobi/current/deploy/remote_prewarm.py"
+  "sudo /opt/yobi/current/venv/bin/python /opt/yobi/current/deploy/remote_prewarm.py"

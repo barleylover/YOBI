@@ -15,6 +15,7 @@ from app.db.seed_data import CATALOG_VERSION
 from app.domain.models import (
     AddressCandidate,
     CartItemInput,
+    CartItemUpdate,
     CartLine,
     CartPreview,
     ChatState,
@@ -30,6 +31,7 @@ from app.domain.models import (
     Order,
     Profile,
     ProfileCreate,
+    ProfileUpdate,
     Session,
 )
 from app.rag.providers import choose_embedding_provider
@@ -126,6 +128,43 @@ class OracleYobiRepository:
             cursor.execute("SELECT * FROM user_profile WHERE profile_id = :id", id=profile_id)
             row = _row(cursor)
         return self._profile(row) if row else None
+
+    def update_profile(self, profile_id: str, data: ProfileUpdate) -> Profile | None:
+        existing = self.get_profile(profile_id)
+        if existing is None:
+            return None
+        merged = ProfileCreate.model_validate(
+            {
+                **existing.model_dump(exclude={"profile_id", "created_at"}),
+                **data.model_dump(exclude_unset=True),
+            }
+        )
+        if not merged.consent_demo_data:
+            raise ValueError("Demo data processing consent is required to keep a profile")
+        with self.pool.connection() as connection:
+            connection.cursor().execute(
+                """
+                UPDATE user_profile SET preferred_language=:preferred_language,
+                  nationality=:nationality,age_band=:age_band,gender=:gender,
+                  religion_selection=:religion_selection,dietary_rules_json=:dietary_rules,
+                  allergy_severity=:allergy_severity,spice_tolerance=:spice_tolerance,
+                  favorite_foods_json=:favorite_foods,consent_demo_data=:consent,
+                  remember_profile=:remember WHERE profile_id=:profile_id
+                """,
+                preferred_language=merged.preferred_language,
+                nationality=merged.nationality,
+                age_band=merged.age_band,
+                gender=merged.gender,
+                religion_selection=merged.religion_selection,
+                dietary_rules=json.dumps(merged.dietary_rules),
+                allergy_severity=merged.allergy_severity,
+                spice_tolerance=merged.spice_tolerance,
+                favorite_foods=json.dumps(merged.favorite_foods),
+                consent=int(merged.consent_demo_data),
+                remember=int(merged.remember_profile),
+                profile_id=profile_id,
+            )
+        return self.get_profile(profile_id)
 
     @staticmethod
     def _profile(row: dict[str, Any]) -> Profile:
@@ -266,15 +305,34 @@ class OracleYobiRepository:
                 """
                 SELECT * FROM (
                   SELECT m.*, r.name_en AS merchant_name, r.delivery_fee, r.eta_min, r.eta_max,
-                    VECTOR_DISTANCE(m.embedding_vector, :query_vector, COSINE) AS vector_distance
+                    VECTOR_DISTANCE(m.embedding_vector, :query_vector, COSINE) AS vector_distance,
+                    NVL((
+                      SELECT MIN(VECTOR_DISTANCE(rv.embedding_vector, :query_vector, COSINE))
+                      FROM review_snippet rv
+                      WHERE rv.menu_id=m.menu_id AND rv.embedding_vector IS NOT NULL
+                    ), 1) AS review_distance,
+                    NVL((
+                      SELECT MIN(VECTOR_DISTANCE(k.embedding_vector, :query_vector, COSINE))
+                      FROM menu_knowledge k
+                      WHERE k.menu_id=m.menu_id AND k.embedding_vector IS NOT NULL
+                    ), 1) AS knowledge_distance
                   FROM menu m JOIN merchant r ON r.merchant_id = m.merchant_id
                   WHERE m.availability = 'AVAILABLE'
                     AND m.price <= :budget
                     AND m.spice_level <= :spice
                     AND m.embedding_vector IS NOT NULL
                     AND (:severe_shellfish = 0 OR (
-                      JSON_EXISTS(m.dietary_tags_json, '$?(@ == "shellfish_sauce_absent")')
-                      AND NOT JSON_EXISTS(m.allergen_tags_json, '$?(@ == "shellfish_risk")')
+                      EXISTS (
+                        SELECT 1 FROM menu_dietary_attribute mda
+                        JOIN dietary_attribute da ON da.attribute_id=mda.attribute_id
+                        WHERE mda.menu_id=m.menu_id AND da.code='shellfish_sauce_absent'
+                          AND mda.status='VERIFIED'
+                      )
+                      AND NOT EXISTS (
+                        SELECT 1 FROM menu_allergen ma
+                        JOIN allergen a ON a.allergen_id=ma.allergen_id
+                        WHERE ma.menu_id=m.menu_id AND a.code='shellfish_risk'
+                      )
                     ))
                     AND (:exclude_pork = 0 OR NOT JSON_EXISTS(m.allergen_tags_json, '$?(@ == "pork")'))
                   ORDER BY vector_distance, m.price
@@ -294,7 +352,12 @@ class OracleYobiRepository:
         for row in rows:
             tags = set(_json(row["dietary_tags_json"]))
             allergens = set(_json(row["allergen_tags_json"]))
-            similarity = max(0.0, 1.0 - float(row["vector_distance"]))
+            menu_similarity = max(0.0, 1.0 - float(row["vector_distance"]))
+            review_similarity = max(0.0, 1.0 - float(row["review_distance"]))
+            knowledge_similarity = max(0.0, 1.0 - float(row["knowledge_distance"]))
+            similarity = (
+                0.6 * menu_similarity + 0.25 * review_similarity + 0.15 * knowledge_similarity
+            )
             boost = 0.0
             if "red rice cake" in lowered and "tteokbokki" in row["category"].lower():
                 boost += 0.45
@@ -320,9 +383,15 @@ class OracleYobiRepository:
                 risks.append("Some dietary details are not verified")
             scored.append((similarity + boost, row, reasons, risks, status))
         scored.sort(key=lambda item: (item[0], -int(item[1]["price"])), reverse=True)
-        return [
+        menus = [
             self._menu_summary(row, reasons, risks, status, score)
             for score, row, reasons, risks, status in scored[:limit]
+        ]
+        return [
+            menu.model_copy(
+                update={"evidence_ids": [item.evidence_id for item in self.get_evidence(menu.menu_id)]}
+            )
+            for menu in menus
         ]
 
     @staticmethod
@@ -377,12 +446,15 @@ class OracleYobiRepository:
             status = EvidenceStatus.RISK_SIGNAL
         elif "shellfish_sauce_absent" in tags:
             status = EvidenceStatus.VERIFIED
-        return self._menu_summary(
+        menu = self._menu_summary(
             row,
             ["Selected menu from the synthetic catalog"],
             ["Cross-contamination is not verified"],
             status,
             1.0,
+        )
+        return menu.model_copy(
+            update={"evidence_ids": [item.evidence_id for item in self.get_evidence(menu_id)]}
         )
 
     def get_evidence(self, menu_id: str) -> list[Evidence]:
@@ -446,7 +518,16 @@ class OracleYobiRepository:
                     ),
                 )
             )
-        return result
+        return [
+            item.model_copy(
+                update={
+                    "evidence_ids": [
+                        evidence.evidence_id for evidence in self.get_evidence(item.menu_id)
+                    ]
+                }
+            )
+            for item in result
+        ]
 
     def get_options(self, menu_id: str) -> list[OptionGroup]:
         with self.pool.connection() as connection:
@@ -522,21 +603,46 @@ class OracleYobiRepository:
             for score, row in scored[:3]
         ]
 
-    def save_address(self, session_id: str, candidate: AddressCandidate) -> str:
+    def get_address_candidate(self, place_id: str) -> AddressCandidate | None:
+        with self.pool.connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute("SELECT * FROM address_place WHERE place_id=:id", id=place_id)
+            row = _row(cursor)
+        if row is None:
+            return None
+        return AddressCandidate(
+            place_id=row["place_id"],
+            hotel_name=row["name_en"],
+            road_address=row["road_address"],
+            postal_code=row["postal_code"],
+            city=row["city"],
+            delivery_hint=row["delivery_hint"],
+            confidence=1.0,
+            source="canonical_fixture",
+            needs_confirmation=True,
+        )
+
+    def save_address(
+        self,
+        session_id: str,
+        candidate: AddressCandidate,
+        source_image_hash: str | None = None,
+    ) -> str:
         address_ref_id = _id("address")
         with self.pool.connection() as connection:
             cursor = connection.cursor()
             cursor.execute(
                 """
-                INSERT INTO address_ref(address_ref_id,session_id,source_type,place_id,hotel_name,
-                  road_address,extraction_confidence,confirmed,created_at)
-                VALUES (:1,:2,:3,:4,:5,:6,:7,1,:8)
+                INSERT INTO address_ref(address_ref_id,session_id,source_type,source_image_hash,
+                  place_id,hotel_name,road_address,extraction_confidence,confirmed,created_at)
+                VALUES (:1,:2,:3,:4,:5,:6,:7,:8,1,:9)
                 """,
                 [
                     address_ref_id,
                     session_id,
                     candidate.source,
-                    candidate.place_id,
+                    source_image_hash,
+                    candidate.place_id if candidate.place_id != "manual" else None,
                     candidate.hotel_name,
                     candidate.road_address,
                     candidate.confidence,
@@ -567,50 +673,78 @@ class OracleYobiRepository:
         )
         return cart_id
 
+    @staticmethod
+    def _cart_item_values(
+        connection: oracledb.Connection, item: CartItemInput
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
+        cursor = connection.cursor()
+        cursor.execute(
+            "SELECT * FROM menu WHERE menu_id=:id AND availability='AVAILABLE'", id=item.menu_id
+        )
+        menu = _row(cursor)
+        if not menu:
+            raise KeyError("MENU_NOT_FOUND")
+        options: list[dict[str, Any]] = []
+        selected_counts: dict[str, int] = {}
+        option_total = 0
+        for option_id in item.option_item_ids:
+            cursor.execute(
+                """
+                SELECT i.*,g.menu_id FROM menu_option_item i
+                JOIN menu_option_group g ON g.option_group_id=i.option_group_id
+                WHERE i.option_item_id=:id AND i.availability='AVAILABLE'
+                """,
+                id=option_id,
+            )
+            option = _row(cursor)
+            if not option or option["menu_id"] != item.menu_id:
+                raise ValueError("INVALID_MENU_OPTION")
+            group_id = str(option["option_group_id"])
+            selected_counts[group_id] = selected_counts.get(group_id, 0) + 1
+            options.append(
+                {
+                    "option_item_id": option["option_item_id"],
+                    "name_en": option["name_en"],
+                    "name_ko": option["name_ko"],
+                    "price_delta": int(option["price_delta"]),
+                }
+            )
+            option_total += int(option["price_delta"])
+        cursor.execute(
+            """
+            SELECT option_group_id,min_select,max_select
+            FROM menu_option_group WHERE menu_id=:id
+            """,
+            id=item.menu_id,
+        )
+        groups = _rows(cursor)
+        if any(
+            selected_counts.get(str(group["option_group_id"]), 0) < int(group["min_select"])
+            for group in groups
+        ):
+            raise ValueError("REQUIRED_MENU_OPTION_MISSING")
+        if any(
+            selected_counts.get(str(group["option_group_id"]), 0) > int(group["max_select"])
+            for group in groups
+        ):
+            raise ValueError("OPTION_GROUP_MAX_EXCEEDED")
+        return menu, options, (int(menu["price"]) + option_total) * item.quantity
+
     def add_cart_item(self, session_id: str, item: CartItemInput) -> CartPreview:
         with self.pool.connection() as connection:
             cursor = connection.cursor()
-            cursor.execute(
-                "SELECT * FROM menu WHERE menu_id=:id AND availability='AVAILABLE'", id=item.menu_id
-            )
-            menu = _row(cursor)
-            if not menu:
-                raise KeyError("MENU_NOT_FOUND")
-            options = []
-            selected_groups: set[str] = set()
-            option_total = 0
-            for option_id in item.option_item_ids:
-                cursor.execute(
-                    """
-                    SELECT i.*,g.menu_id FROM menu_option_item i
-                    JOIN menu_option_group g ON g.option_group_id=i.option_group_id
-                    WHERE i.option_item_id=:id AND i.availability='AVAILABLE'
-                    """,
-                    id=option_id,
-                )
-                option = _row(cursor)
-                if not option or option["menu_id"] != item.menu_id:
-                    raise ValueError("INVALID_MENU_OPTION")
-                if option["option_group_id"] in selected_groups:
-                    raise ValueError("OPTION_GROUP_MAX_EXCEEDED")
-                selected_groups.add(option["option_group_id"])
-                options.append(
-                    {
-                        "option_item_id": option["option_item_id"],
-                        "name_en": option["name_en"],
-                        "name_ko": option["name_ko"],
-                        "price_delta": int(option["price_delta"]),
-                    }
-                )
-                option_total += int(option["price_delta"])
-            cursor.execute(
-                "SELECT option_group_id FROM menu_option_group WHERE menu_id=:id AND required=1",
-                id=item.menu_id,
-            )
-            if any(row[0] not in selected_groups for row in cursor.fetchall()):
-                raise ValueError("REQUIRED_MENU_OPTION_MISSING")
+            menu, options, line_total = self._cart_item_values(connection, item)
             cart_id = self._ensure_cart(connection, session_id)
-            line_total = (int(menu["price"]) + option_total) * item.quantity
+            cursor.execute(
+                """
+                SELECT 1 FROM cart_item WHERE cart_id=:cart_id AND merchant_id<>:merchant_id
+                  AND ROWNUM=1
+                """,
+                cart_id=cart_id,
+                merchant_id=menu["merchant_id"],
+            )
+            if cursor.fetchone():
+                raise ValueError("CART_MULTIPLE_MERCHANTS")
             cursor.execute(
                 """
                 INSERT INTO cart_item(cart_item_id,cart_id,menu_id,merchant_id,quantity,unit_price,
@@ -636,6 +770,87 @@ class OracleYobiRepository:
                 "UPDATE cart SET version=version+1,confirmed=0,updated_at=:now WHERE cart_id=:id",
                 now=_now(),
                 id=cart_id,
+            )
+        return self.get_cart(session_id)
+
+    def update_cart_item(
+        self, session_id: str, cart_item_id: str, item: CartItemUpdate
+    ) -> CartPreview:
+        with self.pool.connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                SELECT ci.* FROM cart_item ci JOIN cart c ON c.cart_id=ci.cart_id
+                WHERE ci.cart_item_id=:cart_item_id AND c.session_id=:session_id
+                FOR UPDATE
+                """,
+                cart_item_id=cart_item_id,
+                session_id=session_id,
+            )
+            existing = _row(cursor)
+            if existing is None:
+                raise KeyError("CART_ITEM_NOT_FOUND")
+            current_options = _json(existing["option_snapshot_json"])
+            replacement = CartItemInput(
+                menu_id=existing["menu_id"],
+                quantity=item.quantity if item.quantity is not None else int(existing["quantity"]),
+                option_item_ids=(
+                    item.option_item_ids
+                    if item.option_item_ids is not None
+                    else [str(option["option_item_id"]) for option in current_options]
+                ),
+                user_note=item.user_note if item.user_note is not None else existing["user_note"],
+            )
+            menu, options, line_total = self._cart_item_values(connection, replacement)
+            cursor.execute(
+                """
+                UPDATE cart_item SET quantity=:quantity,unit_price=:unit_price,
+                  menu_snapshot_json=:menu_snapshot,option_snapshot_json=:option_snapshot,
+                  line_total=:line_total,user_note=:user_note,korean_note=:korean_note
+                WHERE cart_item_id=:cart_item_id
+                """,
+                quantity=replacement.quantity,
+                unit_price=int(menu["price"]),
+                menu_snapshot=json.dumps(
+                    {"name_en": menu["name_en"], "price": int(menu["price"])}
+                ),
+                option_snapshot=json.dumps(options),
+                line_total=line_total,
+                user_note=replacement.user_note,
+                korean_note=self._translate_note(replacement.user_note),
+                cart_item_id=cart_item_id,
+            )
+            cursor.execute(
+                """
+                UPDATE cart SET version=version+1,confirmed=0,updated_at=:now WHERE cart_id=:id
+                """,
+                now=_now(),
+                id=existing["cart_id"],
+            )
+        return self.get_cart(session_id)
+
+    def delete_cart_item(self, session_id: str, cart_item_id: str) -> CartPreview:
+        with self.pool.connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                SELECT ci.cart_id FROM cart_item ci JOIN cart c ON c.cart_id=ci.cart_id
+                WHERE ci.cart_item_id=:cart_item_id AND c.session_id=:session_id
+                FOR UPDATE
+                """,
+                cart_item_id=cart_item_id,
+                session_id=session_id,
+            )
+            existing = cursor.fetchone()
+            if existing is None:
+                raise KeyError("CART_ITEM_NOT_FOUND")
+            cursor.execute("DELETE FROM cart_item WHERE cart_item_id=:id", id=cart_item_id)
+            cursor.execute(
+                """
+                UPDATE cart SET version=version+1,confirmed=0,updated_at=:now WHERE cart_id=:id
+                """,
+                now=_now(),
+                id=existing[0],
             )
         return self.get_cart(session_id)
 
@@ -769,56 +984,264 @@ class OracleYobiRepository:
             )
         return self.get_cart(session_id)
 
-    def confirm_cart(self, session_id: str) -> CartPreview:
-        preview = self.get_cart(session_id)
-        if not preview.ready_to_checkout:
+    @staticmethod
+    def _revalidate_cart(
+        connection: oracledb.Connection,
+        session_id: str,
+        *,
+        confirm: bool,
+    ) -> tuple[str, bool, bool, int]:
+        """Lock, validate, and reprice a cart from authoritative Oracle rows."""
+        cursor = connection.cursor()
+        cursor.execute("SELECT * FROM cart WHERE session_id=:id FOR UPDATE", id=session_id)
+        cart = _row(cursor)
+        if not cart:
             raise ValueError("CART_INCOMPLETE")
-        with self.pool.connection() as connection:
-            connection.cursor().execute(
-                "UPDATE cart SET confirmed=1,updated_at=:now WHERE cart_id=:id",
-                now=_now(),
-                id=preview.cart_id,
+        cursor.execute(
+            """
+            SELECT p.dietary_rules_json, p.allergy_severity
+            FROM chat_session s JOIN user_profile p ON p.profile_id=s.profile_id
+            WHERE s.session_id=:id
+            """,
+            id=session_id,
+        )
+        profile = _row(cursor)
+        if profile is None:
+            raise ValueError("CART_INCOMPLETE")
+        cursor.execute(
+            """
+            SELECT 1 FROM address_ref
+            WHERE address_ref_id=:address AND session_id=:session_id AND confirmed=1
+            """,
+            address=cart["address_ref_id"],
+            session_id=session_id,
+        )
+        address_ok = cursor.fetchone() is not None
+        cursor.execute("SELECT 1 FROM delivery_preference WHERE cart_id=:id", id=cart["cart_id"])
+        delivery_ok = cursor.fetchone() is not None
+        cursor.execute(
+            "SELECT * FROM cart_item WHERE cart_id=:id ORDER BY created_at", id=cart["cart_id"]
+        )
+        lines = _rows(cursor)
+        if not address_ok or not delivery_ok or not lines:
+            raise ValueError("CART_INCOMPLETE")
+
+        dietary_rules = set(_json(profile["dietary_rules_json"]))
+        severe_shellfish = (
+            "shellfish_allergy" in dietary_rules and profile["allergy_severity"] == "severe"
+        )
+        merchant_ids: set[str] = set()
+        subtotal = 0
+        changed = False
+        for line in lines:
+            cursor.execute(
+                """
+                SELECT m.*, r.delivery_fee, r.min_order_amount
+                FROM menu m JOIN merchant r ON r.merchant_id=m.merchant_id
+                WHERE m.menu_id=:id AND m.availability='AVAILABLE'
+                """,
+                id=line["menu_id"],
             )
+            menu = _row(cursor)
+            if not menu:
+                raise ValueError("CART_MENU_UNAVAILABLE")
+            if menu["merchant_id"] != line["merchant_id"]:
+                raise ValueError("CART_MERCHANT_MISMATCH")
+            merchant_ids.add(str(menu["merchant_id"]))
+            if severe_shellfish:
+                cursor.execute(
+                    """
+                    SELECT CASE WHEN
+                      EXISTS (
+                        SELECT 1 FROM menu_dietary_attribute mda
+                        JOIN dietary_attribute da ON da.attribute_id=mda.attribute_id
+                        WHERE mda.menu_id=:id AND da.code='shellfish_sauce_absent'
+                          AND mda.status='VERIFIED'
+                      ) AND NOT EXISTS (
+                        SELECT 1 FROM menu_allergen ma
+                        JOIN allergen a ON a.allergen_id=ma.allergen_id
+                        WHERE ma.menu_id=:id AND a.code='shellfish_risk'
+                      ) THEN 1 ELSE 0 END FROM dual
+                    """,
+                    id=menu["menu_id"],
+                )
+                if int(cursor.fetchone()[0]) != 1:
+                    raise ValueError("CART_DIETARY_CONFLICT")
+
+            selected_ids = [
+                str(option["option_item_id"]) for option in _json(line["option_snapshot_json"])
+            ]
+            selected_counts: dict[str, int] = {}
+            current_options: list[dict[str, Any]] = []
+            option_total = 0
+            for option_id in selected_ids:
+                cursor.execute(
+                    """
+                    SELECT i.*, g.menu_id FROM menu_option_item i
+                    JOIN menu_option_group g ON g.option_group_id=i.option_group_id
+                    WHERE i.option_item_id=:id AND i.availability='AVAILABLE'
+                    """,
+                    id=option_id,
+                )
+                option = _row(cursor)
+                if not option or option["menu_id"] != menu["menu_id"]:
+                    raise ValueError("CART_OPTION_UNAVAILABLE")
+                if severe_shellfish:
+                    cursor.execute(
+                        """
+                        SELECT 1 FROM option_dietary_conflict
+                        WHERE option_item_id=:id AND rule_code='shellfish_allergy'
+                        """,
+                        id=option_id,
+                    )
+                    if cursor.fetchone() is not None:
+                        raise ValueError("CART_DIETARY_CONFLICT")
+                group_id = str(option["option_group_id"])
+                selected_counts[group_id] = selected_counts.get(group_id, 0) + 1
+                current_options.append(
+                    {
+                        "option_item_id": option["option_item_id"],
+                        "name_en": option["name_en"],
+                        "name_ko": option["name_ko"],
+                        "price_delta": int(option["price_delta"]),
+                    }
+                )
+                option_total += int(option["price_delta"])
+            cursor.execute(
+                """
+                SELECT option_group_id, min_select, max_select
+                FROM menu_option_group WHERE menu_id=:id
+                """,
+                id=menu["menu_id"],
+            )
+            groups = _rows(cursor)
+            if any(
+                selected_counts.get(str(group["option_group_id"]), 0) < int(group["min_select"])
+                or selected_counts.get(str(group["option_group_id"]), 0)
+                > int(group["max_select"])
+                for group in groups
+            ):
+                raise ValueError("CART_OPTION_SELECTION_INVALID")
+
+            unit_price = int(menu["price"])
+            line_total = (unit_price + option_total) * int(line["quantity"])
+            menu_snapshot_value = {"name_en": menu["name_en"], "price": unit_price}
+            line_changed = (
+                int(line["unit_price"]) != unit_price
+                or int(line["line_total"]) != line_total
+                or _json(line["menu_snapshot_json"]) != menu_snapshot_value
+                or _json(line["option_snapshot_json"]) != current_options
+            )
+            if line_changed:
+                changed = True
+                cursor.execute(
+                    """
+                    UPDATE cart_item SET unit_price=:unit_price,
+                      menu_snapshot_json=:menu_snapshot, option_snapshot_json=:option_snapshot,
+                      line_total=:line_total WHERE cart_item_id=:cart_item_id
+                    """,
+                    unit_price=unit_price,
+                    menu_snapshot=json.dumps(menu_snapshot_value),
+                    option_snapshot=json.dumps(current_options),
+                    line_total=line_total,
+                    cart_item_id=line["cart_item_id"],
+                )
+            subtotal += line_total
+
+        if len(merchant_ids) != 1:
+            raise ValueError("CART_MULTIPLE_MERCHANTS")
+        cursor.execute(
+            "SELECT min_order_amount, delivery_fee FROM merchant WHERE merchant_id=:id",
+            id=next(iter(merchant_ids)),
+        )
+        merchant = _row(cursor)
+        if merchant is None or subtotal < int(merchant["min_order_amount"]):
+            raise ValueError("MINIMUM_ORDER_NOT_MET")
+
+        was_confirmed = bool(cart["confirmed"])
+        if confirm:
+            cursor.execute(
+                """
+                UPDATE cart SET confirmed=1,version=version+1,updated_at=:now
+                WHERE cart_id=:id
+                """,
+                now=_now(),
+                id=cart["cart_id"],
+            )
+        elif changed:
+            cursor.execute(
+                """
+                UPDATE cart SET confirmed=0,version=version+1,updated_at=:now
+                WHERE cart_id=:id
+                """,
+                now=_now(),
+                id=cart["cart_id"],
+            )
+        return (
+            str(cart["cart_id"]),
+            changed,
+            was_confirmed,
+            subtotal + int(merchant["delivery_fee"]),
+        )
+
+    def confirm_cart(self, session_id: str) -> CartPreview:
+        with self.pool.connection() as connection:
+            self._revalidate_cart(connection, session_id, confirm=True)
         return self.get_cart(session_id)
 
     def create_checkout(self, session_id: str, data: CheckoutCreate) -> Checkout:
-        preview = self.get_cart(session_id)
-        if not preview.ready_to_checkout or not preview.confirmed:
-            raise ValueError("CART_NOT_CONFIRMED")
+        changed = False
+        checkout: Checkout | None = None
         with self.pool.connection() as connection:
-            cursor = connection.cursor()
-            cursor.execute(
-                "SELECT * FROM mock_checkout WHERE idempotency_key=:key", key=data.idempotency_key
+            cart_id, changed, was_confirmed, current_total = self._revalidate_cart(
+                connection, session_id, confirm=False
             )
-            existing = _row(cursor)
-            if existing:
-                if existing["cart_id"] != preview.cart_id:
-                    raise ValueError("IDEMPOTENCY_KEY_REUSED")
-                return self._checkout(existing)
-            checkout_id = _id("checkout")
-            now = _now()
-            cursor.execute(
-                """
-                INSERT INTO mock_checkout(checkout_id,cart_id,idempotency_key,payment_method,status,
-                  amount,payment_url,created_at,updated_at)
-                VALUES (:1,:2,:3,:4,'PENDING',:5,:6,:7,:8)
-                """,
-                [
-                    checkout_id,
-                    preview.cart_id,
-                    data.idempotency_key,
-                    data.payment_method,
-                    preview.total_price,
-                    f"/pay/{checkout_id}",
-                    now,
-                    now,
-                ],
-            )
-            cursor.execute("SELECT * FROM mock_checkout WHERE checkout_id=:id", id=checkout_id)
-            row = _row(cursor)
-        if row is None:
+            if not was_confirmed:
+                raise ValueError("CART_NOT_CONFIRMED")
+            if changed:
+                # Let the transaction commit the refreshed snapshot and reset flag.
+                pass
+            else:
+                cursor = connection.cursor()
+                cursor.execute(
+                    "SELECT * FROM mock_checkout WHERE idempotency_key=:key",
+                    key=data.idempotency_key,
+                )
+                existing = _row(cursor)
+                if existing:
+                    if existing["cart_id"] != cart_id:
+                        raise ValueError("IDEMPOTENCY_KEY_REUSED")
+                    checkout = self._checkout(existing)
+                else:
+                    checkout_id = _id("checkout")
+                    now = _now()
+                    cursor.execute(
+                        """
+                        INSERT INTO mock_checkout(checkout_id,cart_id,idempotency_key,payment_method,
+                          status,amount,payment_url,created_at,updated_at)
+                        VALUES (:1,:2,:3,:4,'PENDING',:5,:6,:7,:8)
+                        """,
+                        [
+                            checkout_id,
+                            cart_id,
+                            data.idempotency_key,
+                            data.payment_method,
+                            current_total,
+                            f"/pay/{checkout_id}",
+                            now,
+                            now,
+                        ],
+                    )
+                    cursor.execute("SELECT * FROM mock_checkout WHERE checkout_id=:id", id=checkout_id)
+                    row = _row(cursor)
+                    if row is None:
+                        raise RuntimeError("CHECKOUT_CREATION_FAILED")
+                    checkout = self._checkout(row)
+        if changed:
+            raise ValueError("CART_CHANGED_RECONFIRM_REQUIRED")
+        if checkout is None:
             raise RuntimeError("CHECKOUT_CREATION_FAILED")
-        return self._checkout(row)
+        return checkout
 
     @staticmethod
     def _checkout(row: dict[str, Any], order_id: str | None = None) -> Checkout:

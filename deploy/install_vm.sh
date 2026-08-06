@@ -2,24 +2,30 @@
 set -euo pipefail
 
 if [[ "${EUID}" -ne 0 ]]; then
-  printf 'Run with sudo: sudo /opt/yobi/current/deploy/install_vm.sh\n' >&2
+  printf 'Run this release installer with sudo.\n' >&2
   exit 1
 fi
 
-dnf install -y nginx python3.9 python3.9-pip tar
+readonly RELEASE_ROOT="${YOBI_RELEASE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+case "$RELEASE_ROOT" in
+  /opt/yobi/releases/*) ;;
+  *) printf 'Refusing release path outside /opt/yobi/releases.\n' >&2; exit 1 ;;
+esac
+
+dnf install -y nginx python3.9 python3.9-pip tar tesseract tesseract-langpack-eng tesseract-langpack-kor
 id yobi >/dev/null 2>&1 || useradd --system --home-dir /opt/yobi --shell /sbin/nologin yobi
 install -d -o yobi -g yobi -m 0755 /opt/yobi/releases /opt/yobi/shared
 install -d -o root -g yobi -m 0750 /etc/yobi
 
-if [[ ! -x /opt/yobi/venv/bin/python ]]; then
-  python3.9 -m venv /opt/yobi/venv
+if [[ ! -x "$RELEASE_ROOT/venv/bin/python" ]]; then
+  python3.9 -m venv "$RELEASE_ROOT/venv"
 fi
-/opt/yobi/venv/bin/python -m pip install --upgrade pip
-/opt/yobi/venv/bin/python -m pip install -e '/opt/yobi/current/backend'
+"$RELEASE_ROOT/venv/bin/python" -m pip install --upgrade pip
+"$RELEASE_ROOT/venv/bin/python" -m pip install "$RELEASE_ROOT/backend"
 
-install -o root -g root -m 0644 /opt/yobi/current/deploy/systemd/yobi-api.service /etc/systemd/system/yobi-api.service
-install -o root -g root -m 0644 /opt/yobi/current/deploy/nginx/nginx.conf /etc/nginx/nginx.conf
-install -o root -g root -m 0644 /opt/yobi/current/deploy/nginx/yobi.conf /etc/nginx/conf.d/yobi.conf
+install -o root -g root -m 0644 "$RELEASE_ROOT/deploy/systemd/yobi-api.service" /etc/systemd/system/yobi-api.service
+install -o root -g root -m 0644 "$RELEASE_ROOT/deploy/nginx/nginx.conf" /etc/nginx/nginx.conf
+install -o root -g root -m 0644 "$RELEASE_ROOT/deploy/nginx/yobi.conf" /etc/nginx/conf.d/yobi.conf
 rm -f /etc/nginx/conf.d/default.conf
 
 if command -v getsebool >/dev/null 2>&1 && command -v setsebool >/dev/null 2>&1; then

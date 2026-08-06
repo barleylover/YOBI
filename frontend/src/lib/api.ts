@@ -34,6 +34,56 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ content }),
     }),
+  streamMessage: async (
+    sessionId: string,
+    content: string,
+    handlers: { onText: (text: string) => void; onStatus: (text: string) => void },
+  ) => {
+    const response = await fetch(`/api/v1/sessions/${sessionId}/messages/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    });
+    if (!response.ok || !response.body) throw new Error("CHAT_STREAM_FAILED");
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let finalTurn: AssistantTurn | null = null;
+    let providerError = false;
+
+    function consumeFrame(frame: string) {
+      const lines = frame.split(/\r?\n/);
+      const event = lines.find((line) => line.startsWith("event:"))?.slice(6).trim();
+      const dataText = lines
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart())
+        .join("\n");
+      if (!event || !dataText) return;
+      const data = JSON.parse(dataText) as Record<string, unknown>;
+      if (event === "text_delta") handlers.onText(String(data.text ?? ""));
+      if (event === "status" || event === "tool_started" || event === "tool_completed") {
+        handlers.onStatus(String(data.text ?? data.label ?? ""));
+      }
+      if (event === "message_end") finalTurn = data as unknown as AssistantTurn;
+      if (event === "error") providerError = true;
+    }
+
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const frames = buffer.split(/\r?\n\r?\n/);
+      buffer = frames.pop() ?? "";
+      frames.forEach(consumeFrame);
+      if (done) break;
+    }
+    if (buffer.trim()) consumeFrame(buffer);
+    if (providerError || !finalTurn) throw new Error("CHAT_STREAM_INCOMPLETE");
+    return finalTurn as AssistantTurn;
+  },
+  getMessages: (sessionId: string) =>
+    request<Array<{ message_id: string; role: "user" | "assistant"; content: string }>>(
+      `/api/v1/sessions/${sessionId}/messages`,
+    ),
   getOptions: (menuId: string) => request<OptionGroup[]>(`/api/v1/menus/${menuId}/options`),
   addCartItem: (
     sessionId: string,
@@ -64,10 +114,33 @@ export const api = {
       notice: string;
     }>;
   },
+  resolveAddress: (sessionId: string, text: string) =>
+    request<{
+      candidates: AddressCandidate[];
+      low_confidence: boolean;
+      notice: string;
+    }>(`/api/v1/sessions/${sessionId}/address/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
   confirmAddress: (sessionId: string, candidate: AddressCandidate) =>
     request<{ address_ref_id: string }>(`/api/v1/sessions/${sessionId}/address/confirm`, {
       method: "POST",
-      body: JSON.stringify({ candidate }),
+      body: JSON.stringify({ candidate_token: candidate.candidate_token }),
+    }),
+  confirmManualAddress: (
+    sessionId: string,
+    manual: {
+      hotel_name: string;
+      road_address: string;
+      postal_code: string;
+      city: string;
+      delivery_hint: string;
+    },
+  ) =>
+    request<{ address_ref_id: string }>(`/api/v1/sessions/${sessionId}/address/confirm`, {
+      method: "POST",
+      body: JSON.stringify({ manual }),
     }),
   updateDelivery: (sessionId: string, addressRefId: string) =>
     request<CartPreview>(`/api/v1/sessions/${sessionId}/delivery`, {
@@ -84,6 +157,15 @@ export const api = {
   confirmCart: (sessionId: string) =>
     request<CartPreview>(`/api/v1/sessions/${sessionId}/cart/confirm`, {
       method: "POST",
+    }),
+  updateCartItem: (sessionId: string, cartItemId: string, quantity: number) =>
+    request<CartPreview>(`/api/v1/sessions/${sessionId}/cart/items/${cartItemId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ quantity }),
+    }),
+  deleteCartItem: (sessionId: string, cartItemId: string) =>
+    request<CartPreview>(`/api/v1/sessions/${sessionId}/cart/items/${cartItemId}`, {
+      method: "DELETE",
     }),
   createCheckout: (sessionId: string) =>
     request<Checkout>(`/api/v1/sessions/${sessionId}/checkout`, {

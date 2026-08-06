@@ -5,6 +5,7 @@ from typing import Protocol
 from app.domain.models import (
     AddressCandidate,
     CartItemInput,
+    CartItemUpdate,
     CartPreview,
     Checkout,
     CheckoutCreate,
@@ -16,6 +17,7 @@ from app.domain.models import (
     Order,
     Profile,
     ProfileCreate,
+    ProfileUpdate,
     Session,
 )
 
@@ -26,6 +28,8 @@ class YobiRepository(Protocol):
     def create_profile(self, data: ProfileCreate) -> Profile: ...
 
     def get_profile(self, profile_id: str) -> Profile | None: ...
+
+    def update_profile(self, profile_id: str, data: ProfileUpdate) -> Profile | None: ...
 
     def delete_profile(self, profile_id: str) -> bool: ...
 
@@ -63,9 +67,22 @@ class YobiRepository(Protocol):
 
     def resolve_address(self, text: str, file_hash: str | None = None) -> list[AddressCandidate]: ...
 
-    def save_address(self, session_id: str, candidate: AddressCandidate) -> str: ...
+    def get_address_candidate(self, place_id: str) -> AddressCandidate | None: ...
+
+    def save_address(
+        self,
+        session_id: str,
+        candidate: AddressCandidate,
+        source_image_hash: str | None = None,
+    ) -> str: ...
 
     def add_cart_item(self, session_id: str, item: CartItemInput) -> CartPreview: ...
+
+    def update_cart_item(
+        self, session_id: str, cart_item_id: str, item: CartItemUpdate
+    ) -> CartPreview: ...
+
+    def delete_cart_item(self, session_id: str, cart_item_id: str) -> CartPreview: ...
 
     def get_cart(self, session_id: str) -> CartPreview: ...
 

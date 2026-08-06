@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ChatState(str, Enum):
@@ -59,6 +59,27 @@ class Profile(ProfileCreate):
     created_at: datetime
 
 
+class ProfileUpdate(BaseModel):
+    preferred_language: str | None = None
+    nationality: str | None = None
+    age_band: str | None = None
+    gender: str | None = None
+    religion_selection: str | None = None
+    dietary_rules: list[str] | None = None
+    allergy_severity: Literal["mild", "moderate", "severe"] | None = None
+    spice_tolerance: int | None = Field(default=None, ge=0, le=5)
+    favorite_foods: list[str] | None = None
+    consent_demo_data: bool | None = None
+    remember_profile: bool | None = None
+
+    @field_validator("dietary_rules", "favorite_foods")
+    @classmethod
+    def normalize_optional_list(cls, values: list[str] | None) -> list[str] | None:
+        if values is None:
+            return None
+        return [value.strip().lower() for value in values if value.strip()]
+
+
 class Session(BaseModel):
     session_id: str
     profile_id: str
@@ -102,6 +123,7 @@ class MenuSummary(BaseModel):
     match_reasons: list[str]
     risk_hints: list[str]
     semantic_score: float
+    evidence_ids: list[str] = Field(default_factory=list)
     is_synthetic: bool = True
 
 
@@ -119,6 +141,7 @@ class MerchantComparison(BaseModel):
     dietary_status: EvidenceStatus
     dietary_note: str
     best_for: str
+    evidence_ids: list[str] = Field(default_factory=list)
     is_synthetic: bool = True
 
 
@@ -195,6 +218,18 @@ class CartItemInput(BaseModel):
     quantity: int = Field(default=1, ge=1, le=10)
     option_item_ids: list[str] = Field(default_factory=list)
     user_note: str = Field(default="", max_length=500)
+
+
+class CartItemUpdate(BaseModel):
+    quantity: int | None = Field(default=None, ge=1, le=10)
+    option_item_ids: list[str] | None = None
+    user_note: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def require_change(self) -> CartItemUpdate:
+        if not self.model_fields_set:
+            raise ValueError("At least one cart item field is required")
+        return self
 
 
 class CartLine(BaseModel):

@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { ArrowUp, ChevronDown, ShieldCheck, ShoppingBag, Sparkles } from "lucide-react";
 import { Navigate, useParams } from "react-router-dom";
 import { OrderFlowPanel } from "../components/OrderFlowPanel";
@@ -24,7 +24,9 @@ export function ChatPage() {
   const session = useSessionStore((state) => state.session);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [activity, setActivity] = useState("Checking menu details…");
   const [selectedMenu, setSelectedMenu] = useState<MenuSummary | null>(null);
+  const [orderPhase, setOrderPhase] = useState<"options" | "note" | "address" | "delivery" | "review">("options");
   const [entries, setEntries] = useState<ChatEntry[]>([
     {
       id: "welcome",
@@ -34,6 +36,36 @@ export function ChatPage() {
   ]);
 
   const activeRules = useMemo(() => profile?.dietary_rules ?? [], [profile]);
+  const journeyStage = selectedMenu
+    ? orderPhase === "address" || orderPhase === "delivery"
+      ? "Deliver"
+      : orderPhase === "review"
+        ? "Pay"
+        : "Choose"
+    : "Discover";
+
+  function openCart() {
+    document.querySelector<HTMLElement>("[data-testid='order-flow']")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  useEffect(() => {
+    if (!sessionId || session?.session_id !== sessionId) return;
+    let active = true;
+    api.getMessages(sessionId)
+      .then((messages) => {
+        if (!active || messages.length === 0) return;
+        setEntries(
+          messages.map((message) => ({
+            id: message.message_id,
+            role: message.role,
+            text: message.content,
+          })),
+        );
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [session?.session_id, sessionId]);
   if (!profile || !session || session.session_id !== sessionId) return <Navigate to="/" replace />;
 
   async function send(text = input) {
@@ -42,11 +74,29 @@ export function ChatPage() {
     setInput("");
     setEntries((current) => [...current, { id: createChatEntryId(), role: "user", text: trimmed }]);
     setSending(true);
+    setActivity("Checking menu details…");
+    const pendingId = createChatEntryId();
+    setEntries((current) => [...current, { id: pendingId, role: "assistant", text: "" }]);
     try {
-      const turn = await api.sendMessage(sessionId, trimmed);
-      setEntries((current) => [...current, { id: turn.message_id, role: "assistant", text: turn.text, turn }]);
+      const turn = await api.streamMessage(sessionId, trimmed, {
+        onText: (delta) => {
+          setEntries((current) => {
+            return current.map((entry) =>
+              entry.id === pendingId ? { ...entry, text: entry.text + delta } : entry,
+            );
+          });
+        },
+        onStatus: setActivity,
+      });
+      setEntries((current) => {
+        const complete = { id: turn.message_id, role: "assistant" as const, text: turn.text, turn };
+        return current.map((entry) => (entry.id === pendingId ? complete : entry));
+      });
     } catch {
-      setEntries((current) => [...current, { id: createChatEntryId(), role: "assistant", text: "I couldn’t complete that check. Your selections are unchanged—please try again." }]);
+      const failure = { id: pendingId, role: "assistant" as const, text: "I couldn’t complete that check. Your selections are unchanged—please try again." };
+      setEntries((current) =>
+        current.map((entry) => (entry.id === pendingId ? failure : entry)),
+      );
     } finally {
       setSending(false);
     }
@@ -63,9 +113,9 @@ export function ChatPage() {
         <header className="chat-header">
           <div className="brand-mark compact">YO<span>BI</span></div>
           <div><strong>Your Korean food buddy</strong><span><i /> Demo catalog ready</span></div>
-          <button aria-label="Open cart"><ShoppingBag size={19} /></button>
+          <button aria-label="Open cart" onClick={openCart} disabled={!selectedMenu} title={selectedMenu ? "Open mock cart" : "Choose a menu first"}><ShoppingBag size={19} /></button>
         </header>
-        <div className="journey-bar"><span className="active">Discover</span><span>Choose</span><span>Deliver</span><span>Pay</span></div>
+        <div className="journey-bar">{["Discover", "Choose", "Deliver", "Pay"].map((step) => <span className={journeyStage === step ? "active" : ""} key={step}>{step}</span>)}</div>
 
         <div className="conversation" aria-live="polite">
           <section className="session-brief">
@@ -75,7 +125,7 @@ export function ChatPage() {
           {entries.map((entry) => (
             <article className={`message ${entry.role}`} key={entry.id}>
               <div className="message-label">{entry.role === "assistant" ? "YOBI" : "You"}</div>
-              <div className="message-bubble">{entry.text}</div>
+              {entry.text && <div className="message-bubble">{entry.text}</div>}
               {entry.turn?.fallback_used && <span className="fallback-chip">Demo continuity mode</span>}
               {entry.turn?.cards.map((card, index) => (
                 <RichCard card={card} key={`${entry.id}-${index}`} onChooseMenu={setSelectedMenu} onQuickReply={(reply) => void send(reply)} />
@@ -87,8 +137,8 @@ export function ChatPage() {
               ) : null}
             </article>
           ))}
-          {sending && <div className="typing"><span /><span /><span /><em>Checking menu details…</em></div>}
-          {selectedMenu && <OrderFlowPanel sessionId={sessionId} menu={selectedMenu} onClose={() => setSelectedMenu(null)} />}
+          {sending && <div className="typing"><span /><span /><span /><em>{activity}</em></div>}
+          {selectedMenu && <OrderFlowPanel sessionId={sessionId} menu={selectedMenu} onClose={() => setSelectedMenu(null)} onPhaseChange={setOrderPhase} />}
         </div>
 
         <form className="composer" onSubmit={submit}>
@@ -102,7 +152,7 @@ export function ChatPage() {
       </section>
 
       <aside className="context-rail">
-        <div className="rail-card profile-card"><p className="eyebrow">Your context</p><h2>Alex in Seoul</h2><p>English · United States · 25-34</p><div className="profile-tags"><span>Spice {profile.spice_tolerance}/5</span>{activeRules.map((rule) => <span key={rule}>{rule.replaceAll("_", " ")}</span>)}</div></div>
+        <div className="rail-card profile-card"><p className="eyebrow">Your context</p><h2>Your Seoul food guide</h2><p>{profile.preferred_language} · {profile.nationality}</p><div className="profile-tags"><span>Spice {profile.spice_tolerance}/5</span>{activeRules.map((rule) => <span key={rule}>{rule.replaceAll("_", " ")}</span>)}</div></div>
         <div className="rail-card"><p className="eyebrow">Trust layer</p><h3><ShieldCheck size={19} /> Evidence before reassurance</h3><p>Restaurant facts, risk signals, and unknowns stay visibly separate.</p><ul><li>Prices come from the demo catalog</li><li>Every dietary claim links to evidence</li><li>No real payment or order</li></ul></div>
         <div className="rail-card demo-data"><strong>Synthetic demo data</strong><p>30 restaurants · 150 menus · 600 review snippets</p></div>
       </aside>

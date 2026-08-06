@@ -16,6 +16,8 @@ def valid_result() -> dict[str, object]:
     return {
         "counts": dict(seed_demo.EXPECTED_COUNTS),
         "null_menu_vectors": 0,
+        "null_review_vectors": 0,
+        "null_knowledge_vectors": 0,
         "canonical_ready": True,
         "required_groups_without_items": 0,
     }
@@ -29,6 +31,8 @@ def test_seed_integrity_accepts_exact_catalog() -> None:
     ("field", "value", "code"),
     [
         ("null_menu_vectors", 1, "SEED_MENU_VECTOR_INTEGRITY_FAILED"),
+        ("null_review_vectors", 1, "SEED_REVIEW_VECTOR_INTEGRITY_FAILED"),
+        ("null_knowledge_vectors", 1, "SEED_KNOWLEDGE_VECTOR_INTEGRITY_FAILED"),
         ("canonical_ready", False, "SEED_CANONICAL_INTEGRITY_FAILED"),
         ("required_groups_without_items", 1, "SEED_REQUIRED_OPTIONS_INTEGRITY_FAILED"),
     ],

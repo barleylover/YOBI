@@ -7,6 +7,26 @@ import pytest
 from app.core.config import Settings
 from app.genai.agent_loop import AgentLoop
 from app.genai.tool_registry import ToolRegistry
+from app.genai.tool_schemas import TOOLS
+
+
+def test_master_spec_exposes_all_fourteen_tools() -> None:
+    assert {tool["name"] for tool in TOOLS} == {
+        "recommend_menu_categories",
+        "search_menus",
+        "explain_menu",
+        "get_dietary_evidence",
+        "compare_merchants",
+        "get_menu_options",
+        "update_cart",
+        "translate_order_note",
+        "resolve_address",
+        "update_delivery_preferences",
+        "get_cart_preview",
+        "create_mock_checkout",
+        "get_mock_payment_status",
+        "complete_mock_order",
+    }
 
 
 def test_tool_registry_rejects_unknown_and_invalid_json(repository, profile_data) -> None:  # type: ignore[no-untyped-def]
@@ -50,6 +70,46 @@ def test_extended_read_tools_are_grounded_and_confirmation_safe(repository, prof
     assert "프런트" in note["korean_translation"]
 
 
+def test_update_cart_tool_uses_repository_pricing_and_can_clear(repository, profile_data) -> None:  # type: ignore[no-untyped-def]
+    profile = repository.create_profile(profile_data)
+    session = repository.create_session(profile.profile_id)
+    registry = ToolRegistry(repository, profile, session.session_id)
+    added = registry.execute(
+        "update_cart",
+        json.dumps(
+            {
+                "action": "ADD_ITEM",
+                "menu_id": "menu_001_01",
+                "cart_item_id": None,
+                "quantity": 2,
+                "option_item_id": None,
+                "option_item_ids": [
+                    "oi_001_01_spice_mild",
+                    "oi_001_01_size_regular",
+                ],
+                "note": "As mild as possible",
+            }
+        ),
+    )["cart"]
+    assert added["items"][0]["line_total"] == added["items"][0]["unit_price"] * 2
+    assert added["confirmed"] is False
+    cleared = registry.execute(
+        "update_cart",
+        json.dumps(
+            {
+                "action": "CLEAR",
+                "menu_id": None,
+                "cart_item_id": None,
+                "quantity": None,
+                "option_item_id": None,
+                "option_item_ids": [],
+                "note": None,
+            }
+        ),
+    )["cart"]
+    assert cleared["items"] == []
+
+
 def test_agent_loop_executes_bounded_function_call(repository, profile_data) -> None:  # type: ignore[no-untyped-def]
     severe_profile = repository.create_profile(profile_data)
     first = SimpleNamespace(
@@ -88,7 +148,12 @@ def test_agent_loop_executes_bounded_function_call(repository, profile_data) -> 
     assert result.text == "I found a grounded mild option."
     assert result.tool_results[0][0] == "search_menus"
     assert result.tool_results[0][1]["menus"][0]["menu_id"] == "menu_001_01"
-    assert fake.responses.calls[1]["previous_response_id"] == "resp_1"
-    returned = json.loads(fake.responses.calls[1]["input"][0]["output"])
+    assert "previous_response_id" not in fake.responses.calls[1]
+    assert fake.responses.calls[1]["input"][0] == {
+        "role": "user",
+        "content": "something mild",
+    }
+    assert fake.responses.calls[1]["input"][1] is first.output[0]
+    returned = json.loads(fake.responses.calls[1]["input"][2]["output"])
     assert set(returned) == {"untrusted_data"}
     assert returned["untrusted_data"]["menus"][0]["menu_id"] == "menu_001_01"

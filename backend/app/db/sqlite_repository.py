@@ -15,6 +15,7 @@ from app.db.seed_data import CATALOG_VERSION, build_seed
 from app.domain.models import (
     AddressCandidate,
     CartItemInput,
+    CartItemUpdate,
     CartLine,
     CartPreview,
     ChatState,
@@ -30,6 +31,7 @@ from app.domain.models import (
     Order,
     Profile,
     ProfileCreate,
+    ProfileUpdate,
     Session,
 )
 from app.rag.embeddings import cosine_similarity, deterministic_embedding
@@ -65,27 +67,84 @@ class SQLiteYobiRepository:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connection() as connection:
             connection.executescript(SCHEMA_SQL)
+            merchant_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(merchant)").fetchall()
+            }
+            if "service_area_id" not in merchant_columns:
+                connection.execute("ALTER TABLE merchant ADD COLUMN service_area_id TEXT")
+            menu_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(menu)").fetchall()
+            }
+            if "category_id" not in menu_columns:
+                connection.execute("ALTER TABLE menu ADD COLUMN category_id TEXT")
             existing = connection.execute("SELECT COUNT(*) FROM merchant").fetchone()[0]
-            if existing:
-                return
             seed = build_seed()
+            if existing:
+                self._backfill_normalized_catalog(connection, seed)
+                return
+            self._insert_rows(connection, "service_area", seed["service_areas"])
+            self._insert_rows(connection, "menu_category", seed["menu_categories"])
             self._insert_rows(connection, "merchant", seed["merchants"])
             self._insert_rows(connection, "menu", seed["menus"])
+            self._insert_rows(connection, "menu_knowledge", seed["knowledge"])
             self._insert_rows(connection, "evidence", seed["evidence"])
             self._insert_rows(connection, "review_snippet", seed["reviews"])
             self._insert_rows(connection, "menu_option_group", seed["option_groups"])
             self._insert_rows(connection, "menu_option_item", seed["option_items"])
+            self._insert_rows(connection, "ingredient", seed["ingredients"])
+            self._insert_rows(connection, "menu_ingredient", seed["menu_ingredients"])
+            self._insert_rows(connection, "allergen", seed["allergens"])
+            self._insert_rows(connection, "menu_allergen", seed["menu_allergens"])
+            self._insert_rows(connection, "dietary_attribute", seed["dietary_attributes"])
+            self._insert_rows(
+                connection, "menu_dietary_attribute", seed["menu_dietary_attributes"]
+            )
+            self._insert_rows(
+                connection, "option_dietary_conflict", seed["option_dietary_conflicts"]
+            )
             self._insert_rows(connection, "address_place", seed["hotels"])
+
+    @classmethod
+    def _backfill_normalized_catalog(
+        cls, connection: sqlite3.Connection, seed: dict[str, list[dict[str, Any]]]
+    ) -> None:
+        for row in seed["merchants"]:
+            connection.execute(
+                "UPDATE merchant SET service_area_id=? WHERE merchant_id=?",
+                (row["service_area_id"], row["merchant_id"]),
+            )
+        for row in seed["menus"]:
+            connection.execute(
+                "UPDATE menu SET category_id=? WHERE menu_id=?",
+                (row["category_id"], row["menu_id"]),
+            )
+        for table, key in (
+            ("service_area", "service_areas"),
+            ("menu_category", "menu_categories"),
+            ("ingredient", "ingredients"),
+            ("menu_ingredient", "menu_ingredients"),
+            ("allergen", "allergens"),
+            ("menu_allergen", "menu_allergens"),
+            ("dietary_attribute", "dietary_attributes"),
+            ("menu_dietary_attribute", "menu_dietary_attributes"),
+            ("option_dietary_conflict", "option_dietary_conflicts"),
+        ):
+            cls._insert_rows(connection, table, seed[key], replace=True)
 
     @staticmethod
     def _insert_rows(
-        connection: sqlite3.Connection, table: str, rows: list[dict[str, Any]]
+        connection: sqlite3.Connection,
+        table: str,
+        rows: list[dict[str, Any]],
+        *,
+        replace: bool = False,
     ) -> None:
         if not rows:
             return
         columns = list(rows[0])
         placeholders = ",".join("?" for _ in columns)
-        sql = f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})"
+        operation = "INSERT OR REPLACE" if replace else "INSERT"
+        sql = f"{operation} INTO {table} ({','.join(columns)}) VALUES ({placeholders})"
         connection.executemany(sql, [[row[column] for column in columns] for row in rows])
 
     def create_profile(self, data: ProfileCreate) -> Profile:
@@ -131,6 +190,45 @@ class SQLiteYobiRepository:
                 "SELECT * FROM user_profile WHERE profile_id = ?", (profile_id,)
             ).fetchone()
         return self._profile_from_row(row) if row else None
+
+    def update_profile(self, profile_id: str, data: ProfileUpdate) -> Profile | None:
+        existing = self.get_profile(profile_id)
+        if existing is None:
+            return None
+        merged = ProfileCreate.model_validate(
+            {
+                **existing.model_dump(
+                    exclude={"profile_id", "created_at"},
+                ),
+                **data.model_dump(exclude_unset=True),
+            }
+        )
+        if not merged.consent_demo_data:
+            raise ValueError("Demo data processing consent is required to keep a profile")
+        with self._connection() as connection:
+            connection.execute(
+                """
+                UPDATE user_profile SET preferred_language=?, nationality=?, age_band=?, gender=?,
+                  religion_selection=?, dietary_rules_json=?, allergy_severity=?,
+                  spice_tolerance=?, favorite_foods_json=?, consent_demo_data=?,
+                  remember_profile=? WHERE profile_id=?
+                """,
+                (
+                    merged.preferred_language,
+                    merged.nationality,
+                    merged.age_band,
+                    merged.gender,
+                    merged.religion_selection,
+                    json.dumps(merged.dietary_rules),
+                    merged.allergy_severity,
+                    merged.spice_tolerance,
+                    json.dumps(merged.favorite_foods),
+                    int(merged.consent_demo_data),
+                    int(merged.remember_profile),
+                    profile_id,
+                ),
+            )
+        return self.get_profile(profile_id)
 
     @staticmethod
     def _profile_from_row(row: sqlite3.Row) -> Profile:
@@ -311,9 +409,15 @@ class SQLiteYobiRepository:
             scored.append((score + exact_boost, row, reasons, risks, status))
 
         scored.sort(key=lambda item: (item[0], -item[1]["price"]), reverse=True)
-        return [
+        menus = [
             self._menu_summary(row, reasons, risks, status, score)
             for score, row, reasons, risks, status in scored[:limit]
+        ]
+        return [
+            menu.model_copy(
+                update={"evidence_ids": [item.evidence_id for item in self.get_evidence(menu.menu_id)]}
+            )
+            for menu in menus
         ]
 
     @staticmethod
@@ -364,12 +468,15 @@ class SQLiteYobiRepository:
         tags = set(json.loads(row["dietary_tags_json"]))
         if "shellfish_sauce_absent" in tags:
             status = EvidenceStatus.VERIFIED
-        return self._menu_summary(
+        menu = self._menu_summary(
             row,
             ["Selected menu from the synthetic catalog"],
             ["Cross-contamination is not verified"],
             status,
             1.0,
+        )
+        return menu.model_copy(
+            update={"evidence_ids": [item.evidence_id for item in self.get_evidence(menu_id)]}
         )
 
     def get_evidence(self, menu_id: str) -> list[Evidence]:
@@ -427,7 +534,16 @@ class SQLiteYobiRepository:
                     ),
                 )
             )
-        return comparisons
+        return [
+            item.model_copy(
+                update={
+                    "evidence_ids": [
+                        evidence.evidence_id for evidence in self.get_evidence(item.menu_id)
+                    ]
+                }
+            )
+            for item in comparisons
+        ]
 
     def get_options(self, menu_id: str) -> list[OptionGroup]:
         with self._connection() as connection:
@@ -502,21 +618,46 @@ class SQLiteYobiRepository:
             for score, row in scored[:3]
         ]
 
-    def save_address(self, session_id: str, candidate: AddressCandidate) -> str:
+    def get_address_candidate(self, place_id: str) -> AddressCandidate | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM address_place WHERE place_id = ?", (place_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        return AddressCandidate(
+            place_id=row["place_id"],
+            hotel_name=row["name_en"],
+            road_address=row["road_address"],
+            postal_code=row["postal_code"],
+            city=row["city"],
+            delivery_hint=row["delivery_hint"],
+            confidence=1.0,
+            source="canonical_fixture",
+            needs_confirmation=True,
+        )
+
+    def save_address(
+        self,
+        session_id: str,
+        candidate: AddressCandidate,
+        source_image_hash: str | None = None,
+    ) -> str:
         address_ref_id = _id("address")
         with self._connection() as connection:
             connection.execute(
                 """
                 INSERT INTO address_ref (
-                  address_ref_id, session_id, source_type, place_id, hotel_name,
+                  address_ref_id, session_id, source_type, source_image_hash, place_id, hotel_name,
                   road_address, extraction_confidence, confirmed, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
                 """,
                 (
                     address_ref_id,
                     session_id,
                     candidate.source,
-                    candidate.place_id,
+                    source_image_hash,
+                    candidate.place_id if candidate.place_id != "manual" else None,
                     candidate.hotel_name,
                     candidate.road_address,
                     candidate.confidence,
@@ -545,56 +686,72 @@ class SQLiteYobiRepository:
         )
         return cart_id
 
+    @staticmethod
+    def _cart_item_values(
+        connection: sqlite3.Connection, item: CartItemInput
+    ) -> tuple[sqlite3.Row, list[dict[str, Any]], int]:
+        menu = connection.execute(
+            "SELECT * FROM menu WHERE menu_id = ? AND availability = 'AVAILABLE'", (item.menu_id,)
+        ).fetchone()
+        if not menu:
+            raise KeyError("MENU_NOT_FOUND")
+        options: list[dict[str, Any]] = []
+        option_total = 0
+        selected_counts: dict[str, int] = {}
+        for option_id in item.option_item_ids:
+            option = connection.execute(
+                """
+                SELECT i.*, g.menu_id FROM menu_option_item i
+                JOIN menu_option_group g ON g.option_group_id = i.option_group_id
+                WHERE i.option_item_id = ? AND i.availability = 'AVAILABLE'
+                """,
+                (option_id,),
+            ).fetchone()
+            if not option or option["menu_id"] != item.menu_id:
+                raise ValueError("INVALID_MENU_OPTION")
+            group_id = str(option["option_group_id"])
+            selected_counts[group_id] = selected_counts.get(group_id, 0) + 1
+            options.append(
+                {
+                    "option_item_id": option["option_item_id"],
+                    "name_en": option["name_en"],
+                    "name_ko": option["name_ko"],
+                    "price_delta": int(option["price_delta"]),
+                }
+            )
+            option_total += int(option["price_delta"])
+        groups = connection.execute(
+            """
+            SELECT option_group_id, min_select, max_select
+            FROM menu_option_group WHERE menu_id = ?
+            """,
+            (item.menu_id,),
+        ).fetchall()
+        if any(
+            selected_counts.get(str(group["option_group_id"]), 0) < int(group["min_select"])
+            for group in groups
+        ):
+            raise ValueError("REQUIRED_MENU_OPTION_MISSING")
+        if any(
+            selected_counts.get(str(group["option_group_id"]), 0) > int(group["max_select"])
+            for group in groups
+        ):
+            raise ValueError("OPTION_GROUP_MAX_EXCEEDED")
+        return menu, options, (int(menu["price"]) + option_total) * item.quantity
+
     def add_cart_item(self, session_id: str, item: CartItemInput) -> CartPreview:
         with self._connection() as connection:
-            menu = connection.execute(
-                "SELECT * FROM menu WHERE menu_id = ? AND availability = 'AVAILABLE'", (item.menu_id,)
-            ).fetchone()
-            if not menu:
-                raise KeyError("MENU_NOT_FOUND")
-            options = []
-            option_total = 0
-            selected_groups: set[str] = set()
-            for option_id in item.option_item_ids:
-                option = connection.execute(
-                    """
-                    SELECT i.*, g.menu_id FROM menu_option_item i
-                    JOIN menu_option_group g ON g.option_group_id = i.option_group_id
-                    WHERE i.option_item_id = ? AND i.availability = 'AVAILABLE'
-                    """,
-                    (option_id,),
-                ).fetchone()
-                if not option or option["menu_id"] != item.menu_id:
-                    raise ValueError("INVALID_MENU_OPTION")
-                if option["option_group_id"] in selected_groups:
-                    raise ValueError("OPTION_GROUP_MAX_EXCEEDED")
-                selected_groups.add(option["option_group_id"])
-                options.append(
-                    {
-                        "option_item_id": option["option_item_id"],
-                        "name_en": option["name_en"],
-                        "name_ko": option["name_ko"],
-                        "price_delta": option["price_delta"],
-                    }
-                )
-                option_total += option["price_delta"]
-            required_groups = connection.execute(
-                """
-                SELECT option_group_id FROM menu_option_group
-                WHERE menu_id = ? AND required = 1
-                """,
-                (item.menu_id,),
-            ).fetchall()
-            missing_required = [
-                row["option_group_id"]
-                for row in required_groups
-                if row["option_group_id"] not in selected_groups
-            ]
-            if missing_required:
-                raise ValueError("REQUIRED_MENU_OPTION_MISSING")
+            menu, options, line_total = self._cart_item_values(connection, item)
             cart_id = self._ensure_cart(connection, session_id)
+            other_merchant = connection.execute(
+                """
+                SELECT 1 FROM cart_item WHERE cart_id = ? AND merchant_id <> ? LIMIT 1
+                """,
+                (cart_id, menu["merchant_id"]),
+            ).fetchone()
+            if other_merchant:
+                raise ValueError("CART_MULTIPLE_MERCHANTS")
             cart_item_id = _id("cartitem")
-            line_total = (menu["price"] + option_total) * item.quantity
             connection.execute(
                 """
                 INSERT INTO cart_item (
@@ -621,6 +778,76 @@ class SQLiteYobiRepository:
             connection.execute(
                 "UPDATE cart SET version = version + 1, confirmed = 0, updated_at = ? WHERE cart_id = ?",
                 (_now(), cart_id),
+            )
+        return self.get_cart(session_id)
+
+    def update_cart_item(
+        self, session_id: str, cart_item_id: str, item: CartItemUpdate
+    ) -> CartPreview:
+        with self._connection() as connection:
+            existing = connection.execute(
+                """
+                SELECT ci.* FROM cart_item ci JOIN cart c ON c.cart_id=ci.cart_id
+                WHERE ci.cart_item_id=? AND c.session_id=?
+                """,
+                (cart_item_id, session_id),
+            ).fetchone()
+            if existing is None:
+                raise KeyError("CART_ITEM_NOT_FOUND")
+            current_options = json.loads(existing["option_snapshot_json"])
+            replacement = CartItemInput(
+                menu_id=existing["menu_id"],
+                quantity=item.quantity if item.quantity is not None else int(existing["quantity"]),
+                option_item_ids=(
+                    item.option_item_ids
+                    if item.option_item_ids is not None
+                    else [str(option["option_item_id"]) for option in current_options]
+                ),
+                user_note=item.user_note if item.user_note is not None else existing["user_note"],
+            )
+            menu, options, line_total = self._cart_item_values(connection, replacement)
+            connection.execute(
+                """
+                UPDATE cart_item SET quantity=?,unit_price=?,menu_snapshot_json=?,
+                  option_snapshot_json=?,line_total=?,user_note=?,korean_note=?
+                WHERE cart_item_id=?
+                """,
+                (
+                    replacement.quantity,
+                    int(menu["price"]),
+                    json.dumps({"name_en": menu["name_en"], "price": int(menu["price"])}),
+                    json.dumps(options),
+                    line_total,
+                    replacement.user_note,
+                    self._translate_note(replacement.user_note),
+                    cart_item_id,
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE cart SET version=version+1,confirmed=0,updated_at=? WHERE cart_id=?
+                """,
+                (_now(), existing["cart_id"]),
+            )
+        return self.get_cart(session_id)
+
+    def delete_cart_item(self, session_id: str, cart_item_id: str) -> CartPreview:
+        with self._connection() as connection:
+            existing = connection.execute(
+                """
+                SELECT ci.cart_id FROM cart_item ci JOIN cart c ON c.cart_id=ci.cart_id
+                WHERE ci.cart_item_id=? AND c.session_id=?
+                """,
+                (cart_item_id, session_id),
+            ).fetchone()
+            if existing is None:
+                raise KeyError("CART_ITEM_NOT_FOUND")
+            connection.execute("DELETE FROM cart_item WHERE cart_item_id=?", (cart_item_id,))
+            connection.execute(
+                """
+                UPDATE cart SET version=version+1,confirmed=0,updated_at=? WHERE cart_id=?
+                """,
+                (_now(), existing["cart_id"]),
             )
         return self.get_cart(session_id)
 
@@ -747,54 +974,252 @@ class SQLiteYobiRepository:
             )
         return self.get_cart(session_id)
 
-    def confirm_cart(self, session_id: str) -> CartPreview:
-        preview = self.get_cart(session_id)
-        if not preview.ready_to_checkout:
+    @staticmethod
+    def _revalidate_cart(
+        connection: sqlite3.Connection,
+        session_id: str,
+        *,
+        confirm: bool,
+    ) -> tuple[str, bool, bool, int]:
+        """Validate and reprice a cart against current catalog rows while locked."""
+        cart = connection.execute(
+            """
+            SELECT c.*, p.dietary_rules_json, p.allergy_severity
+            FROM cart c
+            JOIN chat_session s ON s.session_id = c.session_id
+            JOIN user_profile p ON p.profile_id = s.profile_id
+            WHERE c.session_id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+        if not cart:
             raise ValueError("CART_INCOMPLETE")
-        with self._connection() as connection:
-            connection.execute(
-                "UPDATE cart SET confirmed = 1, updated_at = ? WHERE cart_id = ?",
-                (_now(), preview.cart_id),
+        address = connection.execute(
+            """
+            SELECT 1 FROM address_ref
+            WHERE address_ref_id = ? AND session_id = ? AND confirmed = 1
+            """,
+            (cart["address_ref_id"], session_id),
+        ).fetchone()
+        delivery = connection.execute(
+            "SELECT 1 FROM delivery_preference WHERE cart_id = ?", (cart["cart_id"],)
+        ).fetchone()
+        lines = connection.execute(
+            "SELECT * FROM cart_item WHERE cart_id = ? ORDER BY created_at",
+            (cart["cart_id"],),
+        ).fetchall()
+        if not address or not delivery or not lines:
+            raise ValueError("CART_INCOMPLETE")
+
+        dietary_rules = set(json.loads(cart["dietary_rules_json"]))
+        severe_shellfish = (
+            "shellfish_allergy" in dietary_rules and cart["allergy_severity"] == "severe"
+        )
+        merchant_ids: set[str] = set()
+        subtotal = 0
+        changed = False
+        for line in lines:
+            menu = connection.execute(
+                """
+                SELECT m.*, r.delivery_fee, r.min_order_amount
+                FROM menu m JOIN merchant r ON r.merchant_id = m.merchant_id
+                WHERE m.menu_id = ? AND m.availability = 'AVAILABLE'
+                """,
+                (line["menu_id"],),
+            ).fetchone()
+            if not menu:
+                raise ValueError("CART_MENU_UNAVAILABLE")
+            if menu["merchant_id"] != line["merchant_id"]:
+                raise ValueError("CART_MERCHANT_MISMATCH")
+            merchant_ids.add(menu["merchant_id"])
+            if severe_shellfish:
+                normalized_safe = connection.execute(
+                    """
+                    SELECT CASE WHEN
+                      EXISTS (
+                        SELECT 1 FROM menu_dietary_attribute mda
+                        JOIN dietary_attribute da ON da.attribute_id=mda.attribute_id
+                        WHERE mda.menu_id=? AND da.code='shellfish_sauce_absent'
+                          AND mda.status='VERIFIED'
+                      ) AND NOT EXISTS (
+                        SELECT 1 FROM menu_allergen ma
+                        JOIN allergen a ON a.allergen_id=ma.allergen_id
+                        WHERE ma.menu_id=? AND a.code='shellfish_risk'
+                      ) THEN 1 ELSE 0 END
+                    """,
+                    (menu["menu_id"], menu["menu_id"]),
+                ).fetchone()[0]
+                if not normalized_safe:
+                    raise ValueError("CART_DIETARY_CONFLICT")
+
+            selected_ids = [
+                str(option["option_item_id"])
+                for option in json.loads(line["option_snapshot_json"])
+            ]
+            selected_counts: dict[str, int] = {}
+            current_options: list[dict[str, Any]] = []
+            option_total = 0
+            for option_id in selected_ids:
+                option = connection.execute(
+                    """
+                    SELECT i.*, g.menu_id FROM menu_option_item i
+                    JOIN menu_option_group g ON g.option_group_id = i.option_group_id
+                    WHERE i.option_item_id = ? AND i.availability = 'AVAILABLE'
+                    """,
+                    (option_id,),
+                ).fetchone()
+                if not option or option["menu_id"] != menu["menu_id"]:
+                    raise ValueError("CART_OPTION_UNAVAILABLE")
+                if severe_shellfish:
+                    conflict = connection.execute(
+                        """
+                        SELECT 1 FROM option_dietary_conflict
+                        WHERE option_item_id=? AND rule_code='shellfish_allergy'
+                        """,
+                        (option_id,),
+                    ).fetchone()
+                    if conflict:
+                        raise ValueError("CART_DIETARY_CONFLICT")
+                group_id = str(option["option_group_id"])
+                selected_counts[group_id] = selected_counts.get(group_id, 0) + 1
+                current_options.append(
+                    {
+                        "option_item_id": option["option_item_id"],
+                        "name_en": option["name_en"],
+                        "name_ko": option["name_ko"],
+                        "price_delta": int(option["price_delta"]),
+                    }
+                )
+                option_total += int(option["price_delta"])
+            groups = connection.execute(
+                """
+                SELECT option_group_id, min_select, max_select
+                FROM menu_option_group WHERE menu_id = ?
+                """,
+                (menu["menu_id"],),
+            ).fetchall()
+            if any(
+                selected_counts.get(str(group["option_group_id"]), 0) < int(group["min_select"])
+                or selected_counts.get(str(group["option_group_id"]), 0)
+                > int(group["max_select"])
+                for group in groups
+            ):
+                raise ValueError("CART_OPTION_SELECTION_INVALID")
+
+            unit_price = int(menu["price"])
+            line_total = (unit_price + option_total) * int(line["quantity"])
+            menu_snapshot = json.dumps({"name_en": menu["name_en"], "price": unit_price})
+            option_snapshot = json.dumps(current_options)
+            line_changed = (
+                int(line["unit_price"]) != unit_price
+                or int(line["line_total"]) != line_total
+                or json.loads(line["menu_snapshot_json"]) != json.loads(menu_snapshot)
+                or json.loads(line["option_snapshot_json"]) != current_options
             )
+            if line_changed:
+                changed = True
+                connection.execute(
+                    """
+                    UPDATE cart_item SET unit_price = ?, menu_snapshot_json = ?,
+                      option_snapshot_json = ?, line_total = ? WHERE cart_item_id = ?
+                    """,
+                    (unit_price, menu_snapshot, option_snapshot, line_total, line["cart_item_id"]),
+                )
+            subtotal += line_total
+
+        if len(merchant_ids) != 1:
+            raise ValueError("CART_MULTIPLE_MERCHANTS")
+        merchant = connection.execute(
+            "SELECT min_order_amount, delivery_fee FROM merchant WHERE merchant_id = ?",
+            (next(iter(merchant_ids)),),
+        ).fetchone()
+        if merchant is None or subtotal < int(merchant["min_order_amount"]):
+            raise ValueError("MINIMUM_ORDER_NOT_MET")
+
+        was_confirmed = bool(cart["confirmed"])
+        if confirm:
+            connection.execute(
+                """
+                UPDATE cart SET confirmed = 1, version = version + 1, updated_at = ?
+                WHERE cart_id = ?
+                """,
+                (_now(), cart["cart_id"]),
+            )
+        elif changed:
+            connection.execute(
+                """
+                UPDATE cart SET confirmed = 0, version = version + 1, updated_at = ?
+                WHERE cart_id = ?
+                """,
+                (_now(), cart["cart_id"]),
+            )
+        return (
+            str(cart["cart_id"]),
+            changed,
+            was_confirmed,
+            subtotal + int(merchant["delivery_fee"]),
+        )
+
+    def confirm_cart(self, session_id: str) -> CartPreview:
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._revalidate_cart(connection, session_id, confirm=True)
         return self.get_cart(session_id)
 
     def create_checkout(self, session_id: str, data: CheckoutCreate) -> Checkout:
-        preview = self.get_cart(session_id)
-        if not preview.ready_to_checkout or not preview.confirmed:
-            raise ValueError("CART_NOT_CONFIRMED")
+        changed = False
+        checkout: Checkout | None = None
         with self._connection() as connection:
-            existing = connection.execute(
-                "SELECT * FROM mock_checkout WHERE idempotency_key = ?", (data.idempotency_key,)
-            ).fetchone()
-            if existing:
-                if existing["cart_id"] != preview.cart_id:
-                    raise ValueError("IDEMPOTENCY_KEY_REUSED")
-                return self._checkout_from_row(existing)
-            checkout_id = _id("checkout")
-            payment_url = f"/pay/{checkout_id}"
-            now = _now()
-            connection.execute(
-                """
-                INSERT INTO mock_checkout (
-                  checkout_id, cart_id, idempotency_key, payment_method, status,
-                  amount, payment_url, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?)
-                """,
-                (
-                    checkout_id,
-                    preview.cart_id,
-                    data.idempotency_key,
-                    data.payment_method,
-                    preview.total_price,
-                    payment_url,
-                    now,
-                    now,
-                ),
+            connection.execute("BEGIN IMMEDIATE")
+            cart_id, changed, was_confirmed, current_total = self._revalidate_cart(
+                connection, session_id, confirm=False
             )
-            row = connection.execute(
-                "SELECT * FROM mock_checkout WHERE checkout_id = ?", (checkout_id,)
-            ).fetchone()
-        return self._checkout_from_row(row)
+            if not was_confirmed:
+                raise ValueError("CART_NOT_CONFIRMED")
+            if changed:
+                # Commit the refreshed snapshot and confirmation reset before asking
+                # the user to review the new total.
+                pass
+            else:
+                existing = connection.execute(
+                    "SELECT * FROM mock_checkout WHERE idempotency_key = ?",
+                    (data.idempotency_key,),
+                ).fetchone()
+                if existing:
+                    if existing["cart_id"] != cart_id:
+                        raise ValueError("IDEMPOTENCY_KEY_REUSED")
+                    checkout = self._checkout_from_row(existing)
+                else:
+                    checkout_id = _id("checkout")
+                    payment_url = f"/pay/{checkout_id}"
+                    now = _now()
+                    connection.execute(
+                        """
+                        INSERT INTO mock_checkout (
+                          checkout_id, cart_id, idempotency_key, payment_method, status,
+                          amount, payment_url, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?)
+                        """,
+                        (
+                            checkout_id,
+                            cart_id,
+                            data.idempotency_key,
+                            data.payment_method,
+                            current_total,
+                            payment_url,
+                            now,
+                            now,
+                        ),
+                    )
+                    row = connection.execute(
+                        "SELECT * FROM mock_checkout WHERE checkout_id = ?", (checkout_id,)
+                    ).fetchone()
+                    checkout = self._checkout_from_row(row)
+        if changed:
+            raise ValueError("CART_CHANGED_RECONFIRM_REQUIRED")
+        if checkout is None:
+            raise RuntimeError("CHECKOUT_CREATION_FAILED")
+        return checkout
 
     def get_checkout(self, checkout_id: str) -> Checkout | None:
         with self._connection() as connection:

@@ -241,7 +241,7 @@ class ChatService:
                         "description": menu.cultural_description,
                         "match_reasons": menu.match_reasons,
                         "risk_hints": menu.risk_hints,
-                        "source_ids": [menu.menu_id, menu.merchant_id],
+                        "source_ids": [menu.menu_id, menu.merchant_id, *menu.evidence_ids],
                     }
                 )
                 if len(categories) == 4:
@@ -296,7 +296,11 @@ class ChatService:
                                         "Egg, meat garnish, broth, and gochujang need confirmation",
                                         "Shellfish cross-contamination is not verified",
                                     ],
-                                    "source_ids": [vegan.menu_id, vegan.merchant_id],
+                                    "source_ids": [
+                                        vegan.menu_id,
+                                        vegan.merchant_id,
+                                        *vegan.evidence_ids,
+                                    ],
                                 }
                             ]
                         },

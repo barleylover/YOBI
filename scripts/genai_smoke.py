@@ -55,13 +55,20 @@ def main() -> None:
             "additionalProperties": False,
         },
     }
+    conversation: list[Any] = [
+        {
+            "role": "user",
+            "content": (
+                "Find a Korean meal for one, no pork, not spicy, under 15000 KRW. "
+                "Use the tool. After receiving the tool output, reply exactly "
+                "YOBI_TOOL_LOOP_OK."
+            ),
+        }
+    ]
     response = _create(
         client,
         model=settings.oci_genai_model,
-        input=(
-            "Find a Korean meal for one, no pork, not spicy, under 15000 KRW. Use the tool. "
-            "After receiving the tool output, reply exactly YOBI_TOOL_LOOP_OK."
-        ),
+        input=conversation,
         tools=[tool],
         tool_choice="required",
     )
@@ -76,31 +83,32 @@ def main() -> None:
     required = {"query", "budget_krw", "max_spiciness", "excluded_ingredients"}
     if not required.issubset(arguments):
         raise SystemExit("GenAI function-call arguments were incomplete")
+    conversation += response.output
+    conversation.append(
+        {
+            "type": "function_call_output",
+            "call_id": calls[0].call_id,
+            "output": json.dumps(
+                {
+                    "untrusted_data": {
+                        "menus": [
+                            {
+                                "menu_id": "menu_003_01",
+                                "name_en": "Chicken kalguksu",
+                                "price": 12000,
+                                "spice_level": 0,
+                                "synthetic": True,
+                            }
+                        ]
+                    }
+                }
+            ),
+        }
+    )
     final = _create(
         client,
         model=settings.oci_genai_model,
-        previous_response_id=response.id,
-        input=[
-            {
-                "type": "function_call_output",
-                "call_id": calls[0].call_id,
-                "output": json.dumps(
-                    {
-                        "untrusted_data": {
-                            "menus": [
-                                {
-                                    "menu_id": "menu_003_01",
-                                    "name_en": "Chicken kalguksu",
-                                    "price": 12000,
-                                    "spice_level": 0,
-                                    "synthetic": True,
-                                }
-                            ]
-                        }
-                    }
-                ),
-            }
-        ],
+        input=conversation,
         tools=[tool],
     )
     if final.output_text.strip() != "YOBI_TOOL_LOOP_OK":

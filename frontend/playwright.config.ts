@@ -6,7 +6,9 @@ export default defineConfig({
   testDir: "./tests/e2e",
   timeout: 45_000,
   fullyParallel: false,
-  workers: process.env.YOBI_E2E_BASE_URL ? 1 : undefined,
+  // Local and deployed demos both use one shared stateful backend. Serial browser
+  // journeys prevent test sessions from changing global demo controls concurrently.
+  workers: 1,
   retries: 0,
   reporter: [["list"], ["html", { open: "never" }]],
   expect: { timeout: process.env.YOBI_E2E_BASE_URL ? 30_000 : 5_000 },

@@ -91,7 +91,7 @@ def main() -> None:
         address = require(
             client.post(
                 f"/api/v1/sessions/{session_id}/address/confirm",
-                json={"candidate": upload["candidates"][0]},
+                json={"candidate_token": upload["candidates"][0]["candidate_token"]},
             )
         )
         cart = require(
