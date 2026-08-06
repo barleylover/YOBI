@@ -14,7 +14,7 @@ from app.genai.client import OciGenAIClient
 from app.genai.prompts import SYSTEM_PROMPT
 from app.genai.rate_limit import retry_delay_seconds
 from app.genai.tool_registry import ToolRegistry
-from app.genai.tool_schemas import TOOLS
+from app.genai.tool_schemas import select_tools
 
 
 @dataclass
@@ -37,6 +37,7 @@ class AgentLoop:
     def run(self, user_text: str, dynamic_context: str, registry: ToolRegistry) -> AgentResult:
         client = self.client_factory.build()
         instructions = f"{SYSTEM_PROMPT}\n\nSession context:\n{dynamic_context}"
+        active_tools = select_tools(user_text)
         # Keep the full tool exchange client-side. The legacy OCI endpoint used by the
         # deployed demo accepts Responses input items, but its stored-response
         # continuation has proved unreliable in production. This is also an official
@@ -48,7 +49,7 @@ class AgentLoop:
             self.settings.oci_genai_model,
             instructions=instructions,
             input=cast(Any, conversation),
-            tools=cast(Any, TOOLS),
+            tools=cast(Any, active_tools),
         )
         self._log_response(response)
         tool_results: list[tuple[str, dict[str, Any]]] = []
@@ -82,7 +83,7 @@ class AgentLoop:
                 active_model,
                 instructions=instructions,
                 input=cast(Any, conversation),
-                tools=cast(Any, TOOLS),
+                tools=cast(Any, active_tools),
             )
             self._log_response(response)
         raise RuntimeError("GENAI_TOOL_STEP_LIMIT")

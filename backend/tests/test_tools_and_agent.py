@@ -7,7 +7,7 @@ import pytest
 from app.core.config import Settings
 from app.genai.agent_loop import AgentLoop
 from app.genai.tool_registry import ToolRegistry
-from app.genai.tool_schemas import TOOLS
+from app.genai.tool_schemas import TOOLS, select_tools
 
 
 def test_master_spec_exposes_all_fourteen_tools() -> None:
@@ -27,6 +27,19 @@ def test_master_spec_exposes_all_fourteen_tools() -> None:
         "get_mock_payment_status",
         "complete_mock_order",
     }
+
+
+def test_tool_routing_keeps_each_provider_turn_small_and_relevant() -> None:
+    discovery = {tool["name"] for tool in select_tools("warm mild food after rain")}
+    assert discovery == {"recommend_menu_categories", "search_menus", "explain_menu"}
+    payment = {tool["name"] for tool in select_tools("check my payment status")}
+    assert payment == {
+        "get_cart_preview",
+        "create_mock_checkout",
+        "get_mock_payment_status",
+        "complete_mock_order",
+    }
+    assert max(len(select_tools(prompt)) for prompt in ("food", "hotel", "option", "pay")) <= 4
 
 
 def test_tool_registry_rejects_unknown_and_invalid_json(repository, profile_data) -> None:  # type: ignore[no-untyped-def]

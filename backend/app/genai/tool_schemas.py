@@ -199,3 +199,32 @@ TOOLS = [
         "strict": True,
     },
 ]
+
+
+def select_tools(user_text: str) -> list[dict[str, object]]:
+    """Route a turn to a small allowlisted tool surface.
+
+    Sending every schema on every turn needlessly consumes the provider's request
+    token quota. The complete 14-tool contract remains registered above; this
+    deterministic router exposes only the tools relevant to the user's current
+    action and never uses model-generated routing policy.
+    """
+    lowered = user_text.lower()
+    if any(term in lowered for term in ("pay", "payment", "checkout", "order status")):
+        names = {
+            "get_cart_preview",
+            "create_mock_checkout",
+            "get_mock_payment_status",
+            "complete_mock_order",
+        }
+    elif any(term in lowered for term in ("address", "hotel", "deliver", "front desk")):
+        names = {"resolve_address", "update_delivery_preferences", "get_cart_preview"}
+    elif any(term in lowered for term in ("option", "size", "spice level", "add to cart", "note")):
+        names = {"get_menu_options", "update_cart", "translate_order_note", "get_cart_preview"}
+    elif any(term in lowered for term in ("compare", "cheapest", "fastest", "restaurant")):
+        names = {"search_menus", "compare_merchants", "get_dietary_evidence"}
+    elif any(term in lowered for term in ("allergy", "shellfish", "red rice", "tteokbokki")):
+        names = {"search_menus", "explain_menu", "get_dietary_evidence"}
+    else:
+        names = {"recommend_menu_categories", "search_menus", "explain_menu"}
+    return [tool for tool in TOOLS if str(tool["name"]) in names]
