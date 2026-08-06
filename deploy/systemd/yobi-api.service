@@ -1,0 +1,25 @@
+[Unit]
+Description=YOBI FastAPI service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yobi
+Group=yobi
+WorkingDirectory=/opt/yobi/current
+EnvironmentFile=/etc/yobi/yobi.env
+ExecStart=/opt/yobi/venv/bin/uvicorn app.main:app --app-dir /opt/yobi/current/backend --host 127.0.0.1 --port 8000 --workers 1
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/yobi/shared
+
+[Install]
+WantedBy=multi-user.target
+
