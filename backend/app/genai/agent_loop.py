@@ -62,7 +62,10 @@ class AgentLoop:
                 if not text:
                     raise RuntimeError("GENAI_EMPTY_RESPONSE")
                 return AgentResult(text=text, tool_results=tool_results)
-            conversation.extend(response.output)
+            # The legacy OCI-compatible endpoint can include provider-specific
+            # auxiliary output items alongside function calls. Only function calls
+            # are valid predecessors for the matching function_call_output items.
+            conversation.extend(calls)
             outputs = []
             for call in calls:
                 result = registry.execute(call.name, call.arguments)

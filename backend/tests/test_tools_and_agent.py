@@ -128,6 +128,7 @@ def test_agent_loop_executes_bounded_function_call(repository, profile_data) -> 
     first = SimpleNamespace(
         id="resp_1",
         output=[
+            SimpleNamespace(type="reasoning", summary="provider-specific auxiliary item"),
             SimpleNamespace(
                 type="function_call",
                 name="search_menus",
@@ -167,7 +168,7 @@ def test_agent_loop_executes_bounded_function_call(repository, profile_data) -> 
         "role": "user",
         "content": "something mild",
     }
-    assert fake.responses.calls[1]["input"][1] is first.output[0]
+    assert fake.responses.calls[1]["input"][1] is first.output[1]
     returned = json.loads(fake.responses.calls[1]["input"][2]["output"])
     assert set(returned) == {"untrusted_data"}
     assert returned["untrusted_data"]["menus"][0]["menu_id"] == "menu_001_01"
