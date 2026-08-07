@@ -27,6 +27,15 @@ def test_seed_integrity_accepts_exact_catalog() -> None:
     seed_demo.validate(valid_result())
 
 
+def test_expected_counts_match_the_generated_seed() -> None:
+    seed = seed_demo.build_seed()
+    actual = {
+        seed_key: len(seed[seed_key])
+        for _, _, seed_key in seed_demo.TABLE_ORDER
+    }
+    assert actual == seed_demo.EXPECTED_COUNTS
+
+
 @pytest.mark.parametrize(
     ("field", "value", "code"),
     [
