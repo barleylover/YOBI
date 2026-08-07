@@ -125,24 +125,36 @@ class ChatService:
     ) -> AssistantTurn:
         cards: list[Card] = []
         state = session.state
+        rendered_tools: set[str] = set()
         for name, result in tool_results:
-            if name == "recommend_menu_categories" and result.get("categories"):
+            if name in rendered_tools:
+                continue
+            card_count = len(cards)
+            if name == "recommend_menu_categories":
+                categories = self._merge_tool_items(
+                    tool_results, name, "categories", "category"
+                )
+                if not categories:
+                    continue
                 cards.append(
                     Card(
                         type="category_recommendations",
                         title="Korean food directions that fit",
                         subtitle="Grounded in the synthetic menu catalog",
-                        data={"categories": result["categories"]},
+                        data={"categories": categories},
                     )
                 )
                 state = ChatState.CATEGORY_SHORTLIST
-            elif name == "search_menus" and result.get("menus"):
+            elif name == "search_menus":
+                menus = self._merge_tool_items(tool_results, name, "menus", "menu_id")
+                if not menus:
+                    continue
                 cards.append(
                     Card(
                         type="menu_recommendations",
                         title="Grounded menu matches",
                         subtitle="Synthetic catalog · prices and evidence checked server-side",
-                        data={"menus": result["menus"]},
+                        data={"menus": menus},
                     )
                 )
                 state = ChatState.MENU_EXPLANATION
@@ -156,32 +168,47 @@ class ChatService:
                     )
                 )
                 state = ChatState.MENU_EXPLANATION
-            elif name == "get_dietary_evidence" and result.get("evidence"):
+            elif name == "get_dietary_evidence":
+                evidence = self._merge_tool_items(
+                    tool_results, name, "evidence", "evidence_id"
+                )
+                if not evidence:
+                    continue
                 cards.append(
                     Card(
                         type="dietary_evidence",
                         title="Dietary evidence",
                         subtitle="Evidence status is not a safety guarantee",
-                        data={"evidence": result["evidence"]},
+                        data={"evidence": evidence},
                     )
                 )
                 state = ChatState.SAFETY_WARNING
-            elif name == "compare_merchants" and result.get("merchants"):
+            elif name == "compare_merchants":
+                merchants = self._merge_tool_items(
+                    tool_results, name, "merchants", "merchant_id"
+                )
+                if not merchants:
+                    continue
                 cards.append(
                     Card(
                         type="merchant_comparison",
                         title="Compare the trade-offs",
                         subtitle="Same axes · synthetic demo restaurants",
-                        data={"merchants": result["merchants"]},
+                        data={"merchants": merchants},
                     )
                 )
                 state = ChatState.MERCHANT_COMPARISON
-            elif name == "get_menu_options" and result.get("option_groups"):
+            elif name == "get_menu_options":
+                option_groups = self._merge_tool_items(
+                    tool_results, name, "option_groups", "option_group_id"
+                )
+                if not option_groups:
+                    continue
                 cards.append(
                     Card(
                         type="option_question",
                         title="Choose one option at a time",
-                        data={"option_groups": result["option_groups"]},
+                        data={"option_groups": option_groups},
                     )
                 )
                 state = ChatState.MENU_OPTIONS
@@ -213,10 +240,45 @@ class ChatService:
                         data=result,
                     )
                 )
+            if len(cards) > card_count:
+                rendered_tools.add(name)
         self.repository.set_session_selection(
             session.session_id, state.value, session.selected_menu_id, session.selected_merchant_id
         )
         return self._make_turn(text, state, cards, False)
+
+    @staticmethod
+    def _merge_tool_items(
+        tool_results: list[tuple[str, dict[str, object]]],
+        tool_name: str,
+        list_key: str,
+        identity_key: str,
+    ) -> list[dict[str, object]]:
+        merged: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for name, result in tool_results:
+            if name != tool_name:
+                continue
+            items = result.get(list_key)
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                normalized = {str(key): value for key, value in item.items()}
+                identity_value = normalized.get(identity_key)
+                identity = (
+                    str(identity_value)
+                    if identity_value is not None
+                    else json.dumps(normalized, ensure_ascii=False, sort_keys=True, default=str)
+                )
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                merged.append(normalized)
+                if len(merged) == 12:
+                    return merged
+        return merged
 
     def _deterministic_turn(
         self, session: Session, profile: Profile, user_text: str

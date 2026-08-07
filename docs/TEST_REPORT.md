@@ -15,7 +15,7 @@
 | Master Spec implementation audit | PASS with stated demo boundaries | Initial audit plus remediation record in `CODEX_HANDOFF_AUDIT.md` |
 | Ruff | PASS | Backend and scripts |
 | MyPy | PASS | 30 application source files |
-| Pytest | 52 PASS | API, agent, OCR, seed, cart/payment integrity, fallback, security and bootstrap |
+| Pytest | 53 PASS | API, agent, OCR, seed, cart/payment integrity, fallback, security and bootstrap |
 | Frontend ESLint | PASS | React/TypeScript source and tests |
 | Frontend unit | 2 PASS | Evidence status rendering |
 | TypeScript/Vite build | PASS | 1,788 modules; production assets generated |
@@ -94,3 +94,6 @@ invented. This is a transparent quality limitation, not a missing Vector Search 
   5174 without disturbing existing 8000/5173 listeners, returned health/readiness
   HTTP 200, passed the Primary Demo on all four Playwright viewports, and released
   both selected ports and PID files after `Ctrl-C`.
+- Public provider verification exposed one repeated `search_menus` tool result. The
+  server now merges repeated list-producing tool results by their grounded IDs and
+  emits one deduplicated carousel per tool type; a focused regression test covers it.

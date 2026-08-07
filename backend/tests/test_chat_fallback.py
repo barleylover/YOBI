@@ -4,6 +4,7 @@ import sqlite3
 from app.core.config import Settings
 from app.db.sqlite_repository import SQLiteYobiRepository
 from app.domain.models import ProfileCreate
+from app.genai.tool_registry import ToolRegistry
 from app.services.chat_service import ChatService
 from app.services.demo_control import DemoControl
 
@@ -101,3 +102,25 @@ def test_chat_audit_stores_hashes_without_raw_message_or_session(
     assert raw_message not in row
     assert session.session_id not in row
     assert row[2] == 1
+
+
+def test_duplicate_menu_tool_results_render_one_deduplicated_carousel(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    profile = repository.create_profile(profile_data)
+    session = repository.create_session(profile.profile_id)
+    result = ToolRegistry(repository, profile, session.session_id).execute(
+        "search_menus",
+        '{"query":"mild rice cake","budget_krw":15000,"max_spiciness":2,'
+        '"excluded_ingredients":[]}',
+    )
+
+    turn = ChatService(repository, Settings(), DemoControl())._turn_from_tool_results(
+        session,
+        "Grounded result",
+        [("search_menus", result), ("search_menus", result)],
+    )
+
+    assert [card.type for card in turn.cards] == ["menu_recommendations"]
+    menu_ids = [menu["menu_id"] for menu in turn.cards[0].data["menus"]]
+    assert len(menu_ids) == len(set(menu_ids))
