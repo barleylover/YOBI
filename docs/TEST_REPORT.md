@@ -1,13 +1,13 @@
 # YOBI final test report
 
-- Final verification: 2026-08-07 KST (frontend feedback deployment pass)
+- Final verification: 2026-08-08 KST (chat-room menu deployment pass)
 - Source of truth: `YOBI_FINAL_MVP_CODEX_MASTER_PROMPT.md`
 - Improvement branch: `codex/master-spec-completion`
-- Deployed release: `20260807T093233Z`
+- Deployed release: `20260807T190544Z`
 - Public address: resolved from OCI at runtime; not stored in Git
-- Deployment boundary: both 2026-08-07 UI iterations, three-level database spice
-  migration and repeated-tool-result deduplication are included in the deployed
-  release and publicly verified.
+- Deployment boundary: the prior UI iterations plus the localized chat-room menu,
+  deterministic preset collections and profile-edit/cart restoration are included
+  in the deployed release and publicly verified.
 
 ## Final gate result
 
@@ -16,11 +16,11 @@
 | Master Spec implementation audit | PASS with stated demo boundaries | Initial audit plus remediation record in `CODEX_HANDOFF_AUDIT.md` |
 | Ruff | PASS | Backend and scripts |
 | MyPy | PASS | 31 application source files |
-| Pytest | 58 PASS | API, agent, OCR, seed, cart/payment integrity, fallback, security and migration parser |
+| Pytest | 61 PASS | API, agent, preset intent, OCR, seed, cart/payment integrity, fallback, security and migration parser |
 | Frontend ESLint | PASS | React/TypeScript source and tests |
 | Frontend unit | 2 PASS | Evidence status rendering |
-| TypeScript/Vite build | PASS | 1,793 modules; production assets generated |
-| Local Playwright | PASS | Primary flow on four viewports; Korean full-order localization on iPhone and desktop |
+| TypeScript/Vite build | PASS | 1,796 modules; production assets generated |
+| Local Playwright | 18 PASS | 18 additional intentional cross-viewport skips |
 | Retrieval evaluation | 100 PASS | Every mismatch/unsafe-reassurance counter is zero |
 | Oracle runtime connection | PASS | Runtime user `YOBI_APP`; readiness HTTP 200 |
 | Oracle migration | PASS | `SCHEMA_MIGRATION` versions 001–004; append-only three-level spice migration applied |
@@ -28,10 +28,11 @@
 | Oracle Vector Search data | PASS | Menu 150, review 600 and knowledge 150 vectors; NULL count zero for all three |
 | Grok Function Calling | PASS | Independent two-step continuation smoke after one provider-directed 429 wait |
 | Runtime Agent Loop | PASS | Public grounded-card flow passed; repeated list-producing tool results are merged by grounded ID |
-| Deterministic fallback | PASS | Same repository/domain path; forced fallback unit/API coverage |
+| Deterministic fallback | PASS | Forced fallback over the deployed Oracle repository returned dietary evidence |
 | Address OCR | PASS | VM Tesseract English/Korean packs active; public bundled-image journey passed |
 | Public API smoke | PASS | Health, grounded evidence IDs, cart, OCR address, delivery, payment and order |
-| Public Primary E2E | 3 PASS consecutively | iPhone 13, worker 1, 11.1s / 7.7s / 7.8s |
+| Public chat-menu E2E | 2 PASS | Fixed collections, ordering, profile edit/cart restoration and Korean localization |
+| Public Primary E2E | 3 PASS consecutively | iPhone 13, worker 1, 17.3s / 11.8s / 9.7s |
 | Systemd/Nginx | PASS | Both active; local health and ready checks passed after activation |
 | Runtime env protection | PASS | `/etc/yobi/yobi.env` is `root:root`, mode `0600`; values were not printed |
 
@@ -39,12 +40,12 @@
 
 Exact verified row counts after non-destructive upsert:
 
-- 3 service areas, 15 categories, 30 merchants and 150 menus
+- 3 service areas, 20 categories, 30 merchants and 150 menus
 - 150 knowledge records, 300 evidence records and 600 review snippets
 - 302 option groups and 605 option items
-- 15 ingredients / 150 menu-ingredient links
-- 7 allergens / 153 menu-allergen links
-- 10 dietary attributes / 304 menu-dietary links
+- 20 ingredients / 150 menu-ingredient links
+- 9 allergens / 162 menu-allergen links
+- 15 dietary attributes / 317 menu-dietary links
 - 1 explicit option dietary conflict and 20 synthetic address fixtures
 
 Required option groups without available items: zero. Canonical menus: present. Menu,
@@ -79,6 +80,31 @@ invented. This is a transparent quality limitation, not a missing Vector Search 
   token-level streaming is not claimed.
 - The one warning in Pytest is a third-party Starlette TestClient deprecation warning;
   it does not affect the application contract.
+
+## 2026-08-08 chat-room menu — deployed verification
+
+- Release `20260807T190544Z` serves the localized three-action chat-room menu and
+  deterministic Weekly ranking and K-POP Demon Hunters collections. These two
+  shortcuts intentionally do not call an LLM or a live ranking service.
+- The focused public iPhone suite passed both tests: fixed card order, an orderable
+  BHC card, profile editing, same-session chat/card/cart restoration, server-side
+  dietary revalidation after adding a milk allergy, and Korean menu/response labels.
+- The public Primary Demo completed three consecutive full mock orders. Public root,
+  health, readiness and QR routes returned HTTP 200; protected demo status returned
+  HTTP 403 without its token.
+- A deployed forced-fallback smoke used the real Oracle repository and returned a
+  dietary-evidence card. Release-window `ERROR`, `Traceback` and `CRITICAL` log lines
+  were zero.
+- The first activation attempt stopped before switching `/opt/yobi/current` because
+  historical menu relation rows made the seed count check fail. The seed now replaces
+  only the three relation sets owned by the 150 synthetic menu IDs, one table per
+  transaction; profiles, carts, orders and migrations are untouched. A generated-seed
+  count regression test was added, and the final Oracle verification passed exact
+  counts with zero NULL menu, review or knowledge vectors.
+- Runtime user `YOBI_APP`, `SCHEMA_MIGRATION` 001–004, `root:root` mode `0600` for
+  `/etc/yobi/yobi.env`, and active `yobi-api`/Nginx were reconfirmed without printing
+  secret values. The temporary source-specific SSH rule was removed; the final NSG
+  contains only the approved public TCP 80 rule and no TCP 22 rule.
 
 ## 2026-08-07 UI/UX verification addendum
 
