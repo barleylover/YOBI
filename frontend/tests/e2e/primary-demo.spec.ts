@@ -30,7 +30,7 @@ test("primary tourist order completes with evidence and no real charge", async (
   await page.getByRole("button", { name: /^Regular/ }).click();
   await page.getByRole("button", { name: /^Add cheese/ }).click();
   await page.getByRole("button", { name: /^Remove fish cake/ }).click();
-  await page.getByRole("button", { name: "Add to mock cart" }).click();
+  await page.getByRole("button", { name: "Add to cart" }).click();
   await expect(page.getByRole("button", { name: "Yes, show more menus" })).toBeVisible();
   await expect(page.getByRole("button", { name: /Open cart, 1 items/ })).toBeVisible();
   await page.getByRole("button", { name: "Yes, show more menus" }).click();
@@ -38,7 +38,7 @@ test("primary tourist order completes with evidence and no real charge", async (
   await page.getByTestId("order-flow").getByTestId("menu-menu_001_02").getByRole("button", { name: "Choose this menu" }).click();
   await page.getByRole("button", { name: /^Regular/ }).click();
   await page.getByRole("button", { name: /^No extra/ }).click();
-  await page.getByRole("button", { name: "Add to mock cart" }).click();
+  await page.getByRole("button", { name: "Add to cart" }).click();
   await expect(page.getByRole("button", { name: /Open cart, 2 items/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "Yes, show more menus" })).toBeVisible();
   await page.getByRole("button", { name: "No, continue to delivery" }).click();

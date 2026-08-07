@@ -26,7 +26,7 @@ test("Korean remains active from profile through payment and confirmation", asyn
   await expect(page.getByRole("heading", { name: "어묵" })).toBeVisible();
   await page.getByRole("button", { name: /^어묵 빼기/ }).click();
   await expect(page.getByText("가게 요청 사항")).toBeVisible();
-  await page.getByRole("button", { name: "데모 장바구니에 담기" }).click();
+  await page.getByRole("button", { name: "장바구니에 담기" }).click();
   await expect(page.getByRole("button", { name: "네, 다른 메뉴 보기" })).toBeVisible();
   await page.getByRole("button", { name: "아니요, 배달 단계로" }).click();
 

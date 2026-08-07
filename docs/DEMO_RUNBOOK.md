@@ -66,8 +66,10 @@ Allow about 60–90 seconds after the page opens.
    `YOBI Myeongdong Hotel`. Accept the synthetic-session consent and select
    **Check delivery address**.
 5. Select **Confirm & start** on the returned synthetic address candidate. The chat
-   must open with **Your delivery context is ready** and the confirmed hotel shown.
-6. Select **Try the demo question**: “I saw people eating some red rice cake dish on
+   must open directly with YOBI's welcome message; the former delivery-context summary
+   card is no longer shown.
+6. Select the small **Try the demo question** action directly beneath that first YOBI
+   message: “I saw people eating some red rice cake dish on
    the street. What is that? Can I order it?”
 7. Show the classic tteokbokki risk evidence and the mild rose alternative. State
    that cross-contamination is unknown; the UI never labels the dish allergy-safe.
@@ -76,7 +78,7 @@ Allow about 60–90 seconds after the page opens.
 9. Choose **Mild**, **Regular**, **Add cheese**, and **Remove fish cake**. On the fish
    cake step, point out that **Keep fish cake** is initially disabled, explains the
    dietary risk, and offers **Unlock option** for an explicit override.
-10. Review the Korean restaurant note, then select **Add to mock cart**. Verify the
+10. Review the Korean restaurant note, then select **Add to cart**. Verify the
     cart badge shows `1`.
 11. At **Would you like anything else from this restaurant?**, select **Yes, show more
     menus**. Swipe the same-restaurant carousel, choose one menu, complete its options,
@@ -105,8 +107,10 @@ always exercises this deterministic continuity boundary by design.
 
 ### Chat-room menu proof
 
-1. In chat, open **Chat menu** directly above the composer. Confirm the three localized
-   actions are **Weekly ranking**, **K-POP Demon Hunters**, and **Edit my information**.
+1. In chat, open **Chat menu** directly above the composer. Its closed-state chevron
+   points upward and its open-state chevron points downward. Confirm the three
+   localized actions are **Weekly ranking**, **K-POP Demon Hunters**, and
+   **Edit my information**.
 2. Select **Weekly ranking**. The assistant must return the fixed order **BBQ, BHC,
    No More Pizza, Hong Kong Banjeom, Yeopgi Tteokbokki** with one horizontally
    swipeable nearby menu card for each rank.

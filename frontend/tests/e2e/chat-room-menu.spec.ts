@@ -14,6 +14,11 @@ test("chat menu shows fixed collections and preserves them through profile editi
   test.skip(testInfo.project.name !== "iPhone 13", "One primary mobile proof is sufficient.");
   await startSession(page);
 
+  await expect(page.getByText("Your delivery context is ready")).toHaveCount(0);
+  const welcome = page.locator("article.message.assistant").filter({ hasText: "Hi, I’m YOBI" });
+  await expect(welcome.getByRole("button", { name: "Try the demo question" })).toBeVisible();
+  await expect(page.locator(".composer").getByRole("button", { name: "Try the demo question" })).toHaveCount(0);
+  await expect(page.locator(".chat-room-menu-toggle svg")).toHaveClass(/lucide-chevron-up/);
   await page.getByRole("button", { name: "Chat menu" }).click();
   await expect(page.getByRole("button", { name: "Weekly ranking" })).toBeVisible();
   await page.getByRole("button", { name: "Weekly ranking" }).click();
@@ -25,7 +30,7 @@ test("chat menu shows fixed collections and preserves them through profile editi
   await page.getByTestId("preset-menu-menu_022_01").getByRole("button", { name: "Choose this menu" }).click();
   await page.getByRole("button", { name: /^Regular/ }).click();
   await page.getByRole("button", { name: /^No extra/ }).click();
-  await page.getByRole("button", { name: "Add to mock cart" }).click();
+  await page.getByRole("button", { name: "Add to cart" }).click();
   await page.getByRole("button", { name: "No, continue to delivery" }).click();
   await page.getByRole("button", { name: "Confirm delivery details" }).click();
   await expect(page.getByTestId("cart-review")).toBeVisible();
@@ -40,7 +45,7 @@ test("chat menu shows fixed collections and preserves them through profile editi
 
   await expect(page).toHaveURL(/\/chat\/session_/);
   await expect(page.getByTestId("preset-weekly_ranking")).toBeVisible();
-  await expect(page.locator(".session-brief")).toContainText("Spice level 3/3");
+  await expect(page.locator(".session-brief")).toHaveCount(0);
   await expect(page.getByTestId("cart-review")).toBeVisible();
   await expect(page.getByText(/Remove Cheese-seasoned fried chicken to continue/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Proceed to payment" })).toBeDisabled();

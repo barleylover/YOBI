@@ -1,12 +1,11 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { ArrowUp, ChevronDown, ShoppingBag, Sparkles } from "lucide-react";
+import { ArrowUp, ShoppingBag, Sparkles } from "lucide-react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { ChatRoomMenu } from "../components/ChatRoomMenu";
 import { OrderFlowPanel } from "../components/OrderFlowPanel";
 import { RichCard } from "../components/RichCard";
 import { api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
-import { countryName } from "../lib/locale";
 import { useSessionStore } from "../stores/session";
 import type { AssistantTurn, MenuSummary } from "../types";
 
@@ -27,9 +26,8 @@ export function ChatPage() {
   const profile = useSessionStore((state) => state.profile);
   const session = useSessionStore((state) => state.session);
   const addressRefId = useSessionStore((state) => state.addressRefId);
-  const addressSummary = useSessionStore((state) => state.addressSummary);
   const cartQuantity = useSessionStore((state) => state.cartQuantity);
-  const { copy, profileCopy, dynamicCopy, journeyCopy, language, locale } = useI18n();
+  const { copy, dynamicCopy, journeyCopy, language } = useI18n();
   const chatCacheKey = `yobi-chat-entries-${sessionId}`;
   const inputCacheKey = `yobi-chat-input-${sessionId}`;
   const selectedMenuCacheKey = `yobi-selected-menu-${sessionId}`;
@@ -50,13 +48,6 @@ export function ChatPage() {
   });
 
   const activeRules = useMemo(() => profile?.dietary_rules ?? [], [profile]);
-  const dietarySummary = useMemo(() => {
-    const allergyCount = activeRules.filter((rule) => rule.endsWith("_allergy")).length;
-    return [
-      ...(activeRules.includes("vegan") ? [profileCopy.vegan] : []),
-      ...(allergyCount ? [`${profileCopy.allergies}: ${allergyCount}`] : []),
-    ];
-  }, [activeRules, profileCopy.allergies, profileCopy.vegan]);
   function openCart() {
     document.querySelector<HTMLElement>("[data-testid='order-flow']")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -178,18 +169,19 @@ export function ChatPage() {
           <button className="cart-button" aria-label={language === "English" ? `${journeyCopy.openCart}, ${cartQuantity} items` : `${journeyCopy.openCart}, ${journeyCopy.quantity} ${cartQuantity}`} onClick={openCart} disabled={!selectedMenu} title={selectedMenu ? journeyCopy.openCart : journeyCopy.chooseFirst}><ShoppingBag size={19} />{cartQuantity > 0 && <span className="cart-badge">{cartQuantity}</span>}</button>
         </header>
         <div className="conversation" aria-live="polite">
-          <section className="session-brief">
-            <Sparkles size={18} />
-            <div>
-              <strong>{copy.ready}</strong>
-              <p>{profile.preferred_language} · {countryName(profile.nationality, locale)} · {copy.spice} {profile.spice_tolerance}/3{dietarySummary.length ? ` · ${dietarySummary.join(" · ")}` : ""}</p>
-              <small><span aria-hidden="true">●</span> {addressSummary}</small>
-            </div>
-          </section>
           {entries.map((entry) => (
             <article className={`message ${entry.role}`} key={entry.id}>
               <div className="message-label">{entry.role === "assistant" ? "YOBI" : copy.you}</div>
               {entry.text && <div className="message-bubble">{entry.text}</div>}
+              {entry.id === "welcome" && entries.length === 1 && !sending && (
+                <button
+                  type="button"
+                  className="welcome-prompt-suggestion"
+                  onClick={() => void send("I saw people eating some red rice cake dish on the street. What is that? Can I order it?", journeyCopy.demoPrompt)}
+                >
+                  <Sparkles size={13} /> {copy.demoQuestion}
+                </button>
+              )}
               {entry.turn?.fallback_used && <span className="fallback-chip">{journeyCopy.fallbackMode}</span>}
               {entry.turn?.cards.map((card, index) => (
                 <RichCard card={card} key={`${entry.id}-${index}`} onChooseMenu={chooseMenu} onQuickReply={(reply, localizedReply) => void send(reply, localizedReply)} />
@@ -217,7 +209,6 @@ export function ChatPage() {
             <textarea id="message" value={input} onChange={(event) => setInput(event.target.value)} placeholder={copy.placeholder} rows={1} />
             <button className="send-button" aria-label={journeyCopy.sendMessage} disabled={!input.trim() || sending}><ArrowUp size={20} /></button>
           </div>
-          <button type="button" className="prompt-suggestion" onClick={() => void send("I saw people eating some red rice cake dish on the street. What is that? Can I order it?", journeyCopy.demoPrompt)}>{copy.demoQuestion} <ChevronDown size={15} /></button>
           </form>
         </div>
       </section>

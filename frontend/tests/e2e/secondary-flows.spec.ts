@@ -48,7 +48,7 @@ test("mock payment failure preserves checkout and permits safe retry", async ({ 
   await page.getByRole("button", { name: /^Regular/ }).click();
   await page.getByRole("button", { name: /^Add cheese/ }).click();
   await page.getByRole("button", { name: /^Remove fish cake/ }).click();
-  await page.getByRole("button", { name: "Add to mock cart" }).click();
+  await page.getByRole("button", { name: "Add to cart" }).click();
   await page.getByRole("button", { name: "No, continue to delivery" }).click();
   await page.getByRole("button", { name: "Confirm delivery details" }).click();
   await page.getByRole("button", { name: "Proceed to payment" }).click();

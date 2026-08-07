@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, Clapperboard, Settings2, Trophy } from "lucide-react";
+import { ChevronUp, Clapperboard, Settings2, Trophy } from "lucide-react";
 import { useI18n } from "../lib/i18n";
 
 interface Props {
@@ -47,7 +47,7 @@ export function ChatRoomMenu({ disabled, onPreset, onEditProfile }: Props) {
         aria-label={open ? chatMenuCopy.close : chatMenuCopy.open}
         onClick={() => setOpen((value) => !value)}
       >
-        <span>{chatMenuCopy.open}</span><ChevronDown size={20} />
+        <span>{chatMenuCopy.open}</span><ChevronUp size={20} />
       </button>
     </section>
   );
