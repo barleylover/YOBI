@@ -3,11 +3,11 @@
 - Final verification: 2026-08-08 KST (chat-room menu deployment pass)
 - Source of truth: `YOBI_FINAL_MVP_CODEX_MASTER_PROMPT.md`
 - Improvement branch: `codex/master-spec-completion`
-- Deployed release: `20260807T190544Z`
+- Deployed release: `20260807T194921Z`
 - Public address: resolved from OCI at runtime; not stored in Git
-- Deployment boundary: the prior UI iterations plus the localized chat-room menu,
-  deterministic preset collections and profile-edit/cart restoration are included
-  in the deployed release and publicly verified.
+- Deployment boundary: the prior UI iterations plus the simplified initial chat,
+  localized cart wording, reversed chat-menu chevrons, deterministic preset
+  collections and profile-edit/cart restoration are publicly verified.
 
 ## Final gate result
 
@@ -31,8 +31,8 @@
 | Deterministic fallback | PASS | Forced fallback over the deployed Oracle repository returned dietary evidence |
 | Address OCR | PASS | VM Tesseract English/Korean packs active; public bundled-image journey passed |
 | Public API smoke | PASS | Health, grounded evidence IDs, cart, OCR address, delivery, payment and order |
-| Public chat-menu E2E | 2 PASS | Fixed collections, ordering, profile edit/cart restoration and Korean localization |
-| Public Primary E2E | 3 PASS consecutively | iPhone 13, worker 1, 17.3s / 11.8s / 9.7s |
+| Public focused UI E2E | 3 PASS | Initial chat, fixed collections, ordering, profile/cart restoration and Korean full order |
+| Public Primary E2E | 3 PASS consecutively | iPhone 13, worker 1, 9.1s / 8.0s / 9.6s |
 | Systemd/Nginx | PASS | Both active; local health and ready checks passed after activation |
 | Runtime env protection | PASS | `/etc/yobi/yobi.env` is `root:root`, mode `0600`; values were not printed |
 
@@ -105,6 +105,25 @@ invented. This is a transparent quality limitation, not a missing Vector Search 
   `/etc/yobi/yobi.env`, and active `yobi-api`/Nginx were reconfirmed without printing
   secret values. The temporary source-specific SSH rule was removed; the final NSG
   contains only the approved public TCP 80 rule and no TCP 22 rule.
+
+## 2026-08-08 initial-chat polish — deployed verification
+
+- Release `20260807T194921Z` changes **Add to mock cart** to **Add to cart** and
+  removes the equivalent demo-cart wording from all 16 supported language packs.
+- The delivery-context summary card is absent. A fresh chat opens directly with the
+  localized YOBI welcome bubble and a compact **Try the demo question** action directly
+  beneath it; the composer no longer contains that action.
+- The chat-menu chevron now points upward while collapsed and downward while open.
+  Mobile 390×844 browser inspection confirmed both states, no horizontal overflow,
+  and zero console errors.
+- ESLint, two Vitest tests, TypeScript and the 1,796-module Vite build passed. Local
+  Playwright passed 18 tests with 18 intentional cross-viewport skips.
+- Public iPhone verification passed three focused tests, including the complete Korean
+  order, followed by three consecutive Primary Demo orders. Root, health, readiness
+  and QR returned HTTP 200; protected demo status remained HTTP 403 without a token.
+- Oracle `SCHEMA_MIGRATION` remains 001–004, seed/vector verification passed unchanged,
+  and release-window `ERROR`, `Traceback` and `CRITICAL` log lines were zero. The final
+  NSG contains one public TCP 80 rule and no TCP 22 rule.
 
 ## 2026-08-07 UI/UX verification addendum
 

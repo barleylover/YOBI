@@ -5,7 +5,7 @@ Last updated: 2026-08-08 KST
 ## Status
 
 The audited Master Spec MVP is implemented and publicly deployed on the existing OCI
-resources. Current release: `20260807T190544Z`. The public address is resolved from
+resources. Current release: `20260807T194921Z`. The public address is resolved from
 OCI at runtime and is intentionally absent from this repository.
 
 The 2026-08-07 frontend feedback pass is implemented, committed on
@@ -89,6 +89,19 @@ failure/retry and one synthetic order.
 - Public verification passed the focused chat-menu suite (2 tests), the Primary Demo
   three consecutive times, deployed Oracle deterministic fallback, exact seed/vector
   integrity, and release-window error-log review. The final NSG has no SSH ingress.
+
+## 2026-08-08 initial-chat polish
+
+- Cart action copy is now **Add to cart**; all supported localized action/result labels
+  likewise omit demo/mock-cart wording. The payment and synthetic-order boundaries
+  remain visibly labeled as demo behavior.
+- Chat starts directly with YOBI's welcome bubble. The removed delivery-context card
+  no longer repeats language, country, spice, allergy count or confirmed address.
+- **Try the demo question** is a compact action beneath the initial welcome bubble and
+  disappears after the conversation starts instead of occupying the composer area.
+- The collapsed chat-menu chevron points upward and the expanded chevron points
+  downward. Release `20260807T194921Z` passed mobile browser review, public focused
+  English/Korean E2E, and three consecutive public Primary Demo orders.
 
 All merchants, reviews, hotels, payments and orders are synthetic. The deployment is
 public HTTP for presentation and has no custom domain/TLS. Stored vectors are
