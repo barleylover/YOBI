@@ -144,3 +144,6 @@ database spice contract, and same-restaurant add-on loop. It is included in rele
   and the public Korean iPhone flow independently passed profile through mock payment
   and confirmation. Release-window logs contained 7 normal assistant turns, 18 tool
   calls and zero HTTP 5xx or fallback turns.
+- After remote verification, the two temporary TCP 22 `/32` rules were removed. The
+  final NSG state has zero SSH rules and retains the single approved public TCP 80
+  rule; health, readiness and the public root remained HTTP 200 after cleanup.
