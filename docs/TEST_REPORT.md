@@ -1,12 +1,12 @@
 # YOBI final test report
 
-- Final verification: 2026-08-07 KST (local frontend feedback pass)
+- Final verification: 2026-08-07 KST (frontend feedback deployment pass)
 - Source of truth: `YOBI_FINAL_MVP_CODEX_MASTER_PROMPT.md`
 - Improvement branch: `codex/master-spec-completion`
-- Deployed release: `20260806T085827Z`
+- Deployed release: `20260807T063338Z`
 - Public address: resolved from OCI at runtime; not stored in Git
-- Deployment boundary: the 2026-08-07 UI changes are locally verified and not yet
-  included in deployed release `20260806T085827Z`
+- Deployment boundary: the 2026-08-07 UI changes and repeated-tool-result deduplication
+  are included in the deployed release and publicly verified.
 
 ## Final gate result
 
@@ -26,11 +26,11 @@
 | Oracle seed integrity | PASS | All exact normalized/catalog counts verified |
 | Oracle Vector Search data | PASS | Menu 150, review 600 and knowledge 150 vectors; NULL count zero for all three |
 | Grok Function Calling | PASS | Independent two-step continuation smoke after one provider-directed 429 wait |
-| Runtime Agent Loop | PASS | Latest release aggregate: 9 normal turns, 0 fallback, 25 provider responses, 16 DB-backed tool calls |
+| Runtime Agent Loop | PASS | Public grounded-card flow passed; repeated list-producing tool results are merged by grounded ID |
 | Deterministic fallback | PASS | Same repository/domain path; forced fallback unit/API coverage |
 | Address OCR | PASS | VM Tesseract English/Korean packs active; public bundled-image journey passed |
 | Public API smoke | PASS | Health, grounded evidence IDs, cart, OCR address, delivery, payment and order |
-| Public Primary E2E | 3 PASS consecutively | iPhone 13, worker 1, 10.6s / 12.4s / 11.7s |
+| Public Primary E2E | 3 PASS consecutively | iPhone 13, worker 1, 11.1s / 7.7s / 7.8s |
 | Systemd/Nginx | PASS | Both active; local health and ready checks passed after activation |
 | Runtime env protection | PASS | `/etc/yobi/yobi.env` is `root:root`, mode `0600`; values were not printed |
 
@@ -54,8 +54,8 @@ review and knowledge vectors: no NULL values.
 The deployed Grok path is a real bounded Function Calling loop. It uses a small
 intent-routed subset of the complete 14-tool allowlist, validates arguments with
 Pydantic, executes Oracle-backed tools, returns a bounded untrusted-data payload,
-and receives the final model response. The latest final-release aggregate contained
-no fallback turns.
+and receives the final model response. The prior recorded runtime aggregate contained
+9 normal turns, 0 fallback turns, 25 provider responses and 16 DB-backed tool calls.
 
 Fallback remains mandatory because the provider can return 429. The independent
 Grok smoke honored the provider `Retry-After` once and then completed. A forced or
@@ -97,3 +97,8 @@ invented. This is a transparent quality limitation, not a missing Vector Search 
 - Public provider verification exposed one repeated `search_menus` tool result. The
   server now merges repeated list-producing tool results by their grounded IDs and
   emits one deduplicated carousel per tool type; a focused regression test covers it.
+- OCI release `20260807T063338Z` passed public `/healthz`, `/readyz`, `/`, and
+  `/demo/qr`; unauthenticated demo status remained HTTP 403, the served bundle
+  contained the new UI, and the Primary Demo then passed three consecutive times.
+- Deployment used one temporary current-source `/32` TCP 22 rule. The exact rule was
+  removed after verification, and the final current-source SSH rule count is zero.

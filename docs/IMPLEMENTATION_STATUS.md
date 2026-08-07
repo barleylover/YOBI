@@ -5,12 +5,13 @@ Last updated: 2026-08-07 KST
 ## Status
 
 The audited Master Spec MVP is implemented and publicly deployed on the existing OCI
-resources. Current release: `20260806T085827Z`. The public address is resolved from
+resources. Current release: `20260807T063338Z`. The public address is resolved from
 OCI at runtime and is intentionally absent from this repository.
 
-The 2026-08-07 frontend feedback pass is implemented and fully verified locally on
-`codex/master-spec-completion`; it has not been deployed by this task. The public
-release above therefore remains the previous production snapshot.
+The 2026-08-07 frontend feedback pass is implemented, committed on
+`codex/master-spec-completion`, deployed, and publicly verified. Repeated provider
+list results are consolidated by grounded IDs so the UI renders one carousel per
+tool type.
 
 Confirmed live:
 
@@ -18,8 +19,8 @@ Confirmed live:
 - Exact catalog/normalized seed counts and non-NULL menu/review/knowledge vectors.
 - Real Oracle hard filtering, hybrid `VECTOR_DISTANCE`, cart row locks and idempotent
   mock payment/order creation.
-- Grok two-step smoke and final application Agent Loop. Latest aggregate: 9 normal,
-  0 fallback, 25 provider responses and 16 DB-backed tool calls.
+- Grok two-step smoke and final application Agent Loop. The prior recorded aggregate
+  was 9 normal, 0 fallback, 25 provider responses and 16 DB-backed tool calls.
 - Tesseract English/Korean OCR packages active; raw address images are not persisted.
 - `yobi-api` and Nginx active; public and local health/readiness pass.
 - Public full-order API smoke and Primary iPhone E2E three consecutive passes.
@@ -47,6 +48,8 @@ failure/retry and one synthetic order.
   shortfall amounts and actionable server-error copy.
 - Local browser QA confirmed no horizontal overflow at 390px and 1366px, and no
   console errors.
+- The public iPhone Primary Demo passed three consecutive end-to-end orders on the
+  latest release.
 
 All merchants, reviews, hotels, payments and orders are synthetic. The deployment is
 public HTTP for presentation and has no custom domain/TLS. Stored vectors are

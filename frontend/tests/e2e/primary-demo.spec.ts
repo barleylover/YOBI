@@ -18,7 +18,8 @@ test("primary tourist order completes with evidence and no real charge", async (
     page
       .getByRole("heading", { name: "Why I would avoid the classic version" })
       .or(page.getByRole("heading", { name: "Dietary evidence" }))
-      .or(page.getByRole("heading", { name: "Grounded menu matches" })),
+      .or(page.getByRole("heading", { name: "Grounded menu matches" }))
+      .first(),
   ).toBeVisible();
   await expect(page.getByText("Cross-contamination is not verified").first()).toBeVisible();
   await page.getByTestId("menu-menu_001_01").getByRole("button", { name: "Choose this menu" }).click();
