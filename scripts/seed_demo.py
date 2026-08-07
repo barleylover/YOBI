@@ -65,6 +65,12 @@ EXPECTED_COUNTS = {
     "option_dietary_conflicts": 1,
 }
 
+MENU_RELATION_TABLES = {
+    "menu_ingredient",
+    "menu_allergen",
+    "menu_dietary_attribute",
+}
+
 
 def _merge(
     cursor: oracledb.Cursor,
@@ -179,6 +185,11 @@ def main() -> None:
 
         seed = build_seed()
         for table, key_column, seed_key in TABLE_ORDER:
+            if table in MENU_RELATION_TABLES:
+                cursor.executemany(
+                    f"DELETE FROM {table} WHERE menu_id = :menu_id",
+                    [{"menu_id": row["menu_id"]} for row in seed["menus"]],
+                )
             for row in seed[seed_key]:
                 _merge(cursor, table, key_column, row)
             connection.commit()
