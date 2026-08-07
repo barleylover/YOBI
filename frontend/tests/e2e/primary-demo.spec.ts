@@ -35,7 +35,7 @@ test("primary tourist order completes with evidence and no real charge", async (
   await expect(page.getByRole("button", { name: /Open cart, 1 items/ })).toBeVisible();
   await page.getByRole("button", { name: "Yes, show more menus" }).click();
   await expect(page.getByRole("heading", { name: /More from this restaurant/ })).toBeVisible();
-  await page.getByTestId("menu-menu_001_02").getByRole("button", { name: "Choose this menu" }).click();
+  await page.getByTestId("order-flow").getByTestId("menu-menu_001_02").getByRole("button", { name: "Choose this menu" }).click();
   await page.getByRole("button", { name: /^Regular/ }).click();
   await page.getByRole("button", { name: /^No extra/ }).click();
   await page.getByRole("button", { name: "Add to mock cart" }).click();

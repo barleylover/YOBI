@@ -3,10 +3,11 @@
 - Final verification: 2026-08-07 KST (frontend feedback deployment pass)
 - Source of truth: `YOBI_FINAL_MVP_CODEX_MASTER_PROMPT.md`
 - Improvement branch: `codex/master-spec-completion`
-- Deployed release: `20260807T063338Z`
+- Deployed release: `20260807T093233Z`
 - Public address: resolved from OCI at runtime; not stored in Git
-- Deployment boundary: the 2026-08-07 UI changes and repeated-tool-result deduplication
-  are included in the deployed release and publicly verified.
+- Deployment boundary: both 2026-08-07 UI iterations, three-level database spice
+  migration and repeated-tool-result deduplication are included in the deployed
+  release and publicly verified.
 
 ## Final gate result
 
@@ -14,15 +15,15 @@
 |---|---:|---|
 | Master Spec implementation audit | PASS with stated demo boundaries | Initial audit plus remediation record in `CODEX_HANDOFF_AUDIT.md` |
 | Ruff | PASS | Backend and scripts |
-| MyPy | PASS | 30 application source files |
-| Pytest | 53 PASS | API, agent, OCR, seed, cart/payment integrity, fallback, security and bootstrap |
+| MyPy | PASS | 31 application source files |
+| Pytest | 58 PASS | API, agent, OCR, seed, cart/payment integrity, fallback, security and migration parser |
 | Frontend ESLint | PASS | React/TypeScript source and tests |
 | Frontend unit | 2 PASS | Evidence status rendering |
-| TypeScript/Vite build | PASS | 1,788 modules; production assets generated |
-| Local Playwright | 12 PASS, 12 intentional skips | Primary flow on four viewports; secondary and risk-option flows on the primary mobile viewport |
+| TypeScript/Vite build | PASS | 1,793 modules; production assets generated |
+| Local Playwright | PASS | Primary flow on four viewports; Korean full-order localization on iPhone and desktop |
 | Retrieval evaluation | 100 PASS | Every mismatch/unsafe-reassurance counter is zero |
 | Oracle runtime connection | PASS | Runtime user `YOBI_APP`; readiness HTTP 200 |
-| Oracle migration | PASS | `SCHEMA_MIGRATION` versions 001, 002 and append-only 003 |
+| Oracle migration | PASS | `SCHEMA_MIGRATION` versions 001–004; append-only three-level spice migration applied |
 | Oracle seed integrity | PASS | All exact normalized/catalog counts verified |
 | Oracle Vector Search data | PASS | Menu 150, review 600 and knowledge 150 vectors; NULL count zero for all three |
 | Grok Function Calling | PASS | Independent two-step continuation smoke after one provider-directed 429 wait |
@@ -103,12 +104,12 @@ invented. This is a transparent quality limitation, not a missing Vector Search 
 - Deployment used one temporary current-source `/32` TCP 22 rule. The exact rule was
   removed after verification, and the final current-source SSH rule count is zero.
 
-## 2026-08-07 second UI iteration — local verification
+## 2026-08-07 second UI iteration — deployed verification
 
 This section covers the current working tree after the separate welcome screen,
 locale/profile split, multilingual ordering controls, expanded allergies, three-level
-database spice contract, and same-restaurant add-on loop. It has **not yet been added
-to the deployed release listed at the top of this report**.
+database spice contract, and same-restaurant add-on loop. It is included in release
+`20260807T093233Z`.
 
 - Ruff passed for backend, tests, scripts and deployment code; MyPy passed 31 source
   files.
@@ -133,6 +134,13 @@ to the deployed release listed at the top of this report**.
 - Existing local SQLite catalog rows were updated through key-preserving upsert; user,
   session and cart rows were not deleted. The observed catalog spice range is 1–3 and
   category min/max is 1–3.
-- `004_three_level_spice.sql` is append-only and locally parser-tested. Oracle
-  application, OCI seed count 305, public deployment, and public three-run E2E remain
-  pending until the user requests deployment of this iteration.
+- `004_three_level_spice.sql` is append-only, parser-tested and recorded in live
+  `SCHEMA_MIGRATION`; the live menu spice range is 1–3 and normalized dietary seed
+  count is 305.
+- Public `/healthz`, `/readyz`, `/`, and `/demo/qr` returned HTTP 200; unauthenticated
+  demo status remained HTTP 403. The served bundle contains the new welcome and
+  Korean locale copy.
+- The public iPhone Primary Demo passed three consecutive full orders in 37.6 seconds,
+  and the public Korean iPhone flow independently passed profile through mock payment
+  and confirmation. Release-window logs contained 7 normal assistant turns, 18 tool
+  calls and zero HTTP 5xx or fallback turns.

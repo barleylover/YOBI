@@ -5,7 +5,7 @@ Last updated: 2026-08-07 KST
 ## Status
 
 The audited Master Spec MVP is implemented and publicly deployed on the existing OCI
-resources. Current release: `20260807T063338Z`. The public address is resolved from
+resources. Current release: `20260807T093233Z`. The public address is resolved from
 OCI at runtime and is intentionally absent from this repository.
 
 The 2026-08-07 frontend feedback pass is implemented, committed on
@@ -15,7 +15,8 @@ tool type.
 
 Confirmed live:
 
-- Oracle runtime user `YOBI_APP`; migrations 001, 002 and append-only 003.
+- Oracle runtime user `YOBI_APP`; migrations 001–004, including the append-only
+  three-level spice migration.
 - Exact catalog/normalized seed counts and non-NULL menu/review/knowledge vectors.
 - Real Oracle hard filtering, hybrid `VECTOR_DISTANCE`, cart row locks and idempotent
   mock payment/order creation.
@@ -50,6 +51,23 @@ failure/retry and one synthetic order.
   console errors.
 - The public iPhone Primary Demo passed three consecutive end-to-end orders on the
   latest release.
+
+## 2026-08-07 multilingual ordering iteration
+
+- Compact no-scroll welcome screen restored the context-first product message and
+  removed the speech-bubble/neighbourhood treatment.
+- Locale selection and form-only food/delivery context are separate steps; locale
+  change remains inside the profile form.
+- Profile, address feedback, chat cards, evidence labels, option builder, cart,
+  delivery, payment and confirmation use the selected language. Korean catalog names
+  and country display names are localized while restaurant/hotel proper names remain
+  catalog data.
+- Expanded allergy selection uses one shared severity, and menu/category/seed/database
+  spice values use the same 1–3 contract.
+- Same-restaurant add-on browsing remains swipeable and the cart badge sums item
+  quantities.
+- Public Korean iPhone E2E passed the complete profile-to-confirmation flow on release
+  `20260807T093233Z`.
 
 All merchants, reviews, hotels, payments and orders are synthetic. The deployment is
 public HTTP for presentation and has no custom domain/TLS. Stored vectors are
