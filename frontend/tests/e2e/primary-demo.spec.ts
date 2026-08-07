@@ -8,7 +8,9 @@ test("primary tourist order completes with evidence and no real charge", async (
   await page.goto("/");
   await expect(page.getByRole("heading", { name: /Order K-food with context/ })).toBeVisible();
   await page.getByRole("checkbox", { name: /I agree/ }).check();
-  await page.getByRole("button", { name: "Start ordering" }).click();
+  await page.getByRole("button", { name: "Check delivery address" }).click();
+  await expect(page.getByText("YOBI Myeongdong Hotel")).toBeVisible();
+  await page.getByRole("button", { name: "Confirm & start" }).first().click();
 
   await expect(page).toHaveURL(/\/chat\/session_/);
   await page.getByRole("button", { name: "Try the demo question" }).click();
@@ -26,9 +28,6 @@ test("primary tourist order completes with evidence and no real charge", async (
   await page.getByRole("button", { name: /^Add cheese/ }).click();
   await page.getByRole("button", { name: /^Remove fish cake/ }).click();
   await page.getByRole("button", { name: "Add to mock cart" }).click();
-  await page.getByRole("button", { name: "Use stable demo booking image" }).click();
-  await expect(page.getByText("YOBI Myeongdong Hotel")).toBeVisible();
-  await page.getByRole("button", { name: "Confirm" }).first().click();
   await page.getByRole("button", { name: "Confirm delivery details" }).click();
   await expect(page.getByText("₩15,900", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Proceed to payment" }).click();

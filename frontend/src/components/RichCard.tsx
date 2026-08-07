@@ -1,4 +1,5 @@
-import { ArrowRight, Clock3, Info, Leaf, Soup, Store, TriangleAlert } from "lucide-react";
+import { useRef, useState } from "react";
+import { ArrowLeft, ArrowRight, Clock3, Info, Leaf, Soup, Store, TriangleAlert } from "lucide-react";
 import type {
   CardPayload,
   CategoryRecommendation,
@@ -15,6 +16,20 @@ interface Props {
 }
 
 export function RichCard({ card, onChooseMenu, onQuickReply }: Props) {
+  const carouselRef = useRef<HTMLDivElement>(null);
+  const [activeMenuIndex, setActiveMenuIndex] = useState(0);
+
+  function showMenu(index: number) {
+    const track = carouselRef.current;
+    if (!track) return;
+    const nextIndex = Math.max(0, Math.min(index, track.children.length - 1));
+    const firstCard = track.children[0] as HTMLElement | undefined;
+    const nextCard = track.children[nextIndex] as HTMLElement | undefined;
+    if (!firstCard || !nextCard) return;
+    track.scrollTo({ left: nextCard.offsetLeft - firstCard.offsetLeft, behavior: "smooth" });
+    setActiveMenuIndex(nextIndex);
+  }
+
   if (card.type === "category_recommendations") {
     const categories = (card.data.categories ?? []) as CategoryRecommendation[];
     return (
@@ -50,13 +65,23 @@ export function RichCard({ card, onChooseMenu, onQuickReply }: Props) {
     const menus = (card.data.menus ?? []) as MenuSummary[];
     return (
       <section className="rich-card-stack" aria-label={card.title}>
-        <div className="card-heading">
-          <p className="eyebrow">Menu match</p>
-          <h3>{card.title}</h3>
-          {card.subtitle && <p>{card.subtitle}</p>}
+        <div className="card-heading carousel-heading">
+          <div><p className="eyebrow">Menu match</p><h3>{card.title}</h3>{card.subtitle && <p>{card.subtitle}</p>}</div>
+          {menus.length > 1 && <div className="carousel-controls" aria-label="Menu carousel controls">
+            <button aria-label="Previous menu" onClick={() => showMenu(activeMenuIndex - 1)} disabled={activeMenuIndex === 0}><ArrowLeft size={17} /></button>
+            <span>{activeMenuIndex + 1} / {menus.length}</span>
+            <button aria-label="Next menu" onClick={() => showMenu(activeMenuIndex + 1)} disabled={activeMenuIndex === menus.length - 1}><ArrowRight size={17} /></button>
+          </div>}
         </div>
-        {menus.map((menu) => (
-          <article className="menu-card" key={menu.menu_id} data-testid={`menu-${menu.menu_id}`}>
+        <div className="menu-carousel" ref={carouselRef} onScroll={(event) => {
+          const track = event.currentTarget;
+          const firstCard = track.children[0] as HTMLElement | undefined;
+          const secondCard = track.children[1] as HTMLElement | undefined;
+          const interval = secondCard && firstCard ? secondCard.offsetLeft - firstCard.offsetLeft : track.clientWidth || 1;
+          setActiveMenuIndex(Math.max(0, Math.min(menus.length - 1, Math.round(track.scrollLeft / interval))));
+        }}>
+          {menus.map((menu) => (
+          <article className="menu-card" key={menu.menu_id} data-testid={`menu-${menu.menu_id}`} aria-label={`${menu.name_en} recommendation`}>
             <div className="food-illustration" aria-hidden="true">
               <span>{menu.category.toLowerCase().includes("rose") ? "ROSE" : "K-FOOD"}</span>
             </div>
@@ -86,7 +111,9 @@ export function RichCard({ card, onChooseMenu, onQuickReply }: Props) {
               </button>
             </div>
           </article>
-        ))}
+          ))}
+        </div>
+        {menus.length > 1 && <div className="carousel-dots" aria-hidden="true">{menus.map((menu, index) => <span className={index === activeMenuIndex ? "active" : ""} key={menu.menu_id} />)}</div>}
       </section>
     );
   }

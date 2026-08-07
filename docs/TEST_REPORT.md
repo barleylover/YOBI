@@ -1,10 +1,12 @@
 # YOBI final test report
 
-- Final verification: 2026-08-06 KST
+- Final verification: 2026-08-07 KST (local frontend feedback pass)
 - Source of truth: `YOBI_FINAL_MVP_CODEX_MASTER_PROMPT.md`
 - Improvement branch: `codex/master-spec-completion`
 - Deployed release: `20260806T085827Z`
 - Public address: resolved from OCI at runtime; not stored in Git
+- Deployment boundary: the 2026-08-07 UI changes are locally verified and not yet
+  included in deployed release `20260806T085827Z`
 
 ## Final gate result
 
@@ -13,11 +15,11 @@
 | Master Spec implementation audit | PASS with stated demo boundaries | Initial audit plus remediation record in `CODEX_HANDOFF_AUDIT.md` |
 | Ruff | PASS | Backend and scripts |
 | MyPy | PASS | 30 application source files |
-| Pytest | 50 PASS | API, agent, OCR, seed, cart/payment integrity, fallback, security and bootstrap |
+| Pytest | 52 PASS | API, agent, OCR, seed, cart/payment integrity, fallback, security and bootstrap |
 | Frontend ESLint | PASS | React/TypeScript source and tests |
 | Frontend unit | 2 PASS | Evidence status rendering |
 | TypeScript/Vite build | PASS | 1,788 modules; production assets generated |
-| Local Playwright | 11 PASS, 9 intentional skips | Primary flow on four viewports; secondary flows on the primary mobile viewport |
+| Local Playwright | 12 PASS, 12 intentional skips | Primary flow on four viewports; secondary and risk-option flows on the primary mobile viewport |
 | Retrieval evaluation | 100 PASS | Every mismatch/unsafe-reassurance counter is zero |
 | Oracle runtime connection | PASS | Runtime user `YOBI_APP`; readiness HTTP 200 |
 | Oracle migration | PASS | `SCHEMA_MIGRATION` versions 001, 002 and append-only 003 |
@@ -76,3 +78,19 @@ invented. This is a transparent quality limitation, not a missing Vector Search 
   token-level streaming is not claimed.
 - The one warning in Pytest is a third-party Starlette TestClient deprecation warning;
   it does not affect the application contract.
+
+## 2026-08-07 UI/UX verification addendum
+
+- ESLint, Vitest 2 tests, TypeScript and Vite build all passed; 1,788 modules built.
+- Playwright passed the revised address-first primary order on iPhone 13, Pixel 7,
+  desktop 1366 and desktop 1920.
+- Focused E2E verifies 16 language options, selected-language country priority,
+  gender removal, vegan/religion inputs, three spice radios, the address-first flow,
+  dietary option lock/reason/unlock, and the complete mock order.
+- In-app browser QA verified swipe/arrow carousel navigation, direct Order Builder
+  scroll, checkout dietary/minimum readiness, 390px and 1366px width containment,
+  and zero browser console errors.
+- The new `make dev` launcher started SQLite/fixture/fallback mode, selected 8001 and
+  5174 without disturbing existing 8000/5173 listeners, returned health/readiness
+  HTTP 200, passed the Primary Demo on all four Playwright viewports, and released
+  both selected ports and PID files after `Ctrl-C`.

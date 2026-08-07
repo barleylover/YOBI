@@ -26,3 +26,4 @@ frontend/playwright.config.d.ts
 backend/*.egg-info/
 tmp/
 *.log
+.local-demo/

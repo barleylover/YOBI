@@ -253,6 +253,8 @@ class CartPreview(BaseModel):
     total_price: int
     missing_slots: list[str]
     dietary_warnings: list[str]
+    minimum_order_amount: int = 0
+    minimum_order_shortfall: int = 0
     ready_to_checkout: bool
     confirmed: bool
 

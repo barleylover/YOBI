@@ -21,6 +21,34 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+const ACTIONABLE_ERRORS: Record<string, string> = {
+  REQUIRED_MENU_OPTION_MISSING: "Choose one option in every required group to continue.",
+  INVALID_MENU_OPTION: "Choose an option that belongs to this menu.",
+  OPTION_GROUP_MAX_EXCEEDED: "Choose only the allowed number of options in this group.",
+  CART_DIETARY_CONFLICT: "Remove the dietary-risk menu or option to continue.",
+  CART_MULTIPLE_MERCHANTS: "Remove items from the other restaurant to continue with one delivery.",
+  MINIMUM_ORDER_NOT_MET: "Add more items until the restaurant minimum is reached.",
+  CART_INCOMPLETE: "Add a menu and confirm the delivery details to continue.",
+  CART_OPTION_UNAVAILABLE: "That option is no longer available. Choose another option.",
+  CART_MENU_UNAVAILABLE: "That menu is no longer available. Choose another menu.",
+  CART_CHANGED_RECONFIRM_REQUIRED: "The menu or price changed. Review the cart and confirm it again.",
+  CART_NOT_CONFIRMED: "Review and confirm the latest cart before payment.",
+  IDEMPOTENCY_KEY_REUSED: "This payment request no longer matches the cart. Return to the cart and try again.",
+  PAYMENT_ALREADY_SUCCEEDED: "This demo payment is already complete. Open the confirmed order instead.",
+  ADDRESS_NOT_CONFIRMED: "Confirm your delivery address again before continuing.",
+  ADDRESS_CANDIDATE_TOKEN_INVALID: "The address check expired. Search for the address again.",
+  UPLOAD_SIZE_INVALID: "Choose an address image smaller than 8MB.",
+  UNSUPPORTED_IMAGE_TYPE: "Choose a PNG, JPEG, or WebP address image.",
+  IMAGE_EXTENSION_MISMATCH: "The file extension does not match the image type. Choose another image.",
+  IMAGE_MAGIC_BYTE_INVALID: "That file is not a readable image. Choose another PNG, JPEG, or WebP file.",
+  IMAGE_DECODE_FAILED: "That image could not be read. Try a clearer image or enter the address manually.",
+};
+
+export function actionableError(cause: unknown, fallback: string) {
+  const code = cause instanceof Error ? cause.message : "";
+  return ACTIONABLE_ERRORS[code] ?? fallback;
+}
+
 export const api = {
   createProfile: (body: Record<string, unknown>) =>
     request<Profile>("/api/v1/profiles", { method: "POST", body: JSON.stringify(body) }),
@@ -107,7 +135,10 @@ export const api = {
       method: "POST",
       body: form,
     });
-    if (!response.ok) throw new Error("ADDRESS_UPLOAD_FAILED");
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({ detail: { code: "ADDRESS_UPLOAD_FAILED" } }));
+      throw new Error(payload.detail?.code ?? "ADDRESS_UPLOAD_FAILED");
+    }
     return response.json() as Promise<{
       candidates: AddressCandidate[];
       low_confidence: boolean;

@@ -299,6 +299,7 @@ class OracleYobiRepository:
         severe_shellfish = (
             "shellfish_allergy" in profile.dietary_rules and profile.allergy_severity == "severe"
         )
+        vegan_required = "vegan" in profile.dietary_rules
         with self.pool.connection() as connection:
             cursor = connection.cursor()
             cursor.execute(
@@ -334,6 +335,12 @@ class OracleYobiRepository:
                         WHERE ma.menu_id=m.menu_id AND a.code='shellfish_risk'
                       )
                     ))
+                    AND (:vegan_required = 0 OR EXISTS (
+                      SELECT 1 FROM menu_dietary_attribute mda
+                      JOIN dietary_attribute da ON da.attribute_id=mda.attribute_id
+                      WHERE mda.menu_id=m.menu_id AND da.code='vegan_option'
+                        AND mda.status='VERIFIED'
+                    ))
                     AND (:exclude_pork = 0 OR NOT JSON_EXISTS(m.allergen_tags_json, '$?(@ == "pork")'))
                   ORDER BY vector_distance, m.price
                 ) WHERE ROWNUM <= :candidate_limit
@@ -342,6 +349,7 @@ class OracleYobiRepository:
                 budget=budget,
                 spice=spice,
                 severe_shellfish=int(severe_shellfish),
+                vegan_required=int(vegan_required),
                 exclude_pork=int("pork" in {item.lower() for item in excluded_ingredients}),
                 candidate_limit=max(limit * 5, 20),
             )
@@ -895,6 +903,79 @@ class OracleYobiRepository:
             delivery_fee = int(cursor.fetchone()[0])
             cursor.execute("SELECT 1 FROM delivery_preference WHERE cart_id=:id", id=cart["cart_id"])
             has_delivery = cursor.fetchone() is not None
+            cursor.execute(
+                """
+                SELECT p.dietary_rules_json, p.allergy_severity
+                FROM chat_session s JOIN user_profile p ON p.profile_id=s.profile_id
+                WHERE s.session_id=:id
+                """,
+                id=session_id,
+            )
+            profile_row = _row(cursor)
+            merchant_ids = {str(row["merchant_id"]) for row in rows}
+            minimum_order_amount = 0
+            if len(merchant_ids) == 1:
+                cursor.execute(
+                    "SELECT min_order_amount FROM merchant WHERE merchant_id=:id",
+                    id=next(iter(merchant_ids)),
+                )
+                minimum_row = _row(cursor)
+                minimum_order_amount = int(minimum_row["min_order_amount"]) if minimum_row else 0
+            dietary_conflicts: list[str] = []
+            if profile_row and rows:
+                dietary_rules = set(_json(profile_row["dietary_rules_json"]))
+                severe_shellfish = (
+                    "shellfish_allergy" in dietary_rules
+                    and profile_row["allergy_severity"] == "severe"
+                )
+                vegan_required = "vegan" in dietary_rules
+                for row in rows:
+                    if severe_shellfish:
+                        cursor.execute(
+                            """
+                            SELECT CASE WHEN EXISTS (
+                              SELECT 1 FROM menu_dietary_attribute mda
+                              JOIN dietary_attribute da ON da.attribute_id=mda.attribute_id
+                              WHERE mda.menu_id=:id AND da.code='shellfish_sauce_absent'
+                                AND mda.status='VERIFIED'
+                            ) AND NOT EXISTS (
+                              SELECT 1 FROM menu_allergen ma
+                              JOIN allergen a ON a.allergen_id=ma.allergen_id
+                              WHERE ma.menu_id=:id AND a.code='shellfish_risk'
+                            ) THEN 1 ELSE 0 END FROM dual
+                            """,
+                            id=row["menu_id"],
+                        )
+                        if int(cursor.fetchone()[0]) != 1:
+                            dietary_conflicts.append(
+                                f"Remove {row['menu_name']} to continue; its shellfish safety is not verified."
+                            )
+                    if vegan_required:
+                        cursor.execute(
+                            """
+                            SELECT 1 FROM menu_dietary_attribute mda
+                            JOIN dietary_attribute da ON da.attribute_id=mda.attribute_id
+                            WHERE mda.menu_id=:id AND da.code='vegan_option' AND mda.status='VERIFIED'
+                            """,
+                            id=row["menu_id"],
+                        )
+                        if cursor.fetchone() is None:
+                            dietary_conflicts.append(
+                                f"Remove {row['menu_name']} to continue; vegan status is not verified."
+                            )
+                    if severe_shellfish:
+                        for option in _json(row["option_snapshot_json"]):
+                            cursor.execute(
+                                """
+                                SELECT 1 FROM option_dietary_conflict
+                                WHERE option_item_id=:id AND rule_code='shellfish_allergy'
+                                """,
+                                id=option["option_item_id"],
+                            )
+                            if cursor.fetchone() is not None:
+                                dietary_conflicts.append(
+                                    f"Remove {option['name_en']} to continue."
+                                )
         items = [
             CartLine(
                 cart_item_id=row["cart_item_id"],
@@ -916,6 +997,14 @@ class OracleYobiRepository:
         if not has_delivery:
             missing.append("delivery_preferences")
         subtotal = sum(item.line_total for item in items)
+        minimum_order_shortfall = max(0, minimum_order_amount - subtotal)
+        if minimum_order_shortfall:
+            missing.append("minimum_order_amount")
+        if dietary_conflicts:
+            missing.append("dietary_conflict")
+        warnings = list(dict.fromkeys(dietary_conflicts))
+        if items:
+            warnings.append("Synthetic evidence only; cross-contamination may be unverified.")
         return CartPreview(
             cart_id=cart["cart_id"],
             session_id=session_id,
@@ -925,9 +1014,9 @@ class OracleYobiRepository:
             delivery_fee=delivery_fee,
             total_price=subtotal + delivery_fee,
             missing_slots=missing,
-            dietary_warnings=(
-                ["Synthetic evidence only; cross-contamination may be unverified."] if items else []
-            ),
+            dietary_warnings=warnings,
+            minimum_order_amount=minimum_order_amount,
+            minimum_order_shortfall=minimum_order_shortfall,
             ready_to_checkout=not missing,
             confirmed=bool(cart["confirmed"]),
         )
@@ -1030,6 +1119,7 @@ class OracleYobiRepository:
         severe_shellfish = (
             "shellfish_allergy" in dietary_rules and profile["allergy_severity"] == "severe"
         )
+        vegan_required = "vegan" in dietary_rules
         merchant_ids: set[str] = set()
         subtotal = 0
         changed = False
@@ -1066,6 +1156,17 @@ class OracleYobiRepository:
                     id=menu["menu_id"],
                 )
                 if int(cursor.fetchone()[0]) != 1:
+                    raise ValueError("CART_DIETARY_CONFLICT")
+            if vegan_required:
+                cursor.execute(
+                    """
+                    SELECT 1 FROM menu_dietary_attribute mda
+                    JOIN dietary_attribute da ON da.attribute_id=mda.attribute_id
+                    WHERE mda.menu_id=:id AND da.code='vegan_option' AND mda.status='VERIFIED'
+                    """,
+                    id=menu["menu_id"],
+                )
+                if cursor.fetchone() is None:
                     raise ValueError("CART_DIETARY_CONFLICT")
 
             selected_ids = [

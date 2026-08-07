@@ -22,10 +22,20 @@ make setup
 make dev
 ```
 
-Frontend: `http://127.0.0.1:5173`  
-Backend health: `http://127.0.0.1:8000/healthz`
+Default frontend: `http://127.0.0.1:5173`
+Default backend health: `http://127.0.0.1:8000/healthz`
 
-The local default uses a deterministic SQLite demo database and the deterministic agent fallback. OCI credentials are not needed for UI development or fallback E2E tests.
+`make dev` starts both servers, waits for readiness, and opens the frontend on macOS.
+Keep that terminal open and press `Ctrl-C` to stop both processes. Set
+`YOBI_NO_OPEN=1` if you do not want the browser to open automatically. Logs are
+written under `.local-demo/` and are excluded from Git.
+If either default port is already in use, the launcher selects the next free local
+port without stopping the existing process and prints the actual URLs.
+
+The local launcher explicitly uses a deterministic SQLite demo database, fixture
+address extraction, and the deterministic agent fallback. OCI credentials are not
+needed or used for this UI verification. See `docs/DEMO_RUNBOOK.md` for the exact
+new-UI walkthrough and focused regression checklist.
 
 ## Verification
 
@@ -38,9 +48,9 @@ make smoke
 make e2e
 ```
 
-If local ports 5173 or 8000 are already owned by another app, start the backend on
-an alternate port and set `YOBI_API_PROXY_TARGET` when starting Vite. This changes
-only the local development proxy and never enters the browser bundle.
+For a manual two-terminal start on alternate ports, set `YOBI_API_PROXY_TARGET` to
+the backend origin when starting Vite. This changes only the local development proxy
+and never enters the browser bundle.
 
 ## Security boundary
 

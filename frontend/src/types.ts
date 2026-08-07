@@ -4,6 +4,7 @@ export interface Profile {
   profile_id: string;
   preferred_language: string;
   nationality: string;
+  religion_selection: string;
   spice_tolerance: number;
   dietary_rules: string[];
   favorite_foods: string[];
@@ -144,6 +145,8 @@ export interface CartPreview {
   total_price: number;
   missing_slots: string[];
   dietary_warnings: string[];
+  minimum_order_amount: number;
+  minimum_order_shortfall: number;
   ready_to_checkout: boolean;
   confirmed: boolean;
 }

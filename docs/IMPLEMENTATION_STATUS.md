@@ -1,12 +1,16 @@
 # YOBI MVP implementation status
 
-Last updated: 2026-08-06 KST
+Last updated: 2026-08-07 KST
 
 ## Status
 
 The audited Master Spec MVP is implemented and publicly deployed on the existing OCI
 resources. Current release: `20260806T085827Z`. The public address is resolved from
 OCI at runtime and is intentionally absent from this repository.
+
+The 2026-08-07 frontend feedback pass is implemented and fully verified locally on
+`codex/master-spec-completion`; it has not been deployed by this task. The public
+release above therefore remains the previous production snapshot.
 
 Confirmed live:
 
@@ -25,8 +29,24 @@ Confirmed live:
 
 The product covers editable onboarding, conversational discovery, evidence-linked
 recommendation/explanation, merchant comparison, menu options, translated notes,
-three address methods, cart edit/remove/reprice, delivery confirmation, mock payment
+three onboarding address methods, cart edit/remove/reprice, delivery confirmation, mock payment
 failure/retry and one synthetic order.
+
+## 2026-08-07 frontend feedback pass
+
+- 16 language choices and language-prioritized country ordering.
+- Gender removed; explicit vegan and religion context added without nationality,
+  language or religion-based dietary inference.
+- Three radio-based spice levels and address confirmation moved before chat.
+- Context rail and `Discover / Choose / Deliver / Pay` strip removed.
+- Swipeable one-card menu carousel with accessible previous/next controls.
+- `Choose this menu` scrolls directly to the Order Builder.
+- Dietary-risk options start disabled with a reason and explicit unlock control;
+  authoritative server dietary checks remain enforced.
+- Review readiness now includes dietary conflicts and the restaurant minimum, with
+  shortfall amounts and actionable server-error copy.
+- Local browser QA confirmed no horizontal overflow at 390px and 1366px, and no
+  console errors.
 
 All merchants, reviews, hotels, payments and orders are synthetic. The deployment is
 public HTTP for presentation and has no custom domain/TLS. Stored vectors are

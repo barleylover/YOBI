@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { ArrowUp, ChevronDown, ShieldCheck, ShoppingBag, Sparkles } from "lucide-react";
+import { ArrowUp, ChevronDown, ShoppingBag, Sparkles } from "lucide-react";
 import { Navigate, useParams } from "react-router-dom";
 import { OrderFlowPanel } from "../components/OrderFlowPanel";
 import { RichCard } from "../components/RichCard";
@@ -22,11 +22,12 @@ export function ChatPage() {
   const { sessionId = "" } = useParams();
   const profile = useSessionStore((state) => state.profile);
   const session = useSessionStore((state) => state.session);
+  const addressRefId = useSessionStore((state) => state.addressRefId);
+  const addressSummary = useSessionStore((state) => state.addressSummary);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [activity, setActivity] = useState("Checking menu details…");
   const [selectedMenu, setSelectedMenu] = useState<MenuSummary | null>(null);
-  const [orderPhase, setOrderPhase] = useState<"options" | "note" | "address" | "delivery" | "review">("options");
   const [entries, setEntries] = useState<ChatEntry[]>([
     {
       id: "welcome",
@@ -36,17 +37,24 @@ export function ChatPage() {
   ]);
 
   const activeRules = useMemo(() => profile?.dietary_rules ?? [], [profile]);
-  const journeyStage = selectedMenu
-    ? orderPhase === "address" || orderPhase === "delivery"
-      ? "Deliver"
-      : orderPhase === "review"
-        ? "Pay"
-        : "Choose"
-    : "Discover";
-
   function openCart() {
     document.querySelector<HTMLElement>("[data-testid='order-flow']")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
+
+  function chooseMenu(menu: MenuSummary) {
+    setSelectedMenu(menu);
+  }
+
+  useEffect(() => {
+    if (!selectedMenu) return;
+    const timer = window.setTimeout(() => {
+      document.querySelector<HTMLElement>("[data-testid='order-flow']")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [selectedMenu]);
   useEffect(() => {
     if (!sessionId || session?.session_id !== sessionId) return;
     let active = true;
@@ -66,7 +74,7 @@ export function ChatPage() {
       active = false;
     };
   }, [session?.session_id, sessionId]);
-  if (!profile || !session || session.session_id !== sessionId) return <Navigate to="/" replace />;
+  if (!profile || !session || session.session_id !== sessionId || !addressRefId) return <Navigate to="/" replace />;
 
   async function send(text = input) {
     const trimmed = text.trim();
@@ -115,12 +123,14 @@ export function ChatPage() {
           <div><strong>Your Korean food buddy</strong><span><i /> Demo catalog ready</span></div>
           <button aria-label="Open cart" onClick={openCart} disabled={!selectedMenu} title={selectedMenu ? "Open mock cart" : "Choose a menu first"}><ShoppingBag size={19} /></button>
         </header>
-        <div className="journey-bar">{["Discover", "Choose", "Deliver", "Pay"].map((step) => <span className={journeyStage === step ? "active" : ""} key={step}>{step}</span>)}</div>
-
         <div className="conversation" aria-live="polite">
           <section className="session-brief">
             <Sparkles size={18} />
-            <div><strong>Ready for Alex’s first K-food order</strong><p>English · spice {profile.spice_tolerance}/5 · shellfish allergy</p></div>
+            <div>
+              <strong>Your delivery context is ready</strong>
+              <p>{profile.preferred_language} · {profile.nationality} · spice {profile.spice_tolerance}/5{activeRules.length ? ` · ${activeRules.map((rule) => rule.replaceAll("_", " ")).join(" · ")}` : ""}</p>
+              <small><span aria-hidden="true">●</span> {addressSummary}</small>
+            </div>
           </section>
           {entries.map((entry) => (
             <article className={`message ${entry.role}`} key={entry.id}>
@@ -128,7 +138,7 @@ export function ChatPage() {
               {entry.text && <div className="message-bubble">{entry.text}</div>}
               {entry.turn?.fallback_used && <span className="fallback-chip">Demo continuity mode</span>}
               {entry.turn?.cards.map((card, index) => (
-                <RichCard card={card} key={`${entry.id}-${index}`} onChooseMenu={setSelectedMenu} onQuickReply={(reply) => void send(reply)} />
+                <RichCard card={card} key={`${entry.id}-${index}`} onChooseMenu={chooseMenu} onQuickReply={(reply) => void send(reply)} />
               ))}
               {entry.turn?.suggested_replies.length ? (
                 <div className="quick-replies">
@@ -138,7 +148,7 @@ export function ChatPage() {
             </article>
           ))}
           {sending && <div className="typing"><span /><span /><span /><em>{activity}</em></div>}
-          {selectedMenu && <OrderFlowPanel sessionId={sessionId} menu={selectedMenu} onClose={() => setSelectedMenu(null)} onPhaseChange={setOrderPhase} />}
+          {selectedMenu && <OrderFlowPanel sessionId={sessionId} menu={selectedMenu} addressRefId={addressRefId} dietaryRules={activeRules} onClose={() => setSelectedMenu(null)} />}
         </div>
 
         <form className="composer" onSubmit={submit}>
@@ -150,12 +160,6 @@ export function ChatPage() {
           <button type="button" className="prompt-suggestion" onClick={() => void send("I saw people eating some red rice cake dish on the street. What is that? Can I order it?")}>Try the demo question <ChevronDown size={15} /></button>
         </form>
       </section>
-
-      <aside className="context-rail">
-        <div className="rail-card profile-card"><p className="eyebrow">Your context</p><h2>Your Seoul food guide</h2><p>{profile.preferred_language} · {profile.nationality}</p><div className="profile-tags"><span>Spice {profile.spice_tolerance}/5</span>{activeRules.map((rule) => <span key={rule}>{rule.replaceAll("_", " ")}</span>)}</div></div>
-        <div className="rail-card"><p className="eyebrow">Trust layer</p><h3><ShieldCheck size={19} /> Evidence before reassurance</h3><p>Restaurant facts, risk signals, and unknowns stay visibly separate.</p><ul><li>Prices come from the demo catalog</li><li>Every dietary claim links to evidence</li><li>No real payment or order</li></ul></div>
-        <div className="rail-card demo-data"><strong>Synthetic demo data</strong><p>30 restaurants · 150 menus · 600 review snippets</p></div>
-      </aside>
     </main>
   );
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, CheckCircle2, CreditCard, LockKeyhole, XCircle } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api } from "../lib/api";
+import { actionableError, api } from "../lib/api";
 import type { Checkout } from "../types";
 
 export function PaymentPage() {
@@ -15,11 +15,14 @@ export function PaymentPage() {
 
   async function pay(success: boolean) {
     setBusy(true);
+    setMessage("");
     try {
       const updated = success ? await api.paymentSuccess(checkoutId) : await api.paymentFailure(checkoutId);
       setCheckout(updated);
       if (updated.status === "SUCCEEDED" && updated.order_id) navigate(`/order/${updated.order_id}`);
       else setMessage("Demo payment failed. Your cart is unchanged, so you can retry safely.");
+    } catch (cause) {
+      setMessage(actionableError(cause, "The demo payment could not be updated. Your cart is unchanged; try again."));
     } finally { setBusy(false); }
   }
 
@@ -39,4 +42,3 @@ export function PaymentPage() {
     </main>
   );
 }
-

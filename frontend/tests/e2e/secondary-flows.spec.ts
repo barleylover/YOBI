@@ -3,7 +3,8 @@ import { expect, test } from "@playwright/test";
 async function startSession(page: import("@playwright/test").Page) {
   await page.goto("/");
   await page.getByRole("checkbox", { name: /I agree/ }).check();
-  await page.getByRole("button", { name: "Start ordering" }).click();
+  await page.getByRole("button", { name: "Check delivery address" }).click();
+  await page.getByRole("button", { name: "Confirm & start" }).first().click();
   await expect(page).toHaveURL(/\/chat\/session_/);
 }
 
@@ -46,8 +47,6 @@ test("mock payment failure preserves checkout and permits safe retry", async ({ 
   await page.getByRole("button", { name: /^Add cheese/ }).click();
   await page.getByRole("button", { name: /^Remove fish cake/ }).click();
   await page.getByRole("button", { name: "Add to mock cart" }).click();
-  await page.getByRole("button", { name: "Use stable demo booking image" }).click();
-  await page.getByRole("button", { name: "Confirm" }).first().click();
   await page.getByRole("button", { name: "Confirm delivery details" }).click();
   await page.getByRole("button", { name: "Proceed to payment" }).click();
 

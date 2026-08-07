@@ -9,8 +9,7 @@ setup:
 	cd frontend && $(PNPM) install
 
 dev:
-	@echo "Run backend: .venv/bin/uvicorn app.main:app --app-dir backend --reload"
-	@echo "Run frontend: cd frontend && $(PNPM) dev"
+	./scripts/run_local_demo.sh
 
 test:
 	.venv/bin/ruff check backend scripts

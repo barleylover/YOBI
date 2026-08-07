@@ -370,6 +370,7 @@ class SQLiteYobiRepository:
         severe_shellfish = (
             "shellfish_allergy" in profile.dietary_rules and profile.allergy_severity == "severe"
         )
+        vegan_required = "vegan" in profile.dietary_rules
         excluded = {item.lower() for item in excluded_ingredients}
         for row in rows:
             dietary_tags = set(json.loads(row["dietary_tags_json"]))
@@ -377,6 +378,8 @@ class SQLiteYobiRepository:
             if "pork" in excluded and "pork" in allergen_tags:
                 continue
             if severe_shellfish and "shellfish_sauce_absent" not in dietary_tags:
+                continue
+            if vegan_required and "vegan_option" not in dietary_tags:
                 continue
             score = cosine_similarity(query_vector, deterministic_embedding(row["semantic_text"]))
             exact_boost = 0.0
@@ -890,6 +893,76 @@ class SQLiteYobiRepository:
             has_delivery = connection.execute(
                 "SELECT 1 FROM delivery_preference WHERE cart_id = ?", (cart["cart_id"],)
             ).fetchone()
+            profile_row = connection.execute(
+                """
+                SELECT p.dietary_rules_json, p.allergy_severity
+                FROM chat_session s JOIN user_profile p ON p.profile_id=s.profile_id
+                WHERE s.session_id=?
+                """,
+                (session_id,),
+            ).fetchone()
+            minimum_order_amount = 0
+            if len(merchant_ids) == 1:
+                minimum_row = connection.execute(
+                    "SELECT min_order_amount FROM merchant WHERE merchant_id=?",
+                    (next(iter(merchant_ids)),),
+                ).fetchone()
+                minimum_order_amount = int(minimum_row["min_order_amount"]) if minimum_row else 0
+            dietary_conflicts: list[str] = []
+            if profile_row and rows:
+                dietary_rules = set(json.loads(profile_row["dietary_rules_json"]))
+                severe_shellfish = (
+                    "shellfish_allergy" in dietary_rules
+                    and profile_row["allergy_severity"] == "severe"
+                )
+                vegan_required = "vegan" in dietary_rules
+                for row in rows:
+                    if severe_shellfish:
+                        normalized_safe = connection.execute(
+                            """
+                            SELECT CASE WHEN EXISTS (
+                              SELECT 1 FROM menu_dietary_attribute mda
+                              JOIN dietary_attribute da ON da.attribute_id=mda.attribute_id
+                              WHERE mda.menu_id=? AND da.code='shellfish_sauce_absent'
+                                AND mda.status='VERIFIED'
+                            ) AND NOT EXISTS (
+                              SELECT 1 FROM menu_allergen ma
+                              JOIN allergen a ON a.allergen_id=ma.allergen_id
+                              WHERE ma.menu_id=? AND a.code='shellfish_risk'
+                            ) THEN 1 ELSE 0 END
+                            """,
+                            (row["menu_id"], row["menu_id"]),
+                        ).fetchone()[0]
+                        if not normalized_safe:
+                            dietary_conflicts.append(
+                                f"Remove {row['menu_name']} to continue; its shellfish safety is not verified."
+                            )
+                    if vegan_required:
+                        vegan_verified = connection.execute(
+                            """
+                            SELECT 1 FROM menu_dietary_attribute mda
+                            JOIN dietary_attribute da ON da.attribute_id=mda.attribute_id
+                            WHERE mda.menu_id=? AND da.code='vegan_option' AND mda.status='VERIFIED'
+                            """,
+                            (row["menu_id"],),
+                        ).fetchone()
+                        if not vegan_verified:
+                            dietary_conflicts.append(
+                                f"Remove {row['menu_name']} to continue; vegan status is not verified."
+                            )
+                    if severe_shellfish:
+                        for option in json.loads(row["option_snapshot_json"]):
+                            conflict = connection.execute(
+                                """
+                                SELECT 1 FROM option_dietary_conflict
+                                WHERE option_item_id=? AND rule_code='shellfish_allergy'
+                                """,
+                                (option["option_item_id"],),
+                            ).fetchone()
+                            if conflict:
+                                dietary_conflicts.append(
+                                    f"Remove {option['name_en']} to continue."
+                                )
         items = [
             CartLine(
                 cart_item_id=row["cart_item_id"],
@@ -911,7 +984,12 @@ class SQLiteYobiRepository:
             missing.append("address")
         if not has_delivery:
             missing.append("delivery_preferences")
-        warnings = []
+        minimum_order_shortfall = max(0, minimum_order_amount - subtotal)
+        if minimum_order_shortfall:
+            missing.append("minimum_order_amount")
+        if dietary_conflicts:
+            missing.append("dietary_conflict")
+        warnings = list(dict.fromkeys(dietary_conflicts))
         if items:
             warnings.append("Synthetic evidence only; cross-contamination may be unverified.")
         return CartPreview(
@@ -924,6 +1002,8 @@ class SQLiteYobiRepository:
             total_price=subtotal + delivery_fee,
             missing_slots=missing,
             dietary_warnings=warnings,
+            minimum_order_amount=minimum_order_amount,
+            minimum_order_shortfall=minimum_order_shortfall,
             ready_to_checkout=not missing,
             confirmed=bool(cart["confirmed"]),
         )
@@ -1015,6 +1095,7 @@ class SQLiteYobiRepository:
         severe_shellfish = (
             "shellfish_allergy" in dietary_rules and cart["allergy_severity"] == "severe"
         )
+        vegan_required = "vegan" in dietary_rules
         merchant_ids: set[str] = set()
         subtotal = 0
         changed = False
@@ -1050,6 +1131,17 @@ class SQLiteYobiRepository:
                     (menu["menu_id"], menu["menu_id"]),
                 ).fetchone()[0]
                 if not normalized_safe:
+                    raise ValueError("CART_DIETARY_CONFLICT")
+            if vegan_required:
+                vegan_verified = connection.execute(
+                    """
+                    SELECT 1 FROM menu_dietary_attribute mda
+                    JOIN dietary_attribute da ON da.attribute_id=mda.attribute_id
+                    WHERE mda.menu_id=? AND da.code='vegan_option' AND mda.status='VERIFIED'
+                    """,
+                    (menu["menu_id"],),
+                ).fetchone()
+                if not vegan_verified:
                     raise ValueError("CART_DIETARY_CONFLICT")
 
             selected_ids = [
