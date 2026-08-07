@@ -113,6 +113,10 @@ export const api = {
       `/api/v1/sessions/${sessionId}/messages`,
     ),
   getOptions: (menuId: string) => request<OptionGroup[]>(`/api/v1/menus/${menuId}/options`),
+  getMerchantMenus: (sessionId: string, merchantId: string, excludedMenuIds: string[]) =>
+    request<import("../types").MenuSummary[]>(
+      `/api/v1/sessions/${sessionId}/merchants/${merchantId}/menus?exclude=${encodeURIComponent(excludedMenuIds.join(","))}`,
+    ),
   addCartItem: (
     sessionId: string,
     menuId: string,

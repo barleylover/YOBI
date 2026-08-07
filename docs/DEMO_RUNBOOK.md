@@ -2,9 +2,9 @@
 
 Audience: a team member, presenter, or evaluator checking the current YOBI UI from
 onboarding through mock order completion. This runbook follows the redesigned flow:
-the delivery address is confirmed before recommendations, menu results use a swipe
-carousel, and checkout readiness includes dietary conflicts and the restaurant
-minimum.
+the mobile welcome screen fits without scrolling, onboarding is split into locale and
+profile steps, the delivery address is confirmed before recommendations, and the
+same-restaurant add-on loop preserves one-merchant checkout.
 
 ## 1. Choose the verification boundary
 
@@ -52,37 +52,52 @@ bootstrap during ordinary rehearsal and never print `/etc/yobi/yobi.env` values.
 
 Allow about 60–90 seconds after the page opens.
 
-1. In **Your starting information**, keep **English**, **United States**, age
-   **25-34**, **Prefer not to say**, shellfish allergy **Severe**, and spice
-   **Medium**. Leave Vegan off for the primary path.
-2. Point out that Language now has 16 choices, Country has 36 choices, and countries
-   associated with the selected language appear first. Confirm there is no gender
-   field and that Vegan and Religion are explicit inputs.
-3. In **Delivery address**, keep **Hotel name** and
+1. On the no-scroll welcome screen, point out **Order K-food with context, not
+   guesswork**, the three compact trust benefits, and the synthetic/no-charge
+   boundary, then select **Get started!**. The welcome screen intentionally has no
+   speech bubbles or neighbourhood tagline.
+2. On locale step 1, keep **English** and **United States**, then select **Next**.
+   Point out that Language has 16 choices, Country has 36 choices, and countries
+   associated with the selected language appear first.
+3. On the form-only profile step 2, keep age **25-34**, **Prefer not to say**, shellfish allergy
+   **Severe**, spice **A little spice is fine**, and Vegan off. Show the expanded allergy
+   list and explain that one shared severity applies to every selected allergy.
+4. In **Delivery address**, keep **Hotel name** and
    `YOBI Myeongdong Hotel`. Accept the synthetic-session consent and select
    **Check delivery address**.
-4. Select **Confirm & start** on the returned synthetic address candidate. The chat
+5. Select **Confirm & start** on the returned synthetic address candidate. The chat
    must open with **Your delivery context is ready** and the confirmed hotel shown.
-5. Select **Try the demo question**: “I saw people eating some red rice cake dish on
+6. Select **Try the demo question**: “I saw people eating some red rice cake dish on
    the street. What is that? Can I order it?”
-6. Show the classic tteokbokki risk evidence and the mild rose alternative. State
+7. Show the classic tteokbokki risk evidence and the mild rose alternative. State
    that cross-contamination is unknown; the UI never labels the dish allergy-safe.
-7. Select **Choose this menu** on **Mild rose tteokbokki**. The page must scroll
+8. Select **Choose this menu** on **Mild rose tteokbokki**. The page must scroll
    directly to **Order builder**.
-8. Choose **Mild**, **Regular**, **Add cheese**, and **Remove fish cake**. On the fish
+9. Choose **Mild**, **Regular**, **Add cheese**, and **Remove fish cake**. On the fish
    cake step, point out that **Keep fish cake** is initially disabled, explains the
    dietary risk, and offers **Unlock option** for an explicit override.
-9. Review the Korean restaurant note, then select **Add to mock cart**.
-10. Confirm **Hotel front desk**, **No bell**, and **No disposable cutlery** with
+10. Review the Korean restaurant note, then select **Add to mock cart**. Verify the
+    cart badge shows `1`.
+11. At **Would you like anything else from this restaurant?**, select **Yes, show more
+    menus**. Swipe the same-restaurant carousel, choose one menu, complete its options,
+    and add it. Verify the badge shows `2` and the question appears again. Select
+    **No, continue to delivery**.
+12. Confirm **Hotel front desk**, **No bell**, and **No disposable cutlery** with
     **Confirm delivery details**. The address is not requested again because it was
     confirmed during onboarding.
-11. In **Final review**, verify both readiness checks are green:
+13. In **Final review**, verify both readiness checks are green:
     **Dietary check** has no known hard conflict and **Restaurant minimum** is met.
-    The server-calculated total should be item ₩14,400 + delivery ₩1,500 = ₩15,900.
-12. Select **Proceed to payment**, confirm **Demo payment — no real charge**, and
-    select **Pay ₩15,900 · demo**.
-13. Verify a synthetic order ID is shown with
+    The canonical two-item path totals ₩24,900. Increase and decrease one item once
+    and verify the badge follows the sum of quantities.
+14. Select **Proceed to payment**, confirm **Demo payment — no real charge**, and
+    select **Pay ₩24,900 · demo**.
+15. Verify a synthetic order ID is shown with
     **Demo payment successful · no real restaurant or courier was contacted**.
+
+For the multilingual proof, choose **한국어** and **South Korea** on step 1. From
+profile step 2 onward, verify the form, address errors, chat/fallback cards, option
+builder, cart readiness, payment and order confirmation all remain in Korean. Menu,
+restaurant and hotel proper names may retain their catalog names.
 
 When the provider is limited, **Demo continuity mode** may appear. It must still use
 catalog/domain results and keep the same dietary and pricing rules. The local launcher
@@ -97,8 +112,14 @@ Run these checks separately from the fast primary path when reviewing the redesi
   Egypt should appear before the alphabetical remainder.
 - **Profile fields:** confirm there is no gender choice. Confirm Religion is optional,
   Vegan is available, and religion does not silently add dietary rules.
-- **Three-level spice input:** confirm the only radio cards are **No heat**, **Medium**,
-  and **Here for the heat**.
+- **Three-level spice input:** confirm the only radio cards are **Not spicy at all**,
+  **A little spicy**, and **I love spicy food**. Menu cards and profile context use
+  the same 1–3 scale; no `/5` label remains.
+- **Language continuity:** select a non-English locale and confirm profile step 2,
+  chat navigation, order controls, payment and completion switch with it.
+- **Expanded allergies:** select several allergies and confirm only one shared
+  severity selector appears. Known positive allergen tags are server hard conflicts
+  for a severe profile; the verified-absence shellfish rule remains stricter.
 - **Address-first flow:** test **Hotel name**, **Booking image** with
   **Use stable demo booking image**, and **Road address**. Every mode must finish
   before chat opens and require an explicit confirmation or save action.
@@ -111,6 +132,9 @@ Run these checks separately from the fast primary path when reviewing the redesi
   be the reading focus at a time and the counter/dots should update.
 - **Builder jump:** choose any recommendation and verify the viewport moves to
   **Order builder** without manual scrolling.
+- **Same-restaurant loop:** after adding an item, choose **Yes** and verify only menus
+  from the selected restaurant appear. Add a second item, confirm the question repeats,
+  then choose **No**. The cart badge is the sum of quantities, not distinct lines.
 - **Risk override:** with shellfish allergy active, reach **Fish cake**. Confirm
   **Keep fish cake** is disabled with a reason, then select **Unlock option**. The
   unlocked label must still say server checks apply. Use **Remove fish cake** to

@@ -57,6 +57,14 @@ class YobiRepository(Protocol):
 
     def get_menu(self, menu_id: str, profile: Profile) -> MenuSummary | None: ...
 
+    def list_merchant_menus(
+        self,
+        merchant_id: str,
+        profile: Profile,
+        excluded_menu_ids: list[str],
+        limit: int = 12,
+    ) -> list[MenuSummary]: ...
+
     def get_evidence(self, menu_id: str) -> list[Evidence]: ...
 
     def compare_merchants(

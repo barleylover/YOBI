@@ -102,3 +102,37 @@ invented. This is a transparent quality limitation, not a missing Vector Search 
   contained the new UI, and the Primary Demo then passed three consecutive times.
 - Deployment used one temporary current-source `/32` TCP 22 rule. The exact rule was
   removed after verification, and the final current-source SSH rule count is zero.
+
+## 2026-08-07 second UI iteration — local verification
+
+This section covers the current working tree after the separate welcome screen,
+locale/profile split, multilingual ordering controls, expanded allergies, three-level
+database spice contract, and same-restaurant add-on loop. It has **not yet been added
+to the deployed release listed at the top of this report**.
+
+- Ruff passed for backend, tests, scripts and deployment code; MyPy passed 31 source
+  files.
+- Pytest passed 58 tests. This includes the same-merchant profile filter, 1–3 seed
+  invariant, generic severe-allergen conflict handling, option-rule targeting, and
+  the PL/SQL migration parser.
+- ESLint, 2 Vitest tests, TypeScript and Vite production build passed; 1,793 modules
+  built.
+- Local Playwright passed 12 tests with 12 intentional cross-viewport skips. The full
+  primary flow passed on iPhone 13, Pixel 7, desktop 1366 and desktop 1920.
+- The revised iPhone primary flow passed three consecutive runs. It adds a first menu,
+  opens the same-restaurant carousel, adds a second menu, verifies the repeat prompt,
+  checks cart badge totals 2 → 3 → 2 as quantity changes, and completes a ₩24,900
+  mock checkout without a real charge.
+- Mobile visual QA confirmed the revised, speech-bubble-free welcome page fits both
+  390×844 and 375×667 viewports with no page scroll or internal dead space. The
+  profile page now renders only the input card, with locale change inside that card.
+- A new full Korean localization E2E covers profile step 2, address confirmation,
+  chat/fallback cards, menu and option labels, restaurant note, delivery, cart
+  readiness, payment and order confirmation. The iPhone 13 plus desktop-1366 suite
+  passed 10 tests with 4 intentional cross-viewport skips in 20.3 seconds.
+- Existing local SQLite catalog rows were updated through key-preserving upsert; user,
+  session and cart rows were not deleted. The observed catalog spice range is 1–3 and
+  category min/max is 1–3.
+- `004_three_level_spice.sql` is append-only and locally parser-tested. Oracle
+  application, OCI seed count 305, public deployment, and public three-run E2E remain
+  pending until the user requests deployment of this iteration.

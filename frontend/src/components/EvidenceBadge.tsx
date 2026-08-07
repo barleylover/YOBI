@@ -1,14 +1,15 @@
 import { AlertTriangle, CheckCircle2, CircleHelp, GitCompareArrows } from "lucide-react";
 import type { EvidenceStatus } from "../types";
-
-const labels: Record<EvidenceStatus, string> = {
-  VERIFIED: "Restaurant verified",
-  RISK_SIGNAL: "Risk signal",
-  UNKNOWN: "Not verified",
-  CONFLICTING: "Conflicting information",
-};
+import { useI18n } from "../lib/i18n";
 
 export function EvidenceBadge({ status }: { status: EvidenceStatus }) {
+  const { journeyCopy } = useI18n();
+  const labels: Record<EvidenceStatus, string> = {
+    VERIFIED: journeyCopy.verified,
+    RISK_SIGNAL: journeyCopy.riskSignal,
+    UNKNOWN: journeyCopy.notVerified,
+    CONFLICTING: journeyCopy.conflicting,
+  };
   const Icon =
     status === "VERIFIED"
       ? CheckCircle2
@@ -24,4 +25,3 @@ export function EvidenceBadge({ status }: { status: EvidenceStatus }) {
     </span>
   );
 }
-

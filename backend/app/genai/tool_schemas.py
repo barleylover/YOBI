@@ -8,7 +8,7 @@ TOOLS = [
             "properties": {
                 "query": {"type": "string"},
                 "budget_krw": {"type": ["integer", "null"]},
-                "max_spiciness": {"type": ["integer", "null"], "minimum": 0, "maximum": 5},
+                "max_spiciness": {"type": ["integer", "null"], "minimum": 1, "maximum": 3},
                 "excluded_ingredients": {"type": "array", "items": {"type": "string"}},
                 "servings": {"type": "integer", "minimum": 1, "maximum": 10},
                 "desired_temperature": {"type": "string", "enum": ["warm", "cold", "any"]},
@@ -29,7 +29,7 @@ TOOLS = [
             "properties": {
                 "query": {"type": "string"},
                 "budget_krw": {"type": ["integer", "null"]},
-                "max_spiciness": {"type": ["integer", "null"], "minimum": 0, "maximum": 5},
+                "max_spiciness": {"type": ["integer", "null"], "minimum": 1, "maximum": 3},
                 "excluded_ingredients": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["query", "budget_krw", "max_spiciness", "excluded_ingredients"],

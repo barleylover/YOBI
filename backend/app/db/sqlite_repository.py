@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from app.db.schema_sqlite import SCHEMA_SQL
 from app.db.seed_data import CATALOG_VERSION, build_seed
+from app.domain.dietary import known_allergen_conflicts
 from app.domain.models import (
     AddressCandidate,
     CartItemInput,
@@ -81,6 +82,14 @@ class SQLiteYobiRepository:
             seed = build_seed()
             if existing:
                 self._backfill_normalized_catalog(connection, seed)
+                connection.execute(
+                    """
+                    UPDATE user_profile SET spice_tolerance = CASE
+                      WHEN spice_tolerance <= 1 THEN 1
+                      WHEN spice_tolerance <= 3 THEN 2
+                      ELSE 3 END
+                    """
+                )
                 return
             self._insert_rows(connection, "service_area", seed["service_areas"])
             self._insert_rows(connection, "menu_category", seed["menu_categories"])
@@ -108,28 +117,53 @@ class SQLiteYobiRepository:
     def _backfill_normalized_catalog(
         cls, connection: sqlite3.Connection, seed: dict[str, list[dict[str, Any]]]
     ) -> None:
-        for row in seed["merchants"]:
-            connection.execute(
-                "UPDATE merchant SET service_area_id=? WHERE merchant_id=?",
-                (row["service_area_id"], row["merchant_id"]),
-            )
-        for row in seed["menus"]:
-            connection.execute(
-                "UPDATE menu SET category_id=? WHERE menu_id=?",
-                (row["category_id"], row["menu_id"]),
-            )
-        for table, key in (
-            ("service_area", "service_areas"),
-            ("menu_category", "menu_categories"),
-            ("ingredient", "ingredients"),
-            ("menu_ingredient", "menu_ingredients"),
-            ("allergen", "allergens"),
-            ("menu_allergen", "menu_allergens"),
-            ("dietary_attribute", "dietary_attributes"),
-            ("menu_dietary_attribute", "menu_dietary_attributes"),
-            ("option_dietary_conflict", "option_dietary_conflicts"),
+        for table, seed_key, keys in (
+            ("service_area", "service_areas", ("service_area_id",)),
+            ("menu_category", "menu_categories", ("category_id",)),
+            ("merchant", "merchants", ("merchant_id",)),
+            ("menu", "menus", ("menu_id",)),
+            ("menu_knowledge", "knowledge", ("knowledge_id",)),
+            ("evidence", "evidence", ("evidence_id",)),
+            ("review_snippet", "reviews", ("snippet_id",)),
+            ("menu_option_group", "option_groups", ("option_group_id",)),
+            ("menu_option_item", "option_items", ("option_item_id",)),
+            ("ingredient", "ingredients", ("ingredient_id",)),
+            ("menu_ingredient", "menu_ingredients", ("menu_id", "ingredient_id")),
+            ("allergen", "allergens", ("allergen_id",)),
+            ("menu_allergen", "menu_allergens", ("menu_id", "allergen_id")),
+            ("dietary_attribute", "dietary_attributes", ("attribute_id",)),
+            (
+                "menu_dietary_attribute",
+                "menu_dietary_attributes",
+                ("menu_id", "attribute_id"),
+            ),
+            (
+                "option_dietary_conflict",
+                "option_dietary_conflicts",
+                ("option_item_id", "rule_code"),
+            ),
+            ("address_place", "hotels", ("place_id",)),
         ):
-            cls._insert_rows(connection, table, seed[key], replace=True)
+            cls._upsert_rows(connection, table, seed[seed_key], keys)
+
+    @staticmethod
+    def _upsert_rows(
+        connection: sqlite3.Connection,
+        table: str,
+        rows: list[dict[str, Any]],
+        keys: tuple[str, ...],
+    ) -> None:
+        if not rows:
+            return
+        columns = list(rows[0])
+        updates = [column for column in columns if column not in keys]
+        placeholders = ",".join("?" for _ in columns)
+        update_sql = ",".join(f"{column}=excluded.{column}" for column in updates)
+        sql = (
+            f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders}) "
+            f"ON CONFLICT ({','.join(keys)}) DO UPDATE SET {update_sql}"
+        )
+        connection.executemany(sql, [[row[column] for column in columns] for row in rows])
 
     @staticmethod
     def _insert_rows(
@@ -371,10 +405,15 @@ class SQLiteYobiRepository:
             "shellfish_allergy" in profile.dietary_rules and profile.allergy_severity == "severe"
         )
         vegan_required = "vegan" in profile.dietary_rules
+        severe_allergies = profile.allergy_severity == "severe"
         excluded = {item.lower() for item in excluded_ingredients}
         for row in rows:
             dietary_tags = set(json.loads(row["dietary_tags_json"]))
             allergen_tags = set(json.loads(row["allergen_tags_json"]))
+            if severe_allergies and known_allergen_conflicts(
+                allergen_tags, set(profile.dietary_rules)
+            ):
+                continue
             if "pork" in excluded and "pork" in allergen_tags:
                 continue
             if severe_shellfish and "shellfish_sauce_absent" not in dietary_tags:
@@ -396,7 +435,7 @@ class SQLiteYobiRepository:
                 exact_boost += 0.16
             if any(term in lowered for term in ("vegan", "plant")) and "vegan_option" in dietary_tags:
                 exact_boost += 0.4
-            reasons = [f"Matches your spice tolerance ({row['spice_level']}/5)"]
+            reasons = [f"Matches your spice tolerance (level {row['spice_level']} of 3)"]
             if "creamy pasta" in profile.favorite_foods and "rose" in row["category"].lower():
                 exact_boost += 0.2
                 reasons.append("Creamy profile connects with a favourite food you selected")
@@ -482,6 +521,50 @@ class SQLiteYobiRepository:
             update={"evidence_ids": [item.evidence_id for item in self.get_evidence(menu_id)]}
         )
 
+    def list_merchant_menus(
+        self,
+        merchant_id: str,
+        profile: Profile,
+        excluded_menu_ids: list[str],
+        limit: int = 12,
+    ) -> list[MenuSummary]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT m.*, r.name_en AS merchant_name, r.delivery_fee, r.eta_min, r.eta_max
+                FROM menu m JOIN merchant r ON r.merchant_id=m.merchant_id
+                WHERE m.merchant_id=? AND m.availability='AVAILABLE' AND m.spice_level<=?
+                ORDER BY m.price, m.menu_id
+                """,
+                (merchant_id, profile.spice_tolerance),
+            ).fetchall()
+        excluded = set(excluded_menu_ids)
+        rules = set(profile.dietary_rules)
+        output: list[MenuSummary] = []
+        for row in rows:
+            if row["menu_id"] in excluded:
+                continue
+            tags = set(json.loads(row["dietary_tags_json"]))
+            allergens = set(json.loads(row["allergen_tags_json"]))
+            if profile.allergy_severity == "severe" and known_allergen_conflicts(allergens, rules):
+                continue
+            if "shellfish_allergy" in rules and profile.allergy_severity == "severe" and "shellfish_sauce_absent" not in tags:
+                continue
+            if "vegan" in rules and "vegan_option" not in tags:
+                continue
+            status = EvidenceStatus.VERIFIED if "shellfish_sauce_absent" in tags else EvidenceStatus.UNKNOWN
+            menu = self._menu_summary(
+                row,
+                ["More from the restaurant already selected"],
+                ["Cross-contamination is not verified"],
+                status,
+                1.0,
+            )
+            output.append(menu.model_copy(update={"evidence_ids": [item.evidence_id for item in self.get_evidence(menu.menu_id)]}))
+            if len(output) >= limit:
+                break
+        return output
+
     def get_evidence(self, menu_id: str) -> list[Evidence]:
         with self._connection() as connection:
             rows = connection.execute(
@@ -558,8 +641,13 @@ class SQLiteYobiRepository:
             for group in groups:
                 items = connection.execute(
                     """
-                    SELECT * FROM menu_option_item
-                    WHERE option_group_id = ? ORDER BY sort_order
+                    SELECT i.*, (
+                      SELECT GROUP_CONCAT(odc.rule_code, ',')
+                      FROM option_dietary_conflict odc
+                      WHERE odc.option_item_id=i.option_item_id
+                    ) AS conflicting_rules_csv
+                    FROM menu_option_item i
+                    WHERE i.option_group_id = ? ORDER BY i.sort_order
                     """,
                     (group["option_group_id"],),
                 ).fetchall()
@@ -581,6 +669,11 @@ class SQLiteYobiRepository:
                                 price_delta=item["price_delta"],
                                 available=item["availability"] == "AVAILABLE",
                                 dietary_conflict=item["dietary_conflict"],
+                                conflicting_rules=(
+                                    str(item["conflicting_rules_csv"]).split(",")
+                                    if item["conflicting_rules_csv"]
+                                    else []
+                                ),
                             )
                             for item in items
                         ],
@@ -876,7 +969,7 @@ class SQLiteYobiRepository:
                 cart = connection.execute("SELECT * FROM cart WHERE cart_id = ?", (cart_id,)).fetchone()
             rows = connection.execute(
                 """
-                SELECT ci.*, m.name_en AS menu_name FROM cart_item ci
+                SELECT ci.*, m.name_en AS menu_name, m.name_ko AS menu_name_ko, m.allergen_tags_json FROM cart_item ci
                 JOIN menu m ON m.menu_id = ci.menu_id WHERE ci.cart_id = ? ORDER BY ci.created_at
                 """,
                 (cart["cart_id"],),
@@ -917,6 +1010,13 @@ class SQLiteYobiRepository:
                 )
                 vegan_required = "vegan" in dietary_rules
                 for row in rows:
+                    conflicts = known_allergen_conflicts(
+                        set(json.loads(row["allergen_tags_json"])), dietary_rules
+                    ) if profile_row["allergy_severity"] == "severe" else set()
+                    for conflict in sorted(conflicts - {"shellfish"}):
+                        dietary_conflicts.append(
+                            f"Remove {row['menu_name']} to continue; it is flagged for {conflict.replace('_', ' ')}."
+                        )
                     if severe_shellfish:
                         normalized_safe = connection.execute(
                             """
@@ -969,6 +1069,7 @@ class SQLiteYobiRepository:
                 menu_id=row["menu_id"],
                 merchant_id=row["merchant_id"],
                 menu_name=row["menu_name"],
+                menu_name_ko=row["menu_name_ko"],
                 quantity=row["quantity"],
                 unit_price=row["unit_price"],
                 options=json.loads(row["option_snapshot_json"]),
@@ -1113,6 +1214,12 @@ class SQLiteYobiRepository:
             if menu["merchant_id"] != line["merchant_id"]:
                 raise ValueError("CART_MERCHANT_MISMATCH")
             merchant_ids.add(menu["merchant_id"])
+            if cart["allergy_severity"] == "severe" and (
+                known_allergen_conflicts(
+                    set(json.loads(menu["allergen_tags_json"])), dietary_rules
+                ) - {"shellfish"}
+            ):
+                raise ValueError("CART_DIETARY_CONFLICT")
             if severe_shellfish:
                 normalized_safe = connection.execute(
                     """

@@ -4,6 +4,8 @@ import { Navigate, useParams } from "react-router-dom";
 import { OrderFlowPanel } from "../components/OrderFlowPanel";
 import { RichCard } from "../components/RichCard";
 import { api } from "../lib/api";
+import { useI18n } from "../lib/i18n";
+import { countryName } from "../lib/locale";
 import { useSessionStore } from "../stores/session";
 import type { AssistantTurn, MenuSummary } from "../types";
 
@@ -24,19 +26,28 @@ export function ChatPage() {
   const session = useSessionStore((state) => state.session);
   const addressRefId = useSessionStore((state) => state.addressRefId);
   const addressSummary = useSessionStore((state) => state.addressSummary);
+  const cartQuantity = useSessionStore((state) => state.cartQuantity);
+  const { copy, profileCopy, dynamicCopy, journeyCopy, language, locale } = useI18n();
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
-  const [activity, setActivity] = useState("Checking menu details…");
+  const [activity, setActivity] = useState(copy.checking);
   const [selectedMenu, setSelectedMenu] = useState<MenuSummary | null>(null);
   const [entries, setEntries] = useState<ChatEntry[]>([
     {
       id: "welcome",
       role: "assistant",
-      text: "Hi, I’m YOBI. Tell me what you remember about the food—or how you want tonight’s meal to feel. I’ll translate that into grounded demo choices.",
+      text: copy.hello,
     },
   ]);
 
   const activeRules = useMemo(() => profile?.dietary_rules ?? [], [profile]);
+  const dietarySummary = useMemo(() => {
+    const allergyCount = activeRules.filter((rule) => rule.endsWith("_allergy")).length;
+    return [
+      ...(activeRules.includes("vegan") ? [profileCopy.vegan] : []),
+      ...(allergyCount ? [`${profileCopy.allergies}: ${allergyCount}`] : []),
+    ];
+  }, [activeRules, profileCopy.allergies, profileCopy.vegan]);
   function openCart() {
     document.querySelector<HTMLElement>("[data-testid='order-flow']")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -76,13 +87,13 @@ export function ChatPage() {
   }, [session?.session_id, sessionId]);
   if (!profile || !session || session.session_id !== sessionId || !addressRefId) return <Navigate to="/" replace />;
 
-  async function send(text = input) {
+  async function send(text = input, displayText = text) {
     const trimmed = text.trim();
     if (!trimmed || sending) return;
     setInput("");
-    setEntries((current) => [...current, { id: createChatEntryId(), role: "user", text: trimmed }]);
+    setEntries((current) => [...current, { id: createChatEntryId(), role: "user", text: displayText.trim() }]);
     setSending(true);
-    setActivity("Checking menu details…");
+    setActivity(copy.checking);
     const pendingId = createChatEntryId();
     setEntries((current) => [...current, { id: pendingId, role: "assistant", text: "" }]);
     try {
@@ -94,14 +105,19 @@ export function ChatPage() {
             );
           });
         },
-        onStatus: setActivity,
+        onStatus: (status) => setActivity(language === "English" ? status : copy.checking),
       });
       setEntries((current) => {
-        const complete = { id: turn.message_id, role: "assistant" as const, text: turn.text, turn };
+        const complete = {
+          id: turn.message_id,
+          role: "assistant" as const,
+          text: turn.fallback_used && language !== "English" ? dynamicCopy.fallbackResult : turn.text,
+          turn,
+        };
         return current.map((entry) => (entry.id === pendingId ? complete : entry));
       });
     } catch {
-      const failure = { id: pendingId, role: "assistant" as const, text: "I couldn’t complete that check. Your selections are unchanged—please try again." };
+      const failure = { id: pendingId, role: "assistant" as const, text: journeyCopy.failedCheck };
       setEntries((current) =>
         current.map((entry) => (entry.id === pendingId ? failure : entry)),
       );
@@ -120,27 +136,27 @@ export function ChatPage() {
       <section className="chat-column">
         <header className="chat-header">
           <div className="brand-mark compact">YO<span>BI</span></div>
-          <div><strong>Your Korean food buddy</strong><span><i /> Demo catalog ready</span></div>
-          <button aria-label="Open cart" onClick={openCart} disabled={!selectedMenu} title={selectedMenu ? "Open mock cart" : "Choose a menu first"}><ShoppingBag size={19} /></button>
+          <div><strong>{copy.buddy}</strong><span><i /> {journeyCopy.catalogReady}</span></div>
+          <button className="cart-button" aria-label={language === "English" ? `${journeyCopy.openCart}, ${cartQuantity} items` : `${journeyCopy.openCart}, ${journeyCopy.quantity} ${cartQuantity}`} onClick={openCart} disabled={!selectedMenu} title={selectedMenu ? journeyCopy.openCart : journeyCopy.chooseFirst}><ShoppingBag size={19} />{cartQuantity > 0 && <span className="cart-badge">{cartQuantity}</span>}</button>
         </header>
         <div className="conversation" aria-live="polite">
           <section className="session-brief">
             <Sparkles size={18} />
             <div>
-              <strong>Your delivery context is ready</strong>
-              <p>{profile.preferred_language} · {profile.nationality} · spice {profile.spice_tolerance}/5{activeRules.length ? ` · ${activeRules.map((rule) => rule.replaceAll("_", " ")).join(" · ")}` : ""}</p>
+              <strong>{copy.ready}</strong>
+              <p>{profile.preferred_language} · {countryName(profile.nationality, locale)} · {copy.spice} {profile.spice_tolerance}/3{dietarySummary.length ? ` · ${dietarySummary.join(" · ")}` : ""}</p>
               <small><span aria-hidden="true">●</span> {addressSummary}</small>
             </div>
           </section>
           {entries.map((entry) => (
             <article className={`message ${entry.role}`} key={entry.id}>
-              <div className="message-label">{entry.role === "assistant" ? "YOBI" : "You"}</div>
+              <div className="message-label">{entry.role === "assistant" ? "YOBI" : copy.you}</div>
               {entry.text && <div className="message-bubble">{entry.text}</div>}
-              {entry.turn?.fallback_used && <span className="fallback-chip">Demo continuity mode</span>}
+              {entry.turn?.fallback_used && <span className="fallback-chip">{journeyCopy.fallbackMode}</span>}
               {entry.turn?.cards.map((card, index) => (
-                <RichCard card={card} key={`${entry.id}-${index}`} onChooseMenu={chooseMenu} onQuickReply={(reply) => void send(reply)} />
+                <RichCard card={card} key={`${entry.id}-${index}`} onChooseMenu={chooseMenu} onQuickReply={(reply, localizedReply) => void send(reply, localizedReply)} />
               ))}
-              {entry.turn?.suggested_replies.length ? (
+              {entry.turn?.suggested_replies.length && !(entry.turn.fallback_used && language !== "English") ? (
                 <div className="quick-replies">
                   {entry.turn.suggested_replies.map((reply) => <button key={reply} onClick={() => void send(reply)}>{reply}</button>)}
                 </div>
@@ -152,12 +168,12 @@ export function ChatPage() {
         </div>
 
         <form className="composer" onSubmit={submit}>
-          <label htmlFor="message">Ask YOBI</label>
+          <label htmlFor="message">{copy.ask}</label>
           <div>
-            <textarea id="message" value={input} onChange={(event) => setInput(event.target.value)} placeholder="I saw a red rice cake dish on the street…" rows={1} />
-            <button className="send-button" aria-label="Send message" disabled={!input.trim() || sending}><ArrowUp size={20} /></button>
+            <textarea id="message" value={input} onChange={(event) => setInput(event.target.value)} placeholder={copy.placeholder} rows={1} />
+            <button className="send-button" aria-label={journeyCopy.sendMessage} disabled={!input.trim() || sending}><ArrowUp size={20} /></button>
           </div>
-          <button type="button" className="prompt-suggestion" onClick={() => void send("I saw people eating some red rice cake dish on the street. What is that? Can I order it?")}>Try the demo question <ChevronDown size={15} /></button>
+          <button type="button" className="prompt-suggestion" onClick={() => void send("I saw people eating some red rice cake dish on the street. What is that? Can I order it?", journeyCopy.demoPrompt)}>{copy.demoQuestion} <ChevronDown size={15} /></button>
         </form>
       </section>
     </main>

@@ -41,7 +41,7 @@ class ProfileCreate(BaseModel):
     religion_selection: str = "No specific religion"
     dietary_rules: list[str] = Field(default_factory=lambda: ["shellfish_allergy"])
     allergy_severity: Literal["mild", "moderate", "severe"] = "severe"
-    spice_tolerance: int = Field(default=1, ge=0, le=5)
+    spice_tolerance: int = Field(default=1, ge=1, le=3)
     favorite_foods: list[str] = Field(
         default_factory=lambda: ["creamy pasta", "chicken noodle soup"]
     )
@@ -67,7 +67,7 @@ class ProfileUpdate(BaseModel):
     religion_selection: str | None = None
     dietary_rules: list[str] | None = None
     allergy_severity: Literal["mild", "moderate", "severe"] | None = None
-    spice_tolerance: int | None = Field(default=None, ge=0, le=5)
+    spice_tolerance: int | None = Field(default=None, ge=1, le=3)
     favorite_foods: list[str] | None = None
     consent_demo_data: bool | None = None
     remember_profile: bool | None = None
@@ -153,6 +153,7 @@ class OptionItem(BaseModel):
     price_delta: int
     available: bool
     dietary_conflict: str | None = None
+    conflicting_rules: list[str] = Field(default_factory=list)
 
 
 class OptionGroup(BaseModel):
@@ -237,6 +238,7 @@ class CartLine(BaseModel):
     menu_id: str
     merchant_id: str
     menu_name: str
+    menu_name_ko: str
     quantity: int
     unit_price: int
     options: list[dict[str, Any]]

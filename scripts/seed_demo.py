@@ -57,7 +57,7 @@ EXPECTED_COUNTS = {
     "service_areas": 3,
     "menu_categories": 15,
     "dietary_attributes": 10,
-    "menu_dietary_attributes": 304,
+    "menu_dietary_attributes": 305,
     "allergens": 7,
     "menu_allergens": 153,
     "ingredients": 15,

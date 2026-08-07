@@ -12,6 +12,7 @@ import oracledb
 from app.core.config import Settings
 from app.db.oracle_pool import OraclePool
 from app.db.seed_data import CATALOG_VERSION
+from app.domain.dietary import known_allergen_conflicts
 from app.domain.models import (
     AddressCandidate,
     CartItemInput,
@@ -300,6 +301,7 @@ class OracleYobiRepository:
             "shellfish_allergy" in profile.dietary_rules and profile.allergy_severity == "severe"
         )
         vegan_required = "vegan" in profile.dietary_rules
+        severe_allergies = profile.allergy_severity == "severe"
         with self.pool.connection() as connection:
             cursor = connection.cursor()
             cursor.execute(
@@ -360,6 +362,10 @@ class OracleYobiRepository:
         for row in rows:
             tags = set(_json(row["dietary_tags_json"]))
             allergens = set(_json(row["allergen_tags_json"]))
+            if severe_allergies and known_allergen_conflicts(
+                allergens, set(profile.dietary_rules)
+            ):
+                continue
             menu_similarity = max(0.0, 1.0 - float(row["vector_distance"]))
             review_similarity = max(0.0, 1.0 - float(row["review_distance"]))
             knowledge_similarity = max(0.0, 1.0 - float(row["knowledge_distance"]))
@@ -377,7 +383,7 @@ class OracleYobiRepository:
                 boost += 0.16
             if "vegan" in lowered and "vegan_option" in tags:
                 boost += 0.4
-            reasons = [f"Matches your spice tolerance ({int(row['spice_level'])}/5)"]
+            reasons = [f"Matches your spice tolerance (level {int(row['spice_level'])} of 3)"]
             if "creamy pasta" in profile.favorite_foods and "rose" in row["category"].lower():
                 boost += 0.2
                 reasons.append("Creamy profile connects with a favourite food you selected")
@@ -465,6 +471,57 @@ class OracleYobiRepository:
             update={"evidence_ids": [item.evidence_id for item in self.get_evidence(menu_id)]}
         )
 
+    def list_merchant_menus(
+        self,
+        merchant_id: str,
+        profile: Profile,
+        excluded_menu_ids: list[str],
+        limit: int = 12,
+    ) -> list[MenuSummary]:
+        with self.pool.connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM (
+                  SELECT m.*, r.name_en AS merchant_name, r.delivery_fee, r.eta_min, r.eta_max
+                  FROM menu m JOIN merchant r ON r.merchant_id=m.merchant_id
+                  WHERE m.merchant_id=:merchant_id AND m.availability='AVAILABLE'
+                    AND m.spice_level<=:spice
+                  ORDER BY m.price, m.menu_id
+                ) WHERE ROWNUM<=:candidate_limit
+                """,
+                merchant_id=merchant_id,
+                spice=profile.spice_tolerance,
+                candidate_limit=max(limit * 3, 24),
+            )
+            rows = _rows(cursor)
+        excluded = set(excluded_menu_ids)
+        rules = set(profile.dietary_rules)
+        output: list[MenuSummary] = []
+        for row in rows:
+            if row["menu_id"] in excluded:
+                continue
+            tags = set(_json(row["dietary_tags_json"]))
+            allergens = set(_json(row["allergen_tags_json"]))
+            if profile.allergy_severity == "severe" and known_allergen_conflicts(allergens, rules):
+                continue
+            if "shellfish_allergy" in rules and profile.allergy_severity == "severe" and "shellfish_sauce_absent" not in tags:
+                continue
+            if "vegan" in rules and "vegan_option" not in tags:
+                continue
+            status = EvidenceStatus.VERIFIED if "shellfish_sauce_absent" in tags else EvidenceStatus.UNKNOWN
+            menu = self._menu_summary(
+                row,
+                ["More from the restaurant already selected"],
+                ["Cross-contamination is not verified"],
+                status,
+                1.0,
+            )
+            output.append(menu.model_copy(update={"evidence_ids": [item.evidence_id for item in self.get_evidence(menu.menu_id)]}))
+            if len(output) >= limit:
+                break
+        return output
+
     def get_evidence(self, menu_id: str) -> list[Evidence]:
         with self.pool.connection() as connection:
             cursor = connection.cursor()
@@ -547,7 +604,15 @@ class OracleYobiRepository:
             result = []
             for group in groups:
                 cursor.execute(
-                    "SELECT * FROM menu_option_item WHERE option_group_id=:id ORDER BY sort_order",
+                    """
+                    SELECT i.*, (
+                      SELECT LISTAGG(odc.rule_code, ',') WITHIN GROUP (ORDER BY odc.rule_code)
+                      FROM option_dietary_conflict odc
+                      WHERE odc.option_item_id=i.option_item_id
+                    ) AS conflicting_rules_csv
+                    FROM menu_option_item i
+                    WHERE i.option_group_id=:id ORDER BY i.sort_order
+                    """,
                     id=group["option_group_id"],
                 )
                 items = _rows(cursor)
@@ -569,6 +634,11 @@ class OracleYobiRepository:
                                 price_delta=int(item["price_delta"]),
                                 available=item["availability"] == "AVAILABLE",
                                 dietary_conflict=item["dietary_conflict"],
+                                conflicting_rules=(
+                                    str(item["conflicting_rules_csv"]).split(",")
+                                    if item["conflicting_rules_csv"]
+                                    else []
+                                ),
                             )
                             for item in items
                         ],
@@ -887,7 +957,7 @@ class OracleYobiRepository:
                 raise RuntimeError("CART_CREATION_FAILED")
             cursor.execute(
                 """
-                SELECT ci.*,m.name_en AS menu_name FROM cart_item ci
+                SELECT ci.*,m.name_en AS menu_name,m.name_ko AS menu_name_ko,m.allergen_tags_json FROM cart_item ci
                 JOIN menu m ON m.menu_id=ci.menu_id WHERE ci.cart_id=:id ORDER BY ci.created_at
                 """,
                 id=cart["cart_id"],
@@ -930,6 +1000,13 @@ class OracleYobiRepository:
                 )
                 vegan_required = "vegan" in dietary_rules
                 for row in rows:
+                    conflicts = known_allergen_conflicts(
+                        set(_json(row["allergen_tags_json"])), dietary_rules
+                    ) if profile_row["allergy_severity"] == "severe" else set()
+                    for conflict in sorted(conflicts - {"shellfish"}):
+                        dietary_conflicts.append(
+                            f"Remove {row['menu_name']} to continue; it is flagged for {conflict.replace('_', ' ')}."
+                        )
                     if severe_shellfish:
                         cursor.execute(
                             """
@@ -982,6 +1059,7 @@ class OracleYobiRepository:
                 menu_id=row["menu_id"],
                 merchant_id=row["merchant_id"],
                 menu_name=row["menu_name"],
+                menu_name_ko=row["menu_name_ko"],
                 quantity=int(row["quantity"]),
                 unit_price=int(row["unit_price"]),
                 options=_json(row["option_snapshot_json"]),
@@ -1138,6 +1216,11 @@ class OracleYobiRepository:
             if menu["merchant_id"] != line["merchant_id"]:
                 raise ValueError("CART_MERCHANT_MISMATCH")
             merchant_ids.add(str(menu["merchant_id"]))
+            if profile["allergy_severity"] == "severe" and (
+                known_allergen_conflicts(set(_json(menu["allergen_tags_json"])), dietary_rules)
+                - {"shellfish"}
+            ):
+                raise ValueError("CART_DIETARY_CONFLICT")
             if severe_shellfish:
                 cursor.execute(
                     """

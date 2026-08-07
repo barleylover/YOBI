@@ -164,7 +164,7 @@ def verify_database(settings: Settings) -> dict[str, object]:
         )
         tables = {str(row[0]) for row in cursor.fetchall()}
     migrations = {version for version, _ in migration_rows}
-    expected_migrations = {"001", "002", "003"}
+    expected_migrations = {"001", "002", "003", "004"}
     if current_user != "YOBI_APP":
         raise RuntimeError("BOOTSTRAP_RUNTIME_USER_MISMATCH")
     if not expected_migrations.issubset(migrations):

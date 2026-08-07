@@ -4,22 +4,22 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-CATALOG_VERSION = "demo-2026.08.06-v1"
-UPDATED_AT = "2026-08-06"
+CATALOG_VERSION = "demo-2026.08.07-v2"
+UPDATED_AT = "2026-08-07"
 
 CATEGORIES = [
-    ("Tteokbokki", "떡볶이", 4, "sweet-spicy gochujang and chewy rice cakes"),
+    ("Tteokbokki", "떡볶이", 3, "sweet-spicy gochujang and chewy rice cakes"),
     ("Rose tteokbokki", "로제 떡볶이", 1, "creamy, gently sweet sauce and chewy rice cakes"),
     ("Chicken kalguksu", "닭칼국수", 1, "rich chicken broth with thick wheat noodles"),
     ("Bibimbap", "비빔밥", 1, "warm rice and seasoned vegetables mixed at the table"),
-    ("Gimbap", "김밥", 0, "seaweed rice rolls with colourful fillings"),
+    ("Gimbap", "김밥", 1, "seaweed rice rolls with colourful fillings"),
     ("Korean fried chicken", "한국식 치킨", 2, "crisp fried chicken with a glossy sauce"),
-    ("Samgyetang", "삼계탕", 0, "whole young chicken in a gentle ginseng broth"),
-    ("Jjajangmyeon", "짜장면", 0, "springy noodles in a savoury black bean sauce"),
+    ("Samgyetang", "삼계탕", 1, "whole young chicken in a gentle ginseng broth"),
+    ("Jjajangmyeon", "짜장면", 1, "springy noodles in a savoury black bean sauce"),
     ("Sundubu", "순두부찌개", 3, "silky tofu stew served bubbling hot"),
-    ("Bulgogi", "불고기", 0, "sweet-savoury soy-marinated beef"),
+    ("Bulgogi", "불고기", 1, "sweet-savoury soy-marinated beef"),
     ("Kimchi stew", "김치찌개", 3, "tangy fermented kimchi stew"),
-    ("Japchae", "잡채", 0, "glossy sweet-potato noodles and vegetables"),
+    ("Japchae", "잡채", 1, "glossy sweet-potato noodles and vegetables"),
     ("Mandu", "만두", 1, "Korean dumplings with a juicy filling"),
     ("Naengmyeon", "냉면", 1, "chilled buckwheat noodles with a bright broth"),
     ("Dosirak", "도시락", 1, "a balanced Korean lunch box"),
@@ -90,7 +90,7 @@ def _canonical_menu(merchant_index: int, menu_index: int) -> dict[str, Any] | No
                 "Korean street comfort food."
             ),
             "price": 9900,
-            "spice_level": 4,
+            "spice_level": 3,
             "dietary_tags": ["street_food", "fish_cake_default"],
             "allergen_tags": ["shellfish_risk", "fish"],
             "evidence_status": "RISK_SIGNAL",
@@ -122,7 +122,7 @@ def _canonical_menu(merchant_index: int, menu_index: int) -> dict[str, Any] | No
                 "much as you like."
             ),
             "price": 10500,
-            "spice_level": 0,
+            "spice_level": 1,
             "dietary_tags": ["vegan_option", "sauce_on_side", "no_pork"],
             "allergen_tags": ["soy"],
             "evidence_status": "VERIFIED",
@@ -192,7 +192,7 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
             else:
                 category_index = (merchant_index * 3 + menu_index - 1) % len(CATEGORIES)
                 category_en, category_ko, base_spice, flavor_text = CATEGORIES[category_index]
-                spice_level = max(0, min(5, base_spice + ((merchant_index + menu_index) % 3 - 1)))
+                spice_level = max(1, min(3, base_spice + ((merchant_index + menu_index) % 3 - 1)))
                 item = {
                     "category": category_en,
                     "name_ko": f"{category_ko} 데모 {menu_index}",
@@ -208,6 +208,9 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
                     "allergen_tags": ["unknown_cross_contamination"],
                     "evidence_status": "UNKNOWN",
                 }
+                if menu_id == "menu_001_02":
+                    item["dietary_tags"].append("shellfish_sauce_absent")
+                    item["evidence_status"] = "VERIFIED"
 
             semantic_text = " ".join(
                 [
@@ -263,6 +266,25 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
                         "Treat as not verified for a severe shellfish allergy.",
                     ),
                 ]
+            elif menu_id == "menu_001_02":
+                evidence_rows = [
+                    (
+                        "shellfish_sauce",
+                        "VERIFIED",
+                        "SYNTHETIC_RESTAURANT_DECLARATION",
+                        "The seeded menu specification lists no shellfish ingredient or shellfish sauce.",
+                        "high",
+                        "Cross-contamination remains unverified; confirm directly if severe.",
+                    ),
+                    (
+                        "cross_contamination",
+                        "UNKNOWN",
+                        "SYNTHETIC_RESTAURANT_DECLARATION",
+                        "Separate preparation equipment is not verified for this synthetic menu.",
+                        "low",
+                        "Treat kitchen cross-contamination as unknown.",
+                    ),
+                ]
             elif menu_id == "menu_002_01":
                 evidence_rows = [
                     (
@@ -277,9 +299,9 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
                         "spiciness",
                         "RISK_SIGNAL",
                         "SYNTHETIC_DEMO_REVIEW",
-                        "Twelve demo review signals describe the heat as stronger than expected (4/5).",
+                        "Twelve demo review signals describe the dish as level 3 on YOBI's three-level spice scale.",
                         "medium",
-                        "Choose the mild rose alternative for spice tolerance 1/5.",
+                        "Choose the mild rose alternative for spice tolerance level 1.",
                     ),
                 ]
             else:
@@ -455,8 +477,8 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
             "name_en": name_en,
             "description": description,
             "tags_json": json.dumps([_code(name_en)]),
-            "typical_spice_min": max(0, spice - 1),
-            "typical_spice_max": min(5, spice + 1),
+            "typical_spice_min": max(1, spice - 1),
+            "typical_spice_max": min(3, spice + 1),
         }
         for name_en, name_ko, spice, description in CATEGORIES
     ]

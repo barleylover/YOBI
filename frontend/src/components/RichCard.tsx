@@ -8,14 +8,18 @@ import type {
   MerchantComparison,
 } from "../types";
 import { EvidenceBadge } from "./EvidenceBadge";
+import { useI18n } from "../lib/i18n";
+import { menuName } from "../lib/locale";
 
 interface Props {
   card: CardPayload;
   onChooseMenu: (menu: MenuSummary) => void;
-  onQuickReply: (text: string) => void;
+  onQuickReply: (text: string, localizedText?: string) => void;
 }
 
 export function RichCard({ card, onChooseMenu, onQuickReply }: Props) {
+  const { copy, dynamicCopy, journeyCopy, language, locale } = useI18n();
+  const localizedCatalog = language !== "English";
   const carouselRef = useRef<HTMLDivElement>(null);
   const [activeMenuIndex, setActiveMenuIndex] = useState(0);
 
@@ -35,24 +39,24 @@ export function RichCard({ card, onChooseMenu, onQuickReply }: Props) {
     return (
       <section className="category-card" aria-label={card.title}>
         <div className="card-heading">
-          <p className="eyebrow">Food directions</p>
-          <h3>{card.title}</h3>
-          {card.subtitle && <p>{card.subtitle}</p>}
+          <p className="eyebrow">{copy.whyMatch}</p>
+          <h3>{localizedCatalog ? dynamicCopy.menuMatches : card.title}</h3>
+          {card.subtitle && !localizedCatalog && <p>{card.subtitle}</p>}
         </div>
         <div className="category-grid">
           {categories.map((category) => (
             <article key={category.category}>
               <Soup size={19} aria-hidden="true" />
               <h4>{category.category}</h4>
-              {category.description && <p>{category.description}</p>}
-              <ul>{category.match_reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
-              {category.risk_hints.map((risk) => <p className="risk-copy" key={risk}><TriangleAlert size={14} /> {risk}</p>)}
+              {category.description && <p>{localizedCatalog ? dynamicCopy.catalogDescription : category.description}</p>}
+              <ul>{(localizedCatalog ? [dynamicCopy.matchReason] : category.match_reasons).map((reason) => <li key={reason}>{reason}</li>)}</ul>
+              {(localizedCatalog && category.risk_hints.length ? [dynamicCopy.riskUnknown] : category.risk_hints).map((risk) => <p className="risk-copy" key={risk}><TriangleAlert size={14} /> {risk}</p>)}
               <details className="source-drawer">
-                <summary>Catalog sources</summary>
+                <summary>{journeyCopy.catalogSources}</summary>
                 <code>{category.source_ids.join(" · ")}</code>
               </details>
-              <button className="secondary-button full" onClick={() => onQuickReply(`Show me ${category.category}`)}>
-                Explore this direction <ArrowRight size={15} />
+              <button className="secondary-button full" onClick={() => onQuickReply(`Show me ${category.category}`, `${copy.chooseMenu}: ${category.category}`)}>
+                {copy.chooseMenu} <ArrowRight size={15} />
               </button>
             </article>
           ))}
@@ -66,11 +70,11 @@ export function RichCard({ card, onChooseMenu, onQuickReply }: Props) {
     return (
       <section className="rich-card-stack" aria-label={card.title}>
         <div className="card-heading carousel-heading">
-          <div><p className="eyebrow">Menu match</p><h3>{card.title}</h3>{card.subtitle && <p>{card.subtitle}</p>}</div>
-          {menus.length > 1 && <div className="carousel-controls" aria-label="Menu carousel controls">
-            <button aria-label="Previous menu" onClick={() => showMenu(activeMenuIndex - 1)} disabled={activeMenuIndex === 0}><ArrowLeft size={17} /></button>
+          <div><p className="eyebrow">{copy.whyMatch}</p><h3>{localizedCatalog ? dynamicCopy.menuMatches : card.title}</h3>{card.subtitle && !localizedCatalog && <p>{card.subtitle}</p>}</div>
+          {menus.length > 1 && <div className="carousel-controls" aria-label={dynamicCopy.menuMatches}>
+            <button aria-label={journeyCopy.previousMenu} onClick={() => showMenu(activeMenuIndex - 1)} disabled={activeMenuIndex === 0}><ArrowLeft size={17} /></button>
             <span>{activeMenuIndex + 1} / {menus.length}</span>
-            <button aria-label="Next menu" onClick={() => showMenu(activeMenuIndex + 1)} disabled={activeMenuIndex === menus.length - 1}><ArrowRight size={17} /></button>
+            <button aria-label={journeyCopy.nextMenu} onClick={() => showMenu(activeMenuIndex + 1)} disabled={activeMenuIndex === menus.length - 1}><ArrowRight size={17} /></button>
           </div>}
         </div>
         <div className="menu-carousel" ref={carouselRef} onScroll={(event) => {
@@ -88,26 +92,26 @@ export function RichCard({ card, onChooseMenu, onQuickReply }: Props) {
             <div className="menu-card-body">
               <div className="card-row">
                 <div>
-                  <h4>{menu.name_en}</h4>
+                  <h4>{menuName(menu, language)}</h4>
                   <p className="ko-name">{menu.name_ko}</p>
                 </div>
                 <strong>₩{menu.price.toLocaleString()}</strong>
               </div>
-              <p>{menu.description}</p>
+              <p>{localizedCatalog ? dynamicCopy.catalogDescription : menu.description}</p>
               <div className="fact-row">
-                <span><Clock3 size={15} /> {menu.eta_min}-{menu.eta_max} min</span>
-                <span>Spice {menu.spice_level}/5</span>
+                <span><Clock3 size={15} /> {new Intl.NumberFormat(locale, { style: "unit", unit: "minute", unitDisplay: "short" }).format(menu.eta_min)}–{new Intl.NumberFormat(locale, { style: "unit", unit: "minute", unitDisplay: "short" }).format(menu.eta_max)}</span>
+                <span>{copy.spice} {menu.spice_level} / 3</span>
               </div>
               <EvidenceBadge status={menu.evidence_status} />
-              {menu.risk_hints.map((risk) => <p className="risk-copy" key={risk}>{risk}</p>)}
+              {(localizedCatalog && menu.risk_hints.length ? [dynamicCopy.riskUnknown] : menu.risk_hints).map((risk) => <p className="risk-copy" key={risk}>{risk}</p>)}
               <details className="source-drawer">
-                <summary>Why this match</summary>
-                <ul>{menu.match_reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
+                <summary>{copy.whyMatch}</summary>
+                <ul>{(localizedCatalog ? [dynamicCopy.matchReason] : menu.match_reasons).map((reason) => <li key={reason}>{reason}</li>)}</ul>
                 <code>{[menu.menu_id, menu.merchant_id, ...menu.evidence_ids].join(" · ")}</code>
               </details>
-              <p className="demo-label">Synthetic demo menu · checked 2026-08-06</p>
+              <p className="demo-label">{journeyCopy.syntheticMenu} · 2026-08-06</p>
               <button className="primary-button full" onClick={() => onChooseMenu(menu)}>
-                Choose this menu
+                {copy.chooseMenu}
               </button>
             </div>
           </article>
@@ -128,8 +132,8 @@ export function RichCard({ card, onChooseMenu, onQuickReply }: Props) {
     };
     return (
       <section className="explanation-card" aria-label={card.title}>
-        <div className="card-heading"><p className="eyebrow">Dish guide</p><h3>{card.title}</h3><p>{card.subtitle}</p></div>
-        <article><h4>{menu.name_en}</h4><p>{explanation.cultural_analogy}</p><p><strong>Portion:</strong> {explanation.portion} · <strong>Spice:</strong> {menu.spice_level}/5</p>{explanation.unknown_fields.map((item) => <p className="risk-copy" key={item}>{item}</p>)}<details className="source-drawer"><summary>Evidence sources</summary><code>{explanation.evidence_ids.join(" · ")}</code></details></article>
+        <div className="card-heading"><p className="eyebrow">{copy.whyMatch}</p><h3>{localizedCatalog ? dynamicCopy.menuMatches : card.title}</h3>{!localizedCatalog && <p>{card.subtitle}</p>}</div>
+        <article><h4>{menuName(menu, language)}</h4><p>{localizedCatalog ? dynamicCopy.catalogDescription : explanation.cultural_analogy}</p><p><strong>{journeyCopy.portion}:</strong> {localizedCatalog ? dynamicCopy.catalogDescription : explanation.portion} · <strong>{copy.spice}:</strong> {menu.spice_level} / 3</p>{(localizedCatalog && explanation.unknown_fields.length ? [dynamicCopy.riskUnknown] : explanation.unknown_fields).map((item) => <p className="risk-copy" key={item}>{item}</p>)}<details className="source-drawer"><summary>{copy.evidence}</summary><code>{explanation.evidence_ids.join(" · ")}</code></details></article>
       </section>
     );
   }
@@ -139,17 +143,17 @@ export function RichCard({ card, onChooseMenu, onQuickReply }: Props) {
     return (
       <section className="evidence-card" aria-label={card.title}>
         <div className="card-heading">
-          <p className="eyebrow risk">Dietary evidence</p>
-          <h3>{card.title}</h3>
-          <p>{card.subtitle}</p>
+          <p className="eyebrow risk">{copy.evidence}</p>
+          <h3>{localizedCatalog ? copy.evidence : card.title}</h3>
+          {!localizedCatalog && <p>{card.subtitle}</p>}
         </div>
         {evidence.map((item) => (
           <article className="evidence-row" key={item.evidence_id}>
             <EvidenceBadge status={item.status} />
-            <strong>{item.claim_type.replaceAll("_", " ")}</strong>
-            <p>{item.excerpt}</p>
-            <small>{item.source_type.replaceAll("_", " ")} · checked {item.updated_at}</small>
-            <p className="action-copy"><Info size={15} /> {item.suggested_action}</p>
+            <strong>{localizedCatalog ? copy.evidence : item.claim_type.replaceAll("_", " ")}</strong>
+            <p>{localizedCatalog ? dynamicCopy.evidenceDescription : item.excerpt}</p>
+            <small>{localizedCatalog ? copy.evidence : item.source_type.replaceAll("_", " ")} · {item.updated_at}</small>
+            <p className="action-copy"><Info size={15} /> {localizedCatalog ? dynamicCopy.riskUnknown : item.suggested_action}</p>
           </article>
         ))}
       </section>
@@ -161,30 +165,30 @@ export function RichCard({ card, onChooseMenu, onQuickReply }: Props) {
     return (
       <section className="comparison-card" aria-label={card.title}>
         <div className="card-heading">
-          <p className="eyebrow">Side-by-side</p>
-          <h3>{card.title}</h3>
-          <p>{card.subtitle}</p>
+          <p className="eyebrow">{journeyCopy.sideBySide}</p>
+          <h3>{localizedCatalog ? dynamicCopy.menuMatches : card.title}</h3>
+          {!localizedCatalog && <p>{card.subtitle}</p>}
         </div>
         <div className="comparison-grid">
           {merchants.map((merchant, index) => (
             <article key={merchant.merchant_id} className={index === 0 ? "recommended" : ""}>
-              {index === 0 && <span className="recommend-ribbon">Best fit</span>}
+              {index === 0 && <span className="recommend-ribbon">{journeyCopy.bestFit}</span>}
               <Store size={18} aria-hidden="true" />
               <h4>{merchant.merchant_name}</h4>
               <strong>₩{merchant.price.toLocaleString()}</strong>
               <dl>
-                <div><dt>Delivery</dt><dd>{merchant.eta} · ₩{merchant.delivery_fee.toLocaleString()}</dd></div>
-                <div><dt>Flavour</dt><dd>{merchant.flavor}</dd></div>
-                <div><dt>Portion</dt><dd>{merchant.portion}</dd></div>
+                <div><dt>{copy.delivery}</dt><dd>{merchant.eta} · ₩{merchant.delivery_fee.toLocaleString()}</dd></div>
+                <div><dt>{journeyCopy.flavour}</dt><dd>{localizedCatalog ? dynamicCopy.catalogDescription : merchant.flavor}</dd></div>
+                <div><dt>{journeyCopy.portion}</dt><dd>{localizedCatalog ? dynamicCopy.catalogDescription : merchant.portion}</dd></div>
               </dl>
               <EvidenceBadge status={merchant.dietary_status} />
-              <p>{merchant.dietary_note}</p>
-              <details className="source-drawer"><summary>Evidence sources</summary><code>{merchant.evidence_ids.join(" · ") || "Not verified"}</code></details>
+              <p>{localizedCatalog ? dynamicCopy.evidenceDescription : merchant.dietary_note}</p>
+              <details className="source-drawer"><summary>{copy.evidence}</summary><code>{merchant.evidence_ids.join(" · ") || journeyCopy.notVerified}</code></details>
               <button
                 className={index === 0 ? "primary-button full" : "secondary-button full"}
-                onClick={() => onQuickReply(index === 0 ? "Choose Seoul Rose Tteokbokki" : `Choose ${merchant.merchant_name}`)}
+                onClick={() => onQuickReply(index === 0 ? "Choose Seoul Rose Tteokbokki" : `Choose ${merchant.merchant_name}`, `${copy.chooseMenu}: ${merchant.merchant_name}`)}
               >
-                Choose {index === 0 ? "recommended" : "this place"}
+                {copy.chooseMenu}
               </button>
             </article>
           ))}

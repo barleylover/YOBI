@@ -85,6 +85,7 @@ export interface OptionItem {
   price_delta: number;
   available: boolean;
   dietary_conflict?: string;
+  conflicting_rules: string[];
 }
 
 export interface OptionGroup {
@@ -135,6 +136,7 @@ export interface CartPreview {
     cart_item_id: string;
     menu_id: string;
     menu_name: string;
+    menu_name_ko: string;
     quantity: number;
     unit_price: number;
     options: Array<{ option_item_id: string; name_en: string; name_ko: string; price_delta: number }>;

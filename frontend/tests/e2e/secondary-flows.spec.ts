@@ -2,6 +2,8 @@ import { expect, test } from "@playwright/test";
 
 async function startSession(page: import("@playwright/test").Page) {
   await page.goto("/");
+  await page.getByRole("button", { name: "Get started!" }).click();
+  await page.getByRole("button", { name: "Next" }).click();
   await page.getByRole("checkbox", { name: /I agree/ }).check();
   await page.getByRole("button", { name: "Check delivery address" }).click();
   await page.getByRole("button", { name: "Confirm & start" }).first().click();
@@ -17,7 +19,7 @@ test("abstract request becomes a grounded warm category shortlist", async ({ pag
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(page.getByRole("heading", { name: "Warm, mild directions" })).toBeVisible();
   await expect(page.getByText("Chicken kalguksu", { exact: true })).toBeVisible();
-  await expect(page.getByText("Under ₩15,000 · no pork · spice 1/5 or below")).toBeVisible();
+  await expect(page.getByText("Under ₩15,000 · no pork · spice level 1 of 3")).toBeVisible();
   await page.getByText("Catalog sources").first().click();
   await expect(page.getByText(/menu_003_01/)).toBeVisible();
   await page.getByRole("button", { name: "Show me chicken kalguksu" }).click();
@@ -47,6 +49,7 @@ test("mock payment failure preserves checkout and permits safe retry", async ({ 
   await page.getByRole("button", { name: /^Add cheese/ }).click();
   await page.getByRole("button", { name: /^Remove fish cake/ }).click();
   await page.getByRole("button", { name: "Add to mock cart" }).click();
+  await page.getByRole("button", { name: "No, continue to delivery" }).click();
   await page.getByRole("button", { name: "Confirm delivery details" }).click();
   await page.getByRole("button", { name: "Proceed to payment" }).click();
 

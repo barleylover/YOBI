@@ -1,4 +1,4 @@
-from app.db.seed_data import seed_counts
+from app.db.seed_data import build_seed, seed_counts
 from app.db.sqlite_repository import SQLiteYobiRepository
 from app.domain.models import EvidenceStatus, ProfileCreate, ProfileUpdate
 
@@ -14,6 +14,15 @@ def test_seed_meets_master_minimums() -> None:
     assert counts["hotels"] == 20
 
 
+def test_seed_uses_only_the_three_level_spice_contract() -> None:
+    seed = build_seed()
+    assert {menu["spice_level"] for menu in seed["menus"]}.issubset({1, 2, 3})
+    assert all(
+        1 <= category["typical_spice_min"] <= category["typical_spice_max"] <= 3
+        for category in seed["menu_categories"]
+    )
+
+
 def test_severe_shellfish_filter_excludes_classic_risk_but_keeps_grounded_alternative(
     repository: SQLiteYobiRepository, profile_data: ProfileCreate
 ) -> None:
@@ -22,7 +31,7 @@ def test_severe_shellfish_filter_excludes_classic_risk_but_keeps_grounded_altern
         "red rice cake dish creamy and mild",
         profile,
         budget_krw=15000,
-        max_spiciness=5,
+        max_spiciness=3,
         excluded_ingredients=[],
         limit=10,
     )
@@ -63,3 +72,32 @@ def test_profile_can_be_updated_without_replacing_identity(
     assert updated.profile_id == profile.profile_id
     assert updated.spice_tolerance == 3
     assert updated.favorite_foods == ["bibimbap"]
+
+
+def test_same_merchant_followup_excludes_carted_and_dietary_conflicting_menus(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    profile = repository.create_profile(profile_data)
+
+    menus = repository.list_merchant_menus(
+        "mer_001", profile, ["menu_001_01"], limit=12
+    )
+
+    assert menus
+    assert all(menu.merchant_id == "mer_001" for menu in menus)
+    assert all(menu.menu_id != "menu_001_01" for menu in menus)
+    assert all(menu.spice_level <= profile.spice_tolerance for menu in menus)
+
+
+def test_option_conflict_names_the_dietary_rule_it_applies_to(
+    repository: SQLiteYobiRepository,
+) -> None:
+    groups = repository.get_options("menu_001_01")
+    keep_fish_cake = next(
+        item
+        for group in groups
+        for item in group.items
+        if item.option_item_id == "oi_001_01_fishcake_keep"
+    )
+
+    assert keep_fish_cake.conflicting_rules == ["shellfish_allergy"]

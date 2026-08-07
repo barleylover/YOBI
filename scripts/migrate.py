@@ -17,7 +17,16 @@ DELIMITER = "-- +YOBI STATEMENT"
 
 
 def split_statements(sql: str) -> list[str]:
-    return [statement.strip().rstrip(";") for statement in sql.split(DELIMITER) if statement.strip()]
+    statements = []
+    for raw_statement in sql.split(DELIMITER):
+        statement = raw_statement.strip()
+        if not statement:
+            continue
+        if statement.upper().startswith(("BEGIN", "DECLARE")):
+            statements.append(statement)
+        else:
+            statements.append(statement.rstrip(";"))
+    return statements
 
 
 def ensure_migration_table(connection: oracledb.Connection) -> None:
@@ -81,4 +90,3 @@ def migrate(settings: Settings) -> list[str]:
 if __name__ == "__main__":
     result = migrate(Settings())
     print("Applied:", ", ".join(result) if result else "none; schema is current")
-

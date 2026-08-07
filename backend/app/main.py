@@ -328,6 +328,23 @@ def get_menu_evidence(
     return [item.model_dump(mode="json") for item in repository.get_evidence(menu_id)]
 
 
+@app.get("/api/v1/sessions/{session_id}/merchants/{merchant_id}/menus")
+def list_merchant_menus(
+    session_id: str,
+    merchant_id: str,
+    exclude: str = "",
+    repository: YobiRepository = Depends(get_repository),
+) -> list[dict[str, Any]]:
+    _, profile = _resolve_session_profile(repository, session_id)
+    excluded_menu_ids = [value for value in exclude.split(",") if value]
+    return [
+        menu.model_dump(mode="json")
+        for menu in repository.list_merchant_menus(
+            merchant_id, profile, excluded_menu_ids, limit=12
+        )
+    ]
+
+
 def _validate_image(
     data: bytes,
     content_type: str | None,

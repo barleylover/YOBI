@@ -321,7 +321,7 @@ class ChatService:
                     Card(
                         type="category_recommendations",
                         title="Warm, mild directions",
-                        subtitle="Under ₩15,000 · no pork · spice 1/5 or below",
+                        subtitle="Under ₩15,000 · no pork · spice level 1 of 3",
                         data={"categories": categories},
                     )
                 ],
@@ -423,7 +423,7 @@ class ChatService:
             assert classic and mild
             text = (
                 "That sounds like tteokbokki: chewy rice cakes in a sweet-spicy gochujang sauce. "
-                "The classic demo version is a strong 4/5 for heat. Your shellfish allergy also "
+                "The classic demo version is level 3 on YOBI's three-level spice scale. Your shellfish allergy also "
                 "triggers a risk signal from synthetic review evidence, so I would avoid that one "
                 "by default. I found a milder rose version; its sauce is marked seafood-free, but "
                 "kitchen cross-contamination is still not verified."
@@ -493,7 +493,7 @@ class ChatService:
             )
             return self._make_turn(
                 "Good choice. First, pick the spice level. Mild is the recommended demo default "
-                "for your 1/5 tolerance.",
+                "for your level 1 tolerance.",
                 ChatState.MENU_OPTIONS,
                 [
                     Card(
