@@ -4,8 +4,8 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-CATALOG_VERSION = "demo-2026.08.07-v2"
-UPDATED_AT = "2026-08-07"
+CATALOG_VERSION = "demo-2026.08.08-chat-menu-v1"
+UPDATED_AT = "2026-08-08"
 
 CATEGORIES = [
     ("Tteokbokki", "떡볶이", 3, "sweet-spicy gochujang and chewy rice cakes"),
@@ -23,6 +23,11 @@ CATEGORIES = [
     ("Mandu", "만두", 1, "Korean dumplings with a juicy filling"),
     ("Naengmyeon", "냉면", 1, "chilled buckwheat noodles with a bright broth"),
     ("Dosirak", "도시락", 1, "a balanced Korean lunch box"),
+    ("Pizza", "피자", 1, "a crisp delivery pizza with generous toppings"),
+    ("Gukbap", "국밥", 1, "rice served with a deeply savoury Korean soup"),
+    ("Hotteok", "호떡", 1, "a warm griddled pancake with a sweet nutty filling"),
+    ("Seolleongtang", "설렁탕", 1, "a mild milky beef-bone soup with rice"),
+    ("Eomuk", "어묵", 1, "springy fish cake with a light warm broth"),
 ]
 
 SERVICE_AREAS = {
@@ -48,8 +53,23 @@ MERCHANT_NAMES = [
     ("서울 불고기상", "Seoul Bulgogi Table", "sweet soy flavour and shareable plates"),
 ]
 
+PRESET_MERCHANT_NAMES = {
+    21: ("BBQ 명동점", "BBQ Myeongdong", "crisp Korean fried chicken for delivery"),
+    22: ("BHC 을지로점", "BHC Euljiro", "bold seasoned Korean fried chicken"),
+    23: ("노모어피자 명동점", "No More Pizza Myeongdong", "generous Korean-style pizza toppings"),
+    24: ("홍콩반점 명동점", "Hong Kong Banjeom Myeongdong", "classic Korean-Chinese comfort food"),
+    25: ("엽기떡볶이 명동점", "Yeopgi Tteokbokki Myeongdong", "chewy tteokbokki with selectable heat"),
+    26: ("남산 한줄김밥", "Namsan Gimbap", "neatly rolled gimbap for an easy meal"),
+    27: ("서울 따뜻한국밥", "Seoul Gukbap House", "warming soup and rice bowls"),
+    28: ("명동 호떡마을", "Myeongdong Hotteok", "fresh griddled Korean sweet pancakes"),
+    29: ("을지 설렁탕", "Eulji Seolleongtang", "mild slow-simmered beef-bone soup"),
+    30: ("종로 어묵상회", "Jongno Eomuk House", "warm fish cake and light broth"),
+}
+
 
 def _merchant_name(index: int) -> tuple[str, str, str]:
+    if index in PRESET_MERCHANT_NAMES:
+        return PRESET_MERCHANT_NAMES[index]
     if index <= len(MERCHANT_NAMES):
         return MERCHANT_NAMES[index - 1]
     district = ("Myeongdong", "Hongdae", "Gangnam")[(index - 1) % 3]
@@ -63,6 +83,20 @@ def _merchant_name(index: int) -> tuple[str, str, str]:
 def _canonical_menu(merchant_index: int, menu_index: int) -> dict[str, Any] | None:
     if menu_index != 1:
         return None
+    preset_menus: dict[int, dict[str, Any]] = {
+        21: {"category": "Korean fried chicken", "name_ko": "황금 올리브 치킨", "name_en": "Golden olive fried chicken", "description": "Extra-crisp fried chicken with a clean savoury finish.", "cultural_description": "A classic Korean delivery chicken with a light, crisp coating.", "price": 23000, "spice_level": 1, "dietary_tags": ["preset_weekly_rank", "one_chicken", "shellfish_sauce_absent"], "allergen_tags": ["wheat", "soy"], "evidence_status": "VERIFIED"},
+        22: {"category": "Korean fried chicken", "name_ko": "뿌링클 치킨", "name_en": "Cheese-seasoned fried chicken", "description": "Crisp chicken finished with a sweet-savoury cheese seasoning.", "cultural_description": "Korean fried chicken with a playful powdered seasoning.", "price": 22000, "spice_level": 1, "dietary_tags": ["preset_weekly_rank", "shareable", "shellfish_sauce_absent"], "allergen_tags": ["milk", "wheat", "soy"], "evidence_status": "VERIFIED"},
+        23: {"category": "Pizza", "name_ko": "반반 시그니처 피자", "name_en": "Half-and-half signature pizza", "description": "Two popular topping styles on one crisp delivery pizza.", "cultural_description": "A Korean delivery favourite that lets a group share two flavours.", "price": 24900, "spice_level": 1, "dietary_tags": ["preset_weekly_rank", "shareable", "shellfish_sauce_absent"], "allergen_tags": ["milk", "wheat"], "evidence_status": "VERIFIED"},
+        24: {"category": "Jjajangmyeon", "name_ko": "짜장면과 탕수육 세트", "name_en": "Jjajangmyeon and tangsuyuk set", "description": "Black-bean noodles paired with crisp sweet-and-sour pork.", "cultural_description": "A familiar Korean-Chinese delivery combination for sharing.", "price": 18500, "spice_level": 1, "dietary_tags": ["preset_weekly_rank", "shareable", "shellfish_sauce_absent"], "allergen_tags": ["wheat", "soy"], "evidence_status": "VERIFIED"},
+        25: {"category": "Tteokbokki", "name_ko": "엽기떡볶이 오리지널", "name_en": "Yeopgi original tteokbokki", "description": "Chewy rice cakes in a bold sweet-spicy sauce.", "cultural_description": "A famously bold delivery tteokbokki with chewy rice cakes.", "price": 14000, "spice_level": 3, "dietary_tags": ["preset_weekly_rank", "shareable", "fish_cake_default", "shellfish_sauce_absent"], "allergen_tags": ["fish", "soy"], "evidence_status": "RISK_SIGNAL"},
+        26: {"category": "Gimbap", "name_ko": "알록달록 한줄김밥", "name_en": "Colourful classic gimbap", "description": "Rice and colourful fillings rolled neatly in seaweed.", "cultural_description": "A portable Korean rice roll with varied textures in every slice.", "price": 6500, "spice_level": 1, "dietary_tags": ["preset_kpop_menu", "one_person", "shellfish_sauce_absent"], "allergen_tags": ["egg", "soy"], "evidence_status": "VERIFIED"},
+        27: {"category": "Gukbap", "name_ko": "따뜻한 돼지국밥", "name_en": "Warm pork gukbap", "description": "Steamed rice served with a deeply savoury pork soup.", "cultural_description": "A comforting Korean soup-and-rice meal served piping hot.", "price": 11000, "spice_level": 1, "dietary_tags": ["preset_kpop_menu", "one_person", "shellfish_sauce_absent"], "allergen_tags": ["soy"], "evidence_status": "VERIFIED"},
+        28: {"category": "Hotteok", "name_ko": "씨앗 꿀호떡", "name_en": "Seed and honey hotteok", "description": "A warm griddled pancake filled with brown sugar, honey and seeds.", "cultural_description": "A crisp-edged, chewy Korean street sweet best enjoyed warm.", "price": 5000, "spice_level": 1, "dietary_tags": ["preset_kpop_menu", "dessert", "shellfish_sauce_absent"], "allergen_tags": ["wheat", "tree_nut"], "evidence_status": "VERIFIED"},
+        29: {"category": "Seolleongtang", "name_ko": "맑고 순한 설렁탕", "name_en": "Mild seolleongtang", "description": "Slow-simmered milky beef-bone soup served with rice.", "cultural_description": "A gentle Korean soup seasoned at the table to your taste.", "price": 13000, "spice_level": 1, "dietary_tags": ["preset_kpop_menu", "one_person", "mild", "shellfish_sauce_absent"], "allergen_tags": [], "evidence_status": "VERIFIED"},
+        30: {"category": "Eomuk", "name_ko": "따뜻한 모둠어묵", "name_en": "Warm assorted eomuk", "description": "Springy fish cakes served with a light, warming broth.", "cultural_description": "A beloved Korean street snack with soft, bouncy texture.", "price": 8500, "spice_level": 1, "dietary_tags": ["preset_kpop_menu", "street_food", "shellfish_sauce_absent"], "allergen_tags": ["fish", "wheat", "soy"], "evidence_status": "VERIFIED"},
+    }
+    if merchant_index in preset_menus:
+        return preset_menus[merchant_index]
     if merchant_index == 1:
         return {
             "category": "Rose tteokbokki",
@@ -141,7 +175,11 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
     for merchant_index in range(1, 31):
         merchant_id = f"mer_{merchant_index:03d}"
         name_ko, name_en, flavor = _merchant_name(merchant_index)
-        service_area = ("Myeongdong", "Hongdae", "Gangnam")[(merchant_index - 1) % 3]
+        service_area = (
+            "Myeongdong"
+            if merchant_index in PRESET_MERCHANT_NAMES
+            else ("Myeongdong", "Hongdae", "Gangnam")[(merchant_index - 1) % 3]
+        )
         service_area_id = SERVICE_AREAS[service_area][0]
         merchants.append(
             {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronRight, Languages, LockKeyhole, Minus, Plus, ShieldAlert, ShoppingBag, Trash2, Unlock } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { actionableError, api } from "../lib/api";
@@ -21,6 +21,7 @@ type Phase = "options" | "note" | "more" | "browse" | "delivery" | "review";
 export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryRules, onClose }: Props) {
   const navigate = useNavigate();
   const setCartQuantity = useSessionStore((state) => state.setCartQuantity);
+  const cartQuantity = useSessionStore((state) => state.cartQuantity);
   const { copy, dynamicCopy, journeyCopy, language } = useI18n();
   const [activeMenu, setActiveMenu] = useState(menu);
   const [phase, setPhase] = useState<Phase>("options");
@@ -33,6 +34,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryRules, on
   const [merchantMenus, setMerchantMenus] = useState<MenuSummary[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const restoreCartOnMount = useRef(cartQuantity > 0);
 
   useEffect(() => {
     let active = true;
@@ -43,11 +45,23 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryRules, on
     setPhase("options");
     setCart(null);
     setError("");
-    api.getOptions(activeMenu.menu_id)
-      .then((result) => { if (active) setGroups(result); })
+    Promise.all([
+      api.getOptions(activeMenu.menu_id),
+      restoreCartOnMount.current ? api.getCart(sessionId) : Promise.resolve(null),
+    ])
+      .then(([result, restoredCart]) => {
+        if (!active) return;
+        setGroups(result);
+        if (restoredCart?.items.length) {
+          setCart(restoredCart);
+          setCartQuantity(restoredCart.items.reduce((total, item) => total + item.quantity, 0));
+          setPhase(restoredCart.missing_slots.includes("delivery_preferences") ? "delivery" : "review");
+        }
+        restoreCartOnMount.current = false;
+      })
       .catch((cause) => { if (active) setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry); });
     return () => { active = false; };
-  }, [activeMenu.menu_id, journeyCopy.retry, language]);
+  }, [activeMenu.menu_id, journeyCopy.retry, language, sessionId, setCartQuantity]);
 
   useEffect(() => setActiveMenu(menu), [menu]);
 

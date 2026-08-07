@@ -1,6 +1,6 @@
 # YOBI MVP implementation status
 
-Last updated: 2026-08-07 KST
+Last updated: 2026-08-08 KST
 
 ## Status
 
@@ -68,6 +68,21 @@ failure/retry and one synthetic order.
   quantities.
 - Public Korean iPhone E2E passed the complete profile-to-confirmation flow on release
   `20260807T093233Z`.
+
+## 2026-08-08 chat-room menu iteration
+
+- A localized, collapsible menu above the chat composer exposes **Weekly ranking**,
+  **K-POP Demon Hunters**, and **Edit my information** in all 16 supported languages.
+- Weekly ranking is fixed to BBQ, BHC, No More Pizza, Hong Kong Banjeom, and Yeopgi
+  Tteokbokki. The second collection is fixed to gimbap, gukbap, hotteok,
+  seolleongtang, and eomuk. Both return deterministic assistant cards without an LLM
+  call or a live ranking/data integration.
+- Ten key-preserving catalog slots provide orderable preset restaurants and menus.
+  Existing schema migrations remain unchanged; seed upsert adds five categories and
+  updates only deterministic catalog rows.
+- Existing-profile editing uses `PATCH /profiles/{profile_id}`, reuses the current
+  confirmed address by default, preserves the session/chat/cards/cart/draft, and
+  refreshes the server cart after return so new dietary conflicts block checkout.
 
 All merchants, reviews, hotels, payments and orders are synthetic. The deployment is
 public HTTP for presentation and has no custom domain/TLS. Stored vectors are

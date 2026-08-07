@@ -182,6 +182,7 @@ class Card(BaseModel):
         "payment_cta",
         "order_complete",
         "error_recovery",
+        "preset_collection",
     ]
     title: str
     subtitle: str | None = None
@@ -200,6 +201,7 @@ class AssistantTurn(BaseModel):
 
 class UserMessage(BaseModel):
     content: str = Field(min_length=1, max_length=2000)
+    intent: Literal["weekly_ranking", "kpop_demon_hunters"] | None = None
 
 
 class AddressCandidate(BaseModel):

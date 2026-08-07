@@ -124,3 +124,44 @@ def test_duplicate_menu_tool_results_render_one_deduplicated_carousel(
     assert [card.type for card in turn.cards] == ["menu_recommendations"]
     menu_ids = [menu["menu_id"] for menu in turn.cards[0].data["menus"]]
     assert len(menu_ids) == len(set(menu_ids))
+
+
+def test_weekly_ranking_is_fixed_and_does_not_enter_fallback(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    profile = repository.create_profile(profile_data)
+    session = repository.create_session(profile.profile_id)
+
+    turn = ChatService(repository, Settings(), DemoControl()).respond(
+        session, profile, "Show me this week's delivery ranking", "weekly_ranking"
+    )
+
+    assert turn.fallback_used is False
+    assert [card.type for card in turn.cards] == ["preset_collection"]
+    entries = turn.cards[0].data["entries"]
+    assert [entry["label"] for entry in entries] == [
+        "BBQ", "BHC", "No More Pizza", "Hong Kong Banjeom", "Yeopgi Tteokbokki"
+    ]
+    assert [entry["menu"]["menu_id"] for entry in entries] == [
+        "menu_021_01", "menu_022_01", "menu_023_01", "menu_024_01", "menu_025_01"
+    ]
+
+
+def test_kpop_food_collection_is_fixed_and_orderable(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    profile = repository.create_profile(profile_data)
+    session = repository.create_session(profile.profile_id)
+
+    turn = ChatService(repository, Settings(), DemoControl()).respond(
+        session, profile, "Show me the foods from K-POP Demon Hunters", "kpop_demon_hunters"
+    )
+
+    entries = turn.cards[0].data["entries"]
+    assert [entry["label"] for entry in entries] == [
+        "Gimbap", "Gukbap", "Hotteok", "Seolleongtang", "Eomuk"
+    ]
+    for entry in entries:
+        menu = entry["menu"]
+        assert menu["price"] > 0
+        assert repository.get_options(menu["menu_id"])

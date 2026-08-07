@@ -1,6 +1,6 @@
 import { ChangeEvent, FormEvent, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Hotel, ImageUp, MapPin } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { actionableError, api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import { useSessionStore } from "../stores/session";
@@ -8,25 +8,36 @@ import type { AddressCandidate, Profile, Session } from "../types";
 
 const ALLERGY_CODES = ["shellfish", "fish", "milk", "egg", "peanut", "tree_nut", "wheat", "soy", "sesame"] as const;
 
-type AddressMode = "hotel" | "upload" | "manual";
+type AddressMode = "existing" | "hotel" | "upload" | "manual";
 type CreatedContext = { profile: Profile; session: Session };
 
 export function OnboardingPage() {
   const navigate = useNavigate();
-  const { profileCopy, selectionCopy, language } = useI18n();
+  const location = useLocation();
+  const { profileCopy, selectionCopy, chatMenuCopy, language } = useI18n();
+  const profile = useSessionStore((state) => state.profile);
+  const session = useSessionStore((state) => state.session);
+  const addressRefId = useSessionStore((state) => state.addressRefId);
+  const addressSummary = useSessionStore((state) => state.addressSummary);
   const setContext = useSessionStore((state) => state.setContext);
+  const updateProfile = useSessionStore((state) => state.updateProfile);
   const setDeliveryAddress = useSessionStore((state) => state.setDeliveryAddress);
   const country = useSessionStore((state) => state.draftCountry);
+  const query = new URLSearchParams(location.search);
+  const editMode = query.get("edit") === "1" && Boolean(profile && session);
+  const returnTo = query.get("returnTo") || (session ? `/chat/${session.session_id}` : "/");
   const candidateRef = useRef<HTMLDivElement>(null);
-  const [spice, setSpice] = useState(2);
-  const [ageBand, setAgeBand] = useState("25-34");
-  const [religion, setReligion] = useState("Prefer not to say");
-  const [vegan, setVegan] = useState(false);
-  const [allergies, setAllergies] = useState<Set<string>>(() => new Set(["shellfish"]));
-  const [severity, setSeverity] = useState<"mild" | "moderate" | "severe">("severe");
-  const [favorites, setFavorites] = useState("");
-  const [consent, setConsent] = useState(false);
-  const [addressMode, setAddressMode] = useState<AddressMode>("hotel");
+  const [spice, setSpice] = useState(profile?.spice_tolerance ?? 2);
+  const [ageBand, setAgeBand] = useState(profile?.age_band ?? "25-34");
+  const [religion, setReligion] = useState(profile?.religion_selection ?? "Prefer not to say");
+  const [vegan, setVegan] = useState(profile?.dietary_rules.includes("vegan") ?? false);
+  const [allergies, setAllergies] = useState<Set<string>>(() => profile
+    ? new Set(profile.dietary_rules.filter((rule) => rule.endsWith("_allergy")).map((rule) => rule.replace(/_allergy$/, "")))
+    : new Set(["shellfish"]));
+  const [severity, setSeverity] = useState<"mild" | "moderate" | "severe">(profile?.allergy_severity ?? "severe");
+  const [favorites, setFavorites] = useState(profile?.favorite_foods.join(", ") ?? "");
+  const [consent, setConsent] = useState(profile?.consent_demo_data ?? false);
+  const [addressMode, setAddressMode] = useState<AddressMode>(editMode && addressRefId ? "existing" : "hotel");
   const [hotelQuery, setHotelQuery] = useState("YOBI Myeongdong Hotel");
   const [addressImage, setAddressImage] = useState<File | null>(null);
   const [manualAddress, setManualAddress] = useState({
@@ -53,7 +64,7 @@ export function OnboardingPage() {
       ...[...allergies].map((code) => `${code}_allergy`),
       ...(vegan ? ["vegan"] : []),
     ];
-    const profile = await api.createProfile({
+    const body = {
       preferred_language: language,
       nationality: country,
       age_band: ageBand,
@@ -64,17 +75,25 @@ export function OnboardingPage() {
       favorite_foods: favorites.split(",").map((value) => value.trim()).filter(Boolean),
       consent_demo_data: consent,
       remember_profile: false,
-    });
-    const session = await api.createSession(profile.profile_id);
-    const context = { profile, session };
+    };
+    if (editMode && profile && session) {
+      const updated = await api.updateProfile(profile.profile_id, body);
+      updateProfile(updated);
+      const context = { profile: updated, session };
+      setCreatedContext(context);
+      return context;
+    }
+    const createdProfile = await api.createProfile(body);
+    const createdSession = await api.createSession(createdProfile.profile_id);
+    const context = { profile: createdProfile, session: createdSession };
     setCreatedContext(context);
-    setContext(profile, session);
+    setContext(createdProfile, createdSession);
     return context;
   }
 
   function finish(addressRefId: string, summary: string, session: Session) {
     setDeliveryAddress(addressRefId, summary);
-    navigate(`/chat/${session.session_id}`);
+    navigate(editMode ? returnTo : `/chat/${session.session_id}`);
   }
 
   async function checkAddress(event: FormEvent<HTMLFormElement>) {
@@ -84,6 +103,10 @@ export function OnboardingPage() {
     setCandidates([]);
     try {
       const context = await ensureContext();
+      if (addressMode === "existing") {
+        finish(addressRefId, addressSummary, context.session);
+        return;
+      }
       if (addressMode === "manual") {
         const result = await api.confirmManualAddress(context.session.session_id, manualAddress);
         finish(result.address_ref_id, `${manualAddress.hotel_name} · ${manualAddress.road_address}`, context.session);
@@ -142,7 +165,9 @@ export function OnboardingPage() {
     setAddressImage(event.target.files?.[0] ?? null);
   }
 
-  const addressReady = addressMode === "hotel"
+  const addressReady = addressMode === "existing"
+    ? Boolean(addressRefId)
+    : addressMode === "hotel"
     ? hotelQuery.trim().length >= 2
     : addressMode === "upload"
       ? Boolean(addressImage)
@@ -153,7 +178,7 @@ export function OnboardingPage() {
       <form className="onboarding-card" onSubmit={checkAddress}>
         <div className="profile-card-heading">
           <div><div className="step-label">{profileCopy.step}</div><h2>{profileCopy.title}</h2></div>
-          <button type="button" className="text-button" onClick={() => navigate("/start")}><ArrowLeft size={16} /> {profileCopy.changeLocale}</button>
+          <button type="button" className="text-button" onClick={() => navigate(editMode ? `/start?edit=1&returnTo=${encodeURIComponent(returnTo)}` : "/start")}><ArrowLeft size={16} /> {profileCopy.changeLocale}</button>
         </div>
         <div className="form-grid">
           <label>{profileCopy.age}<select value={ageBand} onChange={(event) => setAgeBand(event.target.value)}><option>18-24</option><option>25-34</option><option>35-44</option><option>45-54</option><option>55+</option><option value="Prefer not to say">{selectionCopy.preferNot}</option></select></label>
@@ -189,6 +214,7 @@ export function OnboardingPage() {
         <section className="onboarding-address" aria-labelledby="delivery-address-title">
           <div className="address-heading"><MapPin size={19} /><div><p className="eyebrow">{profileCopy.required}</p><h3 id="delivery-address-title">{profileCopy.address}</h3></div></div>
           <p>{selectionCopy.addressDescription}</p>
+          {addressMode === "existing" && <article className="current-address"><MapPin size={19} /><div><small>{chatMenuCopy.currentAddress}</small><strong>{addressSummary}</strong></div><button type="button" className="secondary-button" onClick={() => setAddressMode("hotel")}>{chatMenuCopy.changeAddress}</button></article>}
           <div className="address-methods" role="tablist" aria-label={profileCopy.address}>
             <button type="button" className={addressMode === "hotel" ? "active" : ""} onClick={() => { setAddressMode("hotel"); setCandidates([]); }}>{profileCopy.hotel}</button>
             <button type="button" className={addressMode === "upload" ? "active" : ""} onClick={() => { setAddressMode("upload"); setCandidates([]); }}>{profileCopy.image}</button>
@@ -213,7 +239,7 @@ export function OnboardingPage() {
         <label className="consent-row"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} /><span>{profileCopy.consent}</span></label>
         {error && <p className="form-error" role="alert">{error}</p>}
         <button className="primary-button full large" disabled={!consent || !addressReady || loading}>
-          {loading ? selectionCopy.checkingContext : addressMode === "manual" ? selectionCopy.saveStart : profileCopy.check}<ArrowRight size={19} />
+          {loading ? selectionCopy.checkingContext : editMode && addressMode === "existing" ? chatMenuCopy.saveChanges : addressMode === "manual" ? selectionCopy.saveStart : profileCopy.check}<ArrowRight size={19} />
         </button>
       </form>
     </main>

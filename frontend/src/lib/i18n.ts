@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { asSupportedLanguage, LANGUAGE_META, type SupportedLanguage } from "./locale";
 import { useSessionStore } from "../stores/session";
 import { getExtendedCopy } from "./extendedI18n";
+import { getChatMenuCopy } from "./chatMenuI18n";
 
 export interface UiCopy {
   buddy: string; ready: string; checking: string; hello: string; you: string; ask: string;
@@ -112,6 +113,7 @@ export function useI18n() {
     copy: packs[language],
     profileCopy: profilePacks[language],
     dynamicCopy: dynamicPacks[language],
+    chatMenuCopy: getChatMenuCopy(language),
     ...getExtendedCopy(language),
     locale: meta.code,
   };

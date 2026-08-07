@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { ArrowUp, ChevronDown, ShoppingBag, Sparkles } from "lucide-react";
-import { Navigate, useParams } from "react-router-dom";
+import { Navigate, useNavigate, useParams } from "react-router-dom";
+import { ChatRoomMenu } from "../components/ChatRoomMenu";
 import { OrderFlowPanel } from "../components/OrderFlowPanel";
 import { RichCard } from "../components/RichCard";
 import { api } from "../lib/api";
@@ -22,23 +23,31 @@ function createChatEntryId() {
 
 export function ChatPage() {
   const { sessionId = "" } = useParams();
+  const navigate = useNavigate();
   const profile = useSessionStore((state) => state.profile);
   const session = useSessionStore((state) => state.session);
   const addressRefId = useSessionStore((state) => state.addressRefId);
   const addressSummary = useSessionStore((state) => state.addressSummary);
   const cartQuantity = useSessionStore((state) => state.cartQuantity);
   const { copy, profileCopy, dynamicCopy, journeyCopy, language, locale } = useI18n();
-  const [input, setInput] = useState("");
+  const chatCacheKey = `yobi-chat-entries-${sessionId}`;
+  const inputCacheKey = `yobi-chat-input-${sessionId}`;
+  const selectedMenuCacheKey = `yobi-selected-menu-${sessionId}`;
+  const [input, setInput] = useState(() => sessionStorage.getItem(inputCacheKey) ?? "");
   const [sending, setSending] = useState(false);
   const [activity, setActivity] = useState(copy.checking);
-  const [selectedMenu, setSelectedMenu] = useState<MenuSummary | null>(null);
-  const [entries, setEntries] = useState<ChatEntry[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      text: copy.hello,
-    },
-  ]);
+  const [selectedMenu, setSelectedMenu] = useState<MenuSummary | null>(() => {
+    try {
+      return JSON.parse(sessionStorage.getItem(selectedMenuCacheKey) ?? "null") as MenuSummary | null;
+    } catch { return null; }
+  });
+  const [entries, setEntries] = useState<ChatEntry[]>(() => {
+    try {
+      const cached = JSON.parse(sessionStorage.getItem(chatCacheKey) ?? "null") as ChatEntry[] | null;
+      if (cached?.length) return cached;
+    } catch { /* Ignore an invalid browser-only cache. */ }
+    return [{ id: "welcome", role: "assistant", text: copy.hello }];
+  });
 
   const activeRules = useMemo(() => profile?.dietary_rules ?? [], [profile]);
   const dietarySummary = useMemo(() => {
@@ -68,6 +77,7 @@ export function ChatPage() {
   }, [selectedMenu]);
   useEffect(() => {
     if (!sessionId || session?.session_id !== sessionId) return;
+    if (sessionStorage.getItem(chatCacheKey)) return;
     let active = true;
     api.getMessages(sessionId)
       .then((messages) => {
@@ -84,10 +94,32 @@ export function ChatPage() {
     return () => {
       active = false;
     };
-  }, [session?.session_id, sessionId]);
+  }, [chatCacheKey, session?.session_id, sessionId]);
+  useEffect(() => {
+    sessionStorage.setItem(chatCacheKey, JSON.stringify(entries));
+  }, [chatCacheKey, entries]);
+  useEffect(() => {
+    sessionStorage.setItem(inputCacheKey, input);
+  }, [input, inputCacheKey]);
+  useEffect(() => {
+    if (selectedMenu) sessionStorage.setItem(selectedMenuCacheKey, JSON.stringify(selectedMenu));
+    else sessionStorage.removeItem(selectedMenuCacheKey);
+  }, [selectedMenu, selectedMenuCacheKey]);
+  useEffect(() => {
+    setEntries((current) => current.map((entry) => entry.id === "welcome" ? { ...entry, text: copy.hello } : entry));
+  }, [copy.hello]);
+  useEffect(() => {
+    const saved = Number(sessionStorage.getItem(`yobi-chat-scroll-${sessionId}`) ?? "0");
+    if (saved > 0) requestAnimationFrame(() => window.scrollTo({ top: saved }));
+  }, [sessionId]);
   if (!profile || !session || session.session_id !== sessionId || !addressRefId) return <Navigate to="/" replace />;
 
-  async function send(text = input, displayText = text) {
+  async function send(
+    text = input,
+    displayText = text,
+    intent?: "weekly_ranking" | "kpop_demon_hunters",
+    responseText?: string,
+  ) {
     const trimmed = text.trim();
     if (!trimmed || sending) return;
     setInput("");
@@ -99,6 +131,7 @@ export function ChatPage() {
     try {
       const turn = await api.streamMessage(sessionId, trimmed, {
         onText: (delta) => {
+          if (responseText) return;
           setEntries((current) => {
             return current.map((entry) =>
               entry.id === pendingId ? { ...entry, text: entry.text + delta } : entry,
@@ -106,12 +139,12 @@ export function ChatPage() {
           });
         },
         onStatus: (status) => setActivity(language === "English" ? status : copy.checking),
-      });
+      }, intent);
       setEntries((current) => {
         const complete = {
           id: turn.message_id,
           role: "assistant" as const,
-          text: turn.fallback_used && language !== "English" ? dynamicCopy.fallbackResult : turn.text,
+          text: responseText ?? (turn.fallback_used && language !== "English" ? dynamicCopy.fallbackResult : turn.text),
           turn,
         };
         return current.map((entry) => (entry.id === pendingId ? complete : entry));
@@ -129,6 +162,11 @@ export function ChatPage() {
   function submit(event: FormEvent) {
     event.preventDefault();
     void send();
+  }
+
+  function editProfile() {
+    sessionStorage.setItem(`yobi-chat-scroll-${sessionId}`, String(window.scrollY));
+    navigate(`/profile?edit=1&returnTo=${encodeURIComponent(`/chat/${sessionId}`)}`);
   }
 
   return (
@@ -167,14 +205,21 @@ export function ChatPage() {
           {selectedMenu && <OrderFlowPanel sessionId={sessionId} menu={selectedMenu} addressRefId={addressRefId} dietaryRules={activeRules} onClose={() => setSelectedMenu(null)} />}
         </div>
 
-        <form className="composer" onSubmit={submit}>
+        <div className="chat-dock">
+          <ChatRoomMenu
+            disabled={sending}
+            onPreset={(intent, prompt, response) => void send(prompt, prompt, intent, response)}
+            onEditProfile={editProfile}
+          />
+          <form className="composer" onSubmit={submit}>
           <label htmlFor="message">{copy.ask}</label>
           <div>
             <textarea id="message" value={input} onChange={(event) => setInput(event.target.value)} placeholder={copy.placeholder} rows={1} />
             <button className="send-button" aria-label={journeyCopy.sendMessage} disabled={!input.trim() || sending}><ArrowUp size={20} /></button>
           </div>
           <button type="button" className="prompt-suggestion" onClick={() => void send("I saw people eating some red rice cake dish on the street. What is that? Can I order it?", journeyCopy.demoPrompt)}>{copy.demoQuestion} <ChevronDown size={15} /></button>
-        </form>
+          </form>
+        </div>
       </section>
     </main>
   );

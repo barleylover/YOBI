@@ -103,6 +103,26 @@ When the provider is limited, **Demo continuity mode** may appear. It must still
 catalog/domain results and keep the same dietary and pricing rules. The local launcher
 always exercises this deterministic continuity boundary by design.
 
+### Chat-room menu proof
+
+1. In chat, open **Chat menu** directly above the composer. Confirm the three localized
+   actions are **Weekly ranking**, **K-POP Demon Hunters**, and **Edit my information**.
+2. Select **Weekly ranking**. The assistant must return the fixed order **BBQ, BHC,
+   No More Pizza, Hong Kong Banjeom, Yeopgi Tteokbokki** with one horizontally
+   swipeable nearby menu card for each rank.
+3. Choose a ranked menu and complete its options. These preset cards use the same
+   server-priced Order Builder and cart as ordinary recommendations.
+4. Open **Chat menu** again and select **K-POP Demon Hunters**. Confirm the fixed food
+   order **Gimbap, Gukbap, Hotteok, Seolleongtang, Eomuk** and swipe all five cards.
+5. Select **Edit my information**. Confirm the current profile and delivery address
+   are prefilled, change one item, and select **Save changes**. The same chat, cards,
+   cart quantity, and draft are preserved on return. If an allergy change conflicts
+   with the cart, Final review must refresh from the server and disable payment.
+
+The two content shortcuts are intentionally deterministic demo turns. They do not
+calculate rankings, fetch live delivery data, or invoke the LLM; ordinary free-form
+chat continues to use the Agent Loop and its deterministic continuity path.
+
 ## 3. Focused UI regression checklist
 
 Run these checks separately from the fast primary path when reviewing the redesign.
@@ -126,6 +146,12 @@ Run these checks separately from the fast primary path when reviewing the redesi
 - **Simplified chat layout:** confirm the former
   `Discover | Choose | Deliver | Pay` bar and the right-side
   `Your context / Trust layer / Synthetic demo data` rail are absent.
+- **Chat-room menu:** confirm the bottom menu opens and closes without losing the
+  composer draft, each content action inserts one user turn and one fixed assistant
+  collection, and repeated taps are disabled while a response is in flight.
+- **Profile edit return:** edit an existing profile from chat without creating a new
+  session. Confirm current address reuse, language propagation, chat/card restoration,
+  cart quantity preservation, and server revalidation of dietary conflicts.
 - **Swipeable recommendations:** after the demo question, select
   **Find a different mild dish**. In **Grounded menu matches**, swipe horizontally on
   mobile or use **Previous menu** / **Next menu** on desktop; only one full card should

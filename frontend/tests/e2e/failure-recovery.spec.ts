@@ -40,8 +40,8 @@ test("onboarding remains accessible at every required viewport", async ({ page }
   if (expectsProtectedControl) {
     await expect(page.getByRole("status")).toHaveText(/Status is protected/);
   } else {
-    await expect(page.getByText("demo-2026.08.07-v2")).toBeVisible();
-    await expect(page.getByText("2026-08-07", { exact: true })).toBeVisible();
+    await expect(page.getByText("demo-2026.08.08-chat-menu-v1")).toBeVisible();
+    await expect(page.getByText("2026-08-08", { exact: true })).toBeVisible();
   }
 });
 

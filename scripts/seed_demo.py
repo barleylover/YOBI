@@ -55,7 +55,7 @@ EXPECTED_COUNTS = {
     "option_items": 605,
     "hotels": 20,
     "service_areas": 3,
-    "menu_categories": 15,
+    "menu_categories": 20,
     "dietary_attributes": 10,
     "menu_dietary_attributes": 305,
     "allergens": 7,

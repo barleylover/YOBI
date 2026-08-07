@@ -5,6 +5,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from time import monotonic
+from typing import Literal
 from uuid import uuid4
 
 from app.core.config import Settings
@@ -29,15 +30,25 @@ class ChatService:
         self.agent = AgentLoop(settings)
         self.logger = logging.getLogger("yobi")
 
-    def respond(self, session: Session, profile: Profile, user_text: str) -> AssistantTurn:
+    def respond(
+        self,
+        session: Session,
+        profile: Profile,
+        user_text: str,
+        intent: Literal["weekly_ranking", "kpop_demon_hunters"] | None = None,
+    ) -> AssistantTurn:
         started = monotonic()
         safe_error_code: str | None = None
         self.repository.save_message(session.session_id, "user", user_text, "text")
+        preset_turn = self._preset_turn(session, profile, intent) if intent else None
         use_fallback = (
             not self.agent.configured
             or self.demo_control.mode in {"force_fallback", "force_genai_timeout"}
         )
-        if not use_fallback:
+        if preset_turn is not None:
+            turn = preset_turn
+            use_fallback = False
+        elif not use_fallback:
             try:
                 result = self.agent.run(
                     user_text,
@@ -91,6 +102,64 @@ class ChatService:
             safe_error_code=safe_error_code,
         )
         return turn
+
+    def _preset_turn(
+        self,
+        session: Session,
+        profile: Profile,
+        intent: Literal["weekly_ranking", "kpop_demon_hunters"],
+    ) -> AssistantTurn:
+        if intent == "weekly_ranking":
+            definitions = [
+                (1, "BBQ", "Crisp Korean fried chicken", "menu_021_01"),
+                (2, "BHC", "Sweet-savoury seasoned chicken", "menu_022_01"),
+                (3, "No More Pizza", "A shareable half-and-half pizza", "menu_023_01"),
+                (4, "Hong Kong Banjeom", "Korean-Chinese noodles and tangsuyuk", "menu_024_01"),
+                (5, "Yeopgi Tteokbokki", "Bold chewy tteokbokki", "menu_025_01"),
+            ]
+            title = "This week's delivery ranking"
+            text = "Here is this week's fixed YOBI delivery ranking. Swipe through a nearby menu from every ranked restaurant."
+            subtitle = "Five popular delivery picks"
+        else:
+            definitions = [
+                (1, "Gimbap", "Colourful rice rolls wrapped in seaweed", "menu_026_01"),
+                (2, "Gukbap", "A warming Korean soup-and-rice meal", "menu_027_01"),
+                (3, "Hotteok", "A crisp, chewy filled street pancake", "menu_028_01"),
+                (4, "Seolleongtang", "A mild slow-simmered beef-bone soup", "menu_029_01"),
+                (5, "Eomuk", "Springy fish cake with warm broth", "menu_030_01"),
+            ]
+            title = "K-POP Demon Hunters food guide"
+            text = "Meet five Korean foods featured in the K-POP Demon Hunters menu. Swipe to explore a nearby delivery pick for each one."
+            subtitle = "Five foods to explore"
+        entries: list[dict[str, object]] = []
+        for rank, label, description, menu_id in definitions:
+            menu = self.repository.get_menu(menu_id, profile)
+            if menu is None:
+                raise RuntimeError("PRESET_MENU_MISSING")
+            entries.append(
+                {
+                    "rank": rank,
+                    "label": label,
+                    "description": description,
+                    "menu": menu.model_dump(mode="json"),
+                }
+            )
+        self.repository.set_session_selection(
+            session.session_id, ChatState.MENU_EXPLANATION.value, None, None
+        )
+        return self._make_turn(
+            text,
+            ChatState.MENU_EXPLANATION,
+            [
+                Card(
+                    type="preset_collection",
+                    title=title,
+                    subtitle=subtitle,
+                    data={"kind": intent, "entries": entries},
+                )
+            ],
+            False,
+        )
 
     def _dynamic_context(self, session: Session, profile: Profile) -> str:
         cart = self.repository.get_cart(session.session_id)

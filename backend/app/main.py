@@ -267,7 +267,7 @@ def post_message(
     chat_service: ChatService = Depends(get_chat_service),
 ) -> dict[str, Any]:
     session, profile = _resolve_session_profile(repository, session_id)
-    return chat_service.respond(session, profile, data.content).model_dump(mode="json")
+    return chat_service.respond(session, profile, data.content, data.intent).model_dump(mode="json")
 
 
 @app.post("/api/v1/sessions/{session_id}/messages/stream")
@@ -284,7 +284,7 @@ def stream_message(
         yield "event: status\ndata: {\"text\":\"Checking menu details…\"}\n\n"
         yield "event: tool_started\ndata: {\"label\":\"Reviewing grounded demo data…\"}\n\n"
         try:
-            turn = chat_service.respond(session, profile, data.content)
+            turn = chat_service.respond(session, profile, data.content, data.intent)
         except Exception:
             yield "event: error\ndata: {\"code\":\"CHAT_RESPONSE_FAILED\"}\n\n"
             return

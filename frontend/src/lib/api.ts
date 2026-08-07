@@ -52,6 +52,8 @@ export function actionableError(cause: unknown, fallback: string) {
 export const api = {
   createProfile: (body: Record<string, unknown>) =>
     request<Profile>("/api/v1/profiles", { method: "POST", body: JSON.stringify(body) }),
+  updateProfile: (profileId: string, body: Record<string, unknown>) =>
+    request<Profile>(`/api/v1/profiles/${profileId}`, { method: "PATCH", body: JSON.stringify(body) }),
   createSession: (profileId: string) =>
     request<Session>("/api/v1/sessions", {
       method: "POST",
@@ -66,11 +68,12 @@ export const api = {
     sessionId: string,
     content: string,
     handlers: { onText: (text: string) => void; onStatus: (text: string) => void },
+    intent?: "weekly_ranking" | "kpop_demon_hunters",
   ) => {
     const response = await fetch(`/api/v1/sessions/${sessionId}/messages/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, intent }),
     });
     if (!response.ok || !response.body) throw new Error("CHAT_STREAM_FAILED");
     const reader = response.body.getReader();
@@ -117,6 +120,7 @@ export const api = {
     request<import("../types").MenuSummary[]>(
       `/api/v1/sessions/${sessionId}/merchants/${merchantId}/menus?exclude=${encodeURIComponent(excludedMenuIds.join(","))}`,
     ),
+  getCart: (sessionId: string) => request<CartPreview>(`/api/v1/sessions/${sessionId}/cart`),
   addCartItem: (
     sessionId: string,
     menuId: string,

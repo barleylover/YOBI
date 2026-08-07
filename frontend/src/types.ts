@@ -8,6 +8,10 @@ export interface Profile {
   spice_tolerance: number;
   dietary_rules: string[];
   favorite_foods: string[];
+  age_band: string;
+  allergy_severity: "mild" | "moderate" | "severe";
+  consent_demo_data: boolean;
+  remember_profile: boolean;
 }
 
 export interface Session {

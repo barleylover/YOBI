@@ -19,7 +19,7 @@ supported severe allergies hard-filter known positive allergen tags. Profiles, m
 and categories share one three-level spice contract: 1 not spicy, 2 moderately spicy,
 3 very spicy.
 
-The deterministic seed produces exactly 30 merchants, 150 menus, 600 review
+The deterministic seed produces exactly 20 categories, 30 merchants, 150 menus, 600 review
 snippets, 300 evidence rows, at least 250 option items, and 20 hotels. All are marked
 synthetic. Fixed demo identifiers include:
 
@@ -29,6 +29,10 @@ synthetic. Fixed demo identifiers include:
 - `menu_001_02`: second same-restaurant, spice-1 synthetic menu with explicit
   shellfish-sauce absence evidence for the add-on carousel demo.
 - `menu_003_01`: gentle chicken kalguksu.
+- `menu_021_01`–`menu_025_01`: fixed weekly ranking cards for BBQ, BHC,
+  No More Pizza, Hong Kong Banjeom, and Yeopgi Tteokbokki.
+- `menu_026_01`–`menu_030_01`: fixed K-POP Demon Hunters food cards for gimbap,
+  gukbap, hotteok, seolleongtang, and eomuk.
 - `hotel_demo_01`: synthetic Myeongdong hotel fixture.
 
 `--upsert` is the safe default seed mode. `--fresh` deletes only deterministic

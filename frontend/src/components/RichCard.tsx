@@ -10,6 +10,7 @@ import type {
 import { EvidenceBadge } from "./EvidenceBadge";
 import { useI18n } from "../lib/i18n";
 import { menuName } from "../lib/locale";
+import { PresetCollectionCard } from "./PresetCollectionCard";
 
 interface Props {
   card: CardPayload;
@@ -32,6 +33,10 @@ export function RichCard({ card, onChooseMenu, onQuickReply }: Props) {
     if (!firstCard || !nextCard) return;
     track.scrollTo({ left: nextCard.offsetLeft - firstCard.offsetLeft, behavior: "smooth" });
     setActiveMenuIndex(nextIndex);
+  }
+
+  if (card.type === "preset_collection") {
+    return <PresetCollectionCard card={card} onChooseMenu={onChooseMenu} />;
   }
 
   if (card.type === "category_recommendations") {
