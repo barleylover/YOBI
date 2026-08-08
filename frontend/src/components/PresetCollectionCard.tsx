@@ -4,22 +4,16 @@ import { useI18n } from "../lib/i18n";
 import { menuName } from "../lib/locale";
 import type { CardPayload, MenuSummary } from "../types";
 
-interface PresetEntry {
-  rank: number;
-  label: string;
-  description: string;
-  menu: MenuSummary;
-}
-
 interface Props {
-  card: CardPayload;
+  card: Extract<CardPayload, { type: "preset_collection" }>;
   onChooseMenu: (menu: MenuSummary) => void;
+  disabled?: boolean;
 }
 
-export function PresetCollectionCard({ card, onChooseMenu }: Props) {
+export function PresetCollectionCard({ card, onChooseMenu, disabled = false }: Props) {
   const { chatMenuCopy, copy, journeyCopy, language, locale } = useI18n();
-  const entries = (card.data.entries ?? []) as PresetEntry[];
-  const kind = card.data.kind as "weekly_ranking" | "kpop_demon_hunters";
+  const entries = card.data.entries ?? [];
+  const kind = card.data.kind;
   const trackRef = useRef<HTMLDivElement>(null);
   const [activeIndex, setActiveIndex] = useState(0);
 
@@ -67,7 +61,7 @@ export function PresetCollectionCard({ card, onChooseMenu }: Props) {
                 <span><Clock3 size={14} /> {new Intl.NumberFormat(locale, { style: "unit", unit: "minute", unitDisplay: "short" }).format(entry.menu.eta_min)}–{new Intl.NumberFormat(locale, { style: "unit", unit: "minute", unitDisplay: "short" }).format(entry.menu.eta_max)}</span>
                 <span>{copy.spice} {entry.menu.spice_level}/3</span>
               </div>
-              <button className="primary-button full" onClick={() => onChooseMenu(entry.menu)}>{copy.chooseMenu}</button>
+              <button className="primary-button full" onClick={() => onChooseMenu(entry.menu)} disabled={disabled}>{copy.chooseMenu}</button>
             </div>
           </article>
         ))}

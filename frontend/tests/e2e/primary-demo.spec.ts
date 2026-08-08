@@ -2,8 +2,14 @@ import { expect, test } from "@playwright/test";
 
 test("primary tourist order completes with evidence and no real charge", async ({ page }) => {
   const consoleErrors: string[] = [];
+  const conversationEvents: string[] = [];
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  page.on("request", (request) => {
+    if (request.method() !== "POST" || !request.url().endsWith("/events")) return;
+    const payload = request.postDataJSON() as { event_type?: string };
+    if (payload.event_type) conversationEvents.push(payload.event_type);
   });
   await page.goto("/");
   await expect(page.getByRole("heading", { name: /Hi, I’m YOBI/ })).toBeVisible();
@@ -18,7 +24,7 @@ test("primary tourist order completes with evidence and no real charge", async (
   await page.getByRole("button", { name: "Try the demo question" }).click();
   await expect(
     page
-      .getByRole("heading", { name: "Why I would avoid the classic version" })
+      .getByRole("heading", { name: "Why the classic version does not fit" })
       .or(page.getByRole("heading", { name: "Dietary evidence" }))
       .or(page.getByRole("heading", { name: "Grounded menu matches" }))
       .first(),
@@ -55,5 +61,7 @@ test("primary tourist order completes with evidence and no real charge", async (
   await expect(page).toHaveURL(/\/order\/YOBI-DEMO_/);
   await expect(page.getByRole("heading", { name: "Your first K-food order is in." })).toBeVisible();
   await expect(page.getByText(/no real restaurant or courier was contacted/i)).toBeVisible();
+  expect(conversationEvents[0]).toBe("SELECT_MENU");
+  expect(conversationEvents.filter((event) => event === "UPDATE_OPTIONS")).toHaveLength(4);
   expect(consoleErrors).toEqual([]);
 });

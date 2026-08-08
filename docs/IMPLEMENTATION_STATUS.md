@@ -1,6 +1,20 @@
 # YOBI MVP implementation status
 
-Last updated: 2026-08-08 KST
+Last updated: 2026-08-09 KST
+
+> Historical baseline notice (2026-08-09): this file records the public MVP/UI
+> releases that predate the chatbot-improvement migrations `005`–`008`. The current
+> worktree implementation and Phase status are tracked in
+> `CHATBOT_IMPROVEMENT_IMPLEMENTATION.md`; exact final test and new OCI/Public release
+> evidence belongs in `TEST_REPORT.md`. Do not use the release below as evidence that
+> the new multi-turn dialogue or menu knowledge graph is live.
+
+> Current local improvement checkpoint: Ruff and MyPy (58 files) passed; backend
+> Pytest passed 188 tests; legacy evaluation passed 100 queries; chatbot acceptance
+> passed 345 assertions; frontend lint, 10 Vitest tests and the 1,796-module build
+> passed; local Playwright passed 21 tests with 27 intentional viewport skips. These
+> results do not prove migrations 005–008 or the new release are deployed. New
+> Oracle/OCI/Public and Git/Draft PR evidence remains pending.
 
 ## Status
 

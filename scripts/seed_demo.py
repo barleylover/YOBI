@@ -6,7 +6,7 @@ import json
 import sys
 from array import array
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import oracledb
 
@@ -15,9 +15,22 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from app.core.config import Settings
 from app.db.seed_data import CATALOG_VERSION, build_seed
+from app.knowledge.authoring import (
+    CompiledKnowledgeRelease,
+    reembed_release,
+)
+from app.knowledge.catalog_seed import (
+    KNOWLEDGE_CATALOG_VERSION,
+    KNOWLEDGE_RELEASE_ID,
+    build_knowledge_catalog_seed,
+)
+from app.knowledge.oracle_store import load_oracle_release
 from app.rag.providers import choose_embedding_provider
 
-TABLE_ORDER = [
+TableKey = str | tuple[str, ...]
+EmbeddingProviderChoice = Literal["auto", "oci", "deterministic"]
+
+TABLE_ORDER: list[tuple[str, TableKey, str]] = [
     ("service_area", "service_area_id", "service_areas"),
     ("menu_category", "category_id", "menu_categories"),
     ("merchant", "merchant_id", "merchants"),
@@ -45,6 +58,25 @@ TABLE_ORDER = [
     ("address_place", "place_id", "hotels"),
 ]
 
+KNOWLEDGE_SUPPLEMENTAL_TABLES: list[tuple[str, TableKey, str]] = [
+    ("menu_concept_map", ("release_id", "menu_id"), "menu_concept_maps"),
+    (
+        "merchant_origin_declaration",
+        ("release_id", "declaration_id"),
+        "merchant_origin_declarations",
+    ),
+    (
+        "merchant_ingredient",
+        ("release_id", "merchant_id", "ingredient_id", "declaration_id"),
+        "merchant_ingredients",
+    ),
+    (
+        "option_ingredient_effect",
+        ("release_id", "option_item_id", "ingredient_id", "effect"),
+        "option_ingredient_effects",
+    ),
+]
+
 EXPECTED_COUNTS = {
     "merchants": 30,
     "menus": 150,
@@ -58,10 +90,10 @@ EXPECTED_COUNTS = {
     "menu_categories": 20,
     "dietary_attributes": 15,
     "menu_dietary_attributes": 317,
-    "allergens": 9,
+    "allergens": 10,
     "menu_allergens": 162,
-    "ingredients": 20,
-    "menu_ingredients": 150,
+    "ingredients": 47,
+    "menu_ingredients": 7,
     "option_dietary_conflicts": 1,
 }
 
@@ -70,6 +102,25 @@ MENU_RELATION_TABLES = {
     "menu_allergen",
     "menu_dietary_attribute",
 }
+
+
+class PreparedSeed:
+    def __init__(
+        self,
+        *,
+        seed: dict[str, list[dict[str, Any]]],
+        provider: Any,
+        menu_vectors: list[list[float]],
+        review_vectors: list[list[float]],
+        knowledge_vectors: list[list[float]],
+        compiled_knowledge: CompiledKnowledgeRelease,
+    ) -> None:
+        self.seed = seed
+        self.provider = provider
+        self.menu_vectors = menu_vectors
+        self.review_vectors = review_vectors
+        self.knowledge_vectors = knowledge_vectors
+        self.compiled_knowledge = compiled_knowledge
 
 
 def _merge(
@@ -87,14 +138,16 @@ def _merge(
         MERGE INTO {table} target
         USING (SELECT {source_columns} FROM dual) source
         ON ({match})
-        WHEN MATCHED THEN UPDATE SET {', '.join(f'target.{c} = :{c}' for c in updates)}
-        WHEN NOT MATCHED THEN INSERT ({', '.join(columns)})
-        VALUES ({', '.join(':' + c for c in columns)})
+        WHEN MATCHED THEN UPDATE SET {", ".join(f"target.{c} = :{c}" for c in updates)}
+        WHEN NOT MATCHED THEN INSERT ({", ".join(columns)})
+        VALUES ({", ".join(":" + c for c in columns)})
     """
     cursor.execute(sql, row)
 
 
-def _batch_embeddings(provider: Any, texts: list[str], mode: str, batch_size: int = 32) -> list[list[float]]:
+def _batch_embeddings(
+    provider: Any, texts: list[str], mode: str, batch_size: int = 32
+) -> list[list[float]]:
     vectors: list[list[float]] = []
     for start in range(0, len(texts), batch_size):
         vectors.extend(provider.embed(texts[start : start + batch_size], mode))
@@ -123,13 +176,101 @@ def verify(connection: oracledb.Connection) -> dict[str, Any]:
     cursor.execute(
         """
         SELECT COUNT(*) FROM menu_option_group g
-        WHERE g.required = 1 AND NOT EXISTS (
-          SELECT 1 FROM menu_option_item i
-          WHERE i.option_group_id = g.option_group_id AND i.availability = 'AVAILABLE'
-        )
+        WHERE g.min_select<0 OR g.max_select<g.min_select
+          OR (g.required=1 AND g.min_select<1)
+          OR (SELECT COUNT(*) FROM menu_option_item i
+              WHERE i.option_group_id=g.option_group_id
+                AND i.availability='AVAILABLE') < g.min_select
         """
     )
     missing_required = int(cursor.fetchone()[0])
+    cursor.execute(
+        """
+        SELECT release.release_id,release.catalog_version,release.manifest_sha256,
+               release.status,release.expected_counts_json,release.actual_counts_json,
+               release.embedding_model,
+               release.embedding_dimension,release.embedding_version
+        FROM knowledge_runtime_state state
+        JOIN knowledge_release release ON release.release_id=state.active_release_id
+        WHERE state.state_key='ACTIVE'
+        """
+    )
+    active_knowledge = cursor.fetchone()
+    knowledge_ready = bool(active_knowledge and active_knowledge[3] == "READY")
+    active_release_id = str(active_knowledge[0]) if active_knowledge else None
+    expected_counts = (
+        json.loads(
+            active_knowledge[4].read()
+            if hasattr(active_knowledge[4], "read")
+            else str(active_knowledge[4])
+        )
+        if active_knowledge
+        else {}
+    )
+    declared_actual_counts = (
+        json.loads(
+            active_knowledge[5].read()
+            if hasattr(active_knowledge[5], "read")
+            else str(active_knowledge[5])
+        )
+        if active_knowledge
+        else {}
+    )
+    knowledge_counts: dict[str, int] = {}
+    for key, table in (
+        ("concepts", "dish_concept"),
+        ("relations", "dish_relation"),
+        ("closure", "dish_concept_closure"),
+        ("claims", "concept_claim"),
+        ("documents", "knowledge_document"),
+        ("chunks", "knowledge_chunk"),
+        ("menu_mappings", "menu_concept_map"),
+        ("origin_declarations", "merchant_origin_declaration"),
+        ("merchant_ingredients", "merchant_ingredient"),
+        ("option_effects", "option_ingredient_effect"),
+    ):
+        cursor.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE release_id=:release_id",
+            release_id=active_release_id or "none",
+        )
+        knowledge_counts[key] = int(cursor.fetchone()[0])
+    cursor.execute(
+        """
+        SELECT COUNT(*) FROM knowledge_chunk
+        WHERE release_id=:release_id AND embedding_vector IS NULL
+        """,
+        release_id=active_release_id or "none",
+    )
+    null_knowledge_chunk_vectors = int(cursor.fetchone()[0])
+    cursor.execute(
+        """
+        SELECT COUNT(*) FROM knowledge_chunk
+        WHERE release_id=:release_id AND (
+          embedding_model<>:model OR embedding_dimension<>:dimension
+          OR embedding_version<>:version
+        )
+        """,
+        release_id=active_release_id or "none",
+        model=str(active_knowledge[6]) if active_knowledge else "none",
+        dimension=int(active_knowledge[7]) if active_knowledge else 1536,
+        version=str(active_knowledge[8]) if active_knowledge else "none",
+    )
+    incompatible_knowledge_chunk_metadata = int(cursor.fetchone()[0])
+    cursor.execute(
+        """
+        SELECT embedding_model,embedding_dimension,embedding_version,COUNT(*)
+        FROM menu GROUP BY embedding_model,embedding_dimension,embedding_version
+        """
+    )
+    menu_embedding_metadata = [
+        {
+            "model": str(row[0]) if row[0] is not None else None,
+            "dimension": int(row[1]) if row[1] is not None else None,
+            "version": str(row[2]) if row[2] is not None else None,
+            "count": int(row[3]),
+        }
+        for row in cursor.fetchall()
+    ]
     return {
         "catalog_version": CATALOG_VERSION,
         "counts": counts,
@@ -138,6 +279,19 @@ def verify(connection: oracledb.Connection) -> dict[str, Any]:
         "null_knowledge_vectors": null_knowledge_vectors,
         "canonical_ready": canonical,
         "required_groups_without_items": missing_required,
+        "knowledge_ready": knowledge_ready,
+        "knowledge_release_id": active_release_id,
+        "knowledge_catalog_version": str(active_knowledge[1]) if active_knowledge else None,
+        "knowledge_manifest_sha256": str(active_knowledge[2]) if active_knowledge else None,
+        "knowledge_expected_counts": expected_counts,
+        "knowledge_declared_actual_counts": declared_actual_counts,
+        "knowledge_embedding_model": str(active_knowledge[6]) if active_knowledge else None,
+        "knowledge_embedding_dimension": int(active_knowledge[7]) if active_knowledge else None,
+        "knowledge_embedding_version": str(active_knowledge[8]) if active_knowledge else None,
+        "knowledge_counts": knowledge_counts,
+        "null_knowledge_chunk_vectors": null_knowledge_chunk_vectors,
+        "incompatible_knowledge_chunk_metadata": incompatible_knowledge_chunk_metadata,
+        "menu_embedding_metadata": menu_embedding_metadata,
     }
 
 
@@ -154,6 +308,257 @@ def validate(result: dict[str, Any]) -> None:
         raise RuntimeError("SEED_CANONICAL_INTEGRITY_FAILED")
     if result.get("required_groups_without_items") != 0:
         raise RuntimeError("SEED_REQUIRED_OPTIONS_INTEGRITY_FAILED")
+    if result.get("knowledge_ready") is not True:
+        raise RuntimeError("SEED_KNOWLEDGE_RELEASE_NOT_READY")
+    if (
+        result.get("knowledge_release_id") != KNOWLEDGE_RELEASE_ID
+        or result.get("knowledge_catalog_version") != KNOWLEDGE_CATALOG_VERSION
+        or len(str(result.get("knowledge_manifest_sha256") or "")) != 64
+    ):
+        raise RuntimeError("SEED_KNOWLEDGE_RELEASE_IDENTITY_FAILED")
+    if result.get("knowledge_counts") != {
+        "concepts": 29,
+        "relations": 27,
+        "closure": 66,
+        "claims": 411,
+        "documents": 29,
+        "chunks": 261,
+        "menu_mappings": 150,
+        "origin_declarations": 30,
+        "merchant_ingredients": 266,
+        "option_effects": 4,
+    }:
+        raise RuntimeError("SEED_KNOWLEDGE_COUNT_INTEGRITY_FAILED")
+    observed_release_counts = {
+        key: result["knowledge_counts"][key]
+        for key in ("concepts", "relations", "closure", "claims", "documents", "chunks")
+    }
+    if not (
+        result.get("knowledge_expected_counts")
+        == result.get("knowledge_declared_actual_counts")
+        == observed_release_counts
+    ):
+        raise RuntimeError("SEED_KNOWLEDGE_DECLARED_COUNT_MISMATCH")
+    if result.get("null_knowledge_chunk_vectors") != 0:
+        raise RuntimeError("SEED_KNOWLEDGE_VECTOR_INTEGRITY_FAILED")
+    if result.get("incompatible_knowledge_chunk_metadata") != 0:
+        raise RuntimeError("SEED_KNOWLEDGE_EMBEDDING_COMPATIBILITY_FAILED")
+    if result.get("knowledge_embedding_dimension") != 1536:
+        raise RuntimeError("SEED_KNOWLEDGE_EMBEDDING_COMPATIBILITY_FAILED")
+
+
+def validate_runtime_embedding(result: dict[str, Any], provider: Any) -> None:
+    if (
+        result.get("knowledge_embedding_model") != provider.model
+        or result.get("knowledge_embedding_dimension") != provider.dimension
+        or result.get("knowledge_embedding_version") != provider.version
+    ):
+        raise RuntimeError("SEED_KNOWLEDGE_EMBEDDING_COMPATIBILITY_FAILED")
+    if result.get("menu_embedding_metadata") != [
+        {
+            "model": provider.model,
+            "dimension": provider.dimension,
+            "version": provider.version,
+            "count": EXPECTED_COUNTS["menus"],
+        }
+    ]:
+        raise RuntimeError("SEED_MENU_EMBEDDING_COMPATIBILITY_FAILED")
+
+
+def prepare_seed(settings: Settings, embedding_provider: EmbeddingProviderChoice) -> PreparedSeed:
+    """Build every deterministic row and external embedding before opening a DB transaction."""
+
+    seed = build_seed()
+    provider = choose_embedding_provider(settings, embedding_provider)
+    menu_vectors = _batch_embeddings(
+        provider,
+        [row["semantic_text"] for row in seed["menus"]],
+        "SEARCH_DOCUMENT",
+    )
+    review_vectors = _batch_embeddings(
+        provider,
+        [row["review_text"] for row in seed["reviews"]],
+        "SEARCH_DOCUMENT",
+    )
+    knowledge_vectors = _batch_embeddings(
+        provider,
+        [row["embedding_text"] for row in seed["knowledge"]],
+        "SEARCH_DOCUMENT",
+    )
+    catalog = build_knowledge_catalog_seed(seed["menus"])
+    chunk_vectors = _batch_embeddings(
+        provider,
+        [row["embedding_text"] for row in catalog.compiled_release.chunks],
+        "SEARCH_DOCUMENT",
+    )
+    for rows, vectors in (
+        (seed["menus"], menu_vectors),
+        (seed["reviews"], review_vectors),
+        (seed["knowledge"], knowledge_vectors),
+        (catalog.compiled_release.chunks, chunk_vectors),
+    ):
+        if len(rows) != len(vectors) or any(len(vector) != provider.dimension for vector in vectors):
+            raise RuntimeError("SEED_EMBEDDING_COUNT_OR_DIMENSION_MISMATCH")
+
+    compiled = reembed_release(
+        catalog.compiled_release,
+        chunk_vectors,
+        model=provider.model,
+        dimension=provider.dimension,
+        version=provider.version,
+    )
+    supplemental_release_ids = {
+        str(row["release_id"])
+        for _, _, seed_key in KNOWLEDGE_SUPPLEMENTAL_TABLES
+        for row in seed[seed_key]
+    }
+    if supplemental_release_ids != {compiled.release_id}:
+        raise RuntimeError("SEED_KNOWLEDGE_RELEASE_ID_MISMATCH")
+    return PreparedSeed(
+        seed=seed,
+        provider=provider,
+        menu_vectors=menu_vectors,
+        review_vectors=review_vectors,
+        knowledge_vectors=knowledge_vectors,
+        compiled_knowledge=compiled,
+    )
+
+
+def _apply_seed_transaction(
+    connection: oracledb.Connection,
+    prepared: PreparedSeed,
+    *,
+    fresh: bool,
+) -> dict[str, Any]:
+    """Apply base catalog, vectors, and knowledge release without committing."""
+
+    cursor = connection.cursor()
+    seed = prepared.seed
+    provider = prepared.provider
+    if fresh:
+        for table in (
+            "knowledge_runtime_state",
+            "merchant_ingredient",
+            "merchant_origin_declaration",
+            "option_ingredient_effect",
+            "menu_concept_map",
+            "knowledge_chunk",
+            "knowledge_document",
+            "concept_claim",
+            "dish_concept_closure",
+            "dish_relation",
+            "dish_concept",
+            "knowledge_release",
+        ):
+            cursor.execute(f"DELETE FROM {table}")
+        for table, _, _ in reversed(TABLE_ORDER):
+            cursor.execute(f"DELETE FROM {table}")
+
+    for table, key_column, seed_key in TABLE_ORDER:
+        if table in MENU_RELATION_TABLES:
+            cursor.executemany(
+                f"DELETE FROM {table} WHERE menu_id = :menu_id",
+                [{"menu_id": row["menu_id"]} for row in seed["menus"]],
+            )
+        for row in seed[seed_key]:
+            _merge(cursor, table, key_column, row)
+
+    for row, vector in zip(seed["menus"], prepared.menu_vectors):
+        cursor.execute(
+            """
+            UPDATE menu SET embedding_vector = :vector, embedding_model = :model,
+              embedding_dimension = :dimension, embedding_version = :version
+            WHERE menu_id = :menu_id
+            """,
+            vector=array("f", vector),
+            model=provider.model,
+            dimension=provider.dimension,
+            version=provider.version,
+            menu_id=row["menu_id"],
+        )
+    for row, vector in zip(seed["reviews"], prepared.review_vectors):
+        cursor.execute(
+            """
+            UPDATE review_snippet SET embedding_text = :text, embedding_vector = :vector,
+              embedding_model = :model, embedding_dimension = :dimension,
+              embedding_version = :version WHERE snippet_id = :snippet_id
+            """,
+            text=row["review_text"],
+            vector=array("f", vector),
+            model=provider.model,
+            dimension=provider.dimension,
+            version=provider.version,
+            snippet_id=row["snippet_id"],
+        )
+    for row, vector in zip(seed["knowledge"], prepared.knowledge_vectors):
+        cursor.execute(
+            """
+            UPDATE menu_knowledge SET embedding_vector = :vector, embedding_model = :model,
+              embedding_dimension = :dimension, embedding_version = :version
+            WHERE knowledge_id = :knowledge_id
+            """,
+            vector=array("f", vector),
+            model=provider.model,
+            dimension=provider.dimension,
+            version=provider.version,
+            knowledge_id=row["knowledge_id"],
+        )
+
+    load_oracle_release(connection, prepared.compiled_knowledge)
+    for table, key_column, seed_key in KNOWLEDGE_SUPPLEMENTAL_TABLES:
+        for row in seed[seed_key]:
+            _merge(cursor, table, key_column, row)
+    allowed_ingredient_binds = {
+        f"ingredient_{index}": row["ingredient_id"]
+        for index, row in enumerate(seed["ingredients"])
+    }
+    cursor.execute(
+        f"""
+        DELETE FROM ingredient ingredient
+        WHERE ingredient.ingredient_id NOT IN (
+          {",".join(":" + name for name in allowed_ingredient_binds)}
+        )
+          AND NOT EXISTS (
+            SELECT 1 FROM menu_ingredient fact
+            WHERE fact.ingredient_id=ingredient.ingredient_id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM concept_claim claim
+            WHERE claim.ingredient_id=ingredient.ingredient_id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM merchant_ingredient fact
+            WHERE fact.ingredient_id=ingredient.ingredient_id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM option_ingredient_effect effect
+            WHERE effect.ingredient_id=ingredient.ingredient_id
+          )
+        """,
+        allowed_ingredient_binds,
+    )
+    result = verify(connection)
+    result["embedding_provider"] = provider.model
+    validate(result)
+    validate_runtime_embedding(result, provider)
+    return result
+
+
+def apply_seed(
+    connection: oracledb.Connection,
+    prepared: PreparedSeed,
+    *,
+    fresh: bool,
+) -> dict[str, Any]:
+    """Commit exactly once after all seed writes and integrity checks, otherwise roll back."""
+
+    try:
+        result = _apply_seed_transaction(connection, prepared, fresh=fresh)
+        connection.commit()
+        return result
+    except BaseException:
+        connection.rollback()
+        raise
 
 
 def main() -> None:
@@ -171,86 +576,24 @@ def main() -> None:
     password = settings.db_password.get_secret_value()
     if not dsn or not password:
         raise SystemExit("ADB_DSN and DB_PASSWORD are required")
-    with oracledb.connect(user=settings.db_username, password=password, dsn=dsn) as connection:
-        if args.verify_only:
+
+    if args.verify_only:
+        with oracledb.connect(
+            user=settings.db_username,
+            password=password,
+            dsn=dsn,
+        ) as connection:
             result = verify(connection)
             validate(result)
-            print(json.dumps(result, ensure_ascii=False, indent=2))
-            return
-        cursor = connection.cursor()
-        if args.fresh:
-            for table, _, _ in reversed(TABLE_ORDER):
-                cursor.execute(f"DELETE FROM {table}")
-            connection.commit()
-
-        seed = build_seed()
-        for table, key_column, seed_key in TABLE_ORDER:
-            if table in MENU_RELATION_TABLES:
-                cursor.executemany(
-                    f"DELETE FROM {table} WHERE menu_id = :menu_id",
-                    [{"menu_id": row["menu_id"]} for row in seed["menus"]],
-                )
-            for row in seed[seed_key]:
-                _merge(cursor, table, key_column, row)
-            connection.commit()
-
-        provider = choose_embedding_provider(settings, args.embedding_provider)
-        menu_vectors = _batch_embeddings(
-            provider, [row["semantic_text"] for row in seed["menus"]], "SEARCH_DOCUMENT"
-        )
-        for row, vector in zip(seed["menus"], menu_vectors):
-            cursor.execute(
-                """
-                UPDATE menu SET embedding_vector = :vector, embedding_model = :model,
-                  embedding_dimension = :dimension, embedding_version = :version
-                WHERE menu_id = :menu_id
-                """,
-                vector=array("f", vector),
-                model=provider.model,
-                dimension=provider.dimension,
-                version=provider.version,
-                menu_id=row["menu_id"],
-            )
-        review_vectors = _batch_embeddings(
-            provider, [row["review_text"] for row in seed["reviews"]], "SEARCH_DOCUMENT"
-        )
-        for row, vector in zip(seed["reviews"], review_vectors):
-            cursor.execute(
-                """
-                UPDATE review_snippet SET embedding_text = :text, embedding_vector = :vector,
-                  embedding_model = :model, embedding_dimension = :dimension,
-                  embedding_version = :version WHERE snippet_id = :snippet_id
-                """,
-                text=row["review_text"],
-                vector=array("f", vector),
-                model=provider.model,
-                dimension=provider.dimension,
-                version=provider.version,
-                snippet_id=row["snippet_id"],
-            )
-        knowledge_vectors = _batch_embeddings(
-            provider,
-            [row["embedding_text"] for row in seed["knowledge"]],
-            "SEARCH_DOCUMENT",
-        )
-        for row, vector in zip(seed["knowledge"], knowledge_vectors):
-            cursor.execute(
-                """
-                UPDATE menu_knowledge SET embedding_vector = :vector, embedding_model = :model,
-                  embedding_dimension = :dimension, embedding_version = :version
-                WHERE knowledge_id = :knowledge_id
-                """,
-                vector=array("f", vector),
-                model=provider.model,
-                dimension=provider.dimension,
-                version=provider.version,
-                knowledge_id=row["knowledge_id"],
-            )
-        connection.commit()
-        result = verify(connection)
-        validate(result)
-        result["embedding_provider"] = provider.model
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        prepared = prepare_seed(settings, args.embedding_provider)
+        with oracledb.connect(
+            user=settings.db_username,
+            password=password,
+            dsn=dsn,
+        ) as connection:
+            result = apply_seed(connection, prepared, fresh=args.fresh)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

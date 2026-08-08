@@ -1,8 +1,12 @@
 import type {
   AddressCandidate,
   AssistantTurn,
+  CardPayload,
   CartPreview,
   Checkout,
+  ConversationEventInput,
+  ConversationEventResult,
+  ConversationView,
   OptionGroup,
   Profile,
   Session,
@@ -42,6 +46,13 @@ const ACTIONABLE_ERRORS: Record<string, string> = {
   IMAGE_EXTENSION_MISMATCH: "The file extension does not match the image type. Choose another image.",
   IMAGE_MAGIC_BYTE_INVALID: "That file is not a readable image. Choose another PNG, JPEG, or WebP file.",
   IMAGE_DECODE_FAILED: "That image could not be read. Try a clearer image or enter the address manually.",
+  CHAT_STREAM_FAILED: "I couldn’t reconnect to this chat. Please try sending your message again.",
+  CHAT_STREAM_INCOMPLETE: "The chat response was interrupted. Please try again.",
+  CHAT_STATE_VERSION_CONFLICT: "The conversation changed in another action. Review the latest response and try again.",
+  CHAT_REQUEST_ID_REUSED: "This retry key belongs to a different message. Refresh the conversation and send again.",
+  RECOMMENDATION_SNAPSHOT_NOT_FOUND: "That recommendation is no longer available. Ask YOBI for a fresh set of menus.",
+  MENU_NOT_IN_RECOMMENDATION_SNAPSHOT: "That menu is not part of the latest recommendation. Choose from the current cards.",
+  OPTIONS_REQUIRE_SELECTED_MENU: "Choose the menu again before changing its options.",
 };
 
 export function actionableError(cause: unknown, fallback: string) {
@@ -59,28 +70,34 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ profile_id: profileId }),
     }),
-  sendMessage: (sessionId: string, content: string) =>
+  sendMessage: (sessionId: string, content: string, requestId = `chat-${crypto.randomUUID()}`) =>
     request<AssistantTurn>(`/api/v1/sessions/${sessionId}/messages`, {
       method: "POST",
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, request_id: requestId }),
     }),
   streamMessage: async (
     sessionId: string,
     content: string,
-    handlers: { onText: (text: string) => void; onStatus: (text: string) => void },
+    handlers: {
+      onText: (text: string) => void;
+      onStatus: (text: string) => void;
+      onCard?: (card: CardPayload) => void;
+      onWarning?: (text: string) => void;
+    },
     intent?: "weekly_ranking" | "kpop_demon_hunters",
+    requestId = `chat-${crypto.randomUUID()}`,
   ) => {
     const response = await fetch(`/api/v1/sessions/${sessionId}/messages/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content, intent }),
+      body: JSON.stringify({ content, intent, request_id: requestId }),
     });
     if (!response.ok || !response.body) throw new Error("CHAT_STREAM_FAILED");
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     let finalTurn: AssistantTurn | null = null;
-    let providerError = false;
+    let providerErrorCode = "";
 
     function consumeFrame(frame: string) {
       const lines = frame.split(/\r?\n/);
@@ -95,8 +112,10 @@ export const api = {
       if (event === "status" || event === "tool_started" || event === "tool_completed") {
         handlers.onStatus(String(data.text ?? data.label ?? ""));
       }
+      if (event === "card") handlers.onCard?.(data as unknown as CardPayload);
+      if (event === "warning") handlers.onWarning?.(String(data.text ?? ""));
       if (event === "message_end") finalTurn = data as unknown as AssistantTurn;
-      if (event === "error") providerError = true;
+      if (event === "error") providerErrorCode = String(data.code ?? "CHAT_STREAM_INCOMPLETE");
     }
 
     while (true) {
@@ -108,9 +127,17 @@ export const api = {
       if (done) break;
     }
     if (buffer.trim()) consumeFrame(buffer);
-    if (providerError || !finalTurn) throw new Error("CHAT_STREAM_INCOMPLETE");
+    if (providerErrorCode) throw new Error(providerErrorCode);
+    if (!finalTurn) throw new Error("CHAT_STREAM_INCOMPLETE");
     return finalTurn as AssistantTurn;
   },
+  getConversation: (sessionId: string) =>
+    request<ConversationView>(`/api/v1/sessions/${sessionId}/conversation`),
+  postConversationEvent: (sessionId: string, event: ConversationEventInput) =>
+    request<ConversationEventResult>(`/api/v1/sessions/${sessionId}/events`, {
+      method: "POST",
+      body: JSON.stringify(event),
+    }),
   getMessages: (sessionId: string) =>
     request<Array<{ message_id: string; role: "user" | "assistant"; content: string }>>(
       `/api/v1/sessions/${sessionId}/messages`,
@@ -129,6 +156,7 @@ export const api = {
   ) =>
     request<CartPreview>(`/api/v1/sessions/${sessionId}/cart/items`, {
       method: "POST",
+      headers: { "Idempotency-Key": `cart-${crypto.randomUUID()}` },
       body: JSON.stringify({
         menu_id: menuId,
         quantity: 1,
@@ -206,11 +234,11 @@ export const api = {
     request<CartPreview>(`/api/v1/sessions/${sessionId}/cart/items/${cartItemId}`, {
       method: "DELETE",
     }),
-  createCheckout: (sessionId: string) =>
+  createCheckout: (sessionId: string, cartId: string, cartVersion: number) =>
     request<Checkout>(`/api/v1/sessions/${sessionId}/checkout`, {
       method: "POST",
       body: JSON.stringify({
-        idempotency_key: `checkout-${sessionId}`,
+        idempotency_key: `checkout-${cartId}-${cartVersion}`,
         payment_method: "international_card",
       }),
     }),

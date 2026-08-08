@@ -1,0 +1,378 @@
+{
+  "schema_version": 1,
+  "suite": "yobi-chatbot-multiturn-acceptance",
+  "transcripts": [
+    {
+      "id": "greeting_and_unknown_need_discovery",
+      "covers": ["greeting_no_cards", "unknown"],
+      "profile": {
+        "dietary_rules": [],
+        "allergy_severity": "mild",
+        "spice_tolerance": 3
+      },
+      "steps": [
+        {
+          "kind": "message",
+          "input": "hi",
+          "expect": {
+            "dialogue_act": "GREET",
+            "readiness": "NOT_READY",
+            "card_count": 0,
+            "snapshot": "absent",
+            "state": {
+              "equals": {
+                "turn_count": 1,
+                "recommendation_hold": false
+              }
+            }
+          }
+        },
+        {
+          "kind": "message",
+          "input": "I don't know yet",
+          "expect": {
+            "dialogue_act": "COLLECT_NEEDS",
+            "readiness": "NOT_READY",
+            "card_count": 0,
+            "snapshot": "absent",
+            "state": {
+              "equals": {
+                "turn_count": 2
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "hold_and_negative_constraints_persist",
+      "covers": [
+        "hold",
+        "no_soup_persistence",
+        "no_pork_persistence",
+        "explicit_recommendation",
+        "budget",
+        "spice"
+      ],
+      "profile": {
+        "dietary_rules": [],
+        "allergy_severity": "mild",
+        "spice_tolerance": 3
+      },
+      "steps": [
+        {
+          "kind": "message",
+          "input": "No soup and no pork. Ask me questions first.",
+          "expect": {
+            "dialogue_act": "HOLD_RECOMMENDATION",
+            "readiness": "HELD",
+            "card_count": 0,
+            "snapshot": "absent",
+            "state": {
+              "equals": {
+                "recommendation_hold": true
+              },
+              "contains": {
+                "excluded_categories": ["soup"],
+                "excluded_ingredients": ["pork"]
+              }
+            }
+          }
+        },
+        {
+          "kind": "message",
+          "input": "I would like something warm, savory and chewy.",
+          "expect": {
+            "dialogue_act": "HOLD_RECOMMENDATION",
+            "readiness": "HELD",
+            "card_count": 0,
+            "snapshot": "absent",
+            "state": {
+              "equals": {
+                "recommendation_hold": true
+              },
+              "contains": {
+                "temperature_preferences": ["warm"],
+                "texture_preferences": ["chewy"],
+                "flavor_preferences": ["savory"],
+                "excluded_categories": ["soup"],
+                "excluded_ingredients": ["pork"]
+              }
+            }
+          }
+        },
+        {
+          "kind": "message",
+          "input": "Recommend something mild under 12,000 won now.",
+          "expect": {
+            "dialogue_act": "RECOMMEND",
+            "readiness": "EXPLICIT_REQUEST",
+            "card_types": ["menu_recommendations"],
+            "snapshot": "present",
+            "state": {
+              "equals": {
+                "recommendation_hold": false,
+                "budget_krw": 12000,
+                "max_spiciness": 1
+              },
+              "contains": {
+                "excluded_categories": ["soup"],
+                "excluded_ingredients": ["pork"]
+              }
+            },
+            "menus": {
+              "minimum_count": 1,
+              "maximum_price": 12000,
+              "maximum_spiciness": 1,
+              "forbidden_category_groups": ["soup"],
+              "all_synthetic": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "constraint_correction_keeps_unrelated_need",
+      "covers": ["hold", "correction", "no_pork_persistence"],
+      "profile": {
+        "dietary_rules": [],
+        "allergy_severity": "mild",
+        "spice_tolerance": 2
+      },
+      "steps": [
+        {
+          "kind": "message",
+          "input": "No soup and no pork. Ask me questions first.",
+          "expect": {
+            "dialogue_act": "HOLD_RECOMMENDATION",
+            "readiness": "HELD",
+            "card_count": 0,
+            "state": {
+              "contains": {
+                "excluded_categories": ["soup"],
+                "excluded_ingredients": ["pork"]
+              }
+            }
+          }
+        },
+        {
+          "kind": "message",
+          "input": "Actually soup is okay, but still no pork.",
+          "expect": {
+            "dialogue_act": "HOLD_RECOMMENDATION",
+            "readiness": "HELD",
+            "card_count": 0,
+            "snapshot": "absent",
+            "state": {
+              "contains": {
+                "preferred_categories": ["soup"],
+                "excluded_ingredients": ["pork"]
+              },
+              "excludes": {
+                "excluded_categories": ["soup"]
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "readiness_requires_accumulated_context",
+      "covers": ["readiness"],
+      "profile": {
+        "dietary_rules": [],
+        "allergy_severity": "mild",
+        "spice_tolerance": 3
+      },
+      "steps": [
+        {
+          "kind": "message",
+          "input": "I want something warm.",
+          "expect": {
+            "dialogue_act": "COLLECT_NEEDS",
+            "readiness": "NOT_READY",
+            "card_count": 0,
+            "snapshot": "absent"
+          }
+        },
+        {
+          "kind": "message",
+          "input": "Savory and chewy, please.",
+          "expect": {
+            "dialogue_act": "RECOMMEND",
+            "readiness": "READY",
+            "card_types": ["menu_recommendations"],
+            "snapshot": "present",
+            "state": {
+              "contains": {
+                "temperature_preferences": ["warm"],
+                "texture_preferences": ["chewy"],
+                "flavor_preferences": ["savory"]
+              }
+            },
+            "menus": {
+              "minimum_count": 1,
+              "all_synthetic": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "explicit_request_can_recommend_immediately",
+      "covers": ["explicit_recommendation", "budget", "spice"],
+      "profile": {
+        "dietary_rules": [],
+        "allergy_severity": "mild",
+        "spice_tolerance": 3
+      },
+      "steps": [
+        {
+          "kind": "message",
+          "input": "Recommend a mild meal under 15,000 won.",
+          "expect": {
+            "dialogue_act": "RECOMMEND",
+            "readiness": "EXPLICIT_REQUEST",
+            "card_types": ["menu_recommendations"],
+            "snapshot": "present",
+            "state": {
+              "equals": {
+                "budget_krw": 15000,
+                "max_spiciness": 1
+              }
+            },
+            "menus": {
+              "minimum_count": 2,
+              "maximum_price": 15000,
+              "maximum_spiciness": 1,
+              "all_synthetic": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "second_menu_uses_latest_snapshot",
+      "covers": ["explicit_recommendation", "second_menu_snapshot"],
+      "profile": {
+        "dietary_rules": [],
+        "allergy_severity": "mild",
+        "spice_tolerance": 3
+      },
+      "steps": [
+        {
+          "kind": "message",
+          "input": "Recommend a mild meal under 15,000 won.",
+          "expect": {
+            "dialogue_act": "RECOMMEND",
+            "readiness": "EXPLICIT_REQUEST",
+            "card_types": ["menu_recommendations"],
+            "snapshot": "present",
+            "menus": {
+              "minimum_count": 2,
+              "maximum_price": 15000,
+              "maximum_spiciness": 1
+            }
+          }
+        },
+        {
+          "kind": "message",
+          "input": "Tell me about the second menu.",
+          "expect": {
+            "dialogue_act": "EXPLAIN",
+            "card_types": ["menu_explanation"],
+            "snapshot": "absent",
+            "reference": {
+              "candidate_position": 2
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "snapshot_rejection_and_selection",
+      "covers": ["explicit_recommendation", "rejection", "selection"],
+      "profile": {
+        "dietary_rules": [],
+        "allergy_severity": "mild",
+        "spice_tolerance": 3
+      },
+      "steps": [
+        {
+          "kind": "message",
+          "input": "Recommend a mild meal under 15,000 won.",
+          "expect": {
+            "dialogue_act": "RECOMMEND",
+            "readiness": "EXPLICIT_REQUEST",
+            "card_types": ["menu_recommendations"],
+            "snapshot": "present",
+            "menus": {
+              "minimum_count": 2,
+              "maximum_price": 15000,
+              "maximum_spiciness": 1
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "event_type": "REJECT_MENU",
+          "candidate_position": 1,
+          "expect": {
+            "dialogue_act": "REJECT",
+            "candidate_in_state": "rejected_menu_ids",
+            "selected_candidate": false
+          }
+        },
+        {
+          "kind": "message",
+          "input": "Show me another mild meal under 15,000 won.",
+          "expect": {
+            "dialogue_act": "RECOMMEND",
+            "readiness": "EXPLICIT_REQUEST",
+            "card_types": ["menu_recommendations"],
+            "snapshot": "present",
+            "menus": {
+              "minimum_count": 1,
+              "maximum_price": 15000,
+              "maximum_spiciness": 1,
+              "exclude_rejected": true
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "event_type": "SELECT_MENU",
+          "candidate_position": 1,
+          "repeat_once": true,
+          "expect": {
+            "dialogue_act": "SELECT",
+            "candidate_in_state": "selected_menu_id",
+            "selected_candidate": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "severe_allergy_unknown_is_not_reassured",
+      "covers": ["explicit_recommendation", "unsafe_reassurance"],
+      "profile": {
+        "dietary_rules": ["shellfish_allergy"],
+        "allergy_severity": "severe",
+        "spice_tolerance": 1
+      },
+      "steps": [
+        {
+          "kind": "message",
+          "input": "I'm vegan and I have a severe shellfish allergy. What could work?",
+          "expect": {
+            "dialogue_act": "RECOMMEND",
+            "readiness": "EXPLICIT_REQUEST",
+            "card_types": ["category_recommendations"],
+            "snapshot": "absent",
+            "text_contains_all": ["not verify", "cross-contamination"]
+          }
+        }
+      ]
+    }
+  ]
+}

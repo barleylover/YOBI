@@ -36,12 +36,20 @@ test("onboarding remains accessible at every required viewport", async ({ page }
   await expect(page.getByRole("img", { name: /QR code for/ })).toBeVisible();
   await expect(page.getByRole("link", { name: "Download presentation SVG" })).toBeVisible();
   await page.goto("/demo/control");
+  const statusResponsePromise = page.waitForResponse((response) => (
+    response.request().method() === "GET" && response.url().endsWith("/api/v1/demo/status")
+  ));
   await page.getByRole("button", { name: "Load safe status" }).click();
+  const statusResponse = await statusResponsePromise;
   if (expectsProtectedControl) {
     await expect(page.getByRole("status")).toHaveText(/Status is protected/);
   } else {
-    await expect(page.getByText("demo-2026.08.08-chat-menu-v1")).toBeVisible();
-    await expect(page.getByText("2026-08-08", { exact: true })).toBeVisible();
+    expect(statusResponse.ok()).toBe(true);
+    const status = await statusResponse.json() as {
+      database: { catalog_version?: unknown; last_seed_time?: unknown };
+    };
+    await expect(page.getByText(String(status.database.catalog_version), { exact: true })).toBeVisible();
+    await expect(page.getByText(String(status.database.last_seed_time), { exact: true })).toBeVisible();
   }
 });
 

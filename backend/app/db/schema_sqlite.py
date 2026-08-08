@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS chat_session (
   selected_merchant_id TEXT,
   state_stack_json TEXT NOT NULL DEFAULT '[]',
   required_slots_json TEXT NOT NULL DEFAULT '[]',
+  meal_need_state_json TEXT NOT NULL DEFAULT '{}',
+  dialogue_act TEXT NOT NULL DEFAULT 'COLLECT_NEEDS',
+  state_version INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -37,6 +40,30 @@ CREATE TABLE IF NOT EXISTS chat_message (
   message_type TEXT NOT NULL,
   safe_metadata_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS recommendation_snapshot (
+  snapshot_id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES chat_session(session_id) ON DELETE CASCADE,
+  assistant_message_id TEXT NOT NULL REFERENCES chat_message(message_id) ON DELETE CASCADE,
+  state_version INTEGER NOT NULL,
+  meal_need_state_json TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  cards_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS conversation_event (
+  event_id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES chat_session(session_id) ON DELETE CASCADE,
+  snapshot_id TEXT REFERENCES recommendation_snapshot(snapshot_id) ON DELETE SET NULL,
+  event_type TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  resulting_state_version INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(session_id, idempotency_key)
 );
 
 CREATE TABLE IF NOT EXISTS merchant (
@@ -133,6 +160,7 @@ CREATE TABLE IF NOT EXISTS address_place (
   city TEXT NOT NULL,
   delivery_hint TEXT NOT NULL,
   fixture_sha256 TEXT,
+  service_area_id TEXT REFERENCES service_area(service_area_id),
   is_synthetic INTEGER NOT NULL DEFAULT 1
 );
 
@@ -145,6 +173,7 @@ CREATE TABLE IF NOT EXISTS address_ref (
   hotel_name TEXT NOT NULL,
   road_address TEXT NOT NULL,
   extraction_confidence REAL NOT NULL,
+  service_area_id TEXT REFERENCES service_area(service_area_id),
   confirmed INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
@@ -169,6 +198,7 @@ CREATE TABLE IF NOT EXISTS cart_item (
   unit_price INTEGER NOT NULL,
   menu_snapshot_json TEXT NOT NULL,
   option_snapshot_json TEXT NOT NULL,
+  agent_request_key TEXT UNIQUE,
   line_total INTEGER NOT NULL,
   user_note TEXT NOT NULL DEFAULT '',
   korean_note TEXT NOT NULL DEFAULT '',
@@ -194,9 +224,14 @@ CREATE TABLE IF NOT EXISTS mock_checkout (
   status TEXT NOT NULL,
   amount INTEGER NOT NULL,
   payment_url TEXT NOT NULL,
+  cart_version INTEGER,
+  cart_fingerprint TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_checkout_cart_version
+ON mock_checkout(cart_id, cart_version);
 
 CREATE TABLE IF NOT EXISTS mock_order (
   order_id TEXT PRIMARY KEY,
@@ -285,6 +320,196 @@ CREATE TABLE IF NOT EXISTS menu_dietary_attribute (
 CREATE TABLE IF NOT EXISTS option_dietary_conflict (
   option_item_id TEXT NOT NULL REFERENCES menu_option_item(option_item_id), rule_code TEXT NOT NULL,
   conflict_status TEXT NOT NULL, evidence_id TEXT, PRIMARY KEY(option_item_id, rule_code)
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_release (
+  release_id TEXT PRIMARY KEY,
+  catalog_version TEXT NOT NULL,
+  manifest_sha256 TEXT NOT NULL,
+  embedding_model TEXT NOT NULL,
+  embedding_dimension INTEGER NOT NULL CHECK (embedding_dimension = 1536),
+  embedding_version TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('LOADING','READY','FAILED','RETIRED')),
+  expected_counts_json TEXT NOT NULL,
+  actual_counts_json TEXT NOT NULL,
+  is_synthetic INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS dish_concept (
+  release_id TEXT NOT NULL REFERENCES knowledge_release(release_id),
+  concept_id TEXT NOT NULL,
+  concept_type TEXT NOT NULL CHECK (concept_type IN ('CUISINE','FAMILY','VARIANT')),
+  canonical_name_ko TEXT NOT NULL,
+  canonical_name_en TEXT NOT NULL,
+  aliases_json TEXT NOT NULL DEFAULT '[]',
+  source_type TEXT NOT NULL,
+  source_ref TEXT NOT NULL,
+  review_status TEXT NOT NULL,
+  is_synthetic INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(release_id, concept_id)
+);
+
+CREATE TABLE IF NOT EXISTS dish_relation (
+  release_id TEXT NOT NULL,
+  relation_id TEXT NOT NULL,
+  source_concept_id TEXT NOT NULL,
+  target_concept_id TEXT NOT NULL,
+  relation_type TEXT NOT NULL CHECK (relation_type IN ('IS_A','VARIANT_OF','SIMILAR_TO')),
+  inherit_claims INTEGER NOT NULL DEFAULT 1,
+  source_ref TEXT NOT NULL,
+  is_synthetic INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(release_id, relation_id),
+  FOREIGN KEY(release_id, source_concept_id) REFERENCES dish_concept(release_id, concept_id),
+  FOREIGN KEY(release_id, target_concept_id) REFERENCES dish_concept(release_id, concept_id)
+);
+
+CREATE TABLE IF NOT EXISTS dish_concept_closure (
+  release_id TEXT NOT NULL,
+  descendant_concept_id TEXT NOT NULL,
+  ancestor_concept_id TEXT NOT NULL,
+  depth INTEGER NOT NULL CHECK (depth >= 0),
+  inherit_claims INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY(release_id, descendant_concept_id, ancestor_concept_id),
+  FOREIGN KEY(release_id, descendant_concept_id) REFERENCES dish_concept(release_id, concept_id),
+  FOREIGN KEY(release_id, ancestor_concept_id) REFERENCES dish_concept(release_id, concept_id)
+);
+
+CREATE TABLE IF NOT EXISTS concept_claim (
+  release_id TEXT NOT NULL,
+  claim_id TEXT NOT NULL,
+  concept_id TEXT NOT NULL,
+  claim_type TEXT NOT NULL CHECK (claim_type IN ('INGREDIENT','ALLERGEN','DIETARY','FACET','PREPARATION')),
+  ingredient_id TEXT REFERENCES ingredient(ingredient_id),
+  allergen_id TEXT REFERENCES allergen(allergen_id),
+  attribute_id TEXT REFERENCES dietary_attribute(attribute_id),
+  facet_key TEXT,
+  value_text TEXT,
+  ingredient_role TEXT,
+  assertion_status TEXT NOT NULL,
+  inheritance_mode TEXT NOT NULL DEFAULT 'INHERIT',
+  source_ref TEXT NOT NULL,
+  review_status TEXT NOT NULL,
+  is_synthetic INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(release_id, claim_id),
+  FOREIGN KEY(release_id, concept_id) REFERENCES dish_concept(release_id, concept_id)
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_document (
+  release_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  concept_id TEXT NOT NULL,
+  language TEXT NOT NULL,
+  title TEXT NOT NULL,
+  source_path TEXT NOT NULL,
+  front_matter_json TEXT NOT NULL,
+  content_markdown TEXT NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  source_type TEXT NOT NULL,
+  source_ref TEXT NOT NULL,
+  license_state TEXT NOT NULL,
+  review_status TEXT NOT NULL,
+  is_synthetic INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(release_id, document_id),
+  FOREIGN KEY(release_id, concept_id) REFERENCES dish_concept(release_id, concept_id),
+  UNIQUE(release_id, source_path)
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_chunk (
+  release_id TEXT NOT NULL,
+  chunk_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  concept_id TEXT NOT NULL,
+  language TEXT NOT NULL,
+  facet TEXT NOT NULL,
+  chunk_index INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  embedding_text TEXT NOT NULL,
+  embedding_vector_json TEXT,
+  embedding_model TEXT NOT NULL,
+  embedding_dimension INTEGER NOT NULL CHECK (embedding_dimension = 1536),
+  embedding_version TEXT NOT NULL,
+  is_synthetic INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(release_id, chunk_id),
+  FOREIGN KEY(release_id, document_id) REFERENCES knowledge_document(release_id, document_id),
+  FOREIGN KEY(release_id, concept_id) REFERENCES dish_concept(release_id, concept_id),
+  UNIQUE(release_id, document_id, chunk_index)
+);
+
+CREATE TABLE IF NOT EXISTS menu_concept_map (
+  release_id TEXT NOT NULL REFERENCES knowledge_release(release_id),
+  menu_id TEXT NOT NULL REFERENCES menu(menu_id),
+  concept_id TEXT,
+  mapping_status TEXT NOT NULL CHECK (mapping_status IN ('MAPPED','UNMAPPED')),
+  mapping_type TEXT NOT NULL CHECK (mapping_type IN ('EXACT','VARIANT','FAMILY','UNMAPPED')),
+  unmapped_reason TEXT,
+  confidence_band TEXT NOT NULL,
+  source_type TEXT NOT NULL,
+  source_ref TEXT NOT NULL,
+  review_status TEXT NOT NULL,
+  is_synthetic INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(release_id, menu_id),
+  FOREIGN KEY(release_id, concept_id) REFERENCES dish_concept(release_id, concept_id)
+);
+
+CREATE TABLE IF NOT EXISTS merchant_origin_declaration (
+  release_id TEXT NOT NULL REFERENCES knowledge_release(release_id),
+  declaration_id TEXT NOT NULL,
+  merchant_id TEXT NOT NULL REFERENCES merchant(merchant_id),
+  language TEXT NOT NULL,
+  raw_text TEXT NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  source_type TEXT NOT NULL,
+  source_ref TEXT NOT NULL,
+  source_version TEXT NOT NULL,
+  review_status TEXT NOT NULL,
+  is_synthetic INTEGER NOT NULL DEFAULT 1,
+  valid_from TEXT,
+  valid_to TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(release_id, declaration_id)
+);
+
+CREATE TABLE IF NOT EXISTS merchant_ingredient (
+  release_id TEXT NOT NULL,
+  merchant_id TEXT NOT NULL REFERENCES merchant(merchant_id),
+  ingredient_id TEXT NOT NULL REFERENCES ingredient(ingredient_id),
+  declaration_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  origin_text TEXT,
+  source_ref TEXT NOT NULL,
+  is_synthetic INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(release_id, merchant_id, ingredient_id, declaration_id),
+  FOREIGN KEY(release_id, declaration_id)
+    REFERENCES merchant_origin_declaration(release_id, declaration_id)
+);
+
+CREATE TABLE IF NOT EXISTS option_ingredient_effect (
+  release_id TEXT NOT NULL REFERENCES knowledge_release(release_id),
+  option_item_id TEXT NOT NULL REFERENCES menu_option_item(option_item_id),
+  ingredient_id TEXT NOT NULL REFERENCES ingredient(ingredient_id),
+  effect TEXT NOT NULL CHECK (effect IN ('ADD','REMOVE')),
+  assertion_status TEXT NOT NULL,
+  source_ref TEXT NOT NULL,
+  is_synthetic INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(release_id, option_item_id, ingredient_id, effect)
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_runtime_state (
+  state_key TEXT PRIMARY KEY CHECK (state_key = 'ACTIVE'),
+  active_release_id TEXT NOT NULL REFERENCES knowledge_release(release_id),
+  updated_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_menu_category ON menu(category, availability, price);

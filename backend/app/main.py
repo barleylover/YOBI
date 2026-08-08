@@ -20,6 +20,7 @@ from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging, log_event, safe_session_hash
 from app.db.repository import YobiRepository
 from app.dependencies import get_chat_service, get_demo_control, get_repository
+from app.domain.dialogue import ConversationEventInput, ConversationEventResult, ConversationView
 from app.domain.models import (
     AddressCandidate,
     CartItemInput,
@@ -155,7 +156,9 @@ def _demo_authorized(
     current_settings: Settings = Depends(get_settings),
 ) -> None:
     expected = current_settings.demo_control_token.get_secret_value()
-    if current_settings.app_env == "production" and (not expected or x_demo_control_token != expected):
+    if current_settings.app_env == "production" and (
+        not expected or x_demo_control_token != expected
+    ):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={"code": "FORBIDDEN"})
 
 
@@ -173,6 +176,11 @@ def readyz(repository: YobiRepository = Depends(get_repository)) -> dict[str, An
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "DB_NOT_READY"},
         ) from exc
+    if db.get("canonical_ready") is not True or db.get("knowledge_ready") is not True:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "CATALOG_NOT_READY"},
+        )
     return {"status": "ready", "database": db, "genai_required": False}
 
 
@@ -267,7 +275,29 @@ def post_message(
     chat_service: ChatService = Depends(get_chat_service),
 ) -> dict[str, Any]:
     session, profile = _resolve_session_profile(repository, session_id)
-    return chat_service.respond(session, profile, data.content, data.intent).model_dump(mode="json")
+    try:
+        turn = chat_service.respond(
+            session,
+            profile,
+            data.content,
+            data.intent,
+            request_id=data.request_id,
+        )
+    except RuntimeError as exc:
+        if str(exc) == "CHAT_STATE_VERSION_CONFLICT":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "CHAT_STATE_VERSION_CONFLICT"},
+            ) from exc
+        raise
+    except ValueError as exc:
+        if str(exc) == "CHAT_REQUEST_ID_REUSED":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "CHAT_REQUEST_ID_REUSED"},
+            ) from exc
+        raise
+    return turn.model_dump(mode="json")
 
 
 @app.post("/api/v1/sessions/{session_id}/messages/stream")
@@ -281,16 +311,29 @@ def stream_message(
 
     def events() -> Any:
         yield "event: message_start\ndata: {}\n\n"
-        yield "event: status\ndata: {\"text\":\"Checking menu details…\"}\n\n"
-        yield "event: tool_started\ndata: {\"label\":\"Reviewing grounded demo data…\"}\n\n"
         try:
-            turn = chat_service.respond(session, profile, data.content, data.intent)
-        except Exception:
-            yield "event: error\ndata: {\"code\":\"CHAT_RESPONSE_FAILED\"}\n\n"
+            turn = chat_service.respond(
+                session,
+                profile,
+                data.content,
+                data.intent,
+                request_id=data.request_id,
+            )
+        except Exception as exc:
+            code = str(exc) if str(exc) in {
+                "CHAT_STATE_VERSION_CONFLICT",
+                "CHAT_REQUEST_ID_REUSED",
+            } else "CHAT_RESPONSE_FAILED"
+            yield f"event: error\ndata: {json.dumps({'code': code})}\n\n"
             return
-        yield "event: tool_completed\ndata: {\"label\":\"Grounded check complete\"}\n\n"
+        if turn.cards:
+            yield 'event: status\ndata: {"text":"Checking menu details…"}\n\n'
+            yield 'event: tool_started\ndata: {"label":"Reviewing grounded demo data…"}\n\n'
+            yield 'event: tool_completed\ndata: {"label":"Grounded check complete"}\n\n'
+        else:
+            yield 'event: status\ndata: {"text":"Understanding your meal needs…"}\n\n'
         if turn.fallback_used:
-            yield "event: warning\ndata: {\"text\":\"Demo continuity mode is active.\"}\n\n"
+            yield 'event: warning\ndata: {"text":"Demo continuity mode is active."}\n\n'
         for start in range(0, len(turn.text), 80):
             chunk = turn.text[start : start + 80]
             yield f"event: text_delta\ndata: {json.dumps({'text': chunk})}\n\n"
@@ -314,6 +357,53 @@ def list_messages(
     return repository.list_messages(session_id)
 
 
+@app.get("/api/v1/sessions/{session_id}/conversation", response_model=ConversationView)
+def get_conversation(
+    session_id: str, repository: YobiRepository = Depends(get_repository)
+) -> ConversationView:
+    session = repository.get_session(session_id)
+    if session is None:
+        raise _not_found("SESSION_NOT_FOUND")
+    return ConversationView(
+        session_id=session.session_id,
+        state_version=session.state_version,
+        meal_need_state=session.meal_need_state,
+        messages=repository.list_messages(session_id),
+        latest_snapshot=repository.get_recommendation_snapshot(session_id),
+    )
+
+
+@app.post(
+    "/api/v1/sessions/{session_id}/events",
+    response_model=ConversationEventResult,
+)
+def post_conversation_event(
+    session_id: str,
+    event: ConversationEventInput,
+    repository: YobiRepository = Depends(get_repository),
+    chat_service: ChatService = Depends(get_chat_service),
+) -> ConversationEventResult:
+    if repository.get_session(session_id) is None:
+        raise _not_found("SESSION_NOT_FOUND")
+    try:
+        with chat_service.session_guard(session_id):
+            return repository.apply_conversation_event(session_id, event)
+    except KeyError as exc:
+        raise _not_found(str(exc).strip("'")) from exc
+    except RuntimeError as exc:
+        if str(exc) == "CHAT_STATE_VERSION_CONFLICT":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "CHAT_STATE_VERSION_CONFLICT"},
+            ) from exc
+        raise
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": str(exc)},
+        ) from exc
+
+
 @app.get("/api/v1/menus/{menu_id}/options")
 def get_menu_options(
     menu_id: str, repository: YobiRepository = Depends(get_repository)
@@ -335,14 +425,18 @@ def list_merchant_menus(
     exclude: str = "",
     repository: YobiRepository = Depends(get_repository),
 ) -> list[dict[str, Any]]:
-    _, profile = _resolve_session_profile(repository, session_id)
+    session, profile = _resolve_session_profile(repository, session_id)
     excluded_menu_ids = [value for value in exclude.split(",") if value]
     return [
         menu.model_dump(mode="json")
-        for menu in repository.list_merchant_menus(
-            merchant_id, profile, excluded_menu_ids, limit=12
+        for menu in repository.recommend_menus(
+            "available menus from this restaurant",
+            profile,
+            session.meal_need_state,
+            limit=150,
         )
-    ]
+        if menu.merchant_id == merchant_id and menu.menu_id not in excluded_menu_ids
+    ][:12]
 
 
 def _validate_image(
@@ -422,9 +516,7 @@ async def upload_address(
     parsed_text = ocr.parse_booking_fields(extracted_text)
     if not parsed_text:
         parsed_text = (
-            "YOBI Myeongdong Hotel"
-            if "yobi" in filename and "booking" in filename
-            else filename
+            "YOBI Myeongdong Hotel" if "yobi" in filename and "booking" in filename else filename
         )
     candidates = ocr.resolve_place_candidates(repository, parsed_text, digest)
     if extracted_text:
@@ -546,12 +638,18 @@ def get_cart(session_id: str, repository: YobiRepository = Depends(get_repositor
 def add_cart_item(
     session_id: str,
     data: CartItemInput,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     repository: YobiRepository = Depends(get_repository),
 ) -> CartPreview:
     if not repository.get_session(session_id):
         raise _not_found("SESSION_NOT_FOUND")
+    if idempotency_key is not None and not 8 <= len(idempotency_key) <= 100:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "INVALID_IDEMPOTENCY_KEY"},
+        )
     try:
-        return repository.add_cart_item(session_id, data)
+        return repository.add_cart_item(session_id, data, idempotency_key)
     except KeyError as exc:
         raise _not_found("MENU_NOT_FOUND") from exc
     except ValueError as exc:

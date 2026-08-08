@@ -1,5 +1,73 @@
 export type EvidenceStatus = "VERIFIED" | "RISK_SIGNAL" | "UNKNOWN" | "CONFLICTING";
 
+export type DialogueAct =
+  | "GREET"
+  | "COLLECT_NEEDS"
+  | "HOLD_RECOMMENDATION"
+  | "CONFIRM_NEEDS"
+  | "REQUEST_RECOMMENDATION"
+  | "RECOMMEND"
+  | "REQUEST_EXPLANATION"
+  | "EXPLAIN"
+  | "COMPARE"
+  | "REVISE"
+  | "REJECT"
+  | "SELECT"
+  | "ORDER_ACTION"
+  | "OUT_OF_SCOPE"
+  | "ERROR_RECOVERY";
+
+export type RecommendationReadiness = "NOT_READY" | "READY" | "EXPLICIT_REQUEST" | "HELD";
+
+export type FallbackReason =
+  | "RATE_LIMIT"
+  | "TIMEOUT"
+  | "NETWORK_ERROR"
+  | "INVALID_TOOL_ARGUMENT"
+  | "NO_TOOL_RESPONSE"
+  | "EMPTY_RESPONSE"
+  | "GROUNDING_REJECTED"
+  | "PROVIDER_UNAVAILABLE"
+  | "UNKNOWN_PROVIDER_ERROR";
+
+export interface MealNeedState {
+  schema_version: number;
+  turn_count: number;
+  occasion?: string | null;
+  party_size?: number | null;
+  budget_krw?: number | null;
+  max_spiciness?: number | null;
+  service_area_id?: string | null;
+  temperature_preferences: string[];
+  texture_preferences: string[];
+  flavor_preferences: string[];
+  preferred_categories: string[];
+  excluded_categories: string[];
+  excluded_ingredients: string[];
+  dietary_rules: string[];
+  profile_dietary_rules: string[];
+  positive_preferences: string[];
+  negative_preferences: string[];
+  shown_menu_ids: string[];
+  rejected_menu_ids: string[];
+  compared_menu_ids: string[];
+  selected_menu_id?: string | null;
+  option_selections: Record<string, string[]>;
+  option_risk_acknowledged: string[];
+  recommendation_hold: boolean;
+  strictness: "STRICT" | "MODERATE" | "EXPLORATORY";
+  last_question_key?: string | null;
+}
+
+export interface ReadinessDecision {
+  status: RecommendationReadiness;
+  score: number;
+  information_dimensions: string[];
+  missing_fields: string[];
+  next_question_key?: string | null;
+  reason: string;
+}
+
 export interface Profile {
   profile_id: string;
   preferred_language: string;
@@ -18,8 +86,13 @@ export interface Session {
   session_id: string;
   profile_id: string;
   state: string;
-  selected_menu_id?: string;
-  selected_merchant_id?: string;
+  selected_menu_id?: string | null;
+  selected_merchant_id?: string | null;
+  dialogue_act?: DialogueAct;
+  meal_need_state?: MealNeedState;
+  state_version?: number;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface MenuSummary {
@@ -43,7 +116,10 @@ export interface MenuSummary {
   match_reasons: string[];
   risk_hints: string[];
   evidence_ids: string[];
+  grounded_claim_ids: string[];
+  grounded_passage_ids: string[];
   is_synthetic: boolean;
+  semantic_score?: number;
 }
 
 export interface CategoryRecommendation {
@@ -79,6 +155,7 @@ export interface MerchantComparison {
   dietary_note: string;
   best_for: string;
   evidence_ids: string[];
+  menu?: MenuSummary;
 }
 
 export interface OptionItem {
@@ -103,11 +180,118 @@ export interface OptionGroup {
   items: OptionItem[];
 }
 
-export interface CardPayload {
-  type: string;
+export interface PresetEntry {
+  rank: number;
+  label: string;
+  description: string;
+  menu: MenuSummary;
+}
+
+export interface MenuExplanation {
+  cultural_analogy: string;
+  portion: string;
+  unknown_fields: string[];
+  evidence_ids: string[];
+}
+
+interface CardBase {
   title: string;
   subtitle?: string;
-  data: Record<string, unknown>;
+}
+
+export type CardPayload = CardBase & (
+  | { type: "category_recommendations"; data: { categories: CategoryRecommendation[] } }
+  | { type: "menu_recommendations"; data: { menus: MenuSummary[] } }
+  | { type: "menu_explanation"; data: { menu: MenuSummary; explanation: MenuExplanation } }
+  | { type: "dietary_evidence"; data: { evidence: Evidence[]; menu?: MenuSummary } }
+  | { type: "merchant_comparison"; data: { merchants: MerchantComparison[] } }
+  | { type: "preset_collection"; data: { kind: "weekly_ranking" | "kpop_demon_hunters"; entries: PresetEntry[] } }
+  | {
+      type:
+        | "option_question"
+        | "address_upload"
+        | "address_confirmation"
+        | "translated_note"
+        | "cart_summary"
+        | "payment_cta"
+        | "order_complete"
+        | "error_recovery";
+      data: Record<string, unknown>;
+    }
+);
+
+export interface RecommendationCandidate {
+  menu_id: string;
+  merchant_id: string;
+  rank: number;
+  score: number;
+  match_reasons: string[];
+  risk_hints: string[];
+  evidence_ids: string[];
+  claim_ids: string[];
+  passage_ids: string[];
+}
+
+export interface RecommendationResult {
+  snapshot_id: string;
+  candidates: RecommendationCandidate[];
+  query_summary: string;
+  grounded_claim_ids: string[];
+  grounded_passage_ids: string[];
+  synthetic_data: boolean;
+}
+
+export interface RecommendationSnapshot {
+  snapshot_id: string;
+  session_id: string;
+  assistant_message_id: string;
+  state_version: number;
+  meal_need_state: MealNeedState;
+  result: RecommendationResult;
+  cards: CardPayload[];
+  created_at: string;
+}
+
+export type ConversationEventType = "SELECT_MENU" | "REJECT_MENU" | "COMPARE_MENUS" | "UPDATE_OPTIONS";
+
+export interface ConversationEventInput {
+  event_type: ConversationEventType;
+  snapshot_id?: string;
+  menu_id?: string;
+  menu_ids?: string[];
+  option_group_id?: string;
+  option_item_ids?: string[];
+  risk_acknowledged?: boolean;
+  expected_state_version?: number;
+  idempotency_key: string;
+}
+
+export interface ConversationEventResult {
+  event_id: string;
+  event_type: ConversationEventType;
+  state_version: number;
+  state: MealNeedState;
+  selected_menu_id?: string | null;
+  selected_merchant_id?: string | null;
+  selected_menu?: MenuSummary | null;
+  duplicate: boolean;
+}
+
+export interface ConversationMessage {
+  message_id: string;
+  role: "user" | "assistant";
+  content: string;
+  message_type: string;
+  safe_metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ConversationView {
+  session_id: string;
+  state_version: number;
+  meal_need_state: MealNeedState;
+  messages: ConversationMessage[];
+  latest_snapshot?: RecommendationSnapshot | null;
 }
 
 export interface AssistantTurn {
@@ -116,7 +300,13 @@ export interface AssistantTurn {
   state: string;
   cards: CardPayload[];
   suggested_replies: string[];
+  dialogue_act: DialogueAct;
+  readiness?: ReadinessDecision | null;
+  recommendation_result?: RecommendationResult | null;
+  recommendation_snapshot_id?: string | null;
+  state_version: number;
   fallback_used: boolean;
+  fallback_reason?: FallbackReason | null;
   created_at: string;
 }
 

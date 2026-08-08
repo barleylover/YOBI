@@ -1,15 +1,67 @@
-# YOBI final test report
+# YOBI test and deployment evidence ledger
 
-- Final verification: 2026-08-08 KST (chat-room menu deployment pass)
+- Historical public baseline verification: 2026-08-08 KST
+- Chatbot-improvement worktree checkpoint: 2026-08-09 KST
 - Source of truth: `YOBI_FINAL_MVP_CODEX_MASTER_PROMPT.md`
+- Improvement goal: `YOBI_CHATBOT_IMPROVEMENT_CODEX_GOAL.md`
 - Improvement branch: `codex/master-spec-completion`
-- Deployed release: `20260807T194921Z`
+- Historical deployed baseline release: `20260807T194921Z`
 - Public address: resolved from OCI at runtime; not stored in Git
-- Deployment boundary: the prior UI iterations plus the simplified initial chat,
-  localized cart wording, reversed chat-menu chevrons, deterministic preset
-  collections and profile-edit/cart restoration are publicly verified.
+- Evidence boundary: the long-form sections below prove the historical UI/order
+  release only. They do not prove that migrations `005`–`008`, the menu knowledge
+  graph, new multi-turn chatbot, or current worktree are deployed.
 
-## Final gate result
+## Chatbot-improvement final gate
+
+The implementation matrix is in `CHATBOT_IMPROVEMENT_IMPLEMENTATION.md`. The current
+worktree contains the Phase 0–6 runtime paths and Phase 7 deployment safeguards. The
+final local quality gates below were rerun against the completed local implementation;
+new Oracle/OCI/Public release and Git evidence remain separate and pending. A local
+PASS is not substituted for live deployment proof.
+
+| Gate | Required final evidence | Current status |
+|---|---|---:|
+| Ruff | `.venv/bin/ruff check backend scripts` | **PASS** — zero errors |
+| MyPy | `.venv/bin/mypy --python-version 3.12 backend/app backend/evaluation scripts` | **PASS** — 58 source files, zero errors |
+| Pytest | `cd backend && ../.venv/bin/pytest -q` | **PASS** — 188 passed, 1 Starlette deprecation warning, 43.27s |
+| Legacy evaluation | `make evaluate` legacy retrieval run | **PASS** — 100 queries; every failure counter zero |
+| Chatbot acceptance | `make evaluate` chatbot acceptance run | **PASS** — 8 transcripts, 15 turns, 2 events, 3 knowledge cases, 345 assertions; every safety/state counter zero |
+| Frontend | `pnpm lint`, Vitest, TypeScript/Vite build | **PASS** — 4 Vitest files/10 tests; 1,796 modules built |
+| Local product E2E | Playwright across configured viewports | **PASS** — 21 passed, 27 intentional viewport skips, 1.0m; four-viewport Primary flow plus complete iPhone flow |
+| Oracle migration/seed | Applied 001–008, exact catalog/graph/mapping/vector integrity | NOT YET RECORDED |
+| OCI GenAI | On-demand normal, classified failure, grounded fallback smoke | NOT YET RECORDED |
+| Public routes/auth | root, health, readiness, QR 200; unauth demo control 403 | NOT YET RECORDED |
+| Public conversation | `hi` no cards, readiness, correction, snapshot event/reload, grounded explanation | NOT YET RECORDED |
+| Public ordering regression | options, cart, delivery, Mock checkout/payment/order/idempotency | NOT YET RECORDED |
+| Public Primary Demo | Same new release, three consecutive passes | NOT YET RECORDED |
+| Git/Draft PR | Commit, push, Draft PR #1 evidence update | NOT YET RECORDED |
+
+Final local checkpoint (not Oracle/public proof): the complete backend suite passed
+`188` tests in 43.27 seconds with one third-party Starlette deprecation warning. Ruff
+reported zero errors and MyPy passed all 58 checked source files. The 8-transcript,
+15-turn acceptance suite passed all 345 assertions, including 2 event and 3 knowledge
+cases, with every safety/state counter at zero. The legacy 100-query evaluation also
+reported zero constraint, grounding, safety, price, and option failures. Frontend
+ESLint, 4-file/10-test Vitest, TypeScript, and the 1,796-module Vite build passed.
+Local Playwright passed 21 tests with 27 intentional cross-viewport skips in 1.0
+minute, covering the Primary flow on four viewports and the complete iPhone flow.
+Oracle/OCI/Public and Git rows remain pending because they require distinct external
+or repository-state evidence.
+
+The final entry must separately report catalog version, knowledge release, active
+embedding model/dimension/version, generation provider/model/serving mode, app release
+ID, and rollback target. Do not infer one from another. Dedicated adapter fixture
+tests are not evidence of a live dedicated OCI endpoint.
+
+Locally evaluated quality counters are all zero: hard-constraint violations, unsafe
+severe-allergy reassurance, Wiki-missing-as-absent errors, review-influenced
+ranking/safety, body/card/price/option contradictions, ungrounded menu facts, core
+menu mapping gaps, and required-option gaps. Public route failures are a separate
+zero-tolerance deployment criterion and remain unmeasured for the improvement
+release. Review snippets are synthetic display data with recommendation and safety
+weight `0`.
+
+## Historical release baseline (before chatbot improvement)
 
 | Gate | Result | Verified evidence |
 |---|---:|---|

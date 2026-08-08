@@ -14,11 +14,17 @@ interface Props {
   addressRefId: string;
   dietaryRules: string[];
   onClose: () => void;
+  onOptionChange?: (
+    menuId: string,
+    optionGroupId: string,
+    optionItemIds: string[],
+    riskAcknowledged: boolean,
+  ) => Promise<void>;
 }
 
 type Phase = "options" | "note" | "more" | "browse" | "delivery" | "review";
 
-export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryRules, onClose }: Props) {
+export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryRules, onClose, onOptionChange }: Props) {
   const navigate = useNavigate();
   const setCartQuantity = useSessionStore((state) => state.setCartQuantity);
   const cartQuantity = useSessionStore((state) => state.cartQuantity);
@@ -73,10 +79,24 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryRules, on
   const currentGroup = groups[groupIndex];
   const selectedOptionIds = useMemo(() => Object.values(selections), [selections]);
 
-  function selectOption(group: OptionGroup, optionId: string) {
-    setSelections((current) => ({ ...current, [group.option_group_id]: optionId }));
-    if (groupIndex < groups.length - 1) setTimeout(() => setGroupIndex((value) => value + 1), 160);
-    else setTimeout(() => setPhase("note"), 160);
+  async function selectOption(group: OptionGroup, optionId: string) {
+    setBusy(true);
+    setError("");
+    try {
+      await onOptionChange?.(
+        activeMenu.menu_id,
+        group.option_group_id,
+        [optionId],
+        unlockedOptions.has(optionId),
+      );
+      setSelections((current) => ({ ...current, [group.option_group_id]: optionId }));
+      if (groupIndex < groups.length - 1) setTimeout(() => setGroupIndex((value) => value + 1), 160);
+      else setTimeout(() => setPhase("note"), 160);
+    } catch (cause) {
+      setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
+    } finally {
+      setBusy(false);
+    }
   }
 
   function unlockOption(optionId: string) {
@@ -137,8 +157,9 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryRules, on
   async function proceedToPayment() {
     setBusy(true);
     try {
-      await api.confirmCart(sessionId);
-      const checkout = await api.createCheckout(sessionId);
+      const confirmed = await api.confirmCart(sessionId);
+      syncCart(confirmed);
+      const checkout = await api.createCheckout(sessionId, confirmed.cart_id, confirmed.version);
       navigate(`/pay/${checkout.checkout_id}`);
     } catch (cause) {
       setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
@@ -206,8 +227,8 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryRules, on
               return <div className={isLocked ? "option-item-shell risk-locked" : "option-item-shell"} key={option.option_item_id}>
                 <button
                   className={selections[currentGroup.option_group_id] === option.option_item_id ? "option-button selected" : "option-button"}
-                  onClick={() => selectOption(currentGroup, option.option_item_id)}
-                  disabled={!option.available || isLocked}
+                  onClick={() => void selectOption(currentGroup, option.option_item_id)}
+                  disabled={busy || !option.available || isLocked}
                   aria-describedby={riskApplies ? `risk-${option.option_item_id}` : undefined}
                 >
                   <span><strong>{language === "한국어" ? option.name_ko : option.name_en}</strong>{language !== "한국어" && <small>{option.name_ko}</small>}</span>

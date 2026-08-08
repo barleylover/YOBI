@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from dotenv import dotenv_values
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_ENV = Path("/etc/yobi/yobi.env")
 CHECKPOINT = Path("/opt/yobi/shared/bootstrap_state.json")
+RUNTIME_RETRY_POLICY = 'LLM_MAX_RETRIES="1"'
 sys.path.insert(0, str(ROOT / "backend"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
@@ -77,7 +79,7 @@ def write_env(dsn: str, app_password: str, api_key: str, control_token: str) -> 
         f"DB_USERNAME={quote('YOBI_APP')}",
         f"DB_PASSWORD={quote(app_password)}",
         f"LLM_TIMEOUT_SECONDS={quote('120')}",
-        f"LLM_MAX_RETRIES={quote('0')}",
+        f"LLM_MAX_RETRIES={quote('1')}",
         f"TOOL_CALL_MAX_STEPS={quote('6')}",
         f"MAX_UPLOAD_MB={quote('8')}",
         f"ADDRESS_OCR_PROVIDER={quote('fixture')}",
@@ -134,6 +136,42 @@ def checkpoint_status(step: str) -> str | None:
     return str(status) if status else None
 
 
+def persist_runtime_retry_policy(path: Path = RUNTIME_ENV) -> bool:
+    """Atomically upgrade only the non-secret retry policy in an existing env file."""
+    if path.is_symlink():
+        raise SystemExit("Runtime environment must be a regular file, not a symlink")
+    text = path.read_text(encoding="utf-8")
+    matches = list(
+        re.finditer(r"(?m)^[ \t]*LLM_MAX_RETRIES[ \t]*=.*$", text)
+    )
+    if len(matches) > 1:
+        raise SystemExit("Runtime environment contains duplicate LLM_MAX_RETRIES entries")
+    if matches:
+        match = matches[0]
+        if match.group(0) == RUNTIME_RETRY_POLICY:
+            return False
+        updated = text[: match.start()] + RUNTIME_RETRY_POLICY + text[match.end() :]
+    else:
+        separator = "" if not text or text.endswith("\n") else "\n"
+        updated = text + separator + RUNTIME_RETRY_POLICY + "\n"
+
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(updated)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return True
+
+
 def load_runtime_env() -> bool:
     if not RUNTIME_ENV.is_file():
         return False
@@ -141,39 +179,69 @@ def load_runtime_env() -> bool:
     required = {"ADB_DSN", "DB_PASSWORD", "OCI_GENAI_API_KEY", "DEMO_CONTROL_TOKEN"}
     if any(not values.get(key) for key in required):
         raise SystemExit("Runtime environment exists but is missing a required value")
+    persist_runtime_retry_policy(RUNTIME_ENV)
+    values = dotenv_values(RUNTIME_ENV)
     os.environ.update({key: value for key, value in values.items() if value is not None})
     return True
+
+
+def expected_migration_records() -> dict[str, tuple[str, str]]:
+    from migrate import discover_migrations
+
+    return {
+        migration.version: (migration.path.name, migration.checksum)
+        for migration in discover_migrations()
+    }
 
 
 def verify_database(settings: Settings) -> dict[str, object]:
     dsn = settings.adb_dsn.get_secret_value()
     username = settings.db_username
     password = settings.db_password.get_secret_value()
-    required_tables = {"CHAT_SESSION", "MENU", "EXPLANATION_CACHE", "AUDIT_LOG"}
+    required_tables = {
+        "CHAT_SESSION",
+        "MENU",
+        "EXPLANATION_CACHE",
+        "AUDIT_LOG",
+        "RECOMMENDATION_SNAPSHOT",
+        "CONVERSATION_EVENT",
+        "KNOWLEDGE_RELEASE",
+        "KNOWLEDGE_CHUNK",
+        "KNOWLEDGE_RUNTIME_STATE",
+    }
     with oracledb.connect(user=username, password=password, dsn=dsn) as connection:
         cursor = connection.cursor()
         cursor.execute("SELECT USER FROM dual")
         current_user = str(cursor.fetchone()[0])
         cursor.execute(
-            "SELECT version, filename FROM schema_migration ORDER BY applied_at, version"
+            "SELECT version, filename, checksum FROM schema_migration "
+            "ORDER BY applied_at, version"
         )
-        migration_rows = [(str(row[0]), str(row[1])) for row in cursor.fetchall()]
+        migration_rows = [
+            (str(row[0]), str(row[1]), str(row[2])) for row in cursor.fetchall()
+        ]
         cursor.execute(
-            "SELECT table_name FROM user_tables WHERE table_name IN "
-            "('CHAT_SESSION','MENU','EXPLANATION_CACHE','AUDIT_LOG')"
+            "SELECT table_name FROM user_tables"
         )
         tables = {str(row[0]) for row in cursor.fetchall()}
-    migrations = {version for version, _ in migration_rows}
-    expected_migrations = {"001", "002", "003", "004"}
+    migrations = {
+        version: (filename, checksum)
+        for version, filename, checksum in migration_rows
+    }
+    expected_migrations = expected_migration_records()
     if current_user != "YOBI_APP":
         raise RuntimeError("BOOTSTRAP_RUNTIME_USER_MISMATCH")
-    if not expected_migrations.issubset(migrations):
+    if not expected_migrations.keys() <= migrations.keys():
         raise RuntimeError("BOOTSTRAP_MIGRATION_RECORD_MISSING")
+    if any(migrations[version] != record for version, record in expected_migrations.items()):
+        raise RuntimeError("BOOTSTRAP_MIGRATION_RECORD_MISMATCH")
     if not required_tables.issubset(tables):
         raise RuntimeError("BOOTSTRAP_REQUIRED_TABLE_MISSING")
     return {
         "runtime_user": current_user,
-        "migration_records": [filename for _, filename in migration_rows],
+        "migration_records": [filename for _, filename, _ in migration_rows],
+        "expected_migration_count": len(expected_migrations),
+        "latest_expected_migration": max(expected_migrations),
         "required_tables_verified": len(required_tables),
     }
 
@@ -203,7 +271,7 @@ def main() -> None:
                 "DB_PASSWORD": app_password,
                 "OCI_GENAI_API_KEY": api_key,
                 "OCI_GENAI_FALLBACK_MODEL": "openai.gpt-oss-120b",
-                "LLM_MAX_RETRIES": "0",
+                "LLM_MAX_RETRIES": "1",
             }
         )
     from migrate import migrate

@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "suite": "yobi-menu-knowledge-golden-cases",
+  "boundary": {
+    "catalog_data": "SYNTHETIC_DEMO",
+    "wiki_data": "SYNTHETIC_WIKI",
+    "safety_rule": "Unknown is never equivalent to confirmed absent; actual menu and kitchen facts qualify or override concept defaults."
+  },
+  "cases": [
+    {
+      "id": "rose_tteokbokki_menu_and_concept",
+      "query": "creamy mild chewy rice cakes with a shellfish warning",
+      "menu_id": "menu_001_01",
+      "repository_expectations": {
+        "menu_fields": {
+          "name_en": "Mild rose tteokbokki",
+          "category": "Rose tteokbokki",
+          "price": 12900,
+          "spice_level": 1,
+          "is_synthetic": true
+        },
+        "nonempty_menu_fields": ["description", "cultural_description", "dietary_summary"],
+        "minimum_evidence_count": 2,
+        "required_evidence": [
+          {
+            "claim_type": "shellfish_sauce",
+            "status": "VERIFIED",
+            "source_type": "SYNTHETIC_RESTAURANT_DECLARATION"
+          },
+          {
+            "claim_type": "cross_contamination",
+            "status": "UNKNOWN",
+            "source_type": "SYNTHETIC_RESTAURANT_DECLARATION"
+          }
+        ],
+        "required_option_groups": ["Spice level", "Size"]
+      },
+      "knowledge_graph_expectations": {
+        "enforced_by_this_runner": true,
+        "concept_id": "dish_rose_tteokbokki",
+        "expected_retrieval_concepts": ["dish_rose_tteokbokki", "dish_tteokbokki"],
+        "required_facets": ["overview", "taste", "texture", "culture", "analogy", "ingredients", "safety"],
+        "required_claims": [
+          {
+            "claim_type": "INGREDIENT",
+            "target_id": "ingredient_dairy_cream",
+            "status": "CONFIRMED_PRESENT",
+            "scope": "MENU",
+            "inherited": false
+          },
+          {
+            "claim_type": "INGREDIENT",
+            "target_id": "ingredient_rice_cake",
+            "status": "PRESUMED_PRESENT",
+            "scope": "DISH_CONCEPT",
+            "inherited": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "classic_tteokbokki_risk_signal",
+      "query": "classic spicy Korean street rice cakes",
+      "menu_id": "menu_002_01",
+      "repository_expectations": {
+        "menu_fields": {
+          "name_en": "Myeongdong classic tteokbokki",
+          "category": "Tteokbokki",
+          "price": 9900,
+          "spice_level": 3,
+          "evidence_status": "RISK_SIGNAL",
+          "is_synthetic": true
+        },
+        "nonempty_menu_fields": ["description", "cultural_description", "dietary_summary"],
+        "minimum_evidence_count": 2,
+        "required_evidence": [
+          {
+            "claim_type": "shellfish",
+            "status": "RISK_SIGNAL",
+            "source_type": "SYNTHETIC_MENU_SPEC"
+          },
+          {
+            "claim_type": "spiciness",
+            "status": "RISK_SIGNAL",
+            "source_type": "SYNTHETIC_MENU_SPEC"
+          }
+        ]
+      },
+      "knowledge_graph_expectations": {
+        "enforced_by_this_runner": true,
+        "concept_id": "dish_tteokbokki",
+        "expected_retrieval_concepts": ["dish_tteokbokki"],
+        "required_facets": ["overview", "taste", "texture", "culture", "analogy", "ingredients", "safety"],
+        "required_claims": [
+          {
+            "claim_type": "INGREDIENT",
+            "target_id": "ingredient_rice_cake",
+            "status": "PRESUMED_PRESENT",
+            "scope": "DISH_CONCEPT",
+            "inherited": false
+          },
+          {
+            "claim_type": "INGREDIENT",
+            "target_id": "ingredient_fish_cake",
+            "status": "CONFIRMED_PRESENT",
+            "scope": "MENU",
+            "inherited": false
+          }
+        ]
+      }
+    },
+    {
+      "id": "chicken_kalguksu_explanation_grounding",
+      "query": "warm mild chicken noodle soup with thick noodles",
+      "menu_id": "menu_003_01",
+      "repository_expectations": {
+        "menu_fields": {
+          "name_en": "Gentle chicken kalguksu",
+          "category": "Chicken kalguksu",
+          "price": 11000,
+          "spice_level": 1,
+          "is_synthetic": true
+        },
+        "nonempty_menu_fields": ["description", "cultural_description", "dietary_summary"],
+        "minimum_evidence_count": 2,
+        "required_evidence": [
+          {
+            "claim_type": "ingredients",
+            "status": "VERIFIED",
+            "source_type": "SYNTHETIC_MENU_SPEC"
+          },
+          {
+            "claim_type": "cross_contamination",
+            "status": "UNKNOWN",
+            "source_type": "SYNTHETIC_MENU_SPEC"
+          }
+        ]
+      },
+      "knowledge_graph_expectations": {
+        "enforced_by_this_runner": true,
+        "concept_id": "dish_chicken_kalguksu",
+        "expected_retrieval_concepts": ["dish_chicken_kalguksu", "dish_kalguksu"],
+        "required_facets": ["overview", "taste", "texture", "temperature", "culture", "analogy", "ingredients", "safety"],
+        "required_claims": [
+          {
+            "claim_type": "INGREDIENT",
+            "target_id": "ingredient_wheat_noodles",
+            "status": "CONFIRMED_PRESENT",
+            "scope": "MENU",
+            "inherited": false
+          },
+          {
+            "claim_type": "ALLERGEN",
+            "target_id": "allergen_wheat",
+            "status": "CONFIRMED_PRESENT",
+            "scope": "MENU",
+            "inherited": false
+          }
+        ]
+      }
+    }
+  ]
+}

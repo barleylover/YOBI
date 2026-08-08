@@ -47,13 +47,19 @@ test("chat menu shows fixed collections and preserves them through profile editi
   await expect(page.getByTestId("preset-weekly_ranking")).toBeVisible();
   await expect(page.locator(".session-brief")).toHaveCount(0);
   await expect(page.getByTestId("cart-review")).toBeVisible();
-  await expect(page.getByText(/Remove Cheese-seasoned fried chicken to continue/)).toBeVisible();
+  await expect(
+    page.getByText(
+      "Remove Cheese-seasoned fried chicken to continue; it is flagged for milk.",
+      { exact: true },
+    ),
+  ).toBeVisible();
   await expect(page.getByRole("button", { name: "Proceed to payment" })).toBeDisabled();
 
   await page.getByRole("button", { name: "Chat menu" }).click();
   await page.getByRole("button", { name: "K-POP Demon Hunters" }).click();
-  await expect(page.getByTestId("preset-kpop_demon_hunters")).toBeVisible();
-  await expect(page.getByText("Gimbap", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("preset-kpop_demon_hunters")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Recommend a safe alternative" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Review my constraints" })).toBeVisible();
 });
 
 test("Korean chat menu labels and preset response are localized", async ({ page }, testInfo) => {

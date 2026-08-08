@@ -22,12 +22,19 @@ class Settings(BaseSettings):
     sqlite_path: Path = Path("backend/data/yobi_demo.db")
 
     oci_genai_base_url: str = (
-        "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/"
-        "20231130/actions/v1"
+        "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/20231130/actions/v1"
     )
+    oci_genai_region: str = "us-chicago-1"
     oci_genai_api_key: SecretStr = SecretStr("")
     oci_genai_model: str = "xai.grok-4.3"
     oci_genai_fallback_model: str = "openai.gpt-oss-120b"
+    genai_provider: Literal["oci"] = "oci"
+    oci_genai_serving_mode: Literal["on_demand", "dedicated"] = "on_demand"
+    oci_genai_endpoint_id: str = ""
+    oci_genai_fallback_endpoint_id: str = ""
+    oci_genai_structured_output_enabled: bool = False
+    oci_genai_streaming_enabled: bool = False
+    genai_prompt_profile: Literal["yobi-grounded-v1"] = "yobi-grounded-v1"
     oci_embed_model: str = "cohere.embed-v4.0"
     oci_embed_dimension: int = 1536
     oci_compartment_id: SecretStr = SecretStr("")
@@ -37,7 +44,10 @@ class Settings(BaseSettings):
     db_password: SecretStr = SecretStr("")
 
     llm_timeout_seconds: float = 120.0
-    llm_max_retries: int = 0
+    llm_max_retries: int = Field(default=1, ge=0, le=3)
+    llm_retry_base_seconds: float = Field(default=0.25, ge=0.0, le=5.0)
+    llm_retry_max_seconds: float = Field(default=2.0, ge=0.0, le=10.0)
+    llm_max_concurrent_requests: int = Field(default=4, ge=1, le=32)
     tool_call_max_steps: int = 6
     max_upload_mb: int = 8
     address_ocr_provider: Literal["fixture", "tesseract", "rapidocr"] = "tesseract"

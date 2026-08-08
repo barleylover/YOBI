@@ -38,17 +38,18 @@ def test_checkpoint_is_private_and_resumable(tmp_path: Path, monkeypatch) -> Non
     assert bootstrap.checkpoint_complete("genai_smoke") is False
 
 
-def test_runtime_environment_can_resume_without_prompting(
-    tmp_path: Path, monkeypatch
+def test_runtime_environment_can_resume_and_upgrade_retry_policy(
+    tmp_path: Path, monkeypatch, capsys
 ) -> None:  # type: ignore[no-untyped-def]
     runtime_env = tmp_path / "yobi.env"
     runtime_env.write_text(
-        '\n'.join(
+        "\n".join(
             [
                 'ADB_DSN="synthetic-dsn"',
                 'DB_PASSWORD="synthetic-password"',
                 'OCI_GENAI_API_KEY="synthetic-api-key"',
                 'DEMO_CONTROL_TOKEN="synthetic-token"',
+                'LLM_MAX_RETRIES="0"',
             ]
         )
         + "\n",
@@ -60,11 +61,47 @@ def test_runtime_environment_can_resume_without_prompting(
 
     assert bootstrap.load_runtime_env() is True
     assert os.environ["ADB_DSN"] == "synthetic-dsn"
+    persisted = runtime_env.read_text(encoding="utf-8")
+    assert 'LLM_MAX_RETRIES="1"' in persisted
+    assert 'LLM_MAX_RETRIES="0"' not in persisted
+    assert 'DB_PASSWORD="synthetic-password"' in persisted
+    assert stat.S_IMODE(runtime_env.stat().st_mode) == 0o600
+    captured = capsys.readouterr()
+    assert "synthetic-password" not in captured.out + captured.err
+    # load_runtime_env mutates os.environ directly, outside monkeypatch's setter
+    # tracking. Keep later Settings-based tests independent of this synthetic key.
+    for key in (
+        "ADB_DSN",
+        "DB_PASSWORD",
+        "OCI_GENAI_API_KEY",
+        "DEMO_CONTROL_TOKEN",
+        "LLM_MAX_RETRIES",
+    ):
+        os.environ.pop(key, None)
+
+
+def test_retry_policy_matches_settings_and_runtime_restore() -> None:
+    assert bootstrap.Settings.model_fields["llm_max_retries"].default == 1
+    assert "quote('1')" in inspect.getsource(bootstrap.write_env)
+    assert '"LLM_MAX_RETRIES": "1"' in inspect.getsource(bootstrap.main)
+    restore = (ROOT / "deploy" / "restore_runtime_env.sh").read_text(encoding="utf-8")
+    assert "LLM_MAX_RETRIES=\"1\"" in restore
+    assert "LLM_MAX_RETRIES=\"0\"" not in restore
 
 
 def test_environment_is_persisted_before_genai_smoke() -> None:
     source = inspect.getsource(bootstrap.main)
     assert source.index("write_env(") < source.index('checkpoint_status("genai_smoke")')
+
+
+def test_bootstrap_requires_every_migration_shipped_in_the_release() -> None:
+    records = bootstrap.expected_migration_records()
+
+    assert records["005"][0] == "005_conversation_state.sql"
+    assert records["006"][0] == "006_knowledge_graph.sql"
+    assert records["007"][0] == "007_service_area_and_mutation_idempotency.sql"
+    assert records["008"][0] == "008_checkout_cart_version.sql"
+    assert all(len(checksum) == 64 for _, checksum in records.values())
 
 
 def test_prewarm_does_not_duplicate_genai_inference() -> None:

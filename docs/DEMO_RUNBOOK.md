@@ -48,7 +48,44 @@ or public-network behaviour is in scope. Run `./deploy/run_remote_prewarm.sh`, c
 `/healthz` and `/readyz`, and open a fresh private browser window. Do not rerun secure
 bootstrap during ordinary rehearsal and never print `/etc/yobi/yobi.env` values.
 
-## 2. Primary new-UI demo
+## 2. Chatbot quality and primary ordering proof
+
+### Multi-turn chatbot quality proof
+
+Use ordinary free-form chat, not **Try the demo question** or the two fixed content
+shortcuts, for this check.
+
+1. Start a fresh confirmed-address session and send `hi`. YOBI must greet or ask a
+   useful first question. No menu recommendation card or recommendation snapshot may
+   appear.
+2. Send `I don't know yet`. YOBI must continue need discovery without treating the
+   absence of a preference as permission to recommend.
+3. In another fresh session send `No soup and no pork. Ask me questions first.` The
+   turn must stay in recommendation-hold mode with no cards.
+4. Send `I would like something warm, savory and chewy.` The new preferences and both
+   negative constraints must coexist in server state; hold still prevents cards.
+5. Send `Actually soup is okay, but still no pork.` Soup must leave the exclusion
+   list while pork remains. No unrelated preference may disappear.
+6. Send `Recommend something mild under 12,000 won now.` A grounded menu carousel may
+   now appear. Every card must meet the budget and spice limit, avoid the remaining
+   pork constraint, and be marked as synthetic demo data.
+7. Reject one shown card, select another, and refresh the page. The UI must hydrate
+   the latest server conversation/snapshot instead of restoring a different
+   browser-only choice. A repeated event must not duplicate state changes.
+8. Ask `Explain the menu I selected.` The answer must distinguish general synthetic
+   Wiki description from menu-specific facts and unknowns. It must not show raw menu,
+   claim, chunk, or tool IDs and must not create an unrelated recommendation carousel.
+
+For a shorter readiness proof, send `I want something warm.` followed by
+`Savory and chewy, please.` The first turn should ask a follow-up with no cards; the
+second may recommend because three useful preference dimensions have accumulated.
+
+If inspecting the API, `GET /api/v1/sessions/{id}/conversation` must show the same
+`state_version`, cumulative `meal_need_state`, messages, and latest snapshot rendered
+by the UI. This endpoint is a diagnostic truth source; do not expose its internal IDs
+as presenter-facing food explanations.
+
+### Primary new-UI demo
 
 Allow about 60–90 seconds after the page opens.
 
@@ -211,8 +248,10 @@ For a deployed failure:
 2. On the VM check `systemctl status yobi-api nginx`.
 3. Inspect only recent structured logs; do not print environment values.
 4. If the latest activation failed, run
-   `sudo /opt/yobi/current/deploy/rollback.sh` to switch to the previous complete
-   release and recheck health/readiness.
+   `sudo /opt/yobi/current/deploy/rollback.sh` to switch to the exact previous
+   health-verified release recorded by deployment, then recheck health/readiness.
+   The script refuses incomplete or unverified release directories and does not
+   reverse additive database migrations.
 
 ## 6. Manual local start, when required
 

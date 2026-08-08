@@ -1,3 +1,5 @@
+from app.domain.dialogue import DialogueAct
+
 TOOLS = [
     {
         "type": "function",
@@ -201,7 +203,10 @@ TOOLS = [
 ]
 
 
-def select_tools(user_text: str) -> list[dict[str, object]]:
+def select_tools(
+    user_text: str,
+    dialogue_act: DialogueAct | None = None,
+) -> list[dict[str, object]]:
     """Route a turn to a small allowlisted tool surface.
 
     Sending every schema on every turn needlessly consumes the provider's request
@@ -210,13 +215,69 @@ def select_tools(user_text: str) -> list[dict[str, object]]:
     action and never uses model-generated routing policy.
     """
     lowered = user_text.lower()
-    if any(term in lowered for term in ("pay", "payment", "checkout", "order status")):
-        names = {
-            "get_cart_preview",
-            "create_mock_checkout",
-            "get_mock_payment_status",
-            "complete_mock_order",
-        }
+    cart_add = ("add" in lowered and "cart" in lowered) or (
+        "장바구니" in lowered and any(term in lowered for term in ("담", "추가", "넣"))
+    )
+    cart_option_change = any(
+        term in lowered
+        for term in (
+            "select option",
+            "remove option",
+            "change option",
+            "add note",
+            "옵션 변경",
+            "옵션 선택",
+            "요청사항 추가",
+        )
+    )
+    start_checkout = any(
+        term in lowered
+        for term in (
+            "start mock checkout",
+            "create mock checkout",
+            "continue to mock checkout",
+            "proceed to mock checkout",
+            "모의 결제 시작",
+        )
+    ) or lowered.strip() == "checkout"
+    payment_status = any(
+        term in lowered for term in ("payment status", "check payment", "결제 상태")
+    )
+    order_status = any(term in lowered for term in ("order status", "주문 상태"))
+    if dialogue_act == DialogueAct.COMPARE:
+        names = {"search_menus", "compare_merchants", "get_dietary_evidence"}
+    elif dialogue_act == DialogueAct.REQUEST_EXPLANATION:
+        names = {"explain_menu", "get_dietary_evidence", "get_menu_options"}
+    elif dialogue_act == DialogueAct.SELECT:
+        names = {"get_menu_options", "get_cart_preview"}
+    elif dialogue_act == DialogueAct.REQUEST_RECOMMENDATION:
+        names = {"recommend_menu_categories", "search_menus"}
+    elif dialogue_act == DialogueAct.ORDER_ACTION:
+        if cart_add or cart_option_change:
+            names = {
+                "get_menu_options",
+                "update_cart",
+                "translate_order_note",
+                "get_cart_preview",
+            }
+        elif start_checkout:
+            names = {"get_cart_preview", "create_mock_checkout"}
+        elif order_status:
+            names = {
+                "get_cart_preview",
+                "get_mock_payment_status",
+                "complete_mock_order",
+            }
+        elif payment_status:
+            names = {"get_cart_preview", "get_mock_payment_status"}
+        else:
+            names = {"get_cart_preview"}
+    elif start_checkout:
+        names = {"get_cart_preview", "create_mock_checkout"}
+    elif order_status:
+        names = {"get_cart_preview", "get_mock_payment_status", "complete_mock_order"}
+    elif payment_status or any(term in lowered for term in ("pay", "payment", "결제")):
+        names = {"get_cart_preview", "get_mock_payment_status"}
     elif any(term in lowered for term in ("address", "hotel", "deliver", "front desk")):
         names = {"resolve_address", "update_delivery_preferences", "get_cart_preview"}
     elif any(term in lowered for term in ("option", "size", "spice level", "add to cart", "note")):

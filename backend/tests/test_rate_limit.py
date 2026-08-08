@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -135,3 +136,77 @@ def test_runtime_uses_deterministic_path_for_ungrounded_model_answer(
     )
     assert turn.fallback_used is True
     assert [card.type for card in turn.cards] == ["dietary_evidence", "menu_recommendations"]
+
+
+def test_configured_provider_can_answer_greeting_without_tools(
+    repository: Any, profile_data: Any
+) -> None:
+    profile = repository.create_profile(profile_data)
+    session = repository.create_session(profile.profile_id)
+
+    class FakeResponses:
+        def create(self, **kwargs: Any) -> Any:
+            assert "tools" not in kwargs
+            return SimpleNamespace(
+                id="greeting",
+                output=[],
+                output_text=json.dumps(
+                    {
+                        "message": "Would you prefer something warm or light?",
+                        "response_kind": "QUESTION",
+                        "referenced_menu_ids": [],
+                        "referenced_claim_ids": [],
+                    }
+                ),
+            )
+
+    service = ChatService(
+        repository,
+        Settings(oci_genai_api_key="test-key", llm_max_retries=0),
+        DemoControl(),
+    )
+    service.agent.client_factory.build = lambda: SimpleNamespace(responses=FakeResponses())  # type: ignore[method-assign]
+
+    turn = service.respond(session, profile, "hi")
+
+    assert turn.text != "Would you prefer something warm or light?"
+    assert "before showing menus" in turn.text
+    assert turn.cards == []
+    assert turn.fallback_used is False
+
+
+def test_greeting_model_cannot_smuggle_an_early_recommendation(
+    repository: Any, profile_data: Any
+) -> None:
+    profile = repository.create_profile(profile_data)
+    session = repository.create_session(profile.profile_id)
+
+    class FakeResponses:
+        def create(self, **kwargs: Any) -> Any:
+            return SimpleNamespace(
+                id="unsafe-greeting",
+                output=[],
+                output_text=json.dumps(
+                    {
+                        "message": "A good option is pizza. Would you like that?",
+                        "response_kind": "QUESTION",
+                        "referenced_menu_ids": [],
+                        "referenced_claim_ids": [],
+                    }
+                ),
+            )
+
+    service = ChatService(
+        repository,
+        Settings(oci_genai_api_key="test-key", llm_max_retries=0),
+        DemoControl(),
+    )
+    service.agent.client_factory.build = lambda: SimpleNamespace(responses=FakeResponses())  # type: ignore[method-assign]
+
+    turn = service.respond(session, profile, "hi")
+
+    assert turn.cards == []
+    assert turn.fallback_used is True
+    assert turn.fallback_reason is not None
+    assert turn.fallback_reason.value == "GROUNDING_REJECTED"
+    assert "pizza" not in turn.text.lower()

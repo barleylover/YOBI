@@ -90,7 +90,7 @@ emit_runtime_env() {
   printf 'DB_USERNAME="YOBI_APP"\n'
   printf 'DB_PASSWORD='; quote_env_value "$yobi_app_password"; printf '\n'
   printf 'LLM_TIMEOUT_SECONDS="120"\n'
-  printf 'LLM_MAX_RETRIES="0"\n'
+  printf 'LLM_MAX_RETRIES="1"\n'
   printf 'TOOL_CALL_MAX_STEPS="6"\n'
   printf 'MAX_UPLOAD_MB="8"\n'
   printf 'ADDRESS_OCR_PROVIDER="fixture"\n'

@@ -13,7 +13,7 @@ dev:
 
 test:
 	.venv/bin/ruff check backend scripts
-	.venv/bin/mypy backend/app
+	.venv/bin/mypy --python-version 3.12 backend/app backend/evaluation scripts
 	.venv/bin/pytest backend/tests
 	cd frontend && $(PNPM) lint && $(PNPM) test
 
@@ -26,6 +26,7 @@ e2e:
 
 evaluate:
 	PYTHONPATH=backend .venv/bin/python backend/evaluation/run_evaluation.py
+	PYTHONPATH=backend .venv/bin/python backend/evaluation/run_chatbot_acceptance.py
 
 db-bootstrap:
 	.venv/bin/python scripts/bootstrap_db.py

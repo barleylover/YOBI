@@ -8,12 +8,17 @@ All catalog, review, hotel, payment, and order data in this repository is synthe
 
 ## Current status
 
-The product is implemented and running on the existing Seoul OCI VM with Oracle AI
-Database 26ai, Grok 4.3, GPT-OSS and deterministic fallback layers. Secure bootstrap,
-public Health/Ready, responsive E2E, and three consecutive primary mobile flows have
-passed. The standalone Grok bootstrap smoke remains recorded as degraded after a 429
-and safe 404 category, while later public runtime calls returned Grok HTTP 200. See
-`docs/IMPLEMENTATION_STATUS.md` for the exact evidence boundary.
+The repository contains the original mobile ordering MVP plus the chatbot-improvement
+runtime: server-owned multi-turn meal needs, a recommendation readiness gate,
+persisted recommendation snapshots and UI events, a versioned synthetic menu Wiki,
+and grounded hybrid recommendation/explanation paths. Reviews remain display-only
+synthetic data with recommendation and safety weight `0`.
+
+Implementation in Git is not, by itself, evidence that the same revision is live.
+`docs/CHATBOT_IMPROVEMENT_IMPLEMENTATION.md` records the Phase 0-7 implementation
+matrix and `docs/TEST_REPORT.md` separates current-worktree verification from the
+historical public-release baseline. The public URL and OCI identifiers are resolved
+at runtime and are intentionally not committed.
 
 ## Local development
 
@@ -48,6 +53,12 @@ make evaluate
 make prewarm
 make smoke
 make e2e
+```
+
+The chatbot acceptance suite can also be run directly from `backend/`:
+
+```bash
+../.venv/bin/python -m evaluation.run_chatbot_acceptance
 ```
 
 For a manual two-terminal start on alternate ports, set `YOBI_API_PROXY_TARGET` to

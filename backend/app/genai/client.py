@@ -22,6 +22,8 @@ class OciGenAIClient:
                 base_url=self.settings.oci_genai_base_url,
                 api_key=self.settings.oci_genai_api_key.get_secret_value(),
                 timeout=self.settings.llm_timeout_seconds,
-                max_retries=self.settings.llm_max_retries,
+                # AgentLoop owns the single bounded retry/backoff policy. Keeping the
+                # SDK retry disabled prevents multiplicative attempts and latency.
+                max_retries=0,
             )
         return self._client

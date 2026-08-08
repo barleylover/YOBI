@@ -1,9 +1,19 @@
 from __future__ import annotations
 
-from typing import Protocol
+from datetime import datetime
+from typing import Any, Protocol
 
+from app.domain.dialogue import (
+    ConversationEventInput,
+    ConversationEventResult,
+    DialogueAct,
+    MealNeedState,
+    RecommendationSnapshot,
+)
+from app.domain.knowledge import GroundedMenuKnowledge
 from app.domain.models import (
     AddressCandidate,
+    AssistantTurn,
     CartItemInput,
     CartItemUpdate,
     CartPreview,
@@ -37,9 +47,51 @@ class YobiRepository(Protocol):
 
     def get_session(self, session_id: str) -> Session | None: ...
 
-    def save_message(self, session_id: str, role: str, content: str, message_type: str) -> str: ...
+    def save_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        message_type: str,
+        message_id: str | None = None,
+        safe_metadata: dict[str, Any] | None = None,
+    ) -> str: ...
 
-    def list_messages(self, session_id: str) -> list[dict[str, str]]: ...
+    def list_messages(self, session_id: str) -> list[dict[str, Any]]: ...
+
+    def update_dialogue_state(
+        self,
+        session_id: str,
+        dialogue_act: DialogueAct,
+        meal_need_state: MealNeedState,
+        state: str,
+        expected_state_version: int,
+    ) -> Session: ...
+
+    def commit_chat_turn(
+        self,
+        session_id: str,
+        expected_state_version: int,
+        user_message_id: str,
+        user_text: str,
+        user_created_at: datetime,
+        assistant_turn: AssistantTurn,
+        meal_need_state: MealNeedState,
+        dialogue_act: DialogueAct,
+        snapshot: RecommendationSnapshot | None = None,
+        request_id: str | None = None,
+        intent: str | None = None,
+    ) -> Session: ...
+
+    def save_recommendation_snapshot(self, snapshot: RecommendationSnapshot) -> None: ...
+
+    def get_recommendation_snapshot(
+        self, session_id: str, snapshot_id: str | None = None
+    ) -> RecommendationSnapshot | None: ...
+
+    def apply_conversation_event(
+        self, session_id: str, event: ConversationEventInput
+    ) -> ConversationEventResult: ...
 
     def set_session_selection(
         self, session_id: str, state: str, menu_id: str | None, merchant_id: str | None
@@ -55,6 +107,14 @@ class YobiRepository(Protocol):
         limit: int = 4,
     ) -> list[MenuSummary]: ...
 
+    def recommend_menus(
+        self,
+        query: str,
+        profile: Profile,
+        meal_need_state: MealNeedState,
+        limit: int = 4,
+    ) -> list[MenuSummary]: ...
+
     def get_menu(self, menu_id: str, profile: Profile) -> MenuSummary | None: ...
 
     def list_merchant_menus(
@@ -67,13 +127,22 @@ class YobiRepository(Protocol):
 
     def get_evidence(self, menu_id: str) -> list[Evidence]: ...
 
+    def get_grounded_menu_knowledge(
+        self,
+        menu_id: str,
+        query: str = "",
+        option_item_ids: list[str] | None = None,
+    ) -> GroundedMenuKnowledge: ...
+
     def compare_merchants(
         self, category: str, profile: Profile, limit: int = 3
     ) -> list[MerchantComparison]: ...
 
     def get_options(self, menu_id: str) -> list[OptionGroup]: ...
 
-    def resolve_address(self, text: str, file_hash: str | None = None) -> list[AddressCandidate]: ...
+    def resolve_address(
+        self, text: str, file_hash: str | None = None
+    ) -> list[AddressCandidate]: ...
 
     def get_address_candidate(self, place_id: str) -> AddressCandidate | None: ...
 
@@ -84,7 +153,14 @@ class YobiRepository(Protocol):
         source_image_hash: str | None = None,
     ) -> str: ...
 
-    def add_cart_item(self, session_id: str, item: CartItemInput) -> CartPreview: ...
+    def get_session_service_area(self, session_id: str) -> str | None: ...
+
+    def add_cart_item(
+        self,
+        session_id: str,
+        item: CartItemInput,
+        agent_request_key: str | None = None,
+    ) -> CartPreview: ...
 
     def update_cart_item(
         self, session_id: str, cart_item_id: str, item: CartItemUpdate

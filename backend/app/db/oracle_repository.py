@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from array import array
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
@@ -12,9 +13,24 @@ import oracledb
 from app.core.config import Settings
 from app.db.oracle_pool import OraclePool
 from app.db.seed_data import CATALOG_VERSION
-from app.domain.dietary import known_allergen_conflicts
+from app.domain.dialogue import (
+    ConstraintStrictness,
+    ConversationEventInput,
+    ConversationEventResult,
+    ConversationEventType,
+    DialogueAct,
+    MealNeedState,
+    RecommendationSnapshot,
+)
+from app.domain.dietary import apply_profile_constraints, known_allergen_conflicts
+from app.domain.knowledge import (
+    GroundedMenuKnowledge,
+    GroundedPassage,
+    KnowledgeSourceKind,
+)
 from app.domain.models import (
     AddressCandidate,
+    AssistantTurn,
     CartItemInput,
     CartItemUpdate,
     CartLine,
@@ -35,7 +51,44 @@ from app.domain.models import (
     ProfileUpdate,
     Session,
 )
+from app.knowledge.catalog_seed import KNOWLEDGE_CATALOG_VERSION, KNOWLEDGE_RELEASE_ID
+from app.knowledge.resolver import (
+    allergen_constraint_conflicts,
+    category_constraint_conflicts,
+    ingredient_constraint_conflicts,
+    merchant_cross_contact_conflicts,
+    resolve_allergen_claims,
+    resolve_ingredient_claims,
+    resolve_merchant_ingredient_claims,
+    severe_allergy_conflicts,
+)
 from app.rag.providers import choose_embedding_provider
+
+RECOMMENDATION_CANDIDATE_CAP = 40
+RECOMMENDATION_PASSAGE_LIMIT = 3
+EXPECTED_MAPPED_MENUS = 150
+EXPECTED_ORIGIN_DECLARATIONS = 30
+EXPECTED_MERCHANT_INGREDIENTS = 266
+EXPECTED_OPTION_EFFECTS = 4
+EXPECTED_RUNTIME_COUNTS = {
+    "service_area": 3,
+    "menu_category": 20,
+    "merchant": 30,
+    "menu": 150,
+    "menu_knowledge": 150,
+    "menu_option_group": 302,
+    "menu_option_item": 605,
+    "review_snippet": 600,
+    "evidence": 300,
+    "address_place": 20,
+    "ingredient": 47,
+    "menu_ingredient": 7,
+    "allergen": 10,
+    "menu_allergen": 162,
+    "dietary_attribute": 15,
+    "menu_dietary_attribute": 317,
+    "option_dietary_conflict": 1,
+}
 
 
 def _now() -> datetime:
@@ -73,6 +126,22 @@ def _rows(cursor: oracledb.Cursor) -> list[dict[str, Any]]:
         {column: _value(value) for column, value in zip(columns, values)}
         for values in cursor.fetchall()
     ]
+
+
+def _find_menu_projection(value: Any, menu_id: str) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        if value.get("menu_id") == menu_id:
+            return {str(key): item for key, item in value.items()}
+        for item in value.values():
+            match = _find_menu_projection(item, menu_id)
+            if match is not None:
+                return match
+    elif isinstance(value, list):
+        for item in value:
+            match = _find_menu_projection(item, menu_id)
+            if match is not None:
+                return match
+    return None
 
 
 class OracleYobiRepository:
@@ -188,7 +257,9 @@ class OracleYobiRepository:
     def delete_profile(self, profile_id: str) -> bool:
         with self.pool.connection() as connection:
             cursor = connection.cursor()
-            cursor.execute("SELECT session_id FROM chat_session WHERE profile_id = :id", id=profile_id)
+            cursor.execute(
+                "SELECT session_id FROM chat_session WHERE profile_id = :id", id=profile_id
+            )
             for row in cursor.fetchall():
                 self._reset(connection, row[0], True)
             cursor.execute("DELETE FROM user_profile WHERE profile_id = :id", id=profile_id)
@@ -237,34 +308,504 @@ class OracleYobiRepository:
             state=ChatState(row["state"]),
             selected_menu_id=row["selected_menu_id"],
             selected_merchant_id=row["selected_merchant_id"],
+            dialogue_act=DialogueAct(row.get("dialogue_act") or DialogueAct.COLLECT_NEEDS.value),
+            meal_need_state=MealNeedState.model_validate(
+                _json(row.get("meal_need_state_json") or "{}")
+            ),
+            state_version=int(row.get("state_version") or 0),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
 
-    def save_message(self, session_id: str, role: str, content: str, message_type: str) -> str:
-        message_id = _id("msg")
+    def save_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        message_type: str,
+        message_id: str | None = None,
+        safe_metadata: dict[str, Any] | None = None,
+    ) -> str:
+        message_id = message_id or _id("msg")
         with self.pool.connection() as connection:
             connection.cursor().execute(
                 """
-                INSERT INTO chat_message(message_id, session_id, role, content, message_type, created_at)
-                VALUES (:1,:2,:3,:4,:5,:6)
+                INSERT INTO chat_message(message_id, session_id, role, content, message_type,
+                  safe_metadata_json, created_at)
+                VALUES (:1,:2,:3,:4,:5,:6,:7)
                 """,
-                [message_id, session_id, role, content, message_type, _now()],
+                [
+                    message_id,
+                    session_id,
+                    role,
+                    content,
+                    message_type,
+                    json.dumps(safe_metadata or {}, ensure_ascii=False),
+                    _now(),
+                ],
             )
         return message_id
 
-    def list_messages(self, session_id: str) -> list[dict[str, str]]:
+    def list_messages(self, session_id: str) -> list[dict[str, Any]]:
         with self.pool.connection() as connection:
             cursor = connection.cursor()
             cursor.execute(
                 """
-                SELECT message_id, role, content, message_type, created_at
+                SELECT message_id, role, content, message_type, safe_metadata_json, created_at
                 FROM chat_message WHERE session_id = :id ORDER BY created_at, message_id
                 """,
                 id=session_id,
             )
             rows = _rows(cursor)
-        return [{key: str(value) for key, value in row.items()} for row in rows]
+        messages: list[dict[str, Any]] = []
+        for row in rows:
+            messages.append(
+                {
+                    "message_id": str(row["message_id"]),
+                    "role": str(row["role"]),
+                    "content": str(row["content"]),
+                    "message_type": str(row["message_type"]),
+                    "safe_metadata": _json(row["safe_metadata_json"]),
+                    "created_at": str(row["created_at"]),
+                }
+            )
+        return messages
+
+    def update_dialogue_state(
+        self,
+        session_id: str,
+        dialogue_act: DialogueAct,
+        meal_need_state: MealNeedState,
+        state: str,
+        expected_state_version: int,
+    ) -> Session:
+        with self.pool.connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                UPDATE chat_session SET state=:state, dialogue_act=:dialogue_act,
+                  meal_need_state_json=:meal_need_state, state_version=state_version+1,
+                  updated_at=:updated_at
+                WHERE session_id=:session_id AND state_version=:expected_version
+                """,
+                state=state,
+                dialogue_act=dialogue_act.value,
+                meal_need_state=meal_need_state.model_dump_json(),
+                updated_at=_now(),
+                session_id=session_id,
+                expected_version=expected_state_version,
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("CHAT_STATE_VERSION_CONFLICT")
+        updated = self.get_session(session_id)
+        if updated is None:
+            raise KeyError("SESSION_NOT_FOUND")
+        return updated
+
+    def commit_chat_turn(
+        self,
+        session_id: str,
+        expected_state_version: int,
+        user_message_id: str,
+        user_text: str,
+        user_created_at: datetime,
+        assistant_turn: AssistantTurn,
+        meal_need_state: MealNeedState,
+        dialogue_act: DialogueAct,
+        snapshot: RecommendationSnapshot | None = None,
+        request_id: str | None = None,
+        intent: str | None = None,
+    ) -> Session:
+        next_version = expected_state_version + 1
+        persisted_turn = assistant_turn.model_copy(
+            update={"state_version": next_version, "dialogue_act": dialogue_act}
+        )
+        with self.pool.connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                UPDATE chat_session SET state=:state, dialogue_act=:dialogue_act,
+                  meal_need_state_json=:meal_need_state,
+                  selected_menu_id=:selected_menu_id,
+                  selected_merchant_id=(
+                    SELECT merchant_id FROM menu WHERE menu_id=:selected_menu_id
+                  ), state_version=:next_version, updated_at=:updated_at
+                WHERE session_id=:session_id AND state_version=:expected_version
+                """,
+                state=persisted_turn.state.value,
+                dialogue_act=dialogue_act.value,
+                meal_need_state=meal_need_state.model_dump_json(),
+                selected_menu_id=meal_need_state.selected_menu_id,
+                next_version=next_version,
+                updated_at=_now(),
+                session_id=session_id,
+                expected_version=expected_state_version,
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("CHAT_STATE_VERSION_CONFLICT")
+            user_metadata = {
+                "client_request_id": request_id,
+                "intent": intent,
+            } if request_id else {}
+            cursor.execute(
+                """
+                INSERT INTO chat_message(message_id,session_id,role,content,message_type,
+                  safe_metadata_json,created_at)
+                VALUES (:1,:2,'user',:3,'text',:4,:5)
+                """,
+                [
+                    user_message_id,
+                    session_id,
+                    user_text,
+                    json.dumps(user_metadata, ensure_ascii=False),
+                    user_created_at,
+                ],
+            )
+            assistant_metadata = persisted_turn.model_dump(mode="json")
+            if request_id:
+                assistant_metadata["client_request_id"] = request_id
+            cursor.execute(
+                """
+                INSERT INTO chat_message(message_id,session_id,role,content,message_type,
+                  safe_metadata_json,created_at)
+                VALUES (:1,:2,'assistant',:3,'assistant_turn',:4,:5)
+                """,
+                [
+                    persisted_turn.message_id,
+                    session_id,
+                    persisted_turn.text,
+                    json.dumps(assistant_metadata, ensure_ascii=False),
+                    persisted_turn.created_at,
+                ],
+            )
+            if snapshot is not None:
+                persisted_snapshot = snapshot.model_copy(
+                    update={
+                        "state_version": next_version,
+                        "meal_need_state": meal_need_state,
+                        "cards": [card.model_dump(mode="json") for card in persisted_turn.cards],
+                    }
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO recommendation_snapshot(snapshot_id,session_id,
+                      assistant_message_id,state_version,meal_need_state_json,result_json,
+                      cards_json,created_at)
+                    VALUES (:1,:2,:3,:4,:5,:6,:7,:8)
+                    """,
+                    [
+                        persisted_snapshot.snapshot_id,
+                        session_id,
+                        persisted_snapshot.assistant_message_id,
+                        next_version,
+                        meal_need_state.model_dump_json(),
+                        persisted_snapshot.result.model_dump_json(),
+                        json.dumps(persisted_snapshot.cards, ensure_ascii=False),
+                        persisted_snapshot.created_at,
+                    ],
+                )
+        updated = self.get_session(session_id)
+        if updated is None:
+            raise KeyError("SESSION_NOT_FOUND")
+        return updated
+
+    def save_recommendation_snapshot(self, snapshot: RecommendationSnapshot) -> None:
+        with self.pool.connection() as connection:
+            connection.cursor().execute(
+                """
+                INSERT INTO recommendation_snapshot(snapshot_id,session_id,assistant_message_id,
+                  state_version,meal_need_state_json,result_json,cards_json,created_at)
+                VALUES (:1,:2,:3,:4,:5,:6,:7,:8)
+                """,
+                [
+                    snapshot.snapshot_id,
+                    snapshot.session_id,
+                    snapshot.assistant_message_id,
+                    snapshot.state_version,
+                    snapshot.meal_need_state.model_dump_json(),
+                    snapshot.result.model_dump_json(),
+                    json.dumps(snapshot.cards, ensure_ascii=False),
+                    snapshot.created_at,
+                ],
+            )
+
+    def get_recommendation_snapshot(
+        self, session_id: str, snapshot_id: str | None = None
+    ) -> RecommendationSnapshot | None:
+        with self.pool.connection() as connection:
+            cursor = connection.cursor()
+            if snapshot_id:
+                cursor.execute(
+                    """
+                    SELECT * FROM recommendation_snapshot
+                    WHERE session_id=:session_id AND snapshot_id=:snapshot_id
+                    """,
+                    session_id=session_id,
+                    snapshot_id=snapshot_id,
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT * FROM (
+                      SELECT * FROM recommendation_snapshot WHERE session_id=:session_id
+                      ORDER BY created_at DESC, snapshot_id DESC
+                    ) WHERE ROWNUM=1
+                    """,
+                    session_id=session_id,
+                )
+            row = _row(cursor)
+        if row is None:
+            return None
+        return RecommendationSnapshot.model_validate(
+            {
+                "snapshot_id": row["snapshot_id"],
+                "session_id": row["session_id"],
+                "assistant_message_id": row["assistant_message_id"],
+                "state_version": row["state_version"],
+                "meal_need_state": _json(row["meal_need_state_json"]),
+                "result": _json(row["result_json"]),
+                "cards": _json(row["cards_json"]),
+                "created_at": row["created_at"],
+            }
+        )
+
+    def apply_conversation_event(
+        self, session_id: str, event: ConversationEventInput
+    ) -> ConversationEventResult:
+        with self.pool.connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                SELECT payload_json,result_json FROM conversation_event
+                WHERE session_id=:session_id AND idempotency_key=:idempotency_key
+                """,
+                session_id=session_id,
+                idempotency_key=event.idempotency_key,
+            )
+            duplicate = cursor.fetchone()
+            if duplicate:
+                if _json(duplicate[0]) != event.model_dump(mode="json"):
+                    raise ValueError("IDEMPOTENCY_KEY_REUSED")
+                previous = ConversationEventResult.model_validate_json(_value(duplicate[1]))
+                return previous.model_copy(update={"duplicate": True})
+
+            cursor.execute(
+                "SELECT * FROM chat_session WHERE session_id=:session_id FOR UPDATE",
+                session_id=session_id,
+            )
+            session_row = _row(cursor)
+            if session_row is None:
+                raise KeyError("SESSION_NOT_FOUND")
+            # A transaction with the same key may have committed while this request
+            # waited for the session row lock. Recheck inside the serialised region.
+            cursor.execute(
+                """
+                SELECT payload_json,result_json FROM conversation_event
+                WHERE session_id=:session_id AND idempotency_key=:idempotency_key
+                """,
+                session_id=session_id,
+                idempotency_key=event.idempotency_key,
+            )
+            duplicate = cursor.fetchone()
+            if duplicate:
+                if _json(duplicate[0]) != event.model_dump(mode="json"):
+                    raise ValueError("IDEMPOTENCY_KEY_REUSED")
+                previous = ConversationEventResult.model_validate_json(_value(duplicate[1]))
+                return previous.model_copy(update={"duplicate": True})
+            version = int(session_row.get("state_version") or 0)
+            if event.expected_state_version is not None and event.expected_state_version != version:
+                raise RuntimeError("CHAT_STATE_VERSION_CONFLICT")
+            need_state = MealNeedState.model_validate(
+                _json(session_row.get("meal_need_state_json") or "{}")
+            )
+            cursor.execute(
+                """
+                SELECT dietary_rules_json,allergy_severity,religion_selection
+                FROM user_profile WHERE profile_id=:profile_id
+                """,
+                profile_id=session_row["profile_id"],
+            )
+            profile_row = _row(cursor)
+            if profile_row is None:
+                raise KeyError("PROFILE_NOT_FOUND")
+            need_state = apply_profile_constraints(
+                need_state,
+                list(_json(profile_row["dietary_rules_json"])),
+                str(profile_row["religion_selection"]),
+            )
+            cursor.execute(
+                """
+                SELECT ref.service_area_id
+                FROM cart JOIN address_ref ref ON ref.address_ref_id=cart.address_ref_id
+                WHERE cart.session_id=:session_id AND ref.confirmed=1
+                """,
+                session_id=session_id,
+            )
+            current_area = cursor.fetchone()
+            if current_area and current_area[0]:
+                need_state.service_area_id = str(current_area[0])
+            snapshot: RecommendationSnapshot | None = None
+            if event.snapshot_id:
+                cursor.execute(
+                    """
+                    SELECT * FROM recommendation_snapshot
+                    WHERE session_id=:session_id AND snapshot_id=:snapshot_id
+                    """,
+                    session_id=session_id,
+                    snapshot_id=event.snapshot_id,
+                )
+                snapshot_row = _row(cursor)
+                if snapshot_row is None:
+                    raise ValueError("RECOMMENDATION_SNAPSHOT_NOT_FOUND")
+                snapshot = RecommendationSnapshot.model_validate(
+                    {
+                        "snapshot_id": snapshot_row["snapshot_id"],
+                        "session_id": snapshot_row["session_id"],
+                        "assistant_message_id": snapshot_row["assistant_message_id"],
+                        "state_version": snapshot_row["state_version"],
+                        "meal_need_state": _json(snapshot_row["meal_need_state_json"]),
+                        "result": _json(snapshot_row["result_json"]),
+                        "cards": _json(snapshot_row["cards_json"]),
+                        "created_at": snapshot_row["created_at"],
+                    }
+                )
+            candidate_by_id = {
+                candidate.menu_id: candidate
+                for candidate in (snapshot.result.candidates if snapshot else [])
+            }
+            selected_menu_id = session_row.get("selected_menu_id")
+            selected_merchant_id = session_row.get("selected_merchant_id")
+            selected_menu: dict[str, Any] | None = None
+            chat_state = str(session_row["state"])
+            dialogue_act = DialogueAct(
+                session_row.get("dialogue_act") or DialogueAct.COLLECT_NEEDS.value
+            )
+
+            if event.event_type == ConversationEventType.SELECT_MENU:
+                if event.menu_id not in candidate_by_id:
+                    raise ValueError("MENU_NOT_IN_RECOMMENDATION_SNAPSHOT")
+                candidate = candidate_by_id[event.menu_id]
+                conflicts, _ = self._menu_hard_constraint_conflicts(
+                    connection,
+                    candidate.menu_id,
+                    need_state,
+                    str(profile_row["allergy_severity"]),
+                )
+                cursor.execute(
+                    "SELECT merchant_id FROM menu WHERE menu_id=:menu_id",
+                    menu_id=candidate.menu_id,
+                )
+                live_menu = cursor.fetchone()
+                if conflicts or live_menu is None or str(live_menu[0]) != candidate.merchant_id:
+                    raise ValueError("MENU_NO_LONGER_ELIGIBLE")
+                selected_menu_id = candidate.menu_id
+                selected_merchant_id = candidate.merchant_id
+                need_state.selected_menu_id = candidate.menu_id
+                selected_menu = (
+                    _find_menu_projection(snapshot.cards, candidate.menu_id) if snapshot else None
+                )
+                dialogue_act = DialogueAct.SELECT
+                chat_state = ChatState.MENU_SELECTION.value
+            elif event.event_type == ConversationEventType.REJECT_MENU:
+                if event.menu_id not in candidate_by_id:
+                    raise ValueError("MENU_NOT_IN_RECOMMENDATION_SNAPSHOT")
+                if event.menu_id not in need_state.rejected_menu_ids:
+                    need_state.rejected_menu_ids.append(event.menu_id)
+                if selected_menu_id == event.menu_id:
+                    selected_menu_id = None
+                    selected_merchant_id = None
+                    need_state.selected_menu_id = None
+                dialogue_act = DialogueAct.REJECT
+                chat_state = ChatState.DISCOVERY.value
+            elif event.event_type == ConversationEventType.COMPARE_MENUS:
+                if any(menu_id not in candidate_by_id for menu_id in set(event.menu_ids)):
+                    raise ValueError("MENU_NOT_IN_RECOMMENDATION_SNAPSHOT")
+                need_state.compared_menu_ids = list(dict.fromkeys(event.menu_ids))
+                dialogue_act = DialogueAct.COMPARE
+                chat_state = ChatState.MERCHANT_COMPARISON.value
+            elif event.event_type == ConversationEventType.UPDATE_OPTIONS:
+                if event.menu_id != selected_menu_id:
+                    raise ValueError("OPTIONS_REQUIRE_SELECTED_MENU")
+                cursor.execute(
+                    """
+                    SELECT option_group_id,min_select,max_select FROM menu_option_group
+                    WHERE option_group_id=:group_id AND menu_id=:menu_id
+                    """,
+                    group_id=event.option_group_id,
+                    menu_id=event.menu_id,
+                )
+                group = cursor.fetchone()
+                if group is None:
+                    raise ValueError("OPTION_GROUP_NOT_FOUND")
+                selected_option_ids = list(dict.fromkeys(event.option_item_ids))
+                if not int(group[1]) <= len(selected_option_ids) <= int(group[2]):
+                    raise ValueError("OPTION_SELECTION_CARDINALITY_INVALID")
+                cursor.execute(
+                    """
+                    SELECT option_item_id FROM menu_option_item
+                    WHERE option_group_id=:group_id AND availability='AVAILABLE'
+                    """,
+                    group_id=event.option_group_id,
+                )
+                available_items = {str(row[0]) for row in cursor.fetchall()}
+                if not set(selected_option_ids).issubset(available_items):
+                    raise ValueError("OPTION_ITEM_NOT_AVAILABLE")
+                need_state.option_selections[event.option_group_id or ""] = selected_option_ids
+                if event.risk_acknowledged and event.option_group_id:
+                    if event.option_group_id not in need_state.option_risk_acknowledged:
+                        need_state.option_risk_acknowledged.append(event.option_group_id)
+                dialogue_act = DialogueAct.ORDER_ACTION
+                chat_state = ChatState.MENU_OPTIONS.value
+
+            next_version = version + 1
+            cursor.execute(
+                """
+                UPDATE chat_session SET state=:state, selected_menu_id=:selected_menu_id,
+                  selected_merchant_id=:selected_merchant_id, dialogue_act=:dialogue_act,
+                  meal_need_state_json=:meal_need_state, state_version=:next_version,
+                  updated_at=:updated_at
+                WHERE session_id=:session_id AND state_version=:expected_version
+                """,
+                state=chat_state,
+                selected_menu_id=selected_menu_id,
+                selected_merchant_id=selected_merchant_id,
+                dialogue_act=dialogue_act.value,
+                meal_need_state=need_state.model_dump_json(),
+                next_version=next_version,
+                updated_at=_now(),
+                session_id=session_id,
+                expected_version=version,
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("CHAT_STATE_VERSION_CONFLICT")
+            result = ConversationEventResult(
+                event_id=_id("event"),
+                event_type=event.event_type,
+                state_version=next_version,
+                state=need_state,
+                selected_menu_id=str(selected_menu_id) if selected_menu_id else None,
+                selected_merchant_id=(str(selected_merchant_id) if selected_merchant_id else None),
+                selected_menu=selected_menu,
+            )
+            cursor.execute(
+                """
+                INSERT INTO conversation_event(event_id,session_id,snapshot_id,event_type,
+                  payload_json,result_json,idempotency_key,resulting_state_version,created_at)
+                VALUES (:1,:2,:3,:4,:5,:6,:7,:8,:9)
+                """,
+                [
+                    result.event_id,
+                    session_id,
+                    event.snapshot_id,
+                    event.event_type.value,
+                    event.model_dump_json(),
+                    result.model_dump_json(),
+                    event.idempotency_key,
+                    next_version,
+                    _now(),
+                ],
+            )
+        return result
 
     def set_session_selection(
         self, session_id: str, state: str, menu_id: str | None, merchant_id: str | None
@@ -291,12 +832,21 @@ class OracleYobiRepository:
         max_spiciness: int | None,
         excluded_ingredients: list[str],
         limit: int = 4,
+        constraint_strictness: ConstraintStrictness = ConstraintStrictness.STRICT,
     ) -> list[MenuSummary]:
         budget = budget_krw or 30000
         spice = max_spiciness if max_spiciness is not None else max(profile.spice_tolerance, 1)
-        query_vector = array(
-            "f", self.embedding_provider.embed([query], "SEARCH_QUERY")[0]
+        safety_state = apply_profile_constraints(
+            MealNeedState(
+                budget_krw=budget,
+                max_spiciness=spice,
+                excluded_ingredients=excluded_ingredients,
+            ),
+            profile.dietary_rules,
+            profile.religion_selection,
         )
+        safety_state.strictness = constraint_strictness
+        query_vector = array("f", self.embedding_provider.embed([query], "SEARCH_QUERY")[0])
         severe_shellfish = (
             "shellfish_allergy" in profile.dietary_rules and profile.allergy_severity == "severe"
         )
@@ -308,17 +858,7 @@ class OracleYobiRepository:
                 """
                 SELECT * FROM (
                   SELECT m.*, r.name_en AS merchant_name, r.delivery_fee, r.eta_min, r.eta_max,
-                    VECTOR_DISTANCE(m.embedding_vector, :query_vector, COSINE) AS vector_distance,
-                    NVL((
-                      SELECT MIN(VECTOR_DISTANCE(rv.embedding_vector, :query_vector, COSINE))
-                      FROM review_snippet rv
-                      WHERE rv.menu_id=m.menu_id AND rv.embedding_vector IS NOT NULL
-                    ), 1) AS review_distance,
-                    NVL((
-                      SELECT MIN(VECTOR_DISTANCE(k.embedding_vector, :query_vector, COSINE))
-                      FROM menu_knowledge k
-                      WHERE k.menu_id=m.menu_id AND k.embedding_vector IS NOT NULL
-                    ), 1) AS knowledge_distance
+                    VECTOR_DISTANCE(m.embedding_vector, :query_vector, COSINE) AS vector_distance
                   FROM menu m JOIN merchant r ON r.merchant_id = m.merchant_id
                   WHERE m.availability = 'AVAILABLE'
                     AND m.price <= :budget
@@ -353,25 +893,42 @@ class OracleYobiRepository:
                 severe_shellfish=int(severe_shellfish),
                 vegan_required=int(vegan_required),
                 exclude_pork=int("pork" in {item.lower() for item in excluded_ingredients}),
-                candidate_limit=max(limit * 5, 20),
+                candidate_limit=min(
+                    RECOMMENDATION_CANDIDATE_CAP,
+                    max(16, min(limit, RECOMMENDATION_CANDIDATE_CAP) * 4),
+                ),
             )
             rows = _rows(cursor)
+            candidate_ids = [str(row["menu_id"]) for row in rows]
+            grounded = self._bulk_resolved_knowledge_claims(connection, candidate_ids)
+            knowledge = self._bulk_knowledge_passages(connection, candidate_ids, query_vector)
+            evidence_by_menu: dict[str, list[str]] = defaultdict(list)
+            if candidate_ids:
+                bind_names = [f"evidence_menu_{index}" for index in range(len(candidate_ids))]
+                evidence_binds = dict(zip(bind_names, candidate_ids))
+                cursor.execute(
+                    f"""
+                    SELECT subject_id,evidence_id FROM evidence
+                    WHERE subject_id IN ({','.join(':' + name for name in bind_names)})
+                    ORDER BY subject_id,evidence_id
+                    """,
+                    evidence_binds,
+                )
+                for evidence_row in _rows(cursor):
+                    evidence_by_menu[str(evidence_row["subject_id"])].append(
+                        str(evidence_row["evidence_id"])
+                    )
 
         lowered = query.lower()
-        scored: list[tuple[float, dict[str, Any], list[str], list[str], EvidenceStatus]] = []
+        scored: list[MenuSummary] = []
         for row in rows:
+            menu_id = str(row["menu_id"])
             tags = set(_json(row["dietary_tags_json"]))
             allergens = set(_json(row["allergen_tags_json"]))
-            if severe_allergies and known_allergen_conflicts(
-                allergens, set(profile.dietary_rules)
-            ):
+            if severe_allergies and known_allergen_conflicts(allergens, set(profile.dietary_rules)):
                 continue
             menu_similarity = max(0.0, 1.0 - float(row["vector_distance"]))
-            review_similarity = max(0.0, 1.0 - float(row["review_distance"]))
-            knowledge_similarity = max(0.0, 1.0 - float(row["knowledge_distance"]))
-            similarity = (
-                0.6 * menu_similarity + 0.25 * review_similarity + 0.15 * knowledge_similarity
-            )
+            knowledge_similarity, passage_ids = knowledge.get(menu_id, (0.0, []))
             boost = 0.0
             if "red rice cake" in lowered and "tteokbokki" in row["category"].lower():
                 boost += 0.45
@@ -395,18 +952,153 @@ class OracleYobiRepository:
                 risks.append("Cross-contamination is not verified")
             elif allergens:
                 risks.append("Some dietary details are not verified")
-            scored.append((similarity + boost, row, reasons, risks, status))
-        scored.sort(key=lambda item: (item[0], -int(item[1]["price"])), reverse=True)
-        menus = [
-            self._menu_summary(row, reasons, risks, status, score)
-            for score, row, reasons, risks, status in scored[:limit]
-        ]
-        return [
-            menu.model_copy(
-                update={"evidence_ids": [item.evidence_id for item in self.get_evidence(menu.menu_id)]}
+            ingredient_claims, allergen_claims, merchant_claims = grounded.get(
+                menu_id, ([], [], [])
             )
-            for menu in menus
-        ]
+            conflicts = ingredient_constraint_conflicts(ingredient_claims, safety_state)
+            mastered_shellfish = (
+                "shellfish_sauce_absent" in tags and "shellfish_risk" not in allergens
+            )
+            ignored_allergies = (
+                {"shellfish"}
+                if mastered_shellfish
+                and "shellfish_allergy"
+                in {*safety_state.dietary_rules, *safety_state.profile_dietary_rules}
+                else set()
+            )
+            conflicts.extend(
+                allergen_constraint_conflicts(
+                    allergen_claims,
+                    safety_state,
+                    ignored_allergies=ignored_allergies,
+                )
+            )
+            if profile.allergy_severity == "severe":
+                conflicts.extend(
+                    severe_allergy_conflicts(
+                        ingredient_claims,
+                        allergen_claims,
+                        safety_state.dietary_rules,
+                        shellfish_mastered_absence=mastered_shellfish,
+                    )
+                )
+            conflicts.extend(
+                merchant_cross_contact_conflicts(
+                    merchant_claims,
+                    safety_state,
+                    allergy_severity=profile.allergy_severity,
+                )
+            )
+            if conflicts:
+                continue
+            # Reviews remain display-only and intentionally contribute exactly zero.
+            similarity = 0.75 * menu_similarity + 0.25 * knowledge_similarity + boost
+            claim_ids = list(
+                dict.fromkeys(
+                    [claim.source_id for claim in ingredient_claims]
+                    + [claim.source_id for claim in allergen_claims]
+                    + [claim.source_id for claim in merchant_claims]
+                )
+            )
+            scored.append(
+                self._menu_summary(row, reasons, risks, status, similarity).model_copy(
+                    update={
+                        "evidence_ids": evidence_by_menu.get(menu_id, []),
+                        "grounded_claim_ids": claim_ids,
+                        "grounded_passage_ids": passage_ids,
+                    }
+                )
+            )
+        scored.sort(key=lambda item: (item.semantic_score, -item.price), reverse=True)
+        return scored[:limit]
+
+    def recommend_menus(
+        self,
+        query: str,
+        profile: Profile,
+        meal_need_state: MealNeedState,
+        limit: int = 4,
+    ) -> list[MenuSummary]:
+        meal_need_state = apply_profile_constraints(
+            meal_need_state, profile.dietary_rules, profile.religion_selection
+        )
+        effective_profile = profile.model_copy(
+            update={
+                "dietary_rules": list(
+                    dict.fromkeys([*profile.dietary_rules, *meal_need_state.dietary_rules])
+                )
+            }
+        )
+        expanded_query = " ".join(
+            part
+            for part in (
+                query,
+                *meal_need_state.temperature_preferences,
+                *meal_need_state.texture_preferences,
+                *meal_need_state.flavor_preferences,
+                *meal_need_state.preferred_categories,
+            )
+            if part
+        )
+        candidates = self.search_menus(
+            expanded_query,
+            effective_profile,
+            meal_need_state.budget_krw,
+            meal_need_state.max_spiciness,
+            meal_need_state.excluded_ingredients,
+            limit=RECOMMENDATION_CANDIDATE_CAP,
+            constraint_strictness=meal_need_state.strictness,
+        )
+        excluded_categories = {value.lower() for value in meal_need_state.excluded_categories}
+        rejected = set(meal_need_state.rejected_menu_ids)
+        soup_categories = {
+            "chicken kalguksu",
+            "samgyetang",
+            "sundubu",
+            "kimchi stew",
+            "gukbap",
+            "seolleongtang",
+            "eomuk",
+        }
+        with self.pool.connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute("SELECT merchant_id, service_area_id FROM merchant")
+            merchant_areas = {str(row[0]): str(row[1]) for row in cursor.fetchall()}
+        filtered: list[MenuSummary] = []
+        for menu in candidates:
+            category = menu.category.lower()
+            if menu.menu_id in rejected:
+                continue
+            if "soup" in excluded_categories and category in soup_categories:
+                continue
+            if any(excluded in category for excluded in excluded_categories if excluded != "soup"):
+                continue
+            if meal_need_state.service_area_id and (
+                merchant_areas.get(menu.merchant_id) != meal_need_state.service_area_id
+            ):
+                continue
+            if meal_need_state.party_size and menu.serves_max < min(meal_need_state.party_size, 2):
+                continue
+            searchable = f"{menu.category} {menu.description} {menu.cultural_description}".lower()
+            boost = sum(
+                0.06
+                for preference in (
+                    *meal_need_state.temperature_preferences,
+                    *meal_need_state.texture_preferences,
+                    *meal_need_state.flavor_preferences,
+                    *meal_need_state.preferred_categories,
+                )
+                if preference.lower() in searchable
+            )
+            filtered.append(
+                menu.model_copy(
+                    update={
+                        "semantic_score": round(min(1.0, menu.semantic_score + boost), 4),
+                    }
+                )
+            )
+        filtered.sort(key=lambda item: (item.semantic_score, -item.price), reverse=True)
+        return filtered[:limit]
 
     @staticmethod
     def _menu_summary(
@@ -467,8 +1159,13 @@ class OracleYobiRepository:
             status,
             1.0,
         )
+        knowledge = self.get_grounded_menu_knowledge(menu_id)
         return menu.model_copy(
-            update={"evidence_ids": [item.evidence_id for item in self.get_evidence(menu_id)]}
+            update={
+                "evidence_ids": [item.evidence_id for item in self.get_evidence(menu_id)],
+                "grounded_claim_ids": knowledge.claim_ids,
+                "grounded_passage_ids": [item.chunk_id for item in knowledge.passages],
+            }
         )
 
     def list_merchant_menus(
@@ -478,6 +1175,11 @@ class OracleYobiRepository:
         excluded_menu_ids: list[str],
         limit: int = 12,
     ) -> list[MenuSummary]:
+        safety_state = apply_profile_constraints(
+            MealNeedState(max_spiciness=profile.spice_tolerance),
+            profile.dietary_rules,
+            profile.religion_selection,
+        )
         with self.pool.connection() as connection:
             cursor = connection.cursor()
             cursor.execute(
@@ -495,21 +1197,40 @@ class OracleYobiRepository:
                 candidate_limit=max(limit * 3, 24),
             )
             rows = _rows(cursor)
+            hard_conflicts = {
+                str(row["menu_id"]): self._menu_hard_constraint_conflicts(
+                    connection,
+                    str(row["menu_id"]),
+                    safety_state,
+                    profile.allergy_severity,
+                )[0]
+                for row in rows
+            }
         excluded = set(excluded_menu_ids)
         rules = set(profile.dietary_rules)
         output: list[MenuSummary] = []
         for row in rows:
             if row["menu_id"] in excluded:
                 continue
+            if hard_conflicts.get(str(row["menu_id"])):
+                continue
             tags = set(_json(row["dietary_tags_json"]))
             allergens = set(_json(row["allergen_tags_json"]))
             if profile.allergy_severity == "severe" and known_allergen_conflicts(allergens, rules):
                 continue
-            if "shellfish_allergy" in rules and profile.allergy_severity == "severe" and "shellfish_sauce_absent" not in tags:
+            if (
+                "shellfish_allergy" in rules
+                and profile.allergy_severity == "severe"
+                and "shellfish_sauce_absent" not in tags
+            ):
                 continue
             if "vegan" in rules and "vegan_option" not in tags:
                 continue
-            status = EvidenceStatus.VERIFIED if "shellfish_sauce_absent" in tags else EvidenceStatus.UNKNOWN
+            status = (
+                EvidenceStatus.VERIFIED
+                if "shellfish_sauce_absent" in tags
+                else EvidenceStatus.UNKNOWN
+            )
             menu = self._menu_summary(
                 row,
                 ["More from the restaurant already selected"],
@@ -517,7 +1238,15 @@ class OracleYobiRepository:
                 status,
                 1.0,
             )
-            output.append(menu.model_copy(update={"evidence_ids": [item.evidence_id for item in self.get_evidence(menu.menu_id)]}))
+            output.append(
+                menu.model_copy(
+                    update={
+                        "evidence_ids": [
+                            item.evidence_id for item in self.get_evidence(menu.menu_id)
+                        ]
+                    }
+                )
+            )
             if len(output) >= limit:
                 break
         return output
@@ -530,6 +1259,589 @@ class OracleYobiRepository:
             )
             rows = _rows(cursor)
         return [Evidence(**row) for row in rows]
+
+    @staticmethod
+    def _resolved_knowledge_claims(
+        connection: oracledb.Connection,
+        menu_id: str,
+        option_item_ids: list[str] | None = None,
+    ) -> tuple[str | None, str | None, list[Any], list[Any]]:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            SELECT state.active_release_id, mapping.concept_id
+            FROM knowledge_runtime_state state
+            JOIN knowledge_release release ON release.release_id=state.active_release_id
+            LEFT JOIN menu_concept_map mapping
+              ON mapping.release_id=state.active_release_id AND mapping.menu_id=:menu_id
+              AND mapping.mapping_status='MAPPED'
+            WHERE state.state_key='ACTIVE' AND release.status='READY'
+            """,
+            menu_id=menu_id,
+        )
+        active = _row(cursor)
+        if active is None:
+            return None, None, [], []
+        release_id = str(active["active_release_id"])
+        concept_id = str(active["concept_id"]) if active.get("concept_id") else None
+        wiki_ingredient_rows: list[dict[str, Any]] = []
+        wiki_allergen_rows: list[dict[str, Any]] = []
+        if concept_id:
+            cursor.execute(
+                """
+                SELECT claim.*, ingredient.name_en, closure.depth,
+                       claim.release_id AS source_version
+                FROM dish_concept_closure closure
+                JOIN concept_claim claim
+                  ON claim.release_id=closure.release_id
+                 AND claim.concept_id=closure.ancestor_concept_id
+                JOIN ingredient ON ingredient.ingredient_id=claim.ingredient_id
+                WHERE closure.release_id=:release_id
+                  AND closure.descendant_concept_id=:concept_id
+                  AND closure.inherit_claims=1 AND claim.claim_type='INGREDIENT'
+                  AND (closure.depth=0 OR claim.inheritance_mode='INHERIT')
+                """,
+                release_id=release_id,
+                concept_id=concept_id,
+            )
+            wiki_ingredient_rows = _rows(cursor)
+            cursor.execute(
+                """
+                SELECT claim.*, allergen.code, closure.depth,
+                       claim.release_id AS source_version
+                FROM dish_concept_closure closure
+                JOIN concept_claim claim
+                  ON claim.release_id=closure.release_id
+                 AND claim.concept_id=closure.ancestor_concept_id
+                JOIN allergen ON allergen.allergen_id=claim.allergen_id
+                WHERE closure.release_id=:release_id
+                  AND closure.descendant_concept_id=:concept_id
+                  AND closure.inherit_claims=1 AND claim.claim_type='ALLERGEN'
+                  AND (closure.depth=0 OR claim.inheritance_mode='INHERIT')
+                """,
+                release_id=release_id,
+                concept_id=concept_id,
+            )
+            wiki_allergen_rows = _rows(cursor)
+        cursor.execute(
+            """
+            SELECT fact.*, ingredient.name_en, fact.source_id AS source_version
+            FROM menu_ingredient fact
+            JOIN ingredient ON ingredient.ingredient_id=fact.ingredient_id
+            WHERE fact.menu_id=:menu_id
+            """,
+            menu_id=menu_id,
+        )
+        menu_ingredient_rows = _rows(cursor)
+        cursor.execute(
+            """
+            SELECT fact.*, allergen.code, fact.evidence_id AS source_id,
+                   'catalog' AS source_version
+            FROM menu_allergen fact
+            JOIN allergen ON allergen.allergen_id=fact.allergen_id
+            WHERE fact.menu_id=:menu_id
+            """,
+            menu_id=menu_id,
+        )
+        menu_allergen_rows = _rows(cursor)
+        option_rows: list[dict[str, Any]] = []
+        selected_options = list(dict.fromkeys(option_item_ids or []))
+        if selected_options:
+            bind_names = [f"option_{index}" for index in range(len(selected_options))]
+            binds: dict[str, Any] = {"release_id": release_id}
+            binds.update(dict(zip(bind_names, selected_options)))
+            cursor.execute(
+                f"""
+                SELECT effect.*, ingredient.name_en, effect.option_item_id AS source_id,
+                       effect.release_id AS source_version
+                FROM option_ingredient_effect effect
+                JOIN ingredient ON ingredient.ingredient_id=effect.ingredient_id
+                WHERE effect.release_id=:release_id
+                  AND effect.option_item_id IN ({",".join(":" + name for name in bind_names)})
+                """,
+                binds,
+            )
+            option_rows = _rows(cursor)
+        return (
+            release_id,
+            concept_id,
+            resolve_ingredient_claims(wiki_ingredient_rows, menu_ingredient_rows, option_rows),
+            resolve_allergen_claims(wiki_allergen_rows, menu_allergen_rows),
+        )
+
+    @staticmethod
+    def _bulk_resolved_knowledge_claims(
+        connection: oracledb.Connection,
+        menu_ids: list[str],
+    ) -> dict[str, tuple[list[Any], list[Any], list[Any]]]:
+        """Resolve candidate claims with bounded, set-based Oracle queries."""
+
+        unique_ids = list(dict.fromkeys(menu_ids))
+        if not unique_ids:
+            return {}
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            SELECT release.release_id
+            FROM knowledge_runtime_state state
+            JOIN knowledge_release release ON release.release_id=state.active_release_id
+            WHERE state.state_key='ACTIVE' AND release.status='READY'
+            """
+        )
+        active = cursor.fetchone()
+        if active is None:
+            return {menu_id: ([], [], []) for menu_id in unique_ids}
+        release_id = str(active[0])
+        menu_bind_names = [f"menu_{index}" for index in range(len(unique_ids))]
+        binds: dict[str, Any] = {"release_id": release_id}
+        binds.update(dict(zip(menu_bind_names, unique_ids)))
+        in_clause = ",".join(":" + name for name in menu_bind_names)
+
+        cursor.execute(
+            f"""
+            SELECT mapping.menu_id,claim.*,ingredient.name_en,closure.depth,
+                   claim.release_id AS source_version
+            FROM menu_concept_map mapping
+            JOIN dish_concept_closure closure
+              ON closure.release_id=mapping.release_id
+             AND closure.descendant_concept_id=mapping.concept_id
+            JOIN concept_claim claim
+              ON claim.release_id=closure.release_id
+             AND claim.concept_id=closure.ancestor_concept_id
+            JOIN ingredient ON ingredient.ingredient_id=claim.ingredient_id
+            WHERE mapping.release_id=:release_id AND mapping.mapping_status='MAPPED'
+              AND mapping.menu_id IN ({in_clause})
+              AND closure.inherit_claims=1 AND claim.claim_type='INGREDIENT'
+              AND (closure.depth=0 OR claim.inheritance_mode='INHERIT')
+            """,
+            binds,
+        )
+        wiki_ingredients = _rows(cursor)
+        cursor.execute(
+            f"""
+            SELECT mapping.menu_id,claim.*,allergen.code,closure.depth,
+                   claim.release_id AS source_version
+            FROM menu_concept_map mapping
+            JOIN dish_concept_closure closure
+              ON closure.release_id=mapping.release_id
+             AND closure.descendant_concept_id=mapping.concept_id
+            JOIN concept_claim claim
+              ON claim.release_id=closure.release_id
+             AND claim.concept_id=closure.ancestor_concept_id
+            JOIN allergen ON allergen.allergen_id=claim.allergen_id
+            WHERE mapping.release_id=:release_id AND mapping.mapping_status='MAPPED'
+              AND mapping.menu_id IN ({in_clause})
+              AND closure.inherit_claims=1 AND claim.claim_type='ALLERGEN'
+              AND (closure.depth=0 OR claim.inheritance_mode='INHERIT')
+            """,
+            binds,
+        )
+        wiki_allergens = _rows(cursor)
+        cursor.execute(
+            f"""
+            SELECT fact.menu_id,fact.*,ingredient.name_en,fact.source_id AS source_version
+            FROM menu_ingredient fact
+            JOIN ingredient ON ingredient.ingredient_id=fact.ingredient_id
+            WHERE fact.menu_id IN ({in_clause})
+            """,
+            {name: binds[name] for name in menu_bind_names},
+        )
+        menu_ingredients = _rows(cursor)
+        cursor.execute(
+            f"""
+            SELECT fact.menu_id,fact.*,allergen.code,fact.evidence_id AS source_id,
+                   'catalog' AS source_version
+            FROM menu_allergen fact
+            JOIN allergen ON allergen.allergen_id=fact.allergen_id
+            WHERE fact.menu_id IN ({in_clause})
+            """,
+            {name: binds[name] for name in menu_bind_names},
+        )
+        menu_allergens = _rows(cursor)
+        cursor.execute(
+            f"""
+            SELECT menu.menu_id,fact.*,ingredient.name_en,declaration.source_version
+            FROM menu
+            JOIN merchant_ingredient fact ON fact.merchant_id=menu.merchant_id
+            JOIN merchant_origin_declaration declaration
+              ON declaration.release_id=fact.release_id
+             AND declaration.declaration_id=fact.declaration_id
+            JOIN ingredient ON ingredient.ingredient_id=fact.ingredient_id
+            WHERE fact.release_id=:release_id AND menu.menu_id IN ({in_clause})
+            """,
+            binds,
+        )
+        merchant_ingredients = _rows(cursor)
+
+        grouped: dict[str, dict[str, list[dict[str, Any]]]] = {
+            menu_id: defaultdict(list) for menu_id in unique_ids
+        }
+        for key, rows in (
+            ("wiki_ingredients", wiki_ingredients),
+            ("wiki_allergens", wiki_allergens),
+            ("menu_ingredients", menu_ingredients),
+            ("menu_allergens", menu_allergens),
+            ("merchant_ingredients", merchant_ingredients),
+        ):
+            for source in rows:
+                row = dict(source)
+                menu_id = str(row.pop("menu_id"))
+                if key == "merchant_ingredients":
+                    row["source_id"] = f"{row['declaration_id']}:{row['ingredient_id']}"
+                grouped[menu_id][key].append(row)
+        return {
+            menu_id: (
+                resolve_ingredient_claims(
+                    parts["wiki_ingredients"],
+                    parts["menu_ingredients"],
+                ),
+                resolve_allergen_claims(
+                    parts["wiki_allergens"],
+                    parts["menu_allergens"],
+                ),
+                resolve_merchant_ingredient_claims(parts["merchant_ingredients"]),
+            )
+            for menu_id, parts in grouped.items()
+        }
+
+    @staticmethod
+    def _bulk_knowledge_passages(
+        connection: oracledb.Connection,
+        menu_ids: list[str],
+        query_vector: array[float],
+    ) -> dict[str, tuple[float, list[str]]]:
+        unique_ids = list(dict.fromkeys(menu_ids))
+        if not unique_ids:
+            return {}
+        menu_bind_names = [f"menu_{index}" for index in range(len(unique_ids))]
+        binds: dict[str, Any] = {"query_vector": query_vector}
+        binds.update(dict(zip(menu_bind_names, unique_ids)))
+        cursor = connection.cursor()
+        cursor.execute(
+            f"""
+            SELECT mapping.menu_id,chunk.chunk_id,
+                   VECTOR_DISTANCE(chunk.embedding_vector,:query_vector,COSINE) distance
+            FROM knowledge_runtime_state state
+            JOIN knowledge_release release ON release.release_id=state.active_release_id
+            JOIN menu_concept_map mapping
+              ON mapping.release_id=release.release_id AND mapping.mapping_status='MAPPED'
+            JOIN dish_concept_closure closure
+              ON closure.release_id=mapping.release_id
+             AND closure.descendant_concept_id=mapping.concept_id
+             AND closure.inherit_claims=1
+            JOIN knowledge_chunk chunk
+              ON chunk.release_id=closure.release_id
+             AND chunk.concept_id=closure.ancestor_concept_id
+            WHERE state.state_key='ACTIVE' AND release.status='READY'
+              AND mapping.menu_id IN ({','.join(':' + name for name in menu_bind_names)})
+              AND chunk.embedding_vector IS NOT NULL
+              AND chunk.embedding_model=release.embedding_model
+              AND chunk.embedding_dimension=release.embedding_dimension
+              AND chunk.embedding_version=release.embedding_version
+            """,
+            binds,
+        )
+        grouped: dict[str, list[tuple[float, str]]] = defaultdict(list)
+        for row in _rows(cursor):
+            grouped[str(row["menu_id"])].append(
+                (max(0.0, 1.0 - float(row["distance"])), str(row["chunk_id"]))
+            )
+        result: dict[str, tuple[float, list[str]]] = {}
+        for menu_id, values in grouped.items():
+            ranked = sorted(values, key=lambda item: (-item[0], item[1]))
+            result[menu_id] = (
+                min(1.0, ranked[0][0]),
+                [chunk_id for _, chunk_id in ranked[:RECOMMENDATION_PASSAGE_LIMIT]],
+            )
+        return result
+
+    @staticmethod
+    def _menu_hard_constraint_conflicts(
+        connection: oracledb.Connection,
+        menu_id: str,
+        state: MealNeedState,
+        allergy_severity: str,
+        option_item_ids: list[str] | None = None,
+    ) -> tuple[list[str], list[str]]:
+        """Oracle parity for current-state, grounded hard-constraint validation."""
+
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            SELECT m.*, merchant.service_area_id
+            FROM menu m JOIN merchant ON merchant.merchant_id=m.merchant_id
+            WHERE m.menu_id=:menu_id
+            """,
+            menu_id=menu_id,
+        )
+        menu = _row(cursor)
+        if menu is None or menu["availability"] != "AVAILABLE":
+            return ["menu:unavailable"], []
+        conflicts: list[str] = []
+        if state.budget_krw is not None and int(menu["price"]) > state.budget_krw:
+            conflicts.append("menu:over_budget")
+        if state.max_spiciness is not None and int(menu["spice_level"]) > state.max_spiciness:
+            conflicts.append("menu:too_spicy")
+        if state.party_size and int(menu["serves_max"]) < min(state.party_size, 2):
+            conflicts.append("menu:portion_too_small")
+        if menu_id in state.rejected_menu_ids:
+            conflicts.append("menu:rejected")
+        if state.service_area_id and menu.get("service_area_id") != state.service_area_id:
+            conflicts.append("menu:service_area")
+        conflicts.extend(category_constraint_conflicts(str(menu["category"]), state))
+
+        _, _, ingredient_claims, allergen_claims = OracleYobiRepository._resolved_knowledge_claims(
+            connection, menu_id, option_item_ids
+        )
+        cursor.execute(
+            """
+            SELECT fact.*,ingredient.name_en,declaration.source_version
+            FROM menu
+            JOIN knowledge_runtime_state state ON state.state_key='ACTIVE'
+            JOIN merchant_ingredient fact
+              ON fact.release_id=state.active_release_id
+             AND fact.merchant_id=menu.merchant_id
+            JOIN merchant_origin_declaration declaration
+              ON declaration.release_id=fact.release_id
+             AND declaration.declaration_id=fact.declaration_id
+            JOIN ingredient ON ingredient.ingredient_id=fact.ingredient_id
+            WHERE menu.menu_id=:menu_id
+            """,
+            menu_id=menu_id,
+        )
+        merchant_claims = resolve_merchant_ingredient_claims(
+            [
+                {
+                    **row,
+                    "source_id": f"{row['declaration_id']}:{row['ingredient_id']}",
+                }
+                for row in _rows(cursor)
+            ]
+        )
+        conflicts.extend(ingredient_constraint_conflicts(ingredient_claims, state))
+        cursor.execute(
+            """
+            SELECT CASE WHEN EXISTS (
+              SELECT 1 FROM menu_dietary_attribute mda
+              JOIN dietary_attribute da ON da.attribute_id=mda.attribute_id
+              WHERE mda.menu_id=:menu_id AND da.code='shellfish_sauce_absent'
+                AND mda.status='VERIFIED'
+            ) AND NOT EXISTS (
+              SELECT 1 FROM menu_allergen ma
+              JOIN allergen a ON a.allergen_id=ma.allergen_id
+              WHERE ma.menu_id=:menu_id AND a.code='shellfish_risk'
+            ) THEN 1 ELSE 0 END FROM dual
+            """,
+            menu_id=menu_id,
+        )
+        mastered_shellfish = int(cursor.fetchone()[0]) == 1
+        ignored_allergies = (
+            {"shellfish"}
+            if mastered_shellfish
+            and "shellfish_allergy" in {*state.dietary_rules, *state.profile_dietary_rules}
+            else set()
+        )
+        conflicts.extend(
+            allergen_constraint_conflicts(
+                allergen_claims,
+                state,
+                ignored_allergies=ignored_allergies,
+            )
+        )
+        if allergy_severity == "severe":
+            conflicts.extend(
+                severe_allergy_conflicts(
+                    ingredient_claims,
+                    allergen_claims,
+                    state.dietary_rules,
+                    shellfish_mastered_absence=mastered_shellfish,
+                )
+            )
+        conflicts.extend(
+            merchant_cross_contact_conflicts(
+                merchant_claims,
+                state,
+                allergy_severity=allergy_severity,
+            )
+        )
+        claim_ids = list(
+            dict.fromkeys(
+                [claim.source_id for claim in ingredient_claims]
+                + [claim.source_id for claim in allergen_claims]
+                + [claim.source_id for claim in merchant_claims]
+            )
+        )
+        return list(dict.fromkeys(conflicts)), claim_ids
+
+    def get_grounded_menu_knowledge(
+        self,
+        menu_id: str,
+        query: str = "",
+        option_item_ids: list[str] | None = None,
+    ) -> GroundedMenuKnowledge:
+        # External embedding latency must not consume an Oracle pool connection.
+        with self.pool.connection() as lookup_connection:
+            lookup_cursor = lookup_connection.cursor()
+            lookup_cursor.execute(
+                "SELECT name_en,category FROM menu WHERE menu_id=:menu_id",
+                menu_id=menu_id,
+            )
+            menu_row = _row(lookup_cursor)
+        search_text = query.strip() or (
+            f"{menu_row['name_en']} {menu_row['category']} description ingredients safety"
+            if menu_row
+            else f"{menu_id} description ingredients safety"
+        )
+        query_vector = array(
+            "f", self.embedding_provider.embed([search_text], "SEARCH_QUERY")[0]
+        )
+        with self.pool.connection() as connection:
+            release_id, concept_id, ingredient_claims, allergen_claims = (
+                self._resolved_knowledge_claims(connection, menu_id, option_item_ids)
+            )
+            cursor = connection.cursor()
+            passages: list[GroundedPassage] = []
+            concept_lineage: list[str] = []
+            available_facets: list[str] = []
+            if release_id and concept_id:
+                cursor.execute(
+                    """
+                    SELECT ancestor_concept_id FROM dish_concept_closure
+                    WHERE release_id=:release_id AND descendant_concept_id=:concept_id
+                      AND inherit_claims=1 ORDER BY depth,ancestor_concept_id
+                    """,
+                    release_id=release_id,
+                    concept_id=concept_id,
+                )
+                concept_lineage = [str(row[0]) for row in cursor.fetchall()]
+                cursor.execute(
+                    """
+                    SELECT DISTINCT chunk.facet
+                    FROM knowledge_chunk chunk
+                    JOIN dish_concept_closure closure
+                      ON closure.release_id=chunk.release_id
+                     AND closure.ancestor_concept_id=chunk.concept_id
+                    WHERE chunk.release_id=:release_id
+                      AND closure.descendant_concept_id=:concept_id
+                      AND closure.inherit_claims=1
+                    ORDER BY chunk.facet
+                    """,
+                    release_id=release_id,
+                    concept_id=concept_id,
+                )
+                available_facets = [str(row[0]) for row in cursor.fetchall()]
+                cursor.execute(
+                    """
+                    SELECT * FROM (
+                      SELECT chunk.chunk_id,chunk.document_id,chunk.concept_id,chunk.facet,
+                             chunk.content,
+                             VECTOR_DISTANCE(chunk.embedding_vector,:query_vector,COSINE) distance
+                      FROM knowledge_chunk chunk
+                      JOIN dish_concept_closure closure
+                        ON closure.release_id=chunk.release_id
+                       AND closure.ancestor_concept_id=chunk.concept_id
+                      WHERE chunk.release_id=:release_id
+                        AND closure.descendant_concept_id=:concept_id
+                        AND closure.inherit_claims=1
+                        AND chunk.embedding_vector IS NOT NULL
+                      ORDER BY distance,chunk.chunk_id
+                    ) WHERE ROWNUM<=5
+                    """,
+                    query_vector=query_vector,
+                    release_id=release_id,
+                    concept_id=concept_id,
+                )
+                passages = [
+                    GroundedPassage(
+                        chunk_id=row["chunk_id"],
+                        document_id=row["document_id"],
+                        concept_id=row["concept_id"],
+                        facet=row["facet"],
+                        content=row["content"],
+                        source_kind=KnowledgeSourceKind.SYNTHETIC_WIKI,
+                        source_version=release_id,
+                        score=round(max(0.0, 1.0 - float(row["distance"])), 4),
+                    )
+                    for row in _rows(cursor)
+                ]
+            else:
+                cursor.execute(
+                    """
+                    SELECT * FROM (
+                      SELECT knowledge_id,knowledge_type,content,updated_at
+                      FROM menu_knowledge WHERE menu_id=:menu_id ORDER BY knowledge_id
+                    ) WHERE ROWNUM<=3
+                    """,
+                    menu_id=menu_id,
+                )
+                passages = [
+                    GroundedPassage(
+                        chunk_id=row["knowledge_id"],
+                        document_id=row["knowledge_id"],
+                        facet=row["knowledge_type"],
+                        content=row["content"],
+                        source_kind=KnowledgeSourceKind.LEGACY_MENU_KNOWLEDGE,
+                        source_version=str(row["updated_at"]),
+                        score=0.0,
+                    )
+                    for row in _rows(cursor)
+                ]
+            cursor.execute(
+                """
+                SELECT DISTINCT declaration.raw_text,declaration.declaration_id
+                FROM menu
+                JOIN merchant_origin_declaration declaration
+                  ON declaration.merchant_id=menu.merchant_id
+                JOIN knowledge_runtime_state state
+                  ON state.active_release_id=declaration.release_id
+                WHERE menu.menu_id=:menu_id
+                ORDER BY declaration.declaration_id
+                """,
+                menu_id=menu_id,
+            )
+            origin_rows = _rows(cursor)
+            cursor.execute(
+                """
+                SELECT fact.*,ingredient.name_en,declaration.source_version
+                FROM menu
+                JOIN knowledge_runtime_state state ON state.state_key='ACTIVE'
+                JOIN merchant_ingredient fact
+                  ON fact.release_id=state.active_release_id
+                 AND fact.merchant_id=menu.merchant_id
+                JOIN merchant_origin_declaration declaration
+                  ON declaration.release_id=fact.release_id
+                 AND declaration.declaration_id=fact.declaration_id
+                JOIN ingredient ON ingredient.ingredient_id=fact.ingredient_id
+                WHERE menu.menu_id=:menu_id
+                ORDER BY fact.ingredient_id,fact.declaration_id
+                """,
+                menu_id=menu_id,
+            )
+            merchant_claims = resolve_merchant_ingredient_claims(
+                [
+                    {
+                        **row,
+                        "source_id": f"{row['declaration_id']}:{row['ingredient_id']}",
+                    }
+                    for row in _rows(cursor)
+                ]
+            )
+        return GroundedMenuKnowledge(
+            menu_id=menu_id,
+            release_id=release_id,
+            concept_id=concept_id,
+            concept_lineage=concept_lineage,
+            available_facets=available_facets,
+            ingredient_claims=ingredient_claims,
+            allergen_claims=allergen_claims,
+            merchant_ingredient_claims=merchant_claims,
+            passages=passages,
+            merchant_origin_notes=[str(row["raw_text"]) for row in origin_rows],
+            unknowns=[
+                "Merchant-specific recipe differences are unknown unless a menu fact overrides the Wiki.",
+                "Shared-kitchen cross-contact is not confirmed by the synthetic Wiki or origin declaration.",
+            ],
+        )
 
     def compare_merchants(
         self, category: str, profile: Profile, limit: int = 3
@@ -558,7 +1870,7 @@ class OracleYobiRepository:
             note = "Ingredient and cross-contamination details are not verified."
             if "shellfish_risk" in allergens:
                 status = EvidenceStatus.RISK_SIGNAL
-                note = "Synthetic reviews contain a shellfish risk signal."
+                note = "The synthetic menu specification contains a shellfish risk signal."
             elif "shellfish_sauce_absent" in tags:
                 status = EvidenceStatus.VERIFIED
                 note = "Sauce marked seafood-free; cross-contamination remains unknown."
@@ -571,7 +1883,9 @@ class OracleYobiRepository:
                     price=int(row["price"]),
                     delivery_fee=int(row["delivery_fee"]),
                     eta=f"{int(row['eta_min'])}-{int(row['eta_max'])} min",
-                    portion=("One-person portion" if row["serves_max"] == 1 else "Shareable portion"),
+                    portion=(
+                        "One-person portion" if row["serves_max"] == 1 else "Shareable portion"
+                    ),
                     flavor=row["flavor_profile"],
                     packaging_signal=row["packaging_signal"],
                     dietary_status=status,
@@ -656,7 +1970,9 @@ class OracleYobiRepository:
         for row in rows:
             aliases = _json(row["aliases_json"])
             haystack = " ".join([row["name_en"], row["name_ko"], *aliases]).lower()
-            score = 0.98 if row["place_id"] == "hotel_demo_01" and "myeongdong" in normalized else 0.0
+            score = (
+                0.98 if row["place_id"] == "hotel_demo_01" and "myeongdong" in normalized else 0.0
+            )
             if normalized and any(token in haystack for token in normalized.split()):
                 score = max(score, 0.82)
             if file_hash and row["fixture_sha256"] == file_hash:
@@ -673,6 +1989,7 @@ class OracleYobiRepository:
                 road_address=row["road_address"],
                 postal_code=row["postal_code"],
                 city=row["city"],
+                service_area_id=row.get("service_area_id"),
                 delivery_hint=row["delivery_hint"],
                 confidence=score,
                 source="canonical_fixture" if score >= 0.98 else "manual",
@@ -694,6 +2011,7 @@ class OracleYobiRepository:
             road_address=row["road_address"],
             postal_code=row["postal_code"],
             city=row["city"],
+            service_area_id=row.get("service_area_id"),
             delivery_hint=row["delivery_hint"],
             confidence=1.0,
             source="canonical_fixture",
@@ -712,8 +2030,9 @@ class OracleYobiRepository:
             cursor.execute(
                 """
                 INSERT INTO address_ref(address_ref_id,session_id,source_type,source_image_hash,
-                  place_id,hotel_name,road_address,extraction_confidence,confirmed,created_at)
-                VALUES (:1,:2,:3,:4,:5,:6,:7,:8,1,:9)
+                  place_id,hotel_name,road_address,extraction_confidence,service_area_id,
+                  confirmed,created_at)
+                VALUES (:1,:2,:3,:4,:5,:6,:7,:8,:9,1,:10)
                 """,
                 [
                     address_ref_id,
@@ -724,6 +2043,7 @@ class OracleYobiRepository:
                     candidate.hotel_name,
                     candidate.road_address,
                     candidate.confidence,
+                    candidate.service_area_id,
                     _now(),
                 ],
             )
@@ -735,6 +2055,20 @@ class OracleYobiRepository:
                 cart=cart_id,
             )
         return address_ref_id
+
+    def get_session_service_area(self, session_id: str) -> str | None:
+        with self.pool.connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                SELECT ref.service_area_id
+                FROM cart JOIN address_ref ref ON ref.address_ref_id=cart.address_ref_id
+                WHERE cart.session_id=:session_id AND ref.confirmed=1
+                """,
+                session_id=session_id,
+            )
+            row = cursor.fetchone()
+        return str(row[0]) if row and row[0] else None
 
     @staticmethod
     def _ensure_cart(connection: oracledb.Connection, session_id: str) -> str:
@@ -808,11 +2142,45 @@ class OracleYobiRepository:
             raise ValueError("OPTION_GROUP_MAX_EXCEEDED")
         return menu, options, (int(menu["price"]) + option_total) * item.quantity
 
-    def add_cart_item(self, session_id: str, item: CartItemInput) -> CartPreview:
+    def add_cart_item(
+        self,
+        session_id: str,
+        item: CartItemInput,
+        agent_request_key: str | None = None,
+    ) -> CartPreview:
         with self.pool.connection() as connection:
             cursor = connection.cursor()
-            menu, options, line_total = self._cart_item_values(connection, item)
+            cursor.execute(
+                "SELECT session_id FROM chat_session WHERE session_id=:id FOR UPDATE",
+                id=session_id,
+            )
+            if cursor.fetchone() is None:
+                raise KeyError("SESSION_NOT_FOUND")
             cart_id = self._ensure_cart(connection, session_id)
+            if agent_request_key:
+                cursor.execute(
+                    """
+                    SELECT menu_id,quantity,option_snapshot_json,user_note FROM cart_item
+                    WHERE cart_id=:cart_id AND agent_request_key=:request_key AND ROWNUM=1
+                    """,
+                    cart_id=cart_id,
+                    request_key=agent_request_key,
+                )
+                duplicate = _row(cursor)
+                if duplicate:
+                    stored_option_ids = sorted(
+                        str(option["option_item_id"])
+                        for option in _json(duplicate["option_snapshot_json"])
+                    )
+                    if (
+                        str(duplicate["menu_id"]) != item.menu_id
+                        or int(duplicate["quantity"]) != item.quantity
+                        or stored_option_ids != sorted(item.option_item_ids)
+                        or str(duplicate.get("user_note") or "") != item.user_note
+                    ):
+                        raise ValueError("IDEMPOTENCY_KEY_REUSED")
+                    return self.get_cart(session_id)
+            menu, options, line_total = self._cart_item_values(connection, item)
             cursor.execute(
                 """
                 SELECT 1 FROM cart_item WHERE cart_id=:cart_id AND merchant_id<>:merchant_id
@@ -826,8 +2194,9 @@ class OracleYobiRepository:
             cursor.execute(
                 """
                 INSERT INTO cart_item(cart_item_id,cart_id,menu_id,merchant_id,quantity,unit_price,
-                  menu_snapshot_json,option_snapshot_json,line_total,user_note,korean_note,created_at)
-                VALUES (:1,:2,:3,:4,:5,:6,:7,:8,:9,:10,:11,:12)
+                  menu_snapshot_json,option_snapshot_json,line_total,user_note,korean_note,
+                  agent_request_key,created_at)
+                VALUES (:1,:2,:3,:4,:5,:6,:7,:8,:9,:10,:11,:12,:13)
                 """,
                 [
                     _id("cartitem"),
@@ -841,6 +2210,7 @@ class OracleYobiRepository:
                     line_total,
                     item.user_note,
                     self._translate_note(item.user_note),
+                    agent_request_key,
                     _now(),
                 ],
             )
@@ -889,9 +2259,7 @@ class OracleYobiRepository:
                 """,
                 quantity=replacement.quantity,
                 unit_price=int(menu["price"]),
-                menu_snapshot=json.dumps(
-                    {"name_en": menu["name_en"], "price": int(menu["price"])}
-                ),
+                menu_snapshot=json.dumps({"name_en": menu["name_en"], "price": int(menu["price"])}),
                 option_snapshot=json.dumps(options),
                 line_total=line_total,
                 user_note=replacement.user_note,
@@ -971,11 +2339,14 @@ class OracleYobiRepository:
                 id=cart["cart_id"],
             )
             delivery_fee = int(cursor.fetchone()[0])
-            cursor.execute("SELECT 1 FROM delivery_preference WHERE cart_id=:id", id=cart["cart_id"])
+            cursor.execute(
+                "SELECT 1 FROM delivery_preference WHERE cart_id=:id", id=cart["cart_id"]
+            )
             has_delivery = cursor.fetchone() is not None
             cursor.execute(
                 """
-                SELECT p.dietary_rules_json, p.allergy_severity
+                SELECT p.dietary_rules_json, p.allergy_severity,
+                       p.religion_selection, s.meal_need_state_json
                 FROM chat_session s JOIN user_profile p ON p.profile_id=s.profile_id
                 WHERE s.session_id=:id
                 """,
@@ -992,17 +2363,43 @@ class OracleYobiRepository:
                 minimum_row = _row(cursor)
                 minimum_order_amount = int(minimum_row["min_order_amount"]) if minimum_row else 0
             dietary_conflicts: list[str] = []
+            service_area_conflict = False
+            address_service_area = ""
+            if cart.get("address_ref_id"):
+                cursor.execute(
+                    """
+                    SELECT service_area_id FROM address_ref
+                    WHERE address_ref_id=:address_ref_id AND session_id=:session_id
+                      AND confirmed=1
+                    """,
+                    address_ref_id=cart["address_ref_id"],
+                    session_id=session_id,
+                )
+                address_area_row = cursor.fetchone()
+                if address_area_row:
+                    address_service_area = str(address_area_row[0] or "")
             if profile_row and rows:
                 dietary_rules = set(_json(profile_row["dietary_rules_json"]))
+                need_state = apply_profile_constraints(
+                    MealNeedState.model_validate(
+                        _json(profile_row["meal_need_state_json"] or "{}")
+                    ),
+                    list(dietary_rules),
+                    str(profile_row["religion_selection"]),
+                )
                 severe_shellfish = (
                     "shellfish_allergy" in dietary_rules
                     and profile_row["allergy_severity"] == "severe"
                 )
                 vegan_required = "vegan" in dietary_rules
                 for row in rows:
-                    conflicts = known_allergen_conflicts(
-                        set(_json(row["allergen_tags_json"])), dietary_rules
-                    ) if profile_row["allergy_severity"] == "severe" else set()
+                    conflicts = (
+                        known_allergen_conflicts(
+                            set(_json(row["allergen_tags_json"])), dietary_rules
+                        )
+                        if profile_row["allergy_severity"] == "severe"
+                        else set()
+                    )
                     for conflict in sorted(conflicts - {"shellfish"}):
                         dietary_conflicts.append(
                             f"Remove {row['menu_name']} to continue; it is flagged for {conflict.replace('_', ' ')}."
@@ -1050,9 +2447,34 @@ class OracleYobiRepository:
                                 id=option["option_item_id"],
                             )
                             if cursor.fetchone() is not None:
-                                dietary_conflicts.append(
-                                    f"Remove {option['name_en']} to continue."
-                                )
+                                dietary_conflicts.append(f"Remove {option['name_en']} to continue.")
+                    selected_ids = [
+                        str(option["option_item_id"])
+                        for option in _json(row["option_snapshot_json"])
+                    ]
+                    hard_conflicts, _ = self._menu_hard_constraint_conflicts(
+                        connection,
+                        str(row["menu_id"]),
+                        need_state,
+                        str(profile_row["allergy_severity"]),
+                        selected_ids,
+                    )
+                    if hard_conflicts:
+                        dietary_conflicts.append(
+                            f"Remove {row['menu_name']} to continue; it conflicts with current "
+                            "meal constraints or grounded safety facts."
+                        )
+                    cursor.execute(
+                        "SELECT service_area_id FROM merchant WHERE merchant_id=:merchant_id",
+                        merchant_id=row["merchant_id"],
+                    )
+                    merchant_area = cursor.fetchone()
+                    if (
+                        not address_service_area
+                        or merchant_area is None
+                        or merchant_area[0] != address_service_area
+                    ):
+                        service_area_conflict = True
         items = [
             CartLine(
                 cart_item_id=row["cart_item_id"],
@@ -1080,7 +2502,11 @@ class OracleYobiRepository:
             missing.append("minimum_order_amount")
         if dietary_conflicts:
             missing.append("dietary_conflict")
+        if service_area_conflict:
+            missing.append("service_area")
         warnings = list(dict.fromkeys(dietary_conflicts))
+        if service_area_conflict:
+            warnings.append("The confirmed address is outside this merchant's service area.")
         if items:
             warnings.append("Synthetic evidence only; cross-contamination may be unverified.")
         return CartPreview(
@@ -1099,9 +2525,7 @@ class OracleYobiRepository:
             confirmed=bool(cart["confirmed"]),
         )
 
-    def update_delivery(
-        self, session_id: str, preference: DeliveryPreferenceInput
-    ) -> CartPreview:
+    def update_delivery(self, session_id: str, preference: DeliveryPreferenceInput) -> CartPreview:
         with self.pool.connection() as connection:
             cursor = connection.cursor()
             cart_id = self._ensure_cart(connection, session_id)
@@ -1157,7 +2581,7 @@ class OracleYobiRepository:
         session_id: str,
         *,
         confirm: bool,
-    ) -> tuple[str, bool, bool, int]:
+    ) -> tuple[str, bool, bool, int, int]:
         """Lock, validate, and reprice a cart from authoritative Oracle rows."""
         cursor = connection.cursor()
         cursor.execute("SELECT * FROM cart WHERE session_id=:id FOR UPDATE", id=session_id)
@@ -1166,7 +2590,8 @@ class OracleYobiRepository:
             raise ValueError("CART_INCOMPLETE")
         cursor.execute(
             """
-            SELECT p.dietary_rules_json, p.allergy_severity
+            SELECT p.dietary_rules_json, p.allergy_severity,
+                   p.religion_selection, s.meal_need_state_json
             FROM chat_session s JOIN user_profile p ON p.profile_id=s.profile_id
             WHERE s.session_id=:id
             """,
@@ -1177,13 +2602,14 @@ class OracleYobiRepository:
             raise ValueError("CART_INCOMPLETE")
         cursor.execute(
             """
-            SELECT 1 FROM address_ref
+            SELECT service_area_id FROM address_ref
             WHERE address_ref_id=:address AND session_id=:session_id AND confirmed=1
             """,
             address=cart["address_ref_id"],
             session_id=session_id,
         )
-        address_ok = cursor.fetchone() is not None
+        address_row = cursor.fetchone()
+        address_ok = address_row is not None
         cursor.execute("SELECT 1 FROM delivery_preference WHERE cart_id=:id", id=cart["cart_id"])
         delivery_ok = cursor.fetchone() is not None
         cursor.execute(
@@ -1194,6 +2620,14 @@ class OracleYobiRepository:
             raise ValueError("CART_INCOMPLETE")
 
         dietary_rules = set(_json(profile["dietary_rules_json"]))
+        need_state = apply_profile_constraints(
+            MealNeedState.model_validate(_json(profile["meal_need_state_json"] or "{}")),
+            list(dietary_rules),
+            str(profile["religion_selection"]),
+        )
+        address_service_area = str(address_row[0] or "")
+        if need_state.service_area_id and need_state.service_area_id != address_service_area:
+            raise ValueError("CART_SERVICE_AREA_MISMATCH")
         severe_shellfish = (
             "shellfish_allergy" in dietary_rules and profile["allergy_severity"] == "severe"
         )
@@ -1204,7 +2638,8 @@ class OracleYobiRepository:
         for line in lines:
             cursor.execute(
                 """
-                SELECT m.*, r.delivery_fee, r.min_order_amount
+                SELECT m.*, r.delivery_fee, r.min_order_amount,
+                       r.service_area_id AS merchant_service_area_id
                 FROM menu m JOIN merchant r ON r.merchant_id=m.merchant_id
                 WHERE m.menu_id=:id AND m.availability='AVAILABLE'
                 """,
@@ -1215,6 +2650,11 @@ class OracleYobiRepository:
                 raise ValueError("CART_MENU_UNAVAILABLE")
             if menu["merchant_id"] != line["merchant_id"]:
                 raise ValueError("CART_MERCHANT_MISMATCH")
+            if (
+                not address_service_area
+                or menu.get("merchant_service_area_id") != address_service_area
+            ):
+                raise ValueError("CART_SERVICE_AREA_MISMATCH")
             merchant_ids.add(str(menu["merchant_id"]))
             if profile["allergy_severity"] == "severe" and (
                 known_allergen_conflicts(set(_json(menu["allergen_tags_json"])), dietary_rules)
@@ -1301,11 +2741,20 @@ class OracleYobiRepository:
             groups = _rows(cursor)
             if any(
                 selected_counts.get(str(group["option_group_id"]), 0) < int(group["min_select"])
-                or selected_counts.get(str(group["option_group_id"]), 0)
-                > int(group["max_select"])
+                or selected_counts.get(str(group["option_group_id"]), 0) > int(group["max_select"])
                 for group in groups
             ):
                 raise ValueError("CART_OPTION_SELECTION_INVALID")
+
+            hard_conflicts, _ = OracleYobiRepository._menu_hard_constraint_conflicts(
+                connection,
+                str(menu["menu_id"]),
+                need_state,
+                str(profile["allergy_severity"]),
+                selected_ids,
+            )
+            if hard_conflicts:
+                raise ValueError("CART_DIETARY_CONFLICT")
 
             unit_price = int(menu["price"])
             line_total = (unit_price + option_total) * int(line["quantity"])
@@ -1343,7 +2792,8 @@ class OracleYobiRepository:
             raise ValueError("MINIMUM_ORDER_NOT_MET")
 
         was_confirmed = bool(cart["confirmed"])
-        if confirm:
+        version_changed = False
+        if confirm and (not was_confirmed or changed):
             cursor.execute(
                 """
                 UPDATE cart SET confirmed=1,version=version+1,updated_at=:now
@@ -1352,6 +2802,7 @@ class OracleYobiRepository:
                 now=_now(),
                 id=cart["cart_id"],
             )
+            version_changed = True
         elif changed:
             cursor.execute(
                 """
@@ -1361,11 +2812,13 @@ class OracleYobiRepository:
                 now=_now(),
                 id=cart["cart_id"],
             )
+            version_changed = True
         return (
             str(cart["cart_id"]),
             changed,
             was_confirmed,
             subtotal + int(merchant["delivery_fee"]),
+            int(cart["version"]) + int(version_changed),
         )
 
     def confirm_cart(self, session_id: str) -> CartPreview:
@@ -1377,7 +2830,7 @@ class OracleYobiRepository:
         changed = False
         checkout: Checkout | None = None
         with self.pool.connection() as connection:
-            cart_id, changed, was_confirmed, current_total = self._revalidate_cart(
+            cart_id, changed, was_confirmed, current_total, cart_version = self._revalidate_cart(
                 connection, session_id, confirm=False
             )
             if not was_confirmed:
@@ -1387,40 +2840,67 @@ class OracleYobiRepository:
                 pass
             else:
                 cursor = connection.cursor()
+                fingerprint = hashlib.sha256(
+                    f"{cart_id}:{cart_version}:{current_total}".encode()
+                ).hexdigest()
                 cursor.execute(
                     "SELECT * FROM mock_checkout WHERE idempotency_key=:key",
                     key=data.idempotency_key,
                 )
                 existing = _row(cursor)
                 if existing:
-                    if existing["cart_id"] != cart_id:
+                    if (
+                        existing["cart_id"] != cart_id
+                        or int(existing["cart_version"] or -1) != cart_version
+                        or existing["cart_fingerprint"] != fingerprint
+                    ):
                         raise ValueError("IDEMPOTENCY_KEY_REUSED")
                     checkout = self._checkout(existing)
                 else:
-                    checkout_id = _id("checkout")
-                    now = _now()
                     cursor.execute(
                         """
-                        INSERT INTO mock_checkout(checkout_id,cart_id,idempotency_key,payment_method,
-                          status,amount,payment_url,created_at,updated_at)
-                        VALUES (:1,:2,:3,:4,'PENDING',:5,:6,:7,:8)
+                        SELECT * FROM (
+                          SELECT * FROM mock_checkout
+                          WHERE cart_id=:cart_id AND cart_version=:cart_version
+                          ORDER BY created_at,checkout_id
+                        ) WHERE ROWNUM=1
                         """,
-                        [
-                            checkout_id,
-                            cart_id,
-                            data.idempotency_key,
-                            data.payment_method,
-                            current_total,
-                            f"/pay/{checkout_id}",
-                            now,
-                            now,
-                        ],
+                        cart_id=cart_id,
+                        cart_version=cart_version,
                     )
-                    cursor.execute("SELECT * FROM mock_checkout WHERE checkout_id=:id", id=checkout_id)
-                    row = _row(cursor)
-                    if row is None:
-                        raise RuntimeError("CHECKOUT_CREATION_FAILED")
-                    checkout = self._checkout(row)
+                    active = _row(cursor)
+                    if active:
+                        checkout = self._checkout(active)
+                    else:
+                        checkout_id = _id("checkout")
+                        now = _now()
+                        cursor.execute(
+                            """
+                            INSERT INTO mock_checkout(checkout_id,cart_id,idempotency_key,
+                              payment_method,status,amount,payment_url,cart_version,
+                              cart_fingerprint,created_at,updated_at)
+                            VALUES (:1,:2,:3,:4,'PENDING',:5,:6,:7,:8,:9,:10)
+                            """,
+                            [
+                                checkout_id,
+                                cart_id,
+                                data.idempotency_key,
+                                data.payment_method,
+                                current_total,
+                                f"/pay/{checkout_id}",
+                                cart_version,
+                                fingerprint,
+                                now,
+                                now,
+                            ],
+                        )
+                        cursor.execute(
+                            "SELECT * FROM mock_checkout WHERE checkout_id=:id", id=checkout_id
+                        )
+                        created = _row(cursor)
+                        if created is None:
+                            raise RuntimeError("CHECKOUT_CREATION_FAILED")
+                        checkout = self._checkout(created)
         if changed:
             raise ValueError("CART_CHANGED_RECONFIRM_REQUIRED")
         if checkout is None:
@@ -1471,7 +2951,21 @@ class OracleYobiRepository:
             )
             order_id = None
             if status == "SUCCEEDED":
-                cursor.execute("SELECT order_id FROM mock_order WHERE checkout_id=:id", id=checkout_id)
+                cursor.execute(
+                    """
+                    SELECT other.checkout_id FROM mock_checkout other
+                    JOIN mock_order placed ON placed.checkout_id=other.checkout_id
+                    WHERE other.cart_id=:cart_id AND other.checkout_id<>:checkout_id
+                      AND ROWNUM=1
+                    """,
+                    cart_id=row["cart_id"],
+                    checkout_id=checkout_id,
+                )
+                if cursor.fetchone() is not None:
+                    raise ValueError("CART_ORDER_ALREADY_COMPLETED")
+                cursor.execute(
+                    "SELECT order_id FROM mock_order WHERE checkout_id=:id", id=checkout_id
+                )
                 existing = cursor.fetchone()
                 if existing:
                     order_id = existing[0]
@@ -1577,6 +3071,8 @@ class OracleYobiRepository:
             cursor.execute("DELETE FROM mock_checkout WHERE cart_id=:id", id=cart_id)
             cursor.execute("DELETE FROM cart WHERE cart_id=:id", id=cart_id)
         cursor.execute("DELETE FROM address_ref WHERE session_id=:id", id=session_id)
+        cursor.execute("DELETE FROM conversation_event WHERE session_id=:id", id=session_id)
+        cursor.execute("DELETE FROM recommendation_snapshot WHERE session_id=:id", id=session_id)
         cursor.execute("DELETE FROM chat_message WHERE session_id=:id", id=session_id)
         if delete_session:
             cursor.execute("DELETE FROM chat_session WHERE session_id=:id", id=session_id)
@@ -1584,9 +3080,12 @@ class OracleYobiRepository:
             cursor.execute(
                 """
                 UPDATE chat_session SET state=:state,selected_menu_id=NULL,
-                  selected_merchant_id=NULL,updated_at=:now WHERE session_id=:id
+                  selected_merchant_id=NULL,meal_need_state_json='{}',
+                  dialogue_act=:dialogue_act,state_version=state_version+1,
+                  state_stack_json='[]',updated_at=:now WHERE session_id=:id
                 """,
                 state=ChatState.DISCOVERY.value,
+                dialogue_act=DialogueAct.COLLECT_NEEDS.value,
                 now=_now(),
                 id=session_id,
             )
@@ -1594,38 +3093,182 @@ class OracleYobiRepository:
     def status(self) -> dict[str, object]:
         with self.pool.connection() as connection:
             cursor = connection.cursor()
-            counts = {}
-            for table in (
-                "merchant",
-                "menu",
-                "menu_option_item",
-                "review_snippet",
-                "evidence",
-                "address_place",
-            ):
-                cursor.execute(f"SELECT COUNT(*) FROM {table}")
-                counts[table] = int(cursor.fetchone()[0])
+            cursor.execute(
+                " UNION ALL ".join(
+                    f"SELECT '{table}' table_name,COUNT(*) row_count FROM {table}"
+                    for table in EXPECTED_RUNTIME_COUNTS
+                )
+            )
+            counts = {str(row[0]).lower(): int(row[1]) for row in cursor.fetchall()}
             cursor.execute(
                 "SELECT COUNT(*) FROM menu WHERE menu_id IN ('menu_001_01','menu_002_01','menu_003_01')"
             )
             canonical = int(cursor.fetchone()[0]) == 3
             cursor.execute(
                 """
-                SELECT VECTOR_DISTANCE(embedding_vector, embedding_vector, COSINE)
-                FROM menu WHERE embedding_vector IS NOT NULL FETCH FIRST 1 ROW ONLY
-                """
+                SELECT COUNT(*) FROM menu
+                WHERE embedding_vector IS NULL OR embedding_model IS NULL
+                  OR embedding_dimension IS NULL OR embedding_version IS NULL
+                  OR embedding_model<>:model OR embedding_dimension<>:dimension
+                  OR embedding_version<>:version
+                """,
+                model=self.embedding_provider.model,
+                dimension=self.embedding_provider.dimension,
+                version=self.embedding_provider.version,
             )
-            vector_ready = cursor.fetchone() is not None
+            menu_vector_mismatches = int(cursor.fetchone()[0])
             cursor.execute("SELECT MAX(updated_at) FROM menu")
             last_seed_time = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                SELECT release.release_id,release.catalog_version,release.manifest_sha256,
+                       release.status,release.expected_counts_json,release.actual_counts_json,
+                       release.embedding_model,
+                       release.embedding_dimension,release.embedding_version,
+                       (SELECT COUNT(*) FROM menu_concept_map mapping
+                        WHERE mapping.release_id=release.release_id
+                          AND mapping.mapping_status='MAPPED') mapped_menus,
+                       (SELECT COUNT(*) FROM knowledge_chunk chunk
+                        WHERE chunk.release_id=release.release_id
+                          AND chunk.embedding_vector IS NULL) null_vectors
+                FROM knowledge_runtime_state state
+                JOIN knowledge_release release ON release.release_id=state.active_release_id
+                WHERE state.state_key='ACTIVE'
+                """
+            )
+            knowledge = _row(cursor)
+            expected_counts: dict[str, int] = {}
+            declared_actual_counts: dict[str, int] = {}
+            observed_counts: dict[str, int] = {}
+            supplemental_counts = {
+                "mapped_menus": 0,
+                "origin_declarations": 0,
+                "merchant_ingredients": 0,
+                "option_effects": 0,
+                "chunk_metadata_mismatches": 0,
+            }
+            if knowledge:
+                release_id = str(knowledge["release_id"])
+                expected_counts = {
+                    str(key): int(value)
+                    for key, value in _json(knowledge["expected_counts_json"]).items()
+                }
+                declared_actual_counts = {
+                    str(key): int(value)
+                    for key, value in _json(knowledge["actual_counts_json"]).items()
+                }
+                for key, table in (
+                    ("concepts", "dish_concept"),
+                    ("relations", "dish_relation"),
+                    ("closure", "dish_concept_closure"),
+                    ("claims", "concept_claim"),
+                    ("documents", "knowledge_document"),
+                    ("chunks", "knowledge_chunk"),
+                ):
+                    cursor.execute(
+                        f"SELECT COUNT(*) FROM {table} WHERE release_id=:release_id",
+                        release_id=release_id,
+                    )
+                    observed_counts[key] = int(cursor.fetchone()[0])
+                supplemental_counts["mapped_menus"] = int(knowledge["mapped_menus"])
+                for key, table in (
+                    ("origin_declarations", "merchant_origin_declaration"),
+                    ("merchant_ingredients", "merchant_ingredient"),
+                    ("option_effects", "option_ingredient_effect"),
+                ):
+                    cursor.execute(
+                        f"SELECT COUNT(*) FROM {table} WHERE release_id=:release_id",
+                        release_id=release_id,
+                    )
+                    supplemental_counts[key] = int(cursor.fetchone()[0])
+                cursor.execute(
+                    """
+                    SELECT COUNT(*) FROM knowledge_chunk
+                    WHERE release_id=:release_id AND (
+                      embedding_model<>:model OR embedding_dimension<>:dimension
+                      OR embedding_version<>:version
+                    )
+                    """,
+                    release_id=release_id,
+                    model=knowledge["embedding_model"],
+                    dimension=int(knowledge["embedding_dimension"]),
+                    version=knowledge["embedding_version"],
+                )
+                supplemental_counts["chunk_metadata_mismatches"] = int(cursor.fetchone()[0])
+            cursor.execute(
+                """
+                SELECT COUNT(*) FROM menu_option_group g
+                WHERE g.min_select<0 OR g.max_select<g.min_select
+                  OR (g.required=1 AND g.min_select<1)
+                  OR (SELECT COUNT(*) FROM menu_option_item item
+                      WHERE item.option_group_id=g.option_group_id
+                        AND item.availability='AVAILABLE') < g.min_select
+                """
+            )
+            invalid_required_options = int(cursor.fetchone()[0])
+            release_embedding_matches_runtime = bool(
+                knowledge
+                and knowledge["embedding_model"] == self.embedding_provider.model
+                and int(knowledge["embedding_dimension"]) == self.embedding_provider.dimension
+                and knowledge["embedding_version"] == self.embedding_provider.version
+            )
+            readiness_checks = {
+                "base_catalog_counts_exact": counts == EXPECTED_RUNTIME_COUNTS,
+                "canonical_rows_present": canonical,
+                "active_release_matches_runtime_corpus": bool(
+                    knowledge
+                    and knowledge["release_id"] == KNOWLEDGE_RELEASE_ID
+                    and knowledge["catalog_version"] == KNOWLEDGE_CATALOG_VERSION
+                ),
+                "release_manifest_present": bool(
+                    knowledge
+                    and len(str(knowledge["manifest_sha256"])) == 64
+                    and str(knowledge["manifest_sha256"]).strip("0") != ""
+                ),
+                "release_status_ready": bool(knowledge and knowledge["status"] == "READY"),
+                "release_counts_exact": bool(
+                    knowledge
+                    and expected_counts
+                    and expected_counts == declared_actual_counts == observed_counts
+                ),
+                "menu_mappings_exact": supplemental_counts["mapped_menus"]
+                == EXPECTED_MAPPED_MENUS,
+                "origin_declarations_exact": supplemental_counts["origin_declarations"]
+                == EXPECTED_ORIGIN_DECLARATIONS,
+                "merchant_ingredients_exact": supplemental_counts["merchant_ingredients"]
+                == EXPECTED_MERCHANT_INGREDIENTS,
+                "option_effects_exact": supplemental_counts["option_effects"]
+                == EXPECTED_OPTION_EFFECTS,
+                "knowledge_chunk_vectors_complete": bool(
+                    knowledge
+                    and int(knowledge["null_vectors"]) == 0
+                    and supplemental_counts["chunk_metadata_mismatches"] == 0
+                ),
+                "embedding_runtime_compatible": release_embedding_matches_runtime,
+                "menu_vectors_compatible": menu_vector_mismatches == 0,
+                "required_options_valid": invalid_required_options == 0,
+            }
+            knowledge_ready = all(readiness_checks.values())
         return {
             "backend": "oracle-26ai",
             "catalog_version": CATALOG_VERSION,
+            "knowledge_catalog_version": knowledge["catalog_version"] if knowledge else None,
             "counts": counts,
-            "canonical_ready": canonical,
-            "vector_ready": vector_ready,
+            "canonical_ready": canonical and counts == EXPECTED_RUNTIME_COUNTS,
+            "vector_ready": menu_vector_mismatches == 0 and release_embedding_matches_runtime,
             "embedding_model": self.embedding_provider.model,
             "last_seed_time": str(last_seed_time) if last_seed_time else None,
+            "knowledge_ready": knowledge_ready,
+            "readiness_checks": readiness_checks,
+            "knowledge_expected_counts": expected_counts,
+            "knowledge_actual_counts": observed_counts,
+            "knowledge_supplemental_counts": supplemental_counts,
+            "knowledge_release_id": knowledge["release_id"] if knowledge else None,
+            "knowledge_embedding_model": knowledge["embedding_model"] if knowledge else None,
+            "knowledge_embedding_dimension": (
+                int(knowledge["embedding_dimension"]) if knowledge else None
+            ),
+            "knowledge_embedding_version": knowledge["embedding_version"] if knowledge else None,
         }
 
     def record_audit(

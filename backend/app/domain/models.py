@@ -6,6 +6,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.domain.dialogue import (
+    DialogueAct,
+    FallbackReason,
+    MealNeedState,
+    ReadinessDecision,
+    RecommendationResult,
+)
+
 
 class ChatState(str, Enum):
     ONBOARDING = "ONBOARDING"
@@ -86,6 +94,9 @@ class Session(BaseModel):
     state: ChatState
     selected_menu_id: str | None = None
     selected_merchant_id: str | None = None
+    dialogue_act: DialogueAct = DialogueAct.COLLECT_NEEDS
+    meal_need_state: MealNeedState = Field(default_factory=MealNeedState)
+    state_version: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -124,6 +135,8 @@ class MenuSummary(BaseModel):
     risk_hints: list[str]
     semantic_score: float
     evidence_ids: list[str] = Field(default_factory=list)
+    grounded_claim_ids: list[str] = Field(default_factory=list)
+    grounded_passage_ids: list[str] = Field(default_factory=list)
     is_synthetic: bool = True
 
 
@@ -195,13 +208,25 @@ class AssistantTurn(BaseModel):
     state: ChatState
     cards: list[Card] = Field(default_factory=list)
     suggested_replies: list[str] = Field(default_factory=list)
+    dialogue_act: DialogueAct = DialogueAct.COLLECT_NEEDS
+    readiness: ReadinessDecision | None = None
+    recommendation_result: RecommendationResult | None = None
+    recommendation_snapshot_id: str | None = None
+    state_version: int = 0
     fallback_used: bool = False
+    fallback_reason: FallbackReason | None = None
     created_at: datetime
 
 
 class UserMessage(BaseModel):
     content: str = Field(min_length=1, max_length=2000)
     intent: Literal["weekly_ranking", "kpop_demon_hunters"] | None = None
+    request_id: str | None = Field(
+        default=None,
+        min_length=8,
+        max_length=100,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
 
 
 class AddressCandidate(BaseModel):
@@ -210,6 +235,7 @@ class AddressCandidate(BaseModel):
     road_address: str
     postal_code: str
     city: str
+    service_area_id: str | None = None
     delivery_hint: str
     confidence: float = Field(ge=0, le=1)
     source: Literal["ocr", "canonical_fixture", "manual"]

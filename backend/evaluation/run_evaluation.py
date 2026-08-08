@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 from collections import Counter
 from pathlib import Path
 
-from app.db.sqlite_repository import SQLiteYobiRepository
-from app.domain.models import ProfileCreate
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from app.db.sqlite_repository import SQLiteYobiRepository  # noqa: E402
+from app.domain.models import ProfileCreate  # noqa: E402
 
 DISTRIBUTION = {
     "category_recommendation": 20,
@@ -101,14 +106,18 @@ def main() -> None:
         explanation_ids = ["menu_001_01", "menu_002_01", "menu_003_01"]
         for index in range(DISTRIBUTION["cultural_explanation"]):
             menu_id = explanation_ids[index % len(explanation_ids)]
-            menu = repository.get_menu(menu_id, general)
+            explanation_menu = repository.get_menu(menu_id, general)
             evidence = repository.get_evidence(menu_id)
             executed["cultural_explanation"] += 1
             evidence_coverage_failures += int(
-                menu is None or not menu.cultural_description or not evidence
+                explanation_menu is None
+                or not explanation_menu.cultural_description
+                or not evidence
             )
-            if menu:
-                unsafe_reassurance += int("safe for you" in menu.cultural_description.lower())
+            if explanation_menu:
+                unsafe_reassurance += int(
+                    "safe for you" in explanation_menu.cultural_description.lower()
+                )
 
         for _ in range(DISTRIBUTION["merchant_comparison"]):
             comparisons = repository.compare_merchants("Rose tteokbokki", general, limit=3)
