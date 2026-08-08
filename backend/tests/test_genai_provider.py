@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from openai import RateLimitError
 
 from app.core.config import Settings
@@ -16,8 +17,14 @@ from app.genai.contracts import (
     GenAIServingMode,
     ProviderCapabilities,
 )
-from app.genai.providers import OciResponsesProvider, classify_provider_error
+from app.genai.providers import (
+    OciResponsesProvider,
+    classify_provider_error,
+    genai_configuration_errors,
+)
 from app.genai.tool_registry import ToolRegistry
+from app.main import readyz
+from app.services.chat_service import ChatService
 
 
 def _rate_limit() -> RateLimitError:
@@ -45,6 +52,10 @@ def test_on_demand_provider_preserves_legacy_model_request_and_capabilities() ->
     assert provider.capabilities.function_calling is True
     assert provider.capabilities.client_managed_continuation is True
     assert provider.capabilities.server_managed_continuation is False
+    assert provider.capabilities.max_input_tokens == 32768
+    assert provider.capabilities.max_output_tokens == 1200
+    assert provider.capabilities.max_tools_per_request == 4
+    assert provider.capabilities.max_tool_calls_per_response == 4
 
 
 def test_dedicated_provider_normalizes_logical_models_to_endpoint_ocids() -> None:
@@ -204,6 +215,10 @@ def test_structured_capability_sends_strict_narrative_schema(
             native_streaming=False,
             client_managed_continuation=True,
             server_managed_continuation=False,
+            max_input_tokens=32768,
+            max_output_tokens=256,
+            max_tools_per_request=4,
+            max_tool_calls_per_response=4,
         )
 
         def __init__(self) -> None:
@@ -241,7 +256,183 @@ def test_structured_capability_sends_strict_narrative_schema(
     )
 
     assert result.structured_output is True
+    assert provider.requests[0]["max_output_tokens"] == 256
     response_format = provider.requests[0]["text"]["format"]
     assert response_format["type"] == "json_schema"
     assert response_format["strict"] is True
     assert response_format["schema"]["additionalProperties"] is False
+
+
+def test_agent_rejects_provider_input_and_tool_limits_before_calling_provider(
+    repository: Any, profile_data: Any
+) -> None:
+    profile = repository.create_profile(profile_data)
+
+    class RestrictedProvider:
+        configured = True
+        capabilities = ProviderCapabilities(
+            provider="restricted",
+            serving_mode=GenAIServingMode.ON_DEMAND,
+            responses_api=True,
+            function_calling=True,
+            structured_output=False,
+            native_streaming=False,
+            client_managed_continuation=True,
+            server_managed_continuation=False,
+            max_input_tokens=512,
+            max_output_tokens=128,
+            max_tools_per_request=1,
+            max_tool_calls_per_response=1,
+        )
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def supports_model(self, model: str) -> bool:
+            return True
+
+        def normalize_request(self, model: str, **kwargs: Any) -> dict[str, Any]:
+            return {"model": model, **kwargs}
+
+        def create_response(self, model: str, **kwargs: Any) -> Any:
+            self.calls += 1
+            return SimpleNamespace(id="unexpected", output=[], output_text="unexpected")
+
+    tool_limited = RestrictedProvider()
+    agent = AgentLoop(Settings(), provider=tool_limited)
+    with pytest.raises(GenAIProviderError) as caught:
+        agent.run(
+            "recommend something mild",
+            "state=DISCOVERY",
+            ToolRegistry(repository, profile),
+        )
+    assert caught.value.code is GenAIErrorCode.CAPABILITY_LIMIT_EXCEEDED
+    assert tool_limited.calls == 0
+
+    input_limited = RestrictedProvider()
+    agent = AgentLoop(Settings(llm_max_tools_per_request=1), provider=input_limited)
+    with pytest.raises(GenAIProviderError) as caught:
+        agent.run(
+            "hi",
+            "x" * 2_000,
+            ToolRegistry(repository, profile),
+            allow_tools=False,
+        )
+    assert caught.value.code is GenAIErrorCode.CAPABILITY_LIMIT_EXCEEDED
+    assert input_limited.calls == 0
+
+
+def test_required_genai_configuration_fails_closed_without_breaking_local_demo() -> None:
+    assert genai_configuration_errors(Settings()) == []
+
+    production_errors = genai_configuration_errors(Settings(app_env="production"))
+    assert "API_KEY_MISSING" in production_errors
+    assert "PROVIDER_NOT_CONFIGURED" in production_errors
+
+    dedicated_errors = genai_configuration_errors(
+        Settings(
+            oci_genai_api_key="test-key",
+            oci_genai_serving_mode="dedicated",
+        )
+    )
+    assert "PRIMARY_ENDPOINT_MISSING" in dedicated_errors
+    assert "FALLBACK_ENDPOINT_MISSING" in dedicated_errors
+
+    assert (
+        genai_configuration_errors(
+            Settings(
+                app_env="production",
+                oci_genai_api_key="test-key",
+                oci_genai_serving_mode="dedicated",
+                oci_genai_endpoint_id="ocid1.generativeaiendpoint.primary",
+                oci_genai_fallback_endpoint_id="ocid1.generativeaiendpoint.fallback",
+            )
+        )
+        == []
+    )
+
+    incompatible_limits = genai_configuration_errors(
+        Settings(
+            app_env="production",
+            oci_genai_api_key="test-key",
+            oci_genai_max_input_tokens=512,
+            oci_genai_max_output_tokens=64,
+        )
+    )
+    assert "INPUT_LIMIT_INCOMPATIBLE" in incompatible_limits
+    assert "OUTPUT_LIMIT_INCOMPATIBLE" in incompatible_limits
+
+
+def test_readyz_exposes_sanitized_genai_failure_for_production(repository: Any) -> None:
+    local = readyz(repository, Settings())
+    assert local["status"] == "ready"
+    assert local["genai_required"] is False
+
+    with pytest.raises(HTTPException) as caught:
+        readyz(repository, Settings(app_env="production"))
+
+    assert caught.value.status_code == 503
+    assert caught.value.detail["code"] == "GENAI_NOT_READY"
+    assert caught.value.detail["errors"] == ["API_KEY_MISSING", "PROVIDER_NOT_CONFIGURED"]
+    assert "endpoint" not in caught.value.detail
+
+    capability_error = GenAIProviderError(
+        GenAIErrorCode.CAPABILITY_LIMIT_EXCEEDED,
+        retryable=False,
+    )
+    assert ChatService._classify_fallback(capability_error).value == "PROVIDER_UNAVAILABLE"
+
+
+def test_agent_rejects_excess_provider_tool_calls_before_any_execution(
+    repository: Any, profile_data: Any
+) -> None:
+    profile = repository.create_profile(profile_data)
+
+    class MultiCallProvider:
+        configured = True
+        capabilities = ProviderCapabilities(
+            provider="multi-call-fixture",
+            serving_mode=GenAIServingMode.ON_DEMAND,
+            responses_api=True,
+            function_calling=True,
+            structured_output=False,
+            native_streaming=False,
+            client_managed_continuation=True,
+            server_managed_continuation=False,
+            max_input_tokens=32768,
+            max_output_tokens=256,
+            max_tools_per_request=4,
+            max_tool_calls_per_response=1,
+        )
+
+        def supports_model(self, model: str) -> bool:
+            return True
+
+        def normalize_request(self, model: str, **kwargs: Any) -> dict[str, Any]:
+            return {"model": model, **kwargs}
+
+        def create_response(self, model: str, **kwargs: Any) -> Any:
+            calls = [
+                SimpleNamespace(
+                    type="function_call",
+                    name="search_menus",
+                    arguments='{"query":"mild","budget_krw":null,"max_spiciness":null,"excluded_ingredients":[]}',
+                    call_id=f"call-{index}",
+                )
+                for index in range(2)
+            ]
+            return SimpleNamespace(id="too-many-calls", output=calls, output_text="")
+
+    registry = ToolRegistry(repository, profile)
+    executed: list[str] = []
+    registry.execute = lambda name, arguments: executed.append(name) or {}  # type: ignore[method-assign]
+    agent = AgentLoop(
+        Settings(llm_max_tool_calls_per_response=4),
+        provider=MultiCallProvider(),
+    )
+
+    with pytest.raises(GenAIProviderError) as caught:
+        agent.run("recommend something mild", "state=DISCOVERY", registry)
+
+    assert caught.value.code is GenAIErrorCode.CAPABILITY_LIMIT_EXCEEDED
+    assert executed == []

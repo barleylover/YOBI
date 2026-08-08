@@ -74,6 +74,8 @@ quote_env_value() {
 }
 
 emit_runtime_env() {
+  # This file is data for systemd/python-dotenv. Never shell-source or eval its values;
+  # deployment subprocesses must use deploy/run_with_runtime_env.py.
   printf 'APP_ENV="production"\n'
   printf 'APP_BASE_URL="http://127.0.0.1"\n'
   printf 'DEMO_MODE="true"\n'
@@ -86,6 +88,7 @@ emit_runtime_env() {
   printf 'OCI_GENAI_FALLBACK_MODEL="openai.gpt-oss-120b"\n'
   printf 'OCI_EMBED_MODEL="cohere.embed-v4.0"\n'
   printf 'OCI_EMBED_DIMENSION="1536"\n'
+  printf 'EMBEDDING_PROVIDER="deterministic"\n'
   printf 'ADB_DSN='; quote_env_value "$adb_tls_dsn"; printf '\n'
   printf 'DB_USERNAME="YOBI_APP"\n'
   printf 'DB_PASSWORD='; quote_env_value "$yobi_app_password"; printf '\n'
@@ -165,7 +168,7 @@ cat >"$temporary"
 required=(
   APP_ENV APP_BASE_URL DEMO_MODE DEMO_FALLBACK_ENABLED DEMO_DB_BACKEND
   OCI_GENAI_BASE_URL OCI_GENAI_API_KEY OCI_GENAI_MODEL OCI_GENAI_FALLBACK_MODEL
-  OCI_EMBED_MODEL OCI_EMBED_DIMENSION ADB_DSN DB_USERNAME DB_PASSWORD
+  OCI_EMBED_MODEL OCI_EMBED_DIMENSION EMBEDDING_PROVIDER ADB_DSN DB_USERNAME DB_PASSWORD
   LLM_TIMEOUT_SECONDS LLM_MAX_RETRIES TOOL_CALL_MAX_STEPS MAX_UPLOAD_MB
   ADDRESS_OCR_PROVIDER LOG_LEVEL DEMO_CONTROL_TOKEN
 )

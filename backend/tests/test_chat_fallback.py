@@ -5,6 +5,7 @@ from itertools import permutations
 from app.core.config import Settings
 from app.db.sqlite_repository import SQLiteYobiRepository
 from app.domain.models import Card, ChatState, ProfileCreate
+from app.genai.contracts import GenAIErrorCode, GenAIProviderError
 from app.genai.tool_registry import ToolRegistry
 from app.services.chat_service import ChatService
 from app.services.demo_control import DemoControl
@@ -266,6 +267,34 @@ def test_chat_audit_stores_hashes_without_raw_message_or_session(
     assert session.session_id not in row
     # Information-gathering questions are a normal no-tool dialogue path, not fallback.
     assert row[2] == 0
+
+
+def test_chat_audit_preserves_exact_provider_capability_error(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    profile = repository.create_profile(profile_data)
+    session = repository.create_session(profile.profile_id)
+    service = ChatService(repository, Settings(), DemoControl())
+
+    class CapabilityFailingAgent:
+        configured = True
+
+        def run(self, *args: object, **kwargs: object) -> object:
+            raise GenAIProviderError(
+                GenAIErrorCode.CAPABILITY_LIMIT_EXCEEDED,
+                retryable=False,
+            )
+
+    service.agent = CapabilityFailingAgent()  # type: ignore[assignment]
+    turn = service.respond(session, profile, "hi")
+
+    with sqlite3.connect(repository.path) as connection:
+        row = connection.execute(
+            "SELECT safe_error_code FROM audit_log "
+            "WHERE tool = 'assistant_turn' ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+    assert turn.fallback_used is True
+    assert row == ("CAPABILITY_LIMIT_EXCEEDED",)
 
 
 def test_duplicate_menu_tool_results_render_one_deduplicated_carousel(

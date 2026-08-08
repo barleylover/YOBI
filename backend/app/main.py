@@ -36,6 +36,7 @@ from app.domain.models import (
     Session,
     UserMessage,
 )
+from app.genai.providers import genai_configuration_errors
 from app.services.address_ocr import AddressCandidateTokenCodec, choose_address_ocr
 from app.services.chat_service import ChatService
 from app.services.demo_control import DemoControl, FailureMode
@@ -168,7 +169,10 @@ def healthz() -> dict[str, str]:
 
 
 @app.get("/readyz")
-def readyz(repository: YobiRepository = Depends(get_repository)) -> dict[str, Any]:
+def readyz(
+    repository: YobiRepository = Depends(get_repository),
+    current_settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
     try:
         db = repository.status()
     except Exception as exc:
@@ -181,7 +185,36 @@ def readyz(repository: YobiRepository = Depends(get_repository)) -> dict[str, An
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "CATALOG_NOT_READY"},
         )
-    return {"status": "ready", "database": db, "genai_required": False}
+    genai_required = (
+        current_settings.app_env == "production"
+        or current_settings.oci_genai_serving_mode == "dedicated"
+    )
+    configuration_errors = genai_configuration_errors(current_settings)
+    if configuration_errors:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "GENAI_NOT_READY",
+                "errors": configuration_errors,
+            },
+        )
+    return {
+        "status": "ready",
+        "database": db,
+        "genai_required": genai_required,
+        "genai": {
+            "provider": current_settings.genai_provider,
+            "serving_mode": current_settings.oci_genai_serving_mode,
+            "configured": bool(
+                current_settings.oci_genai_api_key.get_secret_value().strip()
+                and current_settings.oci_genai_model.strip()
+                and (
+                    current_settings.oci_genai_serving_mode == "on_demand"
+                    or current_settings.oci_genai_endpoint_id.strip()
+                )
+            ),
+        },
+    }
 
 
 @app.post("/api/v1/profiles", response_model=Profile, status_code=status.HTTP_201_CREATED)

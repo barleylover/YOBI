@@ -27,6 +27,7 @@ from app.domain.dialogue import (
 )
 from app.domain.models import AssistantTurn, Card, CartItemInput, ChatState, Profile, Session
 from app.genai.agent_loop import AgentLoop
+from app.genai.contracts import GenAIProviderError
 from app.genai.grounding import GroundedResponseValidator
 from app.genai.tool_registry import ToolRegistry
 from app.services.demo_control import DemoControl
@@ -601,7 +602,11 @@ class ChatService:
                     # name or recommendation phrase cannot leak into the user turn.
                 except Exception as exc:
                     fallback_reason = self._classify_fallback(exc)
-                    safe_error_code = fallback_reason.value
+                    safe_error_code = (
+                        exc.code.value
+                        if isinstance(exc, GenAIProviderError)
+                        else fallback_reason.value
+                    )
                     turn.fallback_used = True
                     turn.fallback_reason = fallback_reason
             use_fallback = False
@@ -663,7 +668,11 @@ class ChatService:
                 if not self.settings.demo_fallback_enabled:
                     raise
                 fallback_reason = self._classify_fallback(exc)
-                safe_error_code = fallback_reason.value
+                safe_error_code = (
+                    exc.code.value
+                    if isinstance(exc, GenAIProviderError)
+                    else fallback_reason.value
+                )
                 use_fallback = True
         if use_fallback:
             fallback_turn: AssistantTurn | None = None
@@ -1545,6 +1554,8 @@ class ChatService:
             return FallbackReason.EMPTY_RESPONSE
         if "GROUNDING" in message:
             return FallbackReason.GROUNDING_REJECTED
+        if "CAPABILITY_LIMIT_EXCEEDED" in message:
+            return FallbackReason.PROVIDER_UNAVAILABLE
         if "NO_MODEL" in message or "UNAVAILABLE" in message:
             return FallbackReason.PROVIDER_UNAVAILABLE
         return FallbackReason.UNKNOWN_PROVIDER_ERROR

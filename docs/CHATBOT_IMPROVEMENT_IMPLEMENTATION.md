@@ -4,8 +4,8 @@
 - 작업 브랜치: `codex/master-spec-completion`
 - 점검일: 2026-08-09 KST
 - 상태 의미: **연결됨**은 현재 작업 트리의 실제 런타임 경로가 존재한다는 뜻이며,
-  **로컬 PASS**는 최종 로컬 회귀를 통과했다는 뜻이다. Oracle/OCI/Public와 Git은
-  별도 증거가 기록될 때까지 계속 대기 상태다.
+  **로컬 PASS**는 최종 로컬 회귀를 통과했다는 뜻이다. Git/Draft PR 증거는
+  기록됐지만 Oracle/OCI/Public는 별도 live 증거가 생길 때까지 대기 상태다.
 
 이 문서는 구현 파일 목록을 완료 증거로 대신하지 않는다. 로컬 전체 검증, Oracle
 Migration/seed, OCI release 전환, Public E2E, Git push는 서로 다른 증거다. 아래
@@ -43,7 +43,7 @@ Phase 7 표의 빈 항목이 실제 결과로 채워지기 전에는 개선 Goal
 | 4. 합성 Wiki·원산지·매핑 | 연결됨 | 20 카테고리/150 메뉴 매핑, 30 가게 원산지 선언, 정규화 재료, 메뉴 사실, 옵션 효과, `knowledge/dishes/` | 최종 seed exact-count 및 공개 DB 검증 대기 |
 | 5. 하이브리드 추천·설명 | 연결됨 | repository `recommend_menus`/`get_grounded_menu_knowledge`, claim resolver, tool grounding, review-weight-0 회귀 | 로컬 acceptance PASS; Oracle Vector 실행 대기 |
 | 6. LLM 품질·fallback | 연결됨 | provider/capability adapter, DialogueAct tool routing, structured narrative, response validator, 오류 분류·retry | 로컬 회귀 PASS; 실제 OCI 정상/오류 smoke 대기 |
-| 7. 통합·배포 | 로컬 PASS, 외부 증거 대기 | 배포 archive preflight, checksum migration, release marker/정확한 rollback, 문서와 acceptance runner | 로컬 전체 gate PASS; OCI release, Public 3회, Git/PR 기록 필요 |
+| 7. 통합·배포 | 로컬 PASS, 외부 증거 대기 | 배포 archive preflight, checksum migration, SHA release identity, release marker/정확한 rollback, 문서와 acceptance runner | 로컬 전체 gate와 Git/PR PASS; OCI release와 Public 3회 대기 |
 
 ## Phase별 구현 근거
 
@@ -100,7 +100,10 @@ release다. `backend/app/knowledge/authoring.py`는 JSON-compatible front matter
 `sqlite_store.py`와 `oracle_store.py`는 release를 `LOADING`으로 만들고 동일 release
 소유 행을 원자적으로 적재·검증한 뒤 `READY`/`ACTIVE`로 전환한다. Oracle loader는
 배포 시 선택된 embedding vector를 Oracle `VECTOR`로 bind한다. authoring source와
-runtime embedding metadata는 모두 release에 남는다.
+runtime embedding metadata는 모두 release에 남는다. 설명 prewarm cache의
+`source_version`은 catalog version과 active knowledge release를 함께 포함하며,
+새 release가 활성화되면 같은 메뉴의 낡은 prewarm 행을 삭제하고 새 hash key로
+재생성한다.
 
 ### Phase 4 — 현재 데모 데이터 범위
 
@@ -135,8 +138,12 @@ unknown 목록을 함께 반환한다. `UNKNOWN`과 미기재는 안전·부재 
 
 `GenAIProvider`는 생성 provider/model/serving mode를 도메인 로직에서 분리한다.
 capability 계약은 Responses API, Function Calling, structured output, streaming,
-continuation 방식을 표현한다. dedicated endpoint ID가 없으면 실제 dedicated 호출은
-configured 상태가 아니며, contract fixture 통과를 live endpoint 증거로 쓰지 않는다.
+continuation 방식과 최대 input/output, 요청당 tool schema 수, 응답당 tool call 수를
+표현한다. AgentLoop는 server/provider 한도의 작은 값을 적용하고 실행 전에 초과를
+거절한다. production 또는 dedicated 설정의 key/model/HTTPS region/endpoint/
+필수 capability가 누락되면 `/readyz`가 민감값 없이 `GENAI_NOT_READY`로 실패한다.
+dedicated endpoint ID가 없으면 실제 dedicated 호출은 configured 상태가 아니며,
+contract fixture 통과를 live endpoint 증거로 쓰지 않는다.
 
 timeout/network/재시도 가능한 5xx는 bounded exponential backoff와 jitter를 사용한다.
 rate limit은 model cooldown과 fallback으로 분리된다. invalid argument, empty/no-tool
@@ -148,18 +155,19 @@ model 전환은 embedding model/version을 변경하지 않는다.
 
 | Gate | 명령/증거 | 현재 문서 상태 |
 |---|---|---|
-| Backend lint | `.venv/bin/ruff check backend scripts` | PASS — zero errors |
-| Backend type | `.venv/bin/mypy --python-version 3.12 backend/app backend/evaluation scripts` | PASS — 58 source files |
-| Backend full test | `cd backend && ../.venv/bin/pytest -q` | PASS — 188 passed, 1 warning, 43.27s |
+| Backend lint | `.venv/bin/ruff check backend scripts deploy/*.py` | PASS — zero errors |
+| Backend type | `MYPYPATH=backend:scripts:. .venv/bin/mypy --explicit-package-bases --python-version 3.12 backend/app backend/evaluation scripts deploy/release_state.py deploy/run_with_runtime_env.py deploy/secure_bootstrap.py` | PASS — 62 source files |
+| Backend full test | `cd backend && ../.venv/bin/pytest -q` | PASS — 217 passed, 1 warning, 43.97s |
 | Legacy + chatbot acceptance | `make evaluate` | PASS — 100 legacy queries; 8 transcripts/15 turns/2 events/3 knowledge cases/345 assertions; all counters zero |
 | Frontend lint/test/build | `cd frontend && pnpm lint && pnpm test -- --run && pnpm build` | PASS — 4 files/10 tests; 1,796 modules built |
 | Local product E2E | Playwright configured suite | PASS — 21 passed/27 intentional skips, four-viewport Primary + complete iPhone flows, 1.0m |
+| Static/repository hygiene | diff/conflict/secret/debug scan + changed shell `bash -n` | PASS — tracked `.env` 0, secret-pattern files 0, debug files 0 |
 | Migration/seed | migration checksum + exact counts + mapping/vector/FK/option 검증 | Oracle 실행 결과 미기록 |
 | OCI GenAI | 현재 승인된 on-demand 정상·오류/fallback smoke | 실제 실행 결과 미기록 |
 | Public routes/security | `/healthz`, `/readyz`, `/`, `/demo/qr`, demo auth 403 | 개선 release 결과 미기록 |
 | Public product | 대화→추천→옵션→cart→Mock payment/order | 개선 release 결과 미기록 |
 | Primary Demo | 같은 공개 release에서 3회 연속 성공 | 개선 release 결과 미기록 |
-| Git/PR | commit, push, Draft PR #1 증거 갱신 | 미기록 |
+| Git/PR | current branch push + existing Draft PR #1 head/body | PASS — OPEN/Draft, remote head synchronized, duplicate PR 없음 |
 
 `docs/TEST_REPORT.md`에는 위 표를 실제 숫자, release ID, 시간, 경계와 함께 옮긴다.
 로컬 PASS를 Oracle/Public PASS로 복사하지 않는다.
@@ -181,6 +189,8 @@ model 전환은 embedding model/version을 변경하지 않는다.
 - Knowledge catalog: `demo-knowledge-catalog-2026.08.09-v2`.
 - Authoring default embedding: `yobi-semantic-hash-v1`, dimension `1536`, version
   `2026-08-06`.
+- Deployment embedding provider: explicit `deterministic` pin for seed and runtime;
+  `auto` is an operator-only one-off override and is not the release default.
 - Generation default configuration: OCI, logical primary `xai.grok-4.3`, fallback
   `openai.gpt-oss-120b`, `on_demand`; environment can select dedicated endpoint
   references without changing recommendation/safety code.
@@ -196,15 +206,31 @@ safe error code, tool outcome, fallback usage, and grounding rejection without
 recording credentials or endpoint references. The UI may show continuity mode but
 must not expose internal IDs, stack traces, or provider bodies.
 
-Deployment packages the full migration directory and `knowledge/`, checks required
-artifacts before upload, validates all known migration checksums before pending DDL,
-and marks a release ready only after health/readiness. It records the exact prior
-health-verified release in `/opt/yobi/shared/previous_release`.
+Deployment packages the full migration directory and `knowledge/`, checks all
+`001`–`008` artifacts before upload, derives the release identity from the archive
+SHA-256, verifies the remote checksum and manifest, validates the exact migration
+ledger, and marks a release ready only after symlink plus health/readiness checks. It
+uses a release-and-nonce-specific remote upload, deletes that exact upload on every
+exit path, and shares a non-blocking root-owned deploy/rollback lock. Application
+release trees are hardened to `root:yobi` without group/world write permission. It
+records the exact prior health-verified release in
+`/opt/yobi/shared/control/previous_release`.
 
 `sudo /opt/yobi/current/deploy/rollback.sh` switches only to that recorded verified
 application release (or an explicitly supplied verified release ID). It does not
-reverse additive migrations or delete knowledge rows. If rollback health fails it
-restores the original symlink. See `OCI_DEPLOYMENT.md` for operator commands.
+reverse additive migrations or delete knowledge rows. Root-owned atomic provenance in
+`/opt/yobi/shared/control/release-state/<release-id>.json` binds the app release and
+archive SHA-256 to its previous/current knowledge release IDs. Deploy captures the old
+pointer before seed; rollback activates only a recorded `READY` target; both use bound
+SQL, expected-current validation, commit/readback, and restore the original knowledge
+pointer before the original symlink on failure. Bootstrap state is likewise protected
+at `/opt/yobi/shared/control/bootstrap_state.json`.
+
+Historical v1 releases without the knowledge manager/state use only the explicit
+legacy compatibility path and do not switch the pointer. This is current additive-schema
+compatibility evidence, not a global rollback snapshot. Future incompatible global
+configuration, base catalog, or destructive state changes require a separate verified
+snapshot/restore contract. See `OCI_DEPLOYMENT.md` for operator commands.
 
 ## 합성/실데이터 경계와 남은 실서비스 검증
 

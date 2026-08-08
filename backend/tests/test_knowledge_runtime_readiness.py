@@ -6,6 +6,7 @@ from array import array
 from unittest.mock import MagicMock
 
 from app.db.oracle_repository import OracleYobiRepository
+from app.db.seed_data import CATALOG_VERSION
 from app.db.sqlite_repository import SQLiteYobiRepository
 from app.domain.dialogue import ConstraintStrictness, MealNeedState
 from app.domain.models import ProfileCreate
@@ -160,3 +161,48 @@ def test_readiness_rejects_supplemental_or_option_integrity_drift(
     assert status["knowledge_ready"] is False
     assert status["readiness_checks"]["merchant_ingredients_exact"] is False
     assert status["readiness_checks"]["required_options_valid"] is False
+
+
+def test_prewarm_cache_is_invalidated_and_versioned_by_active_knowledge_release(
+    repository: SQLiteYobiRepository,
+) -> None:
+    with repository._connection() as connection:
+        active_release = str(
+            connection.execute(
+                """
+                SELECT active_release_id FROM knowledge_runtime_state
+                WHERE state_key='ACTIVE'
+                """
+            ).fetchone()[0]
+        )
+        connection.execute(
+            """
+            INSERT INTO explanation_cache (
+              cache_key,menu_id,language,profile_signature,
+              explanation_json,source_version,created_at
+            ) VALUES ('stale-cache','menu_003_01','en','prewarm','{}','stale-release','old')
+            """
+        )
+
+    assert repository.prewarm_explanation("menu_003_01") is True
+
+    with repository._connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT cache_key,source_version FROM explanation_cache
+            WHERE menu_id='menu_003_01' AND language='en'
+              AND profile_signature='prewarm'
+            """
+        ).fetchall()
+
+    assert len(rows) == 1
+    assert rows[0]["source_version"] == f"{CATALOG_VERSION}:{active_release}"
+    assert rows[0]["cache_key"].startswith("prewarm:menu_003_01:en:")
+
+
+def test_oracle_prewarm_cache_uses_the_same_release_versioning_contract() -> None:
+    source = inspect.getsource(OracleYobiRepository.prewarm_explanation)
+
+    assert "knowledge_runtime_state" in source
+    assert "DELETE FROM explanation_cache" in source
+    assert 'source_version = f"{CATALOG_VERSION}:{knowledge_version}"' in source

@@ -28,7 +28,7 @@ from app.knowledge.oracle_store import load_oracle_release
 from app.rag.providers import choose_embedding_provider
 
 TableKey = str | tuple[str, ...]
-EmbeddingProviderChoice = Literal["auto", "oci", "deterministic"]
+EmbeddingProviderChoice = Literal["auto", "oci", "deterministic"] | None
 
 TABLE_ORDER: list[tuple[str, TableKey, str]] = [
     ("service_area", "service_area_id", "service_areas"),
@@ -568,7 +568,10 @@ def main() -> None:
     mode.add_argument("--verify-only", action="store_true")
     parser.add_argument("--upsert", action="store_true", help="Explicit name for the default mode")
     parser.add_argument(
-        "--embedding-provider", choices=["auto", "oci", "deterministic"], default="auto"
+        "--embedding-provider",
+        choices=["auto", "oci", "deterministic"],
+        default=None,
+        help="Override EMBEDDING_PROVIDER; production deployments should use an explicit pin",
     )
     args = parser.parse_args()
     settings = Settings()

@@ -16,12 +16,21 @@ from dotenv import dotenv_values
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_ENV = Path("/etc/yobi/yobi.env")
-CHECKPOINT = Path("/opt/yobi/shared/bootstrap_state.json")
+CHECKPOINT = Path("/opt/yobi/shared/control/bootstrap_state.json")
+LEGACY_CHECKPOINT = Path("/opt/yobi/shared/bootstrap_state.json")
 RUNTIME_RETRY_POLICY = 'LLM_MAX_RETRIES="1"'
+RUNTIME_EMBEDDING_POLICY = 'EMBEDDING_PROVIDER="deterministic"'
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "backend"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from app.core.config import Settings
+
+from deploy.release_state import (
+    ReleaseStateError,
+    atomic_write_control_file,
+    read_control_file,
+)
 
 
 def secret(prompt: str) -> str:
@@ -56,6 +65,8 @@ def ensure_app_user(dsn: str, admin_password: str, app_password: str) -> None:
 
 
 def write_env(dsn: str, app_password: str, api_key: str, control_token: str) -> None:
+    # This format is consumed by systemd and python-dotenv. It must never be shell-sourced;
+    # deployment subprocesses use run_with_runtime_env.py with interpolation disabled.
     def quote(value: str) -> str:
         if "\n" in value or "\x00" in value:
             raise SystemExit("A runtime value contains an unsupported control character")
@@ -75,6 +86,7 @@ def write_env(dsn: str, app_password: str, api_key: str, control_token: str) -> 
         f"OCI_GENAI_FALLBACK_MODEL={quote('openai.gpt-oss-120b')}",
         f"OCI_EMBED_MODEL={quote('cohere.embed-v4.0')}",
         f"OCI_EMBED_DIMENSION={quote('1536')}",
+        f"EMBEDDING_PROVIDER={quote('deterministic')}",
         f"ADB_DSN={quote(dsn)}",
         f"DB_USERNAME={quote('YOBI_APP')}",
         f"DB_PASSWORD={quote(app_password)}",
@@ -91,69 +103,84 @@ def write_env(dsn: str, app_password: str, api_key: str, control_token: str) -> 
     os.chown(target, 0, 0)
 
 
-def checkpoint(step: str, status: str, **safe_details: object) -> None:
-    state: dict[str, object] = {}
-    if CHECKPOINT.is_file():
+def _load_checkpoint_state() -> dict[str, object]:
+    for path, validate_parent in ((CHECKPOINT, True), (LEGACY_CHECKPOINT, False)):
         try:
-            loaded = json.loads(CHECKPOINT.read_text(encoding="utf-8"))
+            payload = read_control_file(
+                path,
+                trusted_uid=os.geteuid(),
+                trusted_gid=os.getegid(),
+                validate_parent=validate_parent,
+            )
+            loaded = json.loads(payload)
             if isinstance(loaded, dict):
-                state = loaded
-        except (OSError, json.JSONDecodeError):
-            state = {}
+                return loaded
+            raise SystemExit("Bootstrap checkpoint schema is invalid")
+        except ReleaseStateError as exc:
+            if str(exc) == "RELEASE_STATE_NOT_FOUND":
+                continue
+            raise SystemExit("Bootstrap checkpoint file is not trusted") from None
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise SystemExit("Bootstrap checkpoint JSON is invalid") from None
+    return {}
+
+
+def checkpoint(step: str, status: str, **safe_details: object) -> None:
+    state = _load_checkpoint_state()
     state[step] = {
         "status": status,
         "updated_at": datetime.now(timezone.utc).isoformat(),
         **safe_details,
     }
-    CHECKPOINT.parent.mkdir(parents=True, exist_ok=True)
-    temporary = CHECKPOINT.with_suffix(".tmp")
-    temporary.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.chmod(temporary, 0o600)
-    os.chown(temporary, 0, 0)
-    temporary.replace(CHECKPOINT)
+    payload = (json.dumps(state, indent=2, sort_keys=True) + "\n").encode()
+    atomic_write_control_file(
+        CHECKPOINT,
+        payload,
+        trusted_uid=os.geteuid(),
+        trusted_gid=os.getegid(),
+        mode=0o600,
+    )
 
 
 def checkpoint_complete(step: str) -> bool:
-    if not CHECKPOINT.is_file():
-        return False
-    try:
-        state = json.loads(CHECKPOINT.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False
+    state = _load_checkpoint_state()
     value = state.get(step, {}) if isinstance(state, dict) else {}
     return isinstance(value, dict) and value.get("status") == "complete"
 
 
 def checkpoint_status(step: str) -> str | None:
-    if not CHECKPOINT.is_file():
-        return None
-    try:
-        state = json.loads(CHECKPOINT.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    state = _load_checkpoint_state()
     value = state.get(step, {}) if isinstance(state, dict) else {}
     status = value.get("status") if isinstance(value, dict) else None
     return str(status) if status else None
 
 
-def persist_runtime_retry_policy(path: Path = RUNTIME_ENV) -> bool:
-    """Atomically upgrade only the non-secret retry policy in an existing env file."""
+def persist_runtime_release_policy(path: Path = RUNTIME_ENV) -> bool:
+    """Atomically pin non-secret retry and embedding policies for this release."""
     if path.is_symlink():
         raise SystemExit("Runtime environment must be a regular file, not a symlink")
     text = path.read_text(encoding="utf-8")
-    matches = list(
-        re.finditer(r"(?m)^[ \t]*LLM_MAX_RETRIES[ \t]*=.*$", text)
-    )
-    if len(matches) > 1:
-        raise SystemExit("Runtime environment contains duplicate LLM_MAX_RETRIES entries")
-    if matches:
-        match = matches[0]
-        if match.group(0) == RUNTIME_RETRY_POLICY:
-            return False
-        updated = text[: match.start()] + RUNTIME_RETRY_POLICY + text[match.end() :]
-    else:
-        separator = "" if not text or text.endswith("\n") else "\n"
-        updated = text + separator + RUNTIME_RETRY_POLICY + "\n"
+    updated = text
+    changed = False
+    for key, policy in (
+        ("LLM_MAX_RETRIES", RUNTIME_RETRY_POLICY),
+        ("EMBEDDING_PROVIDER", RUNTIME_EMBEDDING_POLICY),
+    ):
+        matches = list(re.finditer(rf"(?m)^[ \t]*{key}[ \t]*=.*$", updated))
+        if len(matches) > 1:
+            raise SystemExit(f"Runtime environment contains duplicate {key} entries")
+        if matches:
+            match = matches[0]
+            if match.group(0) != policy:
+                updated = updated[: match.start()] + policy + updated[match.end() :]
+                changed = True
+        else:
+            separator = "" if not updated or updated.endswith("\n") else "\n"
+            updated += separator + policy + "\n"
+            changed = True
+
+    if not changed:
+        return False
 
     descriptor, temporary_name = tempfile.mkstemp(
         dir=path.parent,
@@ -172,15 +199,20 @@ def persist_runtime_retry_policy(path: Path = RUNTIME_ENV) -> bool:
     return True
 
 
+def persist_runtime_retry_policy(path: Path = RUNTIME_ENV) -> bool:
+    """Backward-compatible entry point for upgrading the complete release policy."""
+    return persist_runtime_release_policy(path)
+
+
 def load_runtime_env() -> bool:
     if not RUNTIME_ENV.is_file():
         return False
-    values = dotenv_values(RUNTIME_ENV)
+    values = dotenv_values(RUNTIME_ENV, interpolate=False)
     required = {"ADB_DSN", "DB_PASSWORD", "OCI_GENAI_API_KEY", "DEMO_CONTROL_TOKEN"}
     if any(not values.get(key) for key in required):
         raise SystemExit("Runtime environment exists but is missing a required value")
-    persist_runtime_retry_policy(RUNTIME_ENV)
-    values = dotenv_values(RUNTIME_ENV)
+    persist_runtime_release_policy(RUNTIME_ENV)
+    values = dotenv_values(RUNTIME_ENV, interpolate=False)
     os.environ.update({key: value for key, value in values.items() if value is not None})
     return True
 
@@ -240,6 +272,8 @@ def verify_database(settings: Settings) -> dict[str, object]:
     return {
         "runtime_user": current_user,
         "migration_records": [filename for _, filename, _ in migration_rows],
+        "applied_migration_count": len(migrations),
+        "latest_applied_migration": max(migrations) if migrations else None,
         "expected_migration_count": len(expected_migrations),
         "latest_expected_migration": max(expected_migrations),
         "required_tables_verified": len(required_tables),
@@ -271,6 +305,7 @@ def main() -> None:
                 "DB_PASSWORD": app_password,
                 "OCI_GENAI_API_KEY": api_key,
                 "OCI_GENAI_FALLBACK_MODEL": "openai.gpt-oss-120b",
+                "EMBEDDING_PROVIDER": "deterministic",
                 "LLM_MAX_RETRIES": "1",
             }
         )

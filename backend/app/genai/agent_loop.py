@@ -66,6 +66,15 @@ class AgentLoop:
             f"\n\nSession context:\n{dynamic_context}"
         )
         active_tools = select_tools(user_text, dialogue_act) if allow_tools else []
+        max_tools = min(
+            self.settings.llm_max_tools_per_request,
+            capabilities.max_tools_per_request,
+        )
+        if len(active_tools) > max_tools:
+            raise GenAIProviderError(
+                GenAIErrorCode.CAPABILITY_LIMIT_EXCEEDED,
+                retryable=False,
+            )
         active_tool_names = {str(tool["name"]) for tool in active_tools}
         # Keep the full tool exchange client-side. The legacy OCI endpoint used by the
         # deployed demo accepts Responses input items, but its stored-response
@@ -76,6 +85,10 @@ class AgentLoop:
         request: dict[str, Any] = {
             "instructions": instructions,
             "input": cast(Any, conversation),
+            "max_output_tokens": min(
+                self.settings.llm_max_output_tokens,
+                capabilities.max_output_tokens,
+            ),
         }
         if active_tools:
             request["tools"] = cast(Any, active_tools)
@@ -98,6 +111,19 @@ class AgentLoop:
             calls: list[Any] = [
                 item for item in output if getattr(item, "type", None) == "function_call"
             ]
+            max_calls = min(
+                self.settings.llm_max_tool_calls_per_response,
+                capabilities.max_tool_calls_per_response,
+            )
+            if len(calls) > max_calls:
+                if preserved := self._preserve_mutation_result(
+                    tool_results, GenAIErrorCode.CAPABILITY_LIMIT_EXCEEDED
+                ):
+                    return preserved
+                raise GenAIProviderError(
+                    GenAIErrorCode.CAPABILITY_LIMIT_EXCEEDED,
+                    retryable=False,
+                )
             if not calls:
                 text = str(getattr(response, "output_text", "")).strip()
                 if not text:
@@ -178,6 +204,10 @@ class AgentLoop:
                 continuation: dict[str, Any] = {
                     "instructions": instructions,
                     "input": cast(Any, conversation),
+                    "max_output_tokens": min(
+                        self.settings.llm_max_output_tokens,
+                        capabilities.max_output_tokens,
+                    ),
                 }
                 if active_tools:
                     continuation["tools"] = cast(Any, active_tools)
@@ -224,6 +254,15 @@ class AgentLoop:
         preferred_model: str,
         **kwargs: Any,
     ) -> tuple[Any, str]:
+        input_limit = min(
+            self.settings.llm_max_input_tokens,
+            self.provider.capabilities.max_input_tokens,
+        )
+        if self._conservative_input_token_bound(kwargs) > input_limit:
+            raise GenAIProviderError(
+                GenAIErrorCode.CAPABILITY_LIMIT_EXCEEDED,
+                retryable=False,
+            )
         primary = self.settings.oci_genai_model
         fallback = self.settings.oci_genai_fallback_model
         candidates = list(dict.fromkeys([preferred_model, primary, fallback]))
@@ -298,6 +337,32 @@ class AgentLoop:
         if rate_limited:
             raise GenAIProviderError(GenAIErrorCode.RATE_LIMIT, retryable=True)
         raise GenAIProviderError(GenAIErrorCode.PROVIDER_UNAVAILABLE, retryable=False)
+
+    @classmethod
+    def _conservative_input_token_bound(cls, payload: dict[str, Any]) -> int:
+        """Bound tokens without a model tokenizer by counting serialized UTF-8 bytes.
+
+        OCI model tokenizers operate on byte-derived text, so serialized byte length
+        is a deliberately conservative upper bound. This can reject early, but it
+        cannot silently send a request larger than the declared provider contract.
+        """
+
+        def json_default(value: Any) -> Any:
+            model_dump = getattr(value, "model_dump", None)
+            if callable(model_dump):
+                return model_dump()
+            attributes = getattr(value, "__dict__", None)
+            if isinstance(attributes, dict):
+                return attributes
+            return str(value)
+
+        serialized = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=json_default,
+        )
+        return len(serialized.encode("utf-8"))
 
     @staticmethod
     def _compact_tool_result(name: str, result: dict[str, Any]) -> Any:

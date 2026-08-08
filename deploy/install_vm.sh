@@ -14,7 +14,23 @@ esac
 
 dnf install -y nginx python3.9 python3.9-pip tar tesseract tesseract-langpack-eng tesseract-langpack-kor
 id yobi >/dev/null 2>&1 || useradd --system --home-dir /opt/yobi --shell /sbin/nologin yobi
-install -d -o yobi -g yobi -m 0755 /opt/yobi/releases /opt/yobi/shared
+for protected_path in \
+  /opt/yobi \
+  /opt/yobi/releases \
+  /opt/yobi/shared \
+  /opt/yobi/shared/control \
+  /opt/yobi/shared/control/release-state; do
+  [[ ! -L "$protected_path" ]] \
+    || { printf 'Refusing symlinked control path: %s\n' "$protected_path" >&2; exit 1; }
+  [[ ! -e "$protected_path" || -d "$protected_path" ]] \
+    || { printf 'Control path is not a directory: %s\n' "$protected_path" >&2; exit 1; }
+done
+install -d -o root -g root -m 0755 /opt/yobi
+install -d -o root -g yobi -m 0755 /opt/yobi/releases
+install -d -o root -g yobi -m 0750 /opt/yobi/shared
+install -d -o root -g root -m 0750 \
+  /opt/yobi/shared/control \
+  /opt/yobi/shared/control/release-state
 install -d -o root -g yobi -m 0750 /etc/yobi
 
 if [[ ! -x "$RELEASE_ROOT/venv/bin/python" ]]; then

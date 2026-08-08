@@ -6,6 +6,8 @@ import os
 import stat
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).parents[2]
 SPEC = importlib.util.spec_from_file_location(
     "yobi_secure_bootstrap", ROOT / "deploy" / "secure_bootstrap.py"
@@ -38,7 +40,7 @@ def test_checkpoint_is_private_and_resumable(tmp_path: Path, monkeypatch) -> Non
     assert bootstrap.checkpoint_complete("genai_smoke") is False
 
 
-def test_runtime_environment_can_resume_and_upgrade_retry_policy(
+def test_runtime_environment_can_resume_and_upgrade_release_policy(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:  # type: ignore[no-untyped-def]
     runtime_env = tmp_path / "yobi.env"
@@ -64,6 +66,7 @@ def test_runtime_environment_can_resume_and_upgrade_retry_policy(
     persisted = runtime_env.read_text(encoding="utf-8")
     assert 'LLM_MAX_RETRIES="1"' in persisted
     assert 'LLM_MAX_RETRIES="0"' not in persisted
+    assert 'EMBEDDING_PROVIDER="deterministic"' in persisted
     assert 'DB_PASSWORD="synthetic-password"' in persisted
     assert stat.S_IMODE(runtime_env.stat().st_mode) == 0o600
     captured = capsys.readouterr()
@@ -76,6 +79,7 @@ def test_runtime_environment_can_resume_and_upgrade_retry_policy(
         "OCI_GENAI_API_KEY",
         "DEMO_CONTROL_TOKEN",
         "LLM_MAX_RETRIES",
+        "EMBEDDING_PROVIDER",
     ):
         os.environ.pop(key, None)
 
@@ -87,6 +91,70 @@ def test_retry_policy_matches_settings_and_runtime_restore() -> None:
     restore = (ROOT / "deploy" / "restore_runtime_env.sh").read_text(encoding="utf-8")
     assert "LLM_MAX_RETRIES=\"1\"" in restore
     assert "LLM_MAX_RETRIES=\"0\"" not in restore
+    assert bootstrap.Settings.model_fields["embedding_provider"].default == "deterministic"
+    assert "quote('deterministic')" in inspect.getsource(bootstrap.write_env)
+    assert 'EMBEDDING_PROVIDER="deterministic"' in restore
+
+
+def test_release_policy_rejects_duplicate_embedding_provider_without_writing(
+    tmp_path: Path,
+) -> None:
+    runtime_env = tmp_path / "yobi.env"
+    original = (
+        'LLM_MAX_RETRIES="0"\n'
+        'EMBEDDING_PROVIDER="auto"\n'
+        'EMBEDDING_PROVIDER="oci"\n'
+    )
+    runtime_env.write_text(original, encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="duplicate EMBEDDING_PROVIDER"):
+        bootstrap.persist_runtime_release_policy(runtime_env)
+
+    assert runtime_env.read_text(encoding="utf-8") == original
+
+
+def test_runtime_environment_load_disables_interpolation_and_execution(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    command_marker = tmp_path / "command-ran"
+    backtick_marker = tmp_path / "backtick-ran"
+    literal = (
+        f"literal-${{HOME}}-$(touch {command_marker})"
+        f"-`touch {backtick_marker}`-$HOME"
+    )
+    runtime_env = tmp_path / "yobi.env"
+    runtime_env.write_text(
+        "\n".join(
+            (
+                'ADB_DSN="synthetic-dsn"',
+                f'DB_PASSWORD="{literal}"',
+                'OCI_GENAI_API_KEY="synthetic-key"',
+                'DEMO_CONTROL_TOKEN="synthetic-token"',
+                'LLM_MAX_RETRIES="1"',
+                'EMBEDDING_PROVIDER="deterministic"',
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bootstrap, "RUNTIME_ENV", runtime_env)
+    monkeypatch.setenv("HOME", "expanded-home")
+
+    try:
+        assert bootstrap.load_runtime_env() is True
+        assert os.environ["DB_PASSWORD"] == literal
+        assert not command_marker.exists()
+        assert not backtick_marker.exists()
+    finally:
+        for key in (
+            "ADB_DSN",
+            "DB_PASSWORD",
+            "OCI_GENAI_API_KEY",
+            "DEMO_CONTROL_TOKEN",
+            "LLM_MAX_RETRIES",
+            "EMBEDDING_PROVIDER",
+        ):
+            os.environ.pop(key, None)
 
 
 def test_environment_is_persisted_before_genai_smoke() -> None:

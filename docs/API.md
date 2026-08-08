@@ -6,7 +6,7 @@ FastAPI service is reachable internally.
 | Method | Path | Contract |
 |---|---|---|
 | GET | `/healthz` | Process liveness, no dependency check |
-| GET | `/readyz` | Catalog plus active knowledge-release/vector readiness |
+| GET | `/readyz` | Catalog, active knowledge/vector, and required production GenAI configuration readiness |
 | POST/GET/DELETE | `/api/v1/profiles` | Consent-gated browser-session profile |
 | POST/GET | `/api/v1/sessions` | Explicit state-machine session |
 | POST | `/api/v1/sessions/{id}/messages` | Grounded agent or deterministic fallback turn; optional replay-safe `request_id` |
@@ -79,4 +79,8 @@ and model text alone is never treated as confirmation.
 
 `/readyz` returns HTTP 503 when canonical catalog data or the active knowledge
 release is not ready. The database payload reports the active knowledge release and
-embedding metadata without exposing credentials or endpoint identifiers.
+embedding metadata without exposing credentials or endpoint identifiers. In
+production or dedicated serving mode it also validates the configured GenAI provider,
+required Responses/Function Calling capabilities, model/endpoint configuration, and
+compatible input/output/tool limits. Invalid configuration returns sanitized
+`GENAI_NOT_READY` reason codes, never a key or endpoint identifier.

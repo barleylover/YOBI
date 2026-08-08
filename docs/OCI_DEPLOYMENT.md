@@ -20,15 +20,20 @@ chunk, and runtime-state tables introduced by `005` and `006`. No secret is echo
 
 If `/etc/yobi/yobi.env` already exists, do not recreate it. The same resume command
 loads the protected file and does not prompt for secrets. It atomically updates only
-the non-secret `LLM_MAX_RETRIES="1"` policy when a legacy file contains `0` or omits
-the key; all other lines are preserved and no value is printed. The protected file
-remains mode `0600`.
+the non-secret release policies `LLM_MAX_RETRIES="1"` and
+`EMBEDDING_PROVIDER="deterministic"` when a legacy file differs or omits either key;
+all secret and unrelated lines are preserved and no value is printed. Duplicate
+policy entries fail closed. The protected file remains mode `0600`.
 
 Progress is recorded as safe metadata in
-`/opt/yobi/shared/bootstrap_state.json` (`root:root`, mode `0600`). A transient 429
+`/opt/yobi/shared/control/bootstrap_state.json` (`root:root`, mode `0600`). A transient 429
 therefore leaves the database and environment checkpoints complete. Re-running the
 same command loads `/etc/yobi/yobi.env`, skips completed steps, and resumes at the
 first incomplete smoke/seed/service checkpoint without asking for the secrets again.
+The control directory is `root:root` mode `0750`; checkpoint writes use an
+unpredictable exclusive temporary file, `fsync`, and atomic replacement. A legacy
+root-owned `/opt/yobi/shared/bootstrap_state.json` can be read for resume, but an
+untrusted owner, writable file, symlink, or malformed checkpoint fails closed.
 
 The primary smoke performs only the required function-call and continuation requests.
 It honors `Retry-After`, otherwise waits 65–70 seconds plus jitter, and retries at most
@@ -69,14 +74,27 @@ state; secret values are never returned to the local shell.
 `deploy/deploy.sh` now builds a release-specific virtual environment before changing
 `/opt/yobi/current`. The release archive includes `knowledge/`, the complete
 `database/migrations/` directory, and the application/evaluation code. Packaging
-fails early if the `005` conversation migration, `006` knowledge migration, `007`
-service-area/idempotency migration, `008` checkout cart-version migration, or
-knowledge authoring directory is absent.
+fails early unless every immutable/additive migration `001`–`008` and the knowledge
+authoring directory are present. The archive SHA-256 becomes part of the release ID;
+the VM verifies the uploaded checksum and records it in a release manifest before
+installation. Each transfer uses a release-and-nonce-specific file under the SSH
+user's home rather than a shared fixed `/tmp` name. The remote side validates the
+exact path, owner, non-writable mode, and checksum, and removes that exact upload on
+success or failure.
 Deployment applies only checksum-safe
 pending migrations, performs an idempotent seed upsert, switches the symlink, and
-requires both health and readiness. If activation fails, it restores the previous
-complete release link and restarts the services. It does not recreate the VM/ADB,
-broaden IAM, or repeat secure bootstrap.
+requires the exact eight-row migration ledger, current symlink, health, and readiness.
+If any preparation, activation, or metadata step fails after a prior release was
+verified, it restores that exact release and rechecks both endpoints. It does not
+recreate the VM/ADB, broaden IAM, or repeat secure bootstrap.
+
+Deploy and rollback share the non-blocking root-owned lock
+`/run/lock/yobi-deploy.lock` (`0600`). A concurrent operation exits before changing
+the database pointer or current symlink. `/opt/yobi`, `/opt/yobi/releases`, and each
+current/target release tree are checked as real directories and hardened to
+`root:yobi` with no group/world-writable file or directory. The `yobi` service account
+can read the release but cannot rewrite code, manifests, helpers, or rollback markers;
+systemd has no writable `/opt/yobi/shared` allowance.
 
 Seed generation and all embedding calls finish before catalog DML begins. Base rows,
 vectors, the new `LOADING`→`READY` knowledge release, supplemental mappings, runtime
@@ -90,6 +108,17 @@ requires an explicit catalog/compiler contract bump. A collision is a failed see
 not permission to mutate the existing release; active embedding model, dimension, and
 version must match the runtime provider before commit/readiness succeeds.
 
+Deployment captures the active knowledge release after Migration `006` is available
+and before seed activation. After seed commit it records the new active ID, the prior
+ID (including an explicit null state), application release ID, and archive SHA-256 in
+`/opt/yobi/shared/control/release-state/<release-id>.json`. This root-owned `0640`
+state is written with exclusive temporary creation, `fsync`, atomic replacement, and
+owner/mode/symlink validation; the release-local manifest is informational and is not
+the rollback authority. If a later deploy step fails, the script first reactivates the
+captured prior `READY` release—or explicitly clears `ACTIVE` when none existed—using
+bound SQL, an expected-current guard, commit, and readback, then restores and verifies
+the prior application release.
+
 Before pending DDL runs, the migration runner validates the filename and checksum of
 every migration known to the release. Oracle DDL commits implicitly, so `005`–`008`
 are additive and every statement treats its already-created column, table, or
@@ -101,7 +130,7 @@ continue a partial migration.
 
 Each healthy release receives `.yobi-release-ready`. After successful activation,
 deployment records the exact former current release in
-`/opt/yobi/shared/previous_release`. The default rollback uses only that recorded,
+`/opt/yobi/shared/control/previous_release`. The default rollback uses only that recorded,
 health-verified target; it does not choose a directory merely because its timestamp
 sorts newest. An operator may pass an exact verified release ID when deliberately
 choosing another retained release:
@@ -111,10 +140,22 @@ sudo /opt/yobi/current/deploy/rollback.sh
 sudo /opt/yobi/current/deploy/rollback.sh 20260807T194921Z
 ```
 
-Rollback switches application code only. It does not delete migration rows, remove
-the additive `005`–`008` schema, or revert synthetic knowledge data. Old application
-releases must therefore remain compatible with the additive schema. If target health
-or readiness fails, the script restores the original current symlink and services.
+For releases that carry the current knowledge contract, rollback reads the target's
+root-owned release state and activates its recorded `READY` knowledge release before
+switching application code. A target that contains the knowledge manager but lacks
+trusted state is rejected. If activation, health/readiness, or rollback metadata fails,
+the script restores the original knowledge pointer first, then the original current
+symlink, and verifies both endpoints. It does not delete migration rows, remove the
+additive `005`–`008` schema, or delete either knowledge release.
+
+A genuinely historical v1 target with no knowledge manager/state takes the explicit
+legacy compatibility path and leaves the current knowledge pointer untouched. This
+only verifies compatibility with the current additive schema and current demo runtime.
+It is not a general rollback guarantee: a future incompatible global configuration,
+base catalog rewrite, destructive migration, or other non-release-scoped state change
+requires a separately designed and verified snapshot/restore contract before rollout.
+A legacy root-owned `/opt/yobi/shared/previous_release` may be read only as a validated
+fallback; all new writes go to the protected control path.
 
 ## Chatbot-improvement deployment gate
 
@@ -155,9 +196,23 @@ times and check the unauthenticated demo-control boundary remains HTTP 403.
 Generation and embedding are independent deployment settings. The default approved
 path remains OCI on-demand generation. `GENAI_PROVIDER`, logical generation model,
 `OCI_GENAI_SERVING_MODE`, and optional dedicated endpoint references affect only the
-generation adapter; `OCI_EMBED_MODEL` and `OCI_EMBED_DIMENSION` identify retrieval.
+generation adapter; `EMBEDDING_PROVIDER`, `OCI_EMBED_MODEL`, and
+`OCI_EMBED_DIMENSION` identify retrieval. The current release pins
+`EMBEDDING_PROVIDER=deterministic` for both seed and query vectors; `auto` is not a
+production default.
 Do not provision or select a paid dedicated endpoint without separate approval. A
 fake dedicated-adapter contract test is not live dedicated-endpoint evidence.
+
+Production or dedicated `/readyz` validates the required GenAI key, model, HTTPS
+base URL/region, endpoint references where applicable, Responses/Function Calling
+support, and compatible input/output/tool limits. It returns sanitized
+`GENAI_NOT_READY` codes rather than identifiers or credentials when configuration is
+invalid.
+
+The repository deploy path requires authenticated VM access. Do not add TCP 22, IAM
+policy, a Bastion, or an artifact channel merely to make deployment possible unless
+that infrastructure change has been separately approved. An unreachable target is a
+deployment blocker, not permission to broaden ingress.
 
 On the VM:
 

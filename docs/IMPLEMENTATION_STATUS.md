@@ -9,14 +9,15 @@ Last updated: 2026-08-09 KST
 > evidence belongs in `TEST_REPORT.md`. Do not use the release below as evidence that
 > the new multi-turn dialogue or menu knowledge graph is live.
 
-> Current local improvement checkpoint: Ruff and MyPy (58 files) passed; backend
-> Pytest passed 188 tests; legacy evaluation passed 100 queries; chatbot acceptance
+> Current local improvement checkpoint: Ruff and MyPy (62 files) passed; backend
+> Pytest passed 217 tests; legacy evaluation passed 100 queries; chatbot acceptance
 > passed 345 assertions; frontend lint, 10 Vitest tests and the 1,796-module build
 > passed; local Playwright passed 21 tests with 27 intentional viewport skips. These
 > results do not prove migrations 005–008 or the new release are deployed. New
-> Oracle/OCI/Public and Git/Draft PR evidence remains pending.
+> Oracle/OCI/Public evidence remains pending. The implementation branch is pushed and
+> the existing Draft PR #1 remains OPEN/Draft with its head synchronized to the branch.
 
-## Status
+## Historical public baseline status
 
 The audited Master Spec MVP is implemented and publicly deployed on the existing OCI
 resources. Current release: `20260807T194921Z`. The public address is resolved from
@@ -27,7 +28,7 @@ The 2026-08-07 frontend feedback pass is implemented, committed on
 list results are consolidated by grounded IDs so the UI renders one carousel per
 tool type.
 
-Confirmed live:
+Confirmed live for the historical baseline only:
 
 - Oracle runtime user `YOBI_APP`; migrations 001–004, including the append-only
   three-level spice migration.
@@ -40,6 +41,15 @@ Confirmed live:
 - `yobi-api` and Nginx active; public and local health/readiness pass.
 - Public full-order API smoke and Primary iPhone E2E three consecutive passes.
 - `/etc/yobi/yobi.env` remains `root:root` mode `0600`; no values were printed.
+
+## Chatbot-improvement status
+
+The multi-turn dialogue, knowledge graph, grounded hybrid retrieval, provider
+capability/readiness, and release-safety implementation is committed on
+`codex/master-spec-completion` and tracked by Draft PR #1. It is locally verified but
+not the code currently served by OCI. Migration/seed `005`–`008`, the active knowledge
+release, OCI generation smoke, public conversation/order regression, and three-run
+Primary proof remain pending the separately approved deployment access path.
 
 ## Product boundary
 

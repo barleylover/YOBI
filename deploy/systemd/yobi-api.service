@@ -18,7 +18,6 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/yobi/shared
 
 [Install]
 WantedBy=multi-user.target

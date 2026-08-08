@@ -3036,7 +3036,28 @@ class OracleYobiRepository:
             ensure_ascii=False,
         )
         with self.pool.connection() as connection:
-            connection.cursor().execute(
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                SELECT active_release_id FROM knowledge_runtime_state
+                WHERE state_key='ACTIVE'
+                """
+            )
+            active_release = cursor.fetchone()
+            knowledge_version = str(active_release[0]) if active_release else "legacy"
+            source_version = f"{CATALOG_VERSION}:{knowledge_version}"
+            cache_digest = hashlib.sha256(source_version.encode("utf-8")).hexdigest()[:16]
+            cache_key = f"prewarm:{menu_id}:en:{cache_digest}"
+            cursor.execute(
+                """
+                DELETE FROM explanation_cache
+                WHERE menu_id=:menu_id AND language='en' AND profile_signature='prewarm'
+                  AND source_version<>:source_version
+                """,
+                menu_id=menu_id,
+                source_version=source_version,
+            )
+            cursor.execute(
                 """
                 MERGE INTO explanation_cache target
                 USING (SELECT :cache_key AS cache_key FROM dual) source
@@ -3050,10 +3071,10 @@ class OracleYobiRepository:
                   explanation_json, source_version
                 ) VALUES (:cache_key, :menu_id, 'en', 'prewarm', :payload, :source_version)
                 """,
-                cache_key=f"prewarm:{menu_id}:en",
+                cache_key=cache_key,
                 menu_id=menu_id,
                 payload=payload,
-                source_version=CATALOG_VERSION,
+                source_version=source_version,
             )
         return True
 

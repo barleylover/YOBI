@@ -60,8 +60,10 @@ class OCIEmbeddingProvider:
 
 
 def choose_embedding_provider(
-    settings: Settings, requested: Literal["auto", "oci", "deterministic"] = "auto"
+    settings: Settings,
+    requested: Literal["auto", "oci", "deterministic"] | None = None,
 ) -> EmbeddingProvider:
+    requested = requested or settings.embedding_provider
     if requested == "deterministic":
         return DeterministicEmbeddingProvider()
     if requested == "oci":
@@ -75,4 +77,3 @@ def choose_embedding_provider(
             if not settings.demo_fallback_enabled:
                 raise
     return DeterministicEmbeddingProvider()
-

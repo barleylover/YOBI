@@ -6,7 +6,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from app.core.config import Settings
 from app.knowledge.catalog_seed import KNOWLEDGE_CATALOG_VERSION, KNOWLEDGE_RELEASE_ID
+from app.rag.providers import DeterministicEmbeddingProvider, choose_embedding_provider
 
 ROOT = Path(__file__).parents[2]
 SPEC = importlib.util.spec_from_file_location("yobi_seed_demo", ROOT / "scripts" / "seed_demo.py")
@@ -73,6 +75,15 @@ def valid_result() -> dict[str, object]:
 
 def test_seed_integrity_accepts_exact_catalog() -> None:
     seed_demo.validate(valid_result())
+
+
+def test_default_embedding_provider_is_pinned_even_when_genai_key_exists() -> None:
+    settings = Settings(_env_file=None, oci_genai_api_key="synthetic-key")
+    assert settings.oci_genai_api_key.get_secret_value() == "synthetic-key"
+
+    provider = choose_embedding_provider(settings)
+
+    assert isinstance(provider, DeterministicEmbeddingProvider)
 
 
 def test_expected_counts_match_the_generated_seed() -> None:

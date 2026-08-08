@@ -89,6 +89,12 @@ source release is fail-closed with `KNOWLEDGE_RELEASE_ID_COLLISION`; operators m
 advance the catalog/compiler contract so the change receives a new immutable release
 ID instead of overwriting the existing index.
 
+`EXPLANATION_CACHE` remains a derived cache, not a knowledge authority. Prewarm rows
+record `source_version` as `catalog_version:active_knowledge_release`; the key includes
+a hash of that provenance, and prewarming deletes stale rows for the same menu/language
+before writing the new explanation. A Wiki release change therefore cannot silently
+reuse a description generated from the previous release.
+
 ## Claim resolution and safety semantics
 
 Concept claims and specific facts do not have equal meaning:

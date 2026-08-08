@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Protocol
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class GenAIServingMode(str, Enum):
@@ -20,6 +20,7 @@ class GenAIErrorCode(str, Enum):
     EMPTY_RESPONSE = "EMPTY_RESPONSE"
     GROUNDING_REJECTED = "GROUNDING_REJECTED"
     PROVIDER_UNAVAILABLE = "PROVIDER_UNAVAILABLE"
+    CAPABILITY_LIMIT_EXCEEDED = "CAPABILITY_LIMIT_EXCEEDED"
     TOOL_STEP_LIMIT = "TOOL_STEP_LIMIT"
 
 
@@ -34,6 +35,10 @@ class ProviderCapabilities(BaseModel):
     native_streaming: bool
     client_managed_continuation: bool
     server_managed_continuation: bool
+    max_input_tokens: int = Field(gt=0)
+    max_output_tokens: int = Field(gt=0)
+    max_tools_per_request: int = Field(gt=0)
+    max_tool_calls_per_response: int = Field(gt=0)
 
 
 class GenAIProviderError(RuntimeError):

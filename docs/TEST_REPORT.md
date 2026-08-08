@@ -15,38 +15,66 @@
 
 The implementation matrix is in `CHATBOT_IMPROVEMENT_IMPLEMENTATION.md`. The current
 worktree contains the Phase 0–6 runtime paths and Phase 7 deployment safeguards. The
-final local quality gates below were rerun against the completed local implementation;
-new Oracle/OCI/Public release and Git evidence remain separate and pending. A local
-PASS is not substituted for live deployment proof.
+final local quality gates below were rerun against the completed local implementation.
+The branch and existing Draft PR are current; the new Oracle/OCI/Public release remains
+separate and pending. A local or Git PASS is not substituted for live deployment proof.
 
 | Gate | Required final evidence | Current status |
 |---|---|---:|
-| Ruff | `.venv/bin/ruff check backend scripts` | **PASS** — zero errors |
-| MyPy | `.venv/bin/mypy --python-version 3.12 backend/app backend/evaluation scripts` | **PASS** — 58 source files, zero errors |
-| Pytest | `cd backend && ../.venv/bin/pytest -q` | **PASS** — 188 passed, 1 Starlette deprecation warning, 43.27s |
+| Ruff | `.venv/bin/ruff check backend scripts deploy/*.py` | **PASS** — zero errors |
+| MyPy | `MYPYPATH=backend:scripts:. .venv/bin/mypy --explicit-package-bases --python-version 3.12 backend/app backend/evaluation scripts deploy/release_state.py deploy/run_with_runtime_env.py deploy/secure_bootstrap.py` | **PASS** — 62 source files, zero errors |
+| Pytest | `cd backend && ../.venv/bin/pytest -q` | **PASS** — 217 passed, 1 Starlette deprecation warning, 43.97s |
 | Legacy evaluation | `make evaluate` legacy retrieval run | **PASS** — 100 queries; every failure counter zero |
 | Chatbot acceptance | `make evaluate` chatbot acceptance run | **PASS** — 8 transcripts, 15 turns, 2 events, 3 knowledge cases, 345 assertions; every safety/state counter zero |
 | Frontend | `pnpm lint`, Vitest, TypeScript/Vite build | **PASS** — 4 Vitest files/10 tests; 1,796 modules built |
 | Local product E2E | Playwright across configured viewports | **PASS** — 21 passed, 27 intentional viewport skips, 1.0m; four-viewport Primary flow plus complete iPhone flow |
+| Release/static safety | changed shell syntax, diff/conflict scan, provider/cache/deploy contract tests | **PASS** — all checks passed |
+| Repository hygiene | tracked `.env`, credential/private-key patterns, production debug flags | **PASS** — 0 files for each scan |
 | Oracle migration/seed | Applied 001–008, exact catalog/graph/mapping/vector integrity | NOT YET RECORDED |
 | OCI GenAI | On-demand normal, classified failure, grounded fallback smoke | NOT YET RECORDED |
 | Public routes/auth | root, health, readiness, QR 200; unauth demo control 403 | NOT YET RECORDED |
 | Public conversation | `hi` no cards, readiness, correction, snapshot event/reload, grounded explanation | NOT YET RECORDED |
 | Public ordering regression | options, cart, delivery, Mock checkout/payment/order/idempotency | NOT YET RECORDED |
 | Public Primary Demo | Same new release, three consecutive passes | NOT YET RECORDED |
-| Git/Draft PR | Commit, push, Draft PR #1 evidence update | NOT YET RECORDED |
+| Git/Draft PR | Current branch pushed; Draft PR #1 head equals remote branch | **PASS** — `codex/master-spec-completion`, OPEN/Draft, not merged |
+
+### Current pre-deployment boundary
+
+Read-only OCI/public checks still describe the historical release only: public root,
+health, readiness, and QR respond, while unauthenticated demo control remains denied.
+The readiness payload still identifies the pre-improvement catalog, and the last
+verified live migration ledger remains `001`–`004`. Migrations `005`–`008`, the new
+knowledge release, provider-readiness contract, and Nginx header revision are not live.
+
+The 2026-08-09 preflight returned HTTP `200` for `/`, `/healthz`, `/readyz`, and
+`/demo/qr`, HTTP `403` for unauthenticated `/api/v1/demo/status`, catalog
+`demo-2026.08.08-chat-menu-v1`, no active knowledge release field, and
+`genai_required=false`. The attached NSG had zero TCP 22 ingress rules and one TCP 80
+ingress rule. No public address or infrastructure identifier was written to Git.
+
+No IAM, NSG, security-list, credential, database, or paid-resource change was made.
+Harmless Compute Run Command probes remained accepted/visible but were never consumed
+by the VM, so they do not establish a deployment path. The existing SSH/SCP path has
+no TCP 22 ingress. A temporary current-source `/32` TCP 22 rule is therefore a separate
+approval item; if approved it must be removed by exact rule identity and the final
+SSH-rule count must be verified as zero while TCP 80 remains unchanged.
 
 Final local checkpoint (not Oracle/public proof): the complete backend suite passed
-`188` tests in 43.27 seconds with one third-party Starlette deprecation warning. Ruff
-reported zero errors and MyPy passed all 58 checked source files. The 8-transcript,
+`217` tests in 43.97 seconds with one third-party Starlette deprecation warning. Ruff
+reported zero errors and MyPy passed all 62 checked source files. The 8-transcript,
 15-turn acceptance suite passed all 345 assertions, including 2 event and 3 knowledge
 cases, with every safety/state counter at zero. The legacy 100-query evaluation also
 reported zero constraint, grounding, safety, price, and option failures. Frontend
 ESLint, 4-file/10-test Vitest, TypeScript, and the 1,796-module Vite build passed.
 Local Playwright passed 21 tests with 27 intentional cross-viewport skips in 1.0
 minute, covering the Primary flow on four viewports and the complete iPhone flow.
-Oracle/OCI/Public and Git rows remain pending because they require distinct external
-or repository-state evidence.
+The branch is pushed and the existing Draft PR is updated without creating a duplicate
+PR. Oracle/OCI/Public rows remain pending because they require distinct live evidence.
+
+The final repository-hygiene pass found zero tracked `.env` files, zero files matching
+credential/private-key/credential-bearing-URL patterns, zero production debug flags,
+and zero merge-conflict markers. All changed shell scripts passed `bash -n`. Synthetic
+placeholder identifiers in tests are not credentials and remain confined to fixtures.
 
 The final entry must separately report catalog version, knowledge release, active
 embedding model/dimension/version, generation provider/model/serving mode, app release

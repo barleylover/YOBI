@@ -34,21 +34,33 @@ class Settings(BaseSettings):
     oci_genai_fallback_endpoint_id: str = ""
     oci_genai_structured_output_enabled: bool = False
     oci_genai_streaming_enabled: bool = False
+    # Explicit provider contract profile. These are the request envelope that the
+    # configured OCI model/endpoint is expected to support, not advertised model
+    # headline limits. Operators must lower them for a more restrictive endpoint.
+    oci_genai_max_input_tokens: int = Field(default=32768, ge=512)
+    oci_genai_max_output_tokens: int = Field(default=1200, ge=64)
+    oci_genai_max_tools_per_request: int = Field(default=4, ge=1, le=14)
+    oci_genai_max_tool_calls_per_response: int = Field(default=4, ge=1, le=14)
     genai_prompt_profile: Literal["yobi-grounded-v1"] = "yobi-grounded-v1"
     oci_embed_model: str = "cohere.embed-v4.0"
     oci_embed_dimension: int = 1536
+    embedding_provider: Literal["deterministic", "oci", "auto"] = "deterministic"
     oci_compartment_id: SecretStr = SecretStr("")
 
     adb_dsn: SecretStr = SecretStr("")
     db_username: str = "YOBI_APP"
     db_password: SecretStr = SecretStr("")
 
-    llm_timeout_seconds: float = 120.0
+    llm_timeout_seconds: float = Field(default=120.0, gt=0.0, le=300.0)
     llm_max_retries: int = Field(default=1, ge=0, le=3)
     llm_retry_base_seconds: float = Field(default=0.25, ge=0.0, le=5.0)
     llm_retry_max_seconds: float = Field(default=2.0, ge=0.0, le=10.0)
     llm_max_concurrent_requests: int = Field(default=4, ge=1, le=32)
-    tool_call_max_steps: int = 6
+    llm_max_input_tokens: int = Field(default=32768, ge=512)
+    llm_max_output_tokens: int = Field(default=1200, ge=64)
+    llm_max_tools_per_request: int = Field(default=4, ge=1, le=14)
+    llm_max_tool_calls_per_response: int = Field(default=4, ge=1, le=14)
+    tool_call_max_steps: int = Field(default=6, ge=1, le=12)
     max_upload_mb: int = 8
     address_ocr_provider: Literal["fixture", "tesseract", "rapidocr"] = "tesseract"
     log_level: str = "INFO"

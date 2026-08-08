@@ -48,6 +48,11 @@ or public-network behaviour is in scope. Run `./deploy/run_remote_prewarm.sh`, c
 `/healthz` and `/readyz`, and open a fresh private browser window. Do not rerun secure
 bootstrap during ordinary rehearsal and never print `/etc/yobi/yobi.env` values.
 
+Until `TEST_REPORT.md` records a new chatbot-improvement release, the public service is
+the historical pre-improvement baseline. A successful public rehearsal of that
+baseline is not evidence that migrations `005`–`008`, the active menu Wiki, or the new
+multi-turn readiness flow are deployed.
+
 ## 2. Chatbot quality and primary ordering proof
 
 ### Multi-turn chatbot quality proof

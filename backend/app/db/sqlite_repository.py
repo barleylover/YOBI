@@ -3134,6 +3134,24 @@ class SQLiteYobiRepository:
             ensure_ascii=False,
         )
         with self._connection() as connection:
+            active_release = connection.execute(
+                """
+                SELECT active_release_id FROM knowledge_runtime_state
+                WHERE state_key='ACTIVE'
+                """
+            ).fetchone()
+            knowledge_version = str(active_release[0]) if active_release else "legacy"
+            source_version = f"{CATALOG_VERSION}:{knowledge_version}"
+            cache_digest = hashlib.sha256(source_version.encode("utf-8")).hexdigest()[:16]
+            cache_key = f"prewarm:{menu_id}:en:{cache_digest}"
+            connection.execute(
+                """
+                DELETE FROM explanation_cache
+                WHERE menu_id=? AND language='en' AND profile_signature='prewarm'
+                  AND source_version<>?
+                """,
+                (menu_id, source_version),
+            )
             connection.execute(
                 """
                 INSERT INTO explanation_cache (
@@ -3145,7 +3163,7 @@ class SQLiteYobiRepository:
                   source_version=excluded.source_version,
                   created_at=excluded.created_at
                 """,
-                (f"prewarm:{menu_id}:en", menu_id, payload, CATALOG_VERSION, _now()),
+                (cache_key, menu_id, payload, source_version, _now()),
             )
         return True
 
