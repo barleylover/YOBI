@@ -281,6 +281,9 @@ runtime_env_runner=(
   "$new_release/deploy/run_with_runtime_env.py"
   /etc/yobi/yobi.env
 )
+sudo env PYTHONPATH="$new_release/backend:$new_release" "${runtime_env_runner[@]}" \
+  "$new_release/venv/bin/python" -c \
+  'import app.main; print("Verified Python 3.9 application imports.")'
 sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \
   "$new_release/venv/bin/python" "$new_release/scripts/migrate.py"
 sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \

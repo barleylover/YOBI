@@ -2040,7 +2040,30 @@ class ChatService:
             DialogueAct.SELECT: DialogueAct.SELECT,
             DialogueAct.ORDER_ACTION: DialogueAct.ORDER_ACTION,
         }.get(requested_act, DialogueAct.RECOMMEND)
-        return self._make_turn(text, state, cards, False, dialogue_act=output_act)
+        suggested_replies: list[str] = []
+        if output_act == DialogueAct.RECOMMEND:
+            if any(card.type == "menu_recommendations" for card in cards):
+                suggested_replies = ["Compare these", "Something else", "Show dietary evidence"]
+            else:
+                category_card = next(
+                    (card for card in cards if card.type == "category_recommendations"),
+                    None,
+                )
+                category_items = category_card.data.get("categories") if category_card else None
+                if isinstance(category_items, list):
+                    suggested_replies = [
+                        f"Recommend {item['category']}"
+                        for item in category_items[:3]
+                        if isinstance(item, dict) and item.get("category")
+                    ]
+        return self._make_turn(
+            text,
+            state,
+            cards,
+            False,
+            suggested_replies,
+            dialogue_act=output_act,
+        )
 
     @staticmethod
     def _merge_tool_items(

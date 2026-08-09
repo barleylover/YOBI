@@ -443,27 +443,27 @@ Dedicated mode도 endpoint 장애, timeout, 네트워크·IAM 오류, 잘못된 
 
 다음 조건을 모두 충족해야 이 Goal을 `Done`으로 선언할 수 있다.
 
-- [ ] Phase 0~7의 구체 산출물이 실제 코드 경로에 연결되어 있다.
-- [ ] 계획·스캐폴딩·샘플 일부가 아니라 요구된 전체 동작이 구현되어 있다.
-- [ ] 신규 Oracle Migration이 순차 Runner로 재현 가능하고 SQLite 호환 경로가 있다.
-- [ ] 현재 목업 카탈로그를 포괄하는 음식 Wiki·지식 그래프·원산지·메뉴 매핑이 적재되어 있다.
-- [ ] 대화 상태, readiness, 정정·부정 조건, snapshot 참조, UI-서버 이벤트가 동작한다.
-- [ ] Wiki 상속, 메뉴·원산지·옵션 override, 하드 필터, grounded 설명이 동작한다.
-- [ ] 리뷰 추천·안전 가중치가 `0`이며 합성·Mock 경계가 사용자에게 명확하다.
-- [ ] 생성 model과 serving mode가 provider adapter·설정으로 분리되고 도메인 로직에 하드코딩되지 않는다.
-- [ ] 생성 model과 embedding provider·version이 독립적으로 관리된다.
-- [ ] provider·model·serving mode·오류 유형별 fallback 관측과 공통 acceptance 경로가 동작한다.
-- [ ] 기존 장바구니·옵션·배달·Mock 결제·Mock 주문·idempotency 기능이 보존된다.
-- [ ] 기존 테스트와 신규 테스트가 모두 통과한다.
-- [ ] 필수 품질 게이트와 다중 턴·지식 acceptance set이 모두 통과한다.
-- [ ] 관련 데이터 모델·RAG·테스트·배포·운영·rollback 문서가 최신 상태다.
-- [ ] 기존 OCI VM·ADB에 최종 release와 Migration이 배포되어 있다.
-- [ ] Public URL health/readiness와 핵심 보안·인증 경계가 정상이다.
-- [ ] Public URL에서 새 챗봇 흐름과 기존 주문 흐름이 검증되었다.
-- [ ] Primary Demo가 공개 URL에서 3회 연속 성공했다.
-- [ ] 검증된 변경이 현재 branch에 commit·push되고 Draft PR #1이 최신 증거로 갱신되었다.
-- [ ] 남은 미검증 사실, 위험, 사람 확인 항목이 최종 보고서에 구분되어 있다.
-- [ ] 별도 승인 없이는 수행할 수 없는 필수 항목이 남아 있지 않다.
+- [x] Phase 0~7의 구체 산출물이 실제 코드 경로에 연결되어 있다.
+- [x] 계획·스캐폴딩·샘플 일부가 아니라 요구된 전체 동작이 구현되어 있다.
+- [x] 신규 Oracle Migration이 순차 Runner로 재현 가능하고 SQLite 호환 경로가 있다.
+- [x] 현재 목업 카탈로그를 포괄하는 음식 Wiki·지식 그래프·원산지·메뉴 매핑이 적재되어 있다.
+- [x] 대화 상태, readiness, 정정·부정 조건, snapshot 참조, UI-서버 이벤트가 동작한다.
+- [x] Wiki 상속, 메뉴·원산지·옵션 override, 하드 필터, grounded 설명이 동작한다.
+- [x] 리뷰 추천·안전 가중치가 `0`이며 합성·Mock 경계가 사용자에게 명확하다.
+- [x] 생성 model과 serving mode가 provider adapter·설정으로 분리되고 도메인 로직에 하드코딩되지 않는다.
+- [x] 생성 model과 embedding provider·version이 독립적으로 관리된다.
+- [x] provider·model·serving mode·오류 유형별 fallback 관측과 공통 acceptance 경로가 동작한다.
+- [x] 기존 장바구니·옵션·배달·Mock 결제·Mock 주문·idempotency 기능이 보존된다.
+- [x] 기존 테스트와 신규 테스트가 모두 통과한다.
+- [x] 필수 품질 게이트와 다중 턴·지식 acceptance set이 모두 통과한다.
+- [x] 관련 데이터 모델·RAG·테스트·배포·운영·rollback 문서가 최신 상태다.
+- [x] 기존 OCI VM·ADB에 최종 release와 Migration이 배포되어 있다.
+- [x] Public URL health/readiness와 핵심 보안·인증 경계가 정상이다.
+- [x] Public URL에서 새 챗봇 흐름과 기존 주문 흐름이 검증되었다.
+- [x] Primary Demo가 공개 URL에서 3회 연속 성공했다.
+- [x] 검증된 변경이 현재 branch에 commit·push되고 Draft PR #1이 최신 증거로 갱신되었다.
+- [x] 남은 미검증 사실, 위험, 사람 확인 항목이 최종 보고서에 구분되어 있다.
+- [x] 별도 승인 없이는 수행할 수 없는 필수 항목이 남아 있지 않다.
 
 완료 보고에는 최소한 다음을 포함한다.
 

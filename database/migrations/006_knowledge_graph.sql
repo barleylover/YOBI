@@ -1,5 +1,5 @@
 BEGIN
-  EXECUTE IMMEDIATE q'[
+  EXECUTE IMMEDIATE q'^
     CREATE TABLE knowledge_release (
       release_id VARCHAR2(80) PRIMARY KEY,
       catalog_version VARCHAR2(80) NOT NULL,
@@ -14,12 +14,12 @@ BEGIN
       created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
       completed_at TIMESTAMP WITH TIME ZONE
     )
-  ]';
+  ^';
 EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; END IF;
 END;
 -- +YOBI STATEMENT
 BEGIN
-  EXECUTE IMMEDIATE q'[
+  EXECUTE IMMEDIATE q'^
     CREATE TABLE dish_concept (
       release_id VARCHAR2(80) NOT NULL REFERENCES knowledge_release(release_id),
       concept_id VARCHAR2(80) NOT NULL,
@@ -34,12 +34,12 @@ BEGIN
       updated_at VARCHAR2(32) NOT NULL,
       PRIMARY KEY (release_id, concept_id)
     )
-  ]';
+  ^';
 EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; END IF;
 END;
 -- +YOBI STATEMENT
 BEGIN
-  EXECUTE IMMEDIATE q'[
+  EXECUTE IMMEDIATE q'^
     CREATE TABLE dish_relation (
       release_id VARCHAR2(80) NOT NULL,
       relation_id VARCHAR2(128) NOT NULL,
@@ -56,12 +56,12 @@ BEGIN
       CONSTRAINT fk_dish_relation_target FOREIGN KEY (release_id, target_concept_id)
         REFERENCES dish_concept(release_id, concept_id)
     )
-  ]';
+  ^';
 EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; END IF;
 END;
 -- +YOBI STATEMENT
 BEGIN
-  EXECUTE IMMEDIATE q'[
+  EXECUTE IMMEDIATE q'^
     CREATE TABLE dish_concept_closure (
       release_id VARCHAR2(80) NOT NULL,
       descendant_concept_id VARCHAR2(80) NOT NULL,
@@ -74,12 +74,12 @@ BEGIN
       CONSTRAINT fk_dish_closure_anc FOREIGN KEY (release_id, ancestor_concept_id)
         REFERENCES dish_concept(release_id, concept_id)
     )
-  ]';
+  ^';
 EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; END IF;
 END;
 -- +YOBI STATEMENT
 BEGIN
-  EXECUTE IMMEDIATE q'[
+  EXECUTE IMMEDIATE q'^
     CREATE TABLE concept_claim (
       release_id VARCHAR2(80) NOT NULL,
       claim_id VARCHAR2(128) NOT NULL,
@@ -107,12 +107,12 @@ BEGIN
         OR (claim_type IN ('FACET','PREPARATION') AND facet_key IS NOT NULL AND value_text IS NOT NULL)
       )
     )
-  ]';
+  ^';
 EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; END IF;
 END;
 -- +YOBI STATEMENT
 BEGIN
-  EXECUTE IMMEDIATE q'[
+  EXECUTE IMMEDIATE q'^
     CREATE TABLE knowledge_document (
       release_id VARCHAR2(80) NOT NULL,
       document_id VARCHAR2(128) NOT NULL,
@@ -134,12 +134,12 @@ BEGIN
         REFERENCES dish_concept(release_id, concept_id),
       CONSTRAINT uq_knowledge_doc_path UNIQUE (release_id, source_path)
     )
-  ]';
+  ^';
 EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; END IF;
 END;
 -- +YOBI STATEMENT
 BEGIN
-  EXECUTE IMMEDIATE q'[
+  EXECUTE IMMEDIATE q'^
     CREATE TABLE knowledge_chunk (
       release_id VARCHAR2(80) NOT NULL,
       chunk_id VARCHAR2(128) NOT NULL,
@@ -165,12 +165,12 @@ BEGIN
         REFERENCES dish_concept(release_id, concept_id),
       CONSTRAINT uq_knowledge_chunk_pos UNIQUE (release_id, document_id, chunk_index)
     )
-  ]';
+  ^';
 EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; END IF;
 END;
 -- +YOBI STATEMENT
 BEGIN
-  EXECUTE IMMEDIATE q'[
+  EXECUTE IMMEDIATE q'^
     CREATE TABLE menu_concept_map (
       release_id VARCHAR2(80) NOT NULL REFERENCES knowledge_release(release_id),
       menu_id VARCHAR2(32) NOT NULL REFERENCES menu(menu_id),
@@ -192,12 +192,12 @@ BEGIN
         OR (mapping_status = 'UNMAPPED' AND concept_id IS NULL AND mapping_type = 'UNMAPPED' AND unmapped_reason IS NOT NULL)
       )
     )
-  ]';
+  ^';
 EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; END IF;
 END;
 -- +YOBI STATEMENT
 BEGIN
-  EXECUTE IMMEDIATE q'[
+  EXECUTE IMMEDIATE q'^
     CREATE TABLE merchant_origin_declaration (
       release_id VARCHAR2(80) NOT NULL REFERENCES knowledge_release(release_id),
       declaration_id VARCHAR2(128) NOT NULL,
@@ -215,12 +215,12 @@ BEGIN
       updated_at VARCHAR2(32) NOT NULL,
       PRIMARY KEY (release_id, declaration_id)
     )
-  ]';
+  ^';
 EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; END IF;
 END;
 -- +YOBI STATEMENT
 BEGIN
-  EXECUTE IMMEDIATE q'[
+  EXECUTE IMMEDIATE q'^
     CREATE TABLE merchant_ingredient (
       release_id VARCHAR2(80) NOT NULL,
       merchant_id VARCHAR2(32) NOT NULL REFERENCES merchant(merchant_id),
@@ -235,12 +235,12 @@ BEGIN
       CONSTRAINT fk_merchant_ing_origin FOREIGN KEY (release_id, declaration_id)
         REFERENCES merchant_origin_declaration(release_id, declaration_id)
     )
-  ]';
+  ^';
 EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; END IF;
 END;
 -- +YOBI STATEMENT
 BEGIN
-  EXECUTE IMMEDIATE q'[
+  EXECUTE IMMEDIATE q'^
     CREATE TABLE option_ingredient_effect (
       release_id VARCHAR2(80) NOT NULL REFERENCES knowledge_release(release_id),
       option_item_id VARCHAR2(80) NOT NULL REFERENCES menu_option_item(option_item_id),
@@ -252,19 +252,19 @@ BEGIN
       updated_at VARCHAR2(32) NOT NULL,
       PRIMARY KEY (release_id, option_item_id, ingredient_id, effect)
     )
-  ]';
+  ^';
 EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; END IF;
 END;
 -- +YOBI STATEMENT
 BEGIN
-  EXECUTE IMMEDIATE q'[
+  EXECUTE IMMEDIATE q'^
     CREATE TABLE knowledge_runtime_state (
       state_key VARCHAR2(32) PRIMARY KEY,
       active_release_id VARCHAR2(80) NOT NULL REFERENCES knowledge_release(release_id),
       updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
       CONSTRAINT chk_knowledge_state_key CHECK (state_key = 'ACTIVE')
     )
-  ]';
+  ^';
 EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; END IF;
 END;
 -- +YOBI STATEMENT

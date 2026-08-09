@@ -6,7 +6,7 @@ import json
 import sys
 from array import array
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import oracledb
 
@@ -27,8 +27,12 @@ from app.knowledge.catalog_seed import (
 from app.knowledge.oracle_store import load_oracle_release
 from app.rag.providers import choose_embedding_provider
 
-TableKey = str | tuple[str, ...]
-EmbeddingProviderChoice = Literal["auto", "oci", "deterministic"] | None
+if TYPE_CHECKING:
+    TableKey = str | tuple[str, ...]
+    EmbeddingProviderChoice = Literal["auto", "oci", "deterministic"] | None
+else:
+    TableKey = Any
+    EmbeddingProviderChoice = Any
 
 TABLE_ORDER: list[tuple[str, TableKey, str]] = [
     ("service_area", "service_area_id", "service_areas"),
@@ -145,6 +149,11 @@ def _merge(
     cursor.execute(sql, row)
 
 
+def _json_value(value: Any) -> Any:
+    raw = value.read() if hasattr(value, "read") else value
+    return json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else raw
+
+
 def _batch_embeddings(
     provider: Any, texts: list[str], mode: str, batch_size: int = 32
 ) -> list[list[float]]:
@@ -198,24 +207,8 @@ def verify(connection: oracledb.Connection) -> dict[str, Any]:
     active_knowledge = cursor.fetchone()
     knowledge_ready = bool(active_knowledge and active_knowledge[3] == "READY")
     active_release_id = str(active_knowledge[0]) if active_knowledge else None
-    expected_counts = (
-        json.loads(
-            active_knowledge[4].read()
-            if hasattr(active_knowledge[4], "read")
-            else str(active_knowledge[4])
-        )
-        if active_knowledge
-        else {}
-    )
-    declared_actual_counts = (
-        json.loads(
-            active_knowledge[5].read()
-            if hasattr(active_knowledge[5], "read")
-            else str(active_knowledge[5])
-        )
-        if active_knowledge
-        else {}
-    )
+    expected_counts = _json_value(active_knowledge[4]) if active_knowledge else {}
+    declared_actual_counts = _json_value(active_knowledge[5]) if active_knowledge else {}
     knowledge_counts: dict[str, int] = {}
     for key, table in (
         ("concepts", "dish_concept"),

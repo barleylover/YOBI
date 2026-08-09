@@ -1788,7 +1788,7 @@ class OracleYobiRepository:
                 ]
             cursor.execute(
                 """
-                SELECT DISTINCT declaration.raw_text,declaration.declaration_id
+                SELECT declaration.raw_text,declaration.declaration_id
                 FROM menu
                 JOIN merchant_origin_declaration declaration
                   ON declaration.merchant_id=menu.merchant_id

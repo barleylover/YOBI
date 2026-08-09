@@ -25,6 +25,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+function clientRequestId(prefix: string) {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  if (uuid) return `${prefix}-${uuid}`;
+
+  // randomUUID is restricted to secure browser contexts. The public demo is
+  // intentionally served over HTTP, where getRandomValues remains available.
+  // Keep a final non-cryptographic suffix only for older test/webview runtimes.
+  const words = new Uint32Array(4);
+  if (globalThis.crypto?.getRandomValues) {
+    globalThis.crypto.getRandomValues(words);
+    return `${prefix}-${Array.from(words, (word) => word.toString(16).padStart(8, "0")).join("")}`;
+  }
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`;
+}
+
 const ACTIONABLE_ERRORS: Record<string, string> = {
   REQUIRED_MENU_OPTION_MISSING: "Choose one option in every required group to continue.",
   INVALID_MENU_OPTION: "Choose an option that belongs to this menu.",
@@ -70,7 +85,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ profile_id: profileId }),
     }),
-  sendMessage: (sessionId: string, content: string, requestId = `chat-${crypto.randomUUID()}`) =>
+  sendMessage: (sessionId: string, content: string, requestId = clientRequestId("chat")) =>
     request<AssistantTurn>(`/api/v1/sessions/${sessionId}/messages`, {
       method: "POST",
       body: JSON.stringify({ content, request_id: requestId }),
@@ -85,7 +100,7 @@ export const api = {
       onWarning?: (text: string) => void;
     },
     intent?: "weekly_ranking" | "kpop_demon_hunters",
-    requestId = `chat-${crypto.randomUUID()}`,
+    requestId = clientRequestId("chat"),
   ) => {
     const response = await fetch(`/api/v1/sessions/${sessionId}/messages/stream`, {
       method: "POST",
@@ -156,7 +171,7 @@ export const api = {
   ) =>
     request<CartPreview>(`/api/v1/sessions/${sessionId}/cart/items`, {
       method: "POST",
-      headers: { "Idempotency-Key": `cart-${crypto.randomUUID()}` },
+      headers: { "Idempotency-Key": clientRequestId("cart") },
       body: JSON.stringify({
         menu_id: menuId,
         quantity: 1,

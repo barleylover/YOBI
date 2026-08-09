@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -75,6 +76,21 @@ def valid_result() -> dict[str, object]:
 
 def test_seed_integrity_accepts_exact_catalog() -> None:
     seed_demo.validate(valid_result())
+
+
+def test_seed_script_type_aliases_are_runtime_compatible_with_python39() -> None:
+    assert seed_demo.TableKey is Any
+    assert seed_demo.EmbeddingProviderChoice is Any
+
+
+def test_seed_json_reader_accepts_oracle_native_json_and_lob_values() -> None:
+    expected = {"concepts": 29, "chunks": 261}
+    lob = MagicMock()
+    lob.read.return_value = expected
+
+    assert seed_demo._json_value(expected) == expected
+    assert seed_demo._json_value('{"concepts": 29, "chunks": 261}') == expected
+    assert seed_demo._json_value(lob) == expected
 
 
 def test_default_embedding_provider_is_pinned_even_when_genai_key_exists() -> None:

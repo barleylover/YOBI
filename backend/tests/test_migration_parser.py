@@ -59,6 +59,26 @@ def test_conversation_migration_is_append_only_and_partial_rerun_safe() -> None:
     )
 
 
+def test_knowledge_graph_migration_uses_collision_free_oracle_quoting() -> None:
+    path = ROOT / "database" / "migrations" / "006_knowledge_graph.sql"
+    source = path.read_text(encoding="utf-8")
+    statements = migrate.split_statements(source)
+
+    assert "DROP TABLE" not in source.upper()
+    quoted_statements = [statement for statement in statements if "EXECUTE IMMEDIATE q'" in statement]
+
+    assert len(statements) == 15
+    assert len(quoted_statements) == 12
+    assert "q'[" not in source
+    assert all(
+        statement.startswith("BEGIN") and statement.endswith("END;")
+        for statement in statements
+    )
+    assert all(statement.count("q'^") == 1 for statement in quoted_statements)
+    assert all(statement.count("^'") == 1 for statement in quoted_statements)
+    assert all("SQLCODE != -955" in statement for statement in statements)
+
+
 def test_ledger_drift_is_rejected_before_pending_migrations() -> None:
     migrations = migrate.discover_migrations()
     first = migrations[0]

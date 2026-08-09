@@ -115,4 +115,33 @@ describe("versioned mutation API", () => {
       }),
     );
   });
+
+  it("creates a cart idempotency key when randomUUID is unavailable on public HTTP", async () => {
+    const cart = { cart_id: "cart_1", version: 1, items: [], missing_slots: [] };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValue(cart),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("crypto", {
+      getRandomValues: (words: Uint32Array) => {
+        words.set([1, 2, 3, 4]);
+        return words;
+      },
+    });
+
+    await expect(api.addCartItem("session_1", "menu_1", ["option_1"], "Mild"))
+      .resolves.toEqual(cart);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/sessions/session_1/cart/items",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Idempotency-Key": "cart-00000001000000020000000300000004",
+        }),
+      }),
+    );
+  });
 });

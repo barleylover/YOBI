@@ -4,13 +4,12 @@
 - 작업 브랜치: `codex/master-spec-completion`
 - 점검일: 2026-08-09 KST
 - 상태 의미: **연결됨**은 현재 작업 트리의 실제 런타임 경로가 존재한다는 뜻이며,
-  **로컬 PASS**는 최종 로컬 회귀를 통과했다는 뜻이다. Git/Draft PR 증거는
-  기록됐지만 Oracle/OCI/Public는 별도 live 증거가 생길 때까지 대기 상태다.
+  **PASS**는 해당 경계의 실제 검증을 통과했다는 뜻이다. 로컬, Oracle, OCI GenAI,
+  Public, Git/Draft PR 증거는 서로 대체하지 않고 별도로 기록한다.
 
 이 문서는 구현 파일 목록을 완료 증거로 대신하지 않는다. 로컬 전체 검증, Oracle
-Migration/seed, OCI release 전환, Public E2E, Git push는 서로 다른 증거다. 아래
-Phase 7 표의 빈 항목이 실제 결과로 채워지기 전에는 개선 Goal 전체를 Done 또는
-공개 배포 완료로 표현하지 않는다.
+Migration/seed, OCI release 전환, Public E2E, Git push는 서로 다른 증거다. 각 경계의
+최종 결과는 아래 Phase 7 표와 `TEST_REPORT.md`에 기록한다.
 
 ## 핵심 결과
 
@@ -38,12 +37,12 @@ Phase 7 표의 빈 항목이 실제 결과로 채워지기 전에는 개선 Goal
 |---|---|---|---|
 | 0. 계약·기준선·평가 | 연결됨 | `domain/dialogue.py`, `domain/knowledge.py`, `genai/contracts.py`, `evaluation/fixtures/*.json` | 로컬 PASS: legacy 100 queries + acceptance 345 assertions, 모든 failure counter 0 |
 | 1. 대화 상태·readiness | 연결됨 | `services/dialogue_engine.py`, `services/chat_service.py`, `test_dialogue_state.py` | 로컬 backend/acceptance/E2E PASS |
-| 2. 오케스트레이션·UI 계약 | 연결됨 | Migration 005, conversation/snapshot repository와 API, `ChatPage.tsx`, conversation API/Vitest/E2E | 로컬 frontend 및 E2E PASS; Public UI 대기 |
-| 3. 지식 그래프·authoring | 연결됨 | Migration 006, `knowledge/authoring.py`, SQLite/Oracle loader, Markdown corpus | Oracle 실제 Migration/load 검증 대기 |
-| 4. 합성 Wiki·원산지·매핑 | 연결됨 | 20 카테고리/150 메뉴 매핑, 30 가게 원산지 선언, 정규화 재료, 메뉴 사실, 옵션 효과, `knowledge/dishes/` | 최종 seed exact-count 및 공개 DB 검증 대기 |
-| 5. 하이브리드 추천·설명 | 연결됨 | repository `recommend_menus`/`get_grounded_menu_knowledge`, claim resolver, tool grounding, review-weight-0 회귀 | 로컬 acceptance PASS; Oracle Vector 실행 대기 |
-| 6. LLM 품질·fallback | 연결됨 | provider/capability adapter, DialogueAct tool routing, structured narrative, response validator, 오류 분류·retry | 로컬 회귀 PASS; 실제 OCI 정상/오류 smoke 대기 |
-| 7. 통합·배포 | 로컬 PASS, 외부 증거 대기 | 배포 archive preflight, checksum migration, SHA release identity, release marker/정확한 rollback, 문서와 acceptance runner | 로컬 전체 gate와 Git/PR PASS; OCI release와 Public 3회 대기 |
+| 2. 오케스트레이션·UI 계약 | 연결됨 | Migration 005, conversation/snapshot repository와 API, `ChatPage.tsx`, conversation API/Vitest/E2E | 로컬 frontend 및 Public 대화/주문 E2E PASS |
+| 3. 지식 그래프·authoring | 연결됨 | Migration 006, `knowledge/authoring.py`, SQLite/Oracle loader, Markdown corpus | Oracle Migration 001–008 및 active release PASS |
+| 4. 합성 Wiki·원산지·매핑 | 연결됨 | 20 카테고리/150 메뉴 매핑, 30 가게 원산지 선언, 정규화 재료, 메뉴 사실, 옵션 효과, `knowledge/dishes/` | 공개 DB exact-count/mapping PASS |
+| 5. 하이브리드 추천·설명 | 연결됨 | repository `recommend_menus`/`get_grounded_menu_knowledge`, claim resolver, tool grounding, review-weight-0 회귀 | 로컬 acceptance와 Oracle/Public 실행 PASS |
+| 6. LLM 품질·fallback | 연결됨 | provider/capability adapter, DialogueAct tool routing, structured narrative, response validator, 오류 분류·retry | OCI 주 모델·fallback 모델·실제 오류 분류·Oracle fallback PASS |
+| 7. 통합·배포 | PASS | 배포 archive preflight, checksum migration, SHA release identity, release marker/정확한 rollback, 문서와 acceptance runner | release 활성화, Public 21개, Primary 3회, NSG cleanup PASS |
 
 ## Phase별 구현 근거
 
@@ -151,26 +150,30 @@ response, grounding rejection은 안전 코드로 분류된다. model narrative�
 존재하는 menu/claim/passage만 참조할 수 있고 내부 tool/ID 노출은 거절된다. 생성
 model 전환은 embedding model/version을 변경하지 않는다.
 
-### Phase 7 — 로컬 완료 증거와 남은 외부 증거
+### Phase 7 — 최종 로컬·Oracle·OCI·Public 증거
 
 | Gate | 명령/증거 | 현재 문서 상태 |
 |---|---|---|
 | Backend lint | `.venv/bin/ruff check backend scripts deploy/*.py` | PASS — zero errors |
 | Backend type | `MYPYPATH=backend:scripts:. .venv/bin/mypy --explicit-package-bases --python-version 3.12 backend/app backend/evaluation scripts deploy/release_state.py deploy/run_with_runtime_env.py deploy/secure_bootstrap.py` | PASS — 62 source files |
-| Backend full test | `cd backend && ../.venv/bin/pytest -q` | PASS — 217 passed, 1 warning, 43.97s |
+| Backend full test | `cd backend && ../.venv/bin/pytest -q` | PASS — 223 passed, 1 warning, 47.11s |
 | Legacy + chatbot acceptance | `make evaluate` | PASS — 100 legacy queries; 8 transcripts/15 turns/2 events/3 knowledge cases/345 assertions; all counters zero |
-| Frontend lint/test/build | `cd frontend && pnpm lint && pnpm test -- --run && pnpm build` | PASS — 4 files/10 tests; 1,796 modules built |
-| Local product E2E | Playwright configured suite | PASS — 21 passed/27 intentional skips, four-viewport Primary + complete iPhone flows, 1.0m |
+| Frontend lint/test/build | `cd frontend && pnpm lint && pnpm test -- --run && pnpm build` | PASS — 4 files/11 tests; 1,796 modules built |
+| Local product E2E | Playwright configured suite | PASS — 21 passed/27 intentional skips, four-viewport Primary + complete iPhone flows |
 | Static/repository hygiene | diff/conflict/secret/debug scan + changed shell `bash -n` | PASS — tracked `.env` 0, secret-pattern files 0, debug files 0 |
-| Migration/seed | migration checksum + exact counts + mapping/vector/FK/option 검증 | Oracle 실행 결과 미기록 |
-| OCI GenAI | 현재 승인된 on-demand 정상·오류/fallback smoke | 실제 실행 결과 미기록 |
-| Public routes/security | `/healthz`, `/readyz`, `/`, `/demo/qr`, demo auth 403 | 개선 release 결과 미기록 |
-| Public product | 대화→추천→옵션→cart→Mock payment/order | 개선 release 결과 미기록 |
-| Primary Demo | 같은 공개 release에서 3회 연속 성공 | 개선 release 결과 미기록 |
+| Migration/seed | migration checksum + exact counts + mapping/vector/FK/option 검증 | PASS — 001–008, exact catalog/knowledge counts and all readiness checks true |
+| OCI GenAI | 승인된 on-demand 정상·오류/fallback smoke | PASS — Grok tool loop, GPT-OSS, invalid-model classification, Oracle fallback |
+| Public routes/security | `/healthz`, `/readyz`, `/`, `/demo/qr`, demo auth 403 | PASS — 200/200/200/200/403, four security headers |
+| Public product | 대화→추천→옵션→cart→Mock payment/order | PASS — 21 passed/27 intentional skips in 2.4m |
+| Primary Demo | 같은 공개 release에서 3회 연속 성공 | PASS — iPhone 13, worker 1, 3/3 in 26.7s |
 | Git/PR | current branch push + existing Draft PR #1 head/body | PASS — OPEN/Draft, remote head synchronized, duplicate PR 없음 |
 
-`docs/TEST_REPORT.md`에는 위 표를 실제 숫자, release ID, 시간, 경계와 함께 옮긴다.
-로컬 PASS를 Oracle/Public PASS로 복사하지 않는다.
+세부 release ID, 데이터 수치, 로그·NSG 정리, 합성 경계는
+`docs/TEST_REPORT.md`에 기록했다.
+
+배포 release는 `20260809T084353Z-704f74712d9d`, 검증된 rollback target은
+`20260809T083629Z-bfb59275b93f`다. 공개 readiness와 제품 E2E를 마친 뒤 최종
+독립 NSG 조회에서 TCP 22는 `0`, 기존 TCP 80은 `1`이었다.
 
 ## DB·catalog·embedding 식별자
 
@@ -184,8 +187,8 @@ model 전환은 embedding model/version을 변경하지 않는다.
   같은 cart snapshot은 재생되고, 변경·재가격된 cart는 재확정 후 새 version으로만
   checkout을 만들 수 있다.
 - Catalog version: `demo-2026.08.09-knowledge-v2`.
-- Knowledge release: source-derived immutable `knowledge-demo-<24 hex>` ID (the exact value is
-  emitted by seed/readiness evidence for the deployed corpus).
+- Knowledge release: source-derived immutable
+  `knowledge-demo-1c7dd5378736fc75567ba871`.
 - Knowledge catalog: `demo-knowledge-catalog-2026.08.09-v2`.
 - Authoring default embedding: `yobi-semantic-hash-v1`, dimension `1536`, version
   `2026-08-06`.

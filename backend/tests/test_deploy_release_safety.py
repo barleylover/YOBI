@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
@@ -25,19 +26,65 @@ def test_release_archive_contains_knowledge_and_all_migrations() -> None:
     assert 'status["latest_applied_migration"]' in source
     assert 'raise SystemExit("MIGRATION_LEDGER_NOT_EXACT")' in source
     assert "assert status[" not in source
+    runtime_import = source.index('import app.main; print("Verified Python 3.9 application imports.")')
     migration = source.index('"$new_release/scripts/migrate.py"')
     exact_gate = source.index('raise SystemExit("MIGRATION_LEDGER_NOT_EXACT")')
     active_snapshot = source.index('old_knowledge_release_id="$(run_knowledge_manager get-active)"')
     seed = source.index('"$new_release/scripts/seed_demo.py" --upsert')
-    assert migration < exact_gate < active_snapshot < seed
+    assert runtime_import < migration < exact_gate < active_snapshot < seed
 
 
 def test_deploy_loads_runtime_environment_without_shell_source() -> None:
     source = (ROOT / "deploy" / "deploy.sh").read_text(encoding="utf-8")
 
     assert "source /etc/yobi/yobi.env" not in source
-    assert source.count('"${runtime_env_runner[@]}"') == 4
+    assert source.count('"${runtime_env_runner[@]}"') == 5
     assert "run_with_runtime_env.py" in source
+    assert 'PYTHONPATH="$new_release/backend:$new_release"' in source
+
+
+def test_python39_deployable_modules_defer_pep604_annotations() -> None:
+    offenders: list[str] = []
+    for root in (ROOT / "backend" / "app", ROOT / "scripts", ROOT / "deploy"):
+        for path in root.rglob("*.py"):
+            source = path.read_text(encoding="utf-8")
+            module = ast.parse(source)
+            deferred = any(
+                isinstance(statement, ast.ImportFrom)
+                and statement.module == "__future__"
+                and any(alias.name == "annotations" for alias in statement.names)
+                for statement in module.body
+            )
+            if deferred:
+                continue
+            annotations: list[ast.expr] = []
+            for node in ast.walk(module):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    annotations.extend(
+                        argument.annotation
+                        for argument in (
+                            *node.args.posonlyargs,
+                            *node.args.args,
+                            *node.args.kwonlyargs,
+                        )
+                        if argument.annotation is not None
+                    )
+                    if node.args.vararg and node.args.vararg.annotation:
+                        annotations.append(node.args.vararg.annotation)
+                    if node.args.kwarg and node.args.kwarg.annotation:
+                        annotations.append(node.args.kwarg.annotation)
+                    if node.returns is not None:
+                        annotations.append(node.returns)
+                elif isinstance(node, ast.AnnAssign):
+                    annotations.append(node.annotation)
+            if any(
+                isinstance(part, ast.BinOp) and isinstance(part.op, ast.BitOr)
+                for annotation in annotations
+                for part in ast.walk(annotation)
+            ):
+                offenders.append(str(path.relative_to(ROOT)))
+
+    assert offenders == []
 
 
 def test_release_identity_and_failure_restore_are_verified() -> None:

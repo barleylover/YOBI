@@ -206,3 +206,10 @@ def test_oracle_prewarm_cache_uses_the_same_release_versioning_contract() -> Non
     assert "knowledge_runtime_state" in source
     assert "DELETE FROM explanation_cache" in source
     assert 'source_version = f"{CATALOG_VERSION}:{knowledge_version}"' in source
+
+
+def test_oracle_origin_query_never_uses_clob_as_a_distinct_key() -> None:
+    source = inspect.getsource(OracleYobiRepository.get_grounded_menu_knowledge)
+
+    assert "SELECT DISTINCT declaration.raw_text" not in source
+    assert "SELECT declaration.raw_text,declaration.declaration_id" in source

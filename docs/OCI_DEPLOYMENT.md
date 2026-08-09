@@ -3,6 +3,14 @@
 The existing `yobi-app-01` VM and private `yobi-adb` are reused. Scripts resolve
 current identifiers and the ephemeral public IP at runtime; none are stored in Git.
 
+Verified 2026-08-09 deployment: release `20260809T084353Z-704f74712d9d` is active,
+the exact migration ledger is `001`–`008`, and the trusted rollback target is
+`20260809T083629Z-bfb59275b93f`. Public readiness, the configured product E2E suite,
+and three consecutive Primary runs passed. The approved temporary current-source
+`/32` TCP 22 rules were removed after every SSH window; the final independent NSG
+state is TCP 22 `0`, existing TCP 80 `1`. See `TEST_REPORT.md` for exact data and
+GenAI smoke evidence.
+
 ```bash
 make test
 make build
@@ -137,7 +145,7 @@ choosing another retained release:
 
 ```bash
 sudo /opt/yobi/current/deploy/rollback.sh
-sudo /opt/yobi/current/deploy/rollback.sh 20260807T194921Z
+sudo /opt/yobi/current/deploy/rollback.sh 20260809T083629Z-bfb59275b93f
 ```
 
 For releases that carry the current knowledge contract, rollback reads the target's

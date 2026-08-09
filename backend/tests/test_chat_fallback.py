@@ -316,6 +316,27 @@ def test_duplicate_menu_tool_results_render_one_deduplicated_carousel(
     assert [card.type for card in turn.cards] == ["menu_recommendations"]
     menu_ids = [menu["menu_id"] for menu in turn.cards[0].data["menus"]]
     assert len(menu_ids) == len(set(menu_ids))
+    assert turn.suggested_replies == ["Compare these", "Something else", "Show dietary evidence"]
+
+
+def test_grounded_category_tool_results_offer_bound_category_followups(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    profile = repository.create_profile(profile_data)
+    session = repository.create_session(profile.profile_id)
+
+    turn = ChatService(repository, Settings(), DemoControl())._turn_from_tool_results(
+        session,
+        "Grounded category result",
+        [
+            (
+                "recommend_menu_categories",
+                {"categories": [{"category": "Chicken kalguksu"}, {"category": "Bibimbap"}]},
+            )
+        ],
+    )
+
+    assert turn.suggested_replies == ["Recommend Chicken kalguksu", "Recommend Bibimbap"]
 
 
 def test_weekly_ranking_is_fixed_and_does_not_enter_fallback(

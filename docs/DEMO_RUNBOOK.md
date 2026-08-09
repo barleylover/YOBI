@@ -48,10 +48,10 @@ or public-network behaviour is in scope. Run `./deploy/run_remote_prewarm.sh`, c
 `/healthz` and `/readyz`, and open a fresh private browser window. Do not rerun secure
 bootstrap during ordinary rehearsal and never print `/etc/yobi/yobi.env` values.
 
-Until `TEST_REPORT.md` records a new chatbot-improvement release, the public service is
-the historical pre-improvement baseline. A successful public rehearsal of that
-baseline is not evidence that migrations `005`–`008`, the active menu Wiki, or the new
-multi-turn readiness flow are deployed.
+`TEST_REPORT.md` records chatbot-improvement release
+`20260809T084353Z-704f74712d9d` as the current verified public boundary. Reconfirm
+`/readyz` before a presentation; an HTTP `200` alone is insufficient unless the exact
+catalog, active knowledge release, and all readiness checks also match the report.
 
 ## 2. Chatbot quality and primary ordering proof
 

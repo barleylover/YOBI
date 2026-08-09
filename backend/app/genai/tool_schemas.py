@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from app.domain.dialogue import DialogueAct
 
 TOOLS = [

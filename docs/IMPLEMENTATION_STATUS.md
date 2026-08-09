@@ -2,20 +2,19 @@
 
 Last updated: 2026-08-09 KST
 
-> Historical baseline notice (2026-08-09): this file records the public MVP/UI
-> releases that predate the chatbot-improvement migrations `005`–`008`. The current
-> worktree implementation and Phase status are tracked in
-> `CHATBOT_IMPROVEMENT_IMPLEMENTATION.md`; exact final test and new OCI/Public release
-> evidence belongs in `TEST_REPORT.md`. Do not use the release below as evidence that
-> the new multi-turn dialogue or menu knowledge graph is live.
+> Historical sections below remain evidence for the public MVP/UI releases that
+> predate the chatbot-improvement migrations `005`–`008`. The current Phase status is
+> tracked in `CHATBOT_IMPROVEMENT_IMPLEMENTATION.md`; exact final test and live
+> OCI/Public evidence is in `TEST_REPORT.md`.
 
-> Current local improvement checkpoint: Ruff and MyPy (62 files) passed; backend
-> Pytest passed 217 tests; legacy evaluation passed 100 queries; chatbot acceptance
-> passed 345 assertions; frontend lint, 10 Vitest tests and the 1,796-module build
-> passed; local Playwright passed 21 tests with 27 intentional viewport skips. These
-> results do not prove migrations 005–008 or the new release are deployed. New
-> Oracle/OCI/Public evidence remains pending. The implementation branch is pushed and
-> the existing Draft PR #1 remains OPEN/Draft with its head synchronized to the branch.
+> Chatbot-improvement release `20260809T084353Z-704f74712d9d` is live on the existing
+> OCI VM/ADB. Migrations `001`–`008`, catalog
+> `demo-2026.08.09-knowledge-v2`, immutable knowledge release
+> `knowledge-demo-1c7dd5378736fc75567ba871`, public readiness/security, full public
+> Playwright, and three consecutive Primary runs passed. Final local gates passed Ruff,
+> MyPy (62 files), backend Pytest (223), legacy evaluation (100 queries), chatbot
+> acceptance (345 assertions), frontend lint/Vitest (11 tests), and the 1,796-module
+> build. Draft PR #1 remains OPEN/Draft; it is not merged.
 
 ## Historical public baseline status
 
@@ -45,11 +44,13 @@ Confirmed live for the historical baseline only:
 ## Chatbot-improvement status
 
 The multi-turn dialogue, knowledge graph, grounded hybrid retrieval, provider
-capability/readiness, and release-safety implementation is committed on
-`codex/master-spec-completion` and tracked by Draft PR #1. It is locally verified but
-not the code currently served by OCI. Migration/seed `005`–`008`, the active knowledge
-release, OCI generation smoke, public conversation/order regression, and three-run
-Primary proof remain pending the separately approved deployment access path.
+capability/readiness, and release-safety implementation is deployed from
+`codex/master-spec-completion` and tracked by Draft PR #1. Oracle migration/seed,
+on-demand OCI primary/fallback/error classification, public conversation/order
+regression, and three consecutive Primary runs are verified. The approved temporary
+current-source SSH rules were removed after every window; the final independent NSG
+state is TCP 22 `0`, existing TCP 80 `1`. The trusted rollback target is
+`20260809T083629Z-bfb59275b93f`.
 
 ## Product boundary
 

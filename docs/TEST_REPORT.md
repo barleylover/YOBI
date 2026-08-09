@@ -6,88 +6,112 @@
 - Improvement goal: `YOBI_CHATBOT_IMPROVEMENT_CODEX_GOAL.md`
 - Improvement branch: `codex/master-spec-completion`
 - Historical deployed baseline release: `20260807T194921Z`
+- Chatbot-improvement deployed release: `20260809T084353Z-704f74712d9d`
+- Verified rollback target: `20260809T083629Z-bfb59275b93f`
 - Public address: resolved from OCI at runtime; not stored in Git
-- Evidence boundary: the long-form sections below prove the historical UI/order
-  release only. They do not prove that migrations `005`–`008`, the menu knowledge
-  graph, new multi-turn chatbot, or current worktree are deployed.
+- Evidence boundary: the final-gate section below records the 2026-08-09 chatbot
+  improvement release; later long-form sections explicitly labelled historical remain
+  evidence for their earlier releases only.
 
 ## Chatbot-improvement final gate
 
-The implementation matrix is in `CHATBOT_IMPROVEMENT_IMPLEMENTATION.md`. The current
-worktree contains the Phase 0–6 runtime paths and Phase 7 deployment safeguards. The
-final local quality gates below were rerun against the completed local implementation.
-The branch and existing Draft PR are current; the new Oracle/OCI/Public release remains
-separate and pending. A local or Git PASS is not substituted for live deployment proof.
+The implementation matrix is in `CHATBOT_IMPROVEMENT_IMPLEMENTATION.md`. Phase 0–7 is
+connected, locally verified, deployed to the existing OCI VM/ADB, and independently
+checked through the public product surface. Local, Oracle, OCI GenAI, public browser,
+network-cleanup, and Git evidence remain separate rows rather than being inferred from
+one another.
 
 | Gate | Required final evidence | Current status |
 |---|---|---:|
 | Ruff | `.venv/bin/ruff check backend scripts deploy/*.py` | **PASS** — zero errors |
 | MyPy | `MYPYPATH=backend:scripts:. .venv/bin/mypy --explicit-package-bases --python-version 3.12 backend/app backend/evaluation scripts deploy/release_state.py deploy/run_with_runtime_env.py deploy/secure_bootstrap.py` | **PASS** — 62 source files, zero errors |
-| Pytest | `cd backend && ../.venv/bin/pytest -q` | **PASS** — 217 passed, 1 Starlette deprecation warning, 43.97s |
+| Pytest | `cd backend && ../.venv/bin/pytest -q` | **PASS** — 223 passed, 1 Starlette deprecation warning, 47.11s |
 | Legacy evaluation | `make evaluate` legacy retrieval run | **PASS** — 100 queries; every failure counter zero |
 | Chatbot acceptance | `make evaluate` chatbot acceptance run | **PASS** — 8 transcripts, 15 turns, 2 events, 3 knowledge cases, 345 assertions; every safety/state counter zero |
-| Frontend | `pnpm lint`, Vitest, TypeScript/Vite build | **PASS** — 4 Vitest files/10 tests; 1,796 modules built |
-| Local product E2E | Playwright across configured viewports | **PASS** — 21 passed, 27 intentional viewport skips, 1.0m; four-viewport Primary flow plus complete iPhone flow |
+| Frontend | `pnpm lint`, Vitest, TypeScript/Vite build | **PASS** — 4 Vitest files/11 tests; 1,796 modules built |
+| Local product E2E | Playwright across configured viewports | **PASS** — 21 passed, 27 intentional viewport skips; four-viewport Primary flow plus complete iPhone flow |
 | Release/static safety | changed shell syntax, diff/conflict scan, provider/cache/deploy contract tests | **PASS** — all checks passed |
 | Repository hygiene | tracked `.env`, credential/private-key patterns, production debug flags | **PASS** — 0 files for each scan |
-| Oracle migration/seed | Applied 001–008, exact catalog/graph/mapping/vector integrity | NOT YET RECORDED |
-| OCI GenAI | On-demand normal, classified failure, grounded fallback smoke | NOT YET RECORDED |
-| Public routes/auth | root, health, readiness, QR 200; unauth demo control 403 | NOT YET RECORDED |
-| Public conversation | `hi` no cards, readiness, correction, snapshot event/reload, grounded explanation | NOT YET RECORDED |
-| Public ordering regression | options, cart, delivery, Mock checkout/payment/order/idempotency | NOT YET RECORDED |
-| Public Primary Demo | Same new release, three consecutive passes | NOT YET RECORDED |
+| Oracle migration/seed | Applied 001–008, exact catalog/graph/mapping/vector integrity | **PASS** — exact ledger; 29 concepts, 27 relations, 66 closure rows, 411 claims, 29 documents, 261 chunks, 150 menu mappings |
+| OCI GenAI | On-demand normal, classified failure, grounded fallback smoke | **PASS** — Grok Function Calling/continuation, GPT-OSS fallback model, invalid-model classification, Oracle deterministic fallback |
+| Public routes/auth | root, health, readiness, QR 200; unauth demo control 403 | **PASS** — exact status codes and four security headers |
+| Public conversation | `hi` no cards, readiness, correction, snapshot event/reload, grounded explanation | **PASS** — configured public Playwright suite |
+| Public ordering regression | options, cart, delivery, Mock checkout/payment/order/idempotency | **PASS** — configured public Playwright suite, 21 passed/27 intentional skips in 2.4m |
+| Public Primary Demo | Same new release, three consecutive passes | **PASS** — iPhone 13, worker 1, 3/3 in 26.7s |
 | Git/Draft PR | Current branch pushed; Draft PR #1 head equals remote branch | **PASS** — `codex/master-spec-completion`, OPEN/Draft, not merged |
 
-### Current pre-deployment boundary
+### 2026-08-09 deployed improvement evidence
 
-Read-only OCI/public checks still describe the historical release only: public root,
-health, readiness, and QR respond, while unauthenticated demo control remains denied.
-The readiness payload still identifies the pre-improvement catalog, and the last
-verified live migration ledger remains `001`–`004`. Migrations `005`–`008`, the new
-knowledge release, provider-readiness contract, and Nginx header revision are not live.
+Release `20260809T084353Z-704f74712d9d` was built from an archive SHA-256 identity,
+verified on the VM, imported under Python 3.9 before any database write, migrated,
+seeded, activated, and checked by local health/readiness. The exact live migration
+ledger is `001`–`008`. The active catalog is `demo-2026.08.09-knowledge-v2`; the
+immutable knowledge release is `knowledge-demo-1c7dd5378736fc75567ba871`, catalog
+`demo-knowledge-catalog-2026.08.09-v2`. Runtime and stored embeddings are independently
+pinned to deterministic `yobi-semantic-hash-v1`, dimension `1536`, version
+`2026-08-06`; generation is OCI on-demand with logical primary `xai.grok-4.3` and
+fallback `openai.gpt-oss-120b`.
 
-The 2026-08-09 preflight returned HTTP `200` for `/`, `/healthz`, `/readyz`, and
-`/demo/qr`, HTTP `403` for unauthenticated `/api/v1/demo/status`, catalog
-`demo-2026.08.08-chat-menu-v1`, no active knowledge release field, and
-`genai_required=false`. The attached NSG had zero TCP 22 ingress rules and one TCP 80
-ingress rule. No public address or infrastructure identifier was written to Git.
+The Oracle seed verified 29 concepts, 27 relations, 66 closure rows, 411 claims,
+29 documents, 261 chunks, 150 menu mappings, 30 origin declarations, 266 merchant
+ingredient rows, and 4 option effects. All knowledge readiness checks are true, chunk
+metadata mismatches are zero, and required base catalog/vector/option counts are exact.
 
-No IAM, NSG, security-list, credential, database, or paid-resource change was made.
-Harmless Compute Run Command probes remained accepted/visible but were never consumed
-by the VM, so they do not establish a deployment path. The existing SSH/SCP path has
-no TCP 22 ingress. A temporary current-source `/32` TCP 22 rule is therefore a separate
-approval item; if approved it must be removed by exact rule identity and the final
-SSH-rule count must be verified as zero while TCP 80 remains unchanged.
+Public `/`, `/healthz`, `/readyz`, and `/demo/qr` returned HTTP `200`; unauthenticated
+`/api/v1/demo/status` returned `403`. Readiness reports production GenAI required,
+OCI/on-demand configured, the exact catalog and knowledge release above, and every
+database readiness check true. `X-Content-Type-Options`, `Referrer-Policy`,
+`X-Frame-Options`, and `Permissions-Policy` were present.
 
-Final local checkpoint (not Oracle/public proof): the complete backend suite passed
-`217` tests in 43.97 seconds with one third-party Starlette deprecation warning. Ruff
-reported zero errors and MyPy passed all 62 checked source files. The 8-transcript,
-15-turn acceptance suite passed all 345 assertions, including 2 event and 3 knowledge
-cases, with every safety/state counter at zero. The legacy 100-query evaluation also
-reported zero constraint, grounding, safety, price, and option failures. Frontend
-ESLint, 4-file/10-test Vitest, TypeScript, and the 1,796-module Vite build passed.
-Local Playwright passed 21 tests with 27 intentional cross-viewport skips in 1.0
-minute, covering the Primary flow on four viewports and the complete iPhone flow.
-The branch is pushed and the existing Draft PR is updated without creating a duplicate
-PR. Oracle/OCI/Public rows remain pending because they require distinct live evidence.
+The public configured Playwright suite passed 21 tests with 27 intentional viewport
+skips in 2.4 minutes. It covers card-free greeting and multi-turn readiness, rejection
+events, grounded explanation/comparison, profile correction, option risk handling,
+cart/delivery, localized flow, Mock payment failure/retry, and Mock order completion.
+The Primary iPhone flow then passed three additional consecutive runs in 26.7 seconds.
+The HTTP-only public environment also verified the `getRandomValues` client-key
+fallback used when `randomUUID` is unavailable.
+
+Actual OCI smoke passed the primary Grok function call and two-step continuation after
+one provider-directed rate-limit wait, the GPT-OSS fallback-model response, an invalid
+model classified as `PROVIDER_UNAVAILABLE`, and deterministic fallback over the real
+Oracle repository with dietary evidence. The release window contains zero Traceback,
+CRITICAL, Oracle, HTTP 5xx, or systemd-priority error lines; two classified rate-limit
+events were recovered. `yobi-api` and Nginx are active, and the runtime environment is
+`root:root` mode `0600`.
+
+The user-approved temporary current-source `/32` TCP 22 rule was added only for each
+SSH deployment/verification window and removed by exact rule identity on every exit.
+The final independent NSG query reports TCP 22 rules `0` and the pre-existing TCP 80
+rule `1`. No IAM, security-list, credential, secret, database resource, or paid-resource
+expansion was made. The trusted rollback target is
+`20260809T083629Z-bfb59275b93f`; rollback uses
+`sudo /opt/yobi/current/deploy/rollback.sh` and restores the app and bound knowledge
+pointer before rechecking health/readiness.
+
+The complete backend suite passed `223` tests in 47.11 seconds with one third-party
+Starlette deprecation warning. Ruff reported zero errors and MyPy passed all 62 checked
+source files. The 8-transcript, 15-turn acceptance suite passed all 345 assertions,
+including 2 events and 3 knowledge cases, with every safety/state counter at zero.
+The legacy 100-query evaluation also reported zero constraint, grounding, safety,
+price, and option failures. Frontend ESLint, 4-file/11-test Vitest, TypeScript, and the
+1,796-module Vite build passed.
 
 The final repository-hygiene pass found zero tracked `.env` files, zero files matching
 credential/private-key/credential-bearing-URL patterns, zero production debug flags,
 and zero merge-conflict markers. All changed shell scripts passed `bash -n`. Synthetic
 placeholder identifiers in tests are not credentials and remain confined to fixtures.
 
-The final entry must separately report catalog version, knowledge release, active
-embedding model/dimension/version, generation provider/model/serving mode, app release
-ID, and rollback target. Do not infer one from another. Dedicated adapter fixture
-tests are not evidence of a live dedicated OCI endpoint.
+Catalog, knowledge release, embedding identity, generation model/serving mode, app
+release, and rollback target above were checked independently. The live evidence is
+for OCI on-demand only; dedicated adapter fixtures are not evidence of a live dedicated
+endpoint.
 
 Locally evaluated quality counters are all zero: hard-constraint violations, unsafe
 severe-allergy reassurance, Wiki-missing-as-absent errors, review-influenced
 ranking/safety, body/card/price/option contradictions, ungrounded menu facts, core
-menu mapping gaps, and required-option gaps. Public route failures are a separate
-zero-tolerance deployment criterion and remain unmeasured for the improvement
-release. Review snippets are synthetic display data with recommendation and safety
-weight `0`.
+menu mapping gaps, and required-option gaps. Public route and product regressions are
+also zero in the recorded suite. Review snippets are synthetic display data with
+recommendation and safety weight `0`.
 
 ## Historical release baseline (before chatbot improvement)
 
