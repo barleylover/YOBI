@@ -22,7 +22,7 @@ The first run is interactive. Enter the ADB TLS DSN, ADB ADMIN password,
 `YOBI_APP` password, OCI Generative AI API-key secret, and a demo-control token. The
 script creates the least-privilege app user if absent, applies checksum migrations,
 verifies `YOBI_APP` plus every migration packaged in that release (currently
-`001`–`008`), and writes the protected runtime environment before any GenAI smoke
+`001`–`009`), and writes the protected runtime environment before any GenAI smoke
 request. Verification includes the conversation snapshot/event and knowledge release,
 chunk, and runtime-state tables introduced by `005` and `006`. No secret is echoed.
 
