@@ -65,6 +65,9 @@ test("greeting stays card-free until accumulated needs are recommendation-ready"
   await expect(page.locator("[data-testid^='menu-']")).toHaveCount(0);
 
   await sendMessage(page, "I want something warm.");
+  await expect.poll(async () => (
+    latestAssistant(await getConversation(page)).dialogue_act
+  )).toBe("COLLECT_NEEDS");
   assistant = latestAssistant(await getConversation(page));
   expect(assistant.dialogue_act).toBe("COLLECT_NEEDS");
   expect(assistant.readiness?.status).toBe("NOT_READY");

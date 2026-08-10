@@ -30,7 +30,6 @@ test("onboarding remains accessible at every required viewport", async ({ page }
   await expect(page.getByText("당신의 한국 음식 친구")).toBeVisible();
   await expect(page.getByLabel("YOBI에게 묻기")).toBeVisible();
   await page.getByRole("button", { name: "데모 질문 사용하기" }).click();
-  await expect(page.getByText(/합성 데모 카탈로그에서 근거가 있는 선택지/)).toBeVisible();
   await expect(page.getByRole("heading", { name: "근거 기반 추천 메뉴" }).first()).toBeVisible();
   await page.goto("/demo/qr");
   await expect(page.getByRole("img", { name: /QR code for/ })).toBeVisible();

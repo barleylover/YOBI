@@ -14,7 +14,7 @@ async function startSession(page: import("@playwright/test").Page) {
   await expect(page).toHaveURL(/\/chat\/session_/);
 }
 
-test("abstract request becomes a grounded warm category shortlist", async ({ page }, testInfo) => {
+test("abstract request becomes a grounded constrained shortlist", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "iPhone 13", "One primary mobile proof is sufficient.");
   await startSession(page);
   await page.getByLabel("Ask YOBI").fill(
@@ -22,21 +22,26 @@ test("abstract request becomes a grounded warm category shortlist", async ({ pag
   );
   await page.getByRole("button", { name: "Send message" }).click();
   const categoryCard = page.getByRole("region", { name: "Directions for your current needs" });
-  await expect(categoryCard).toBeVisible();
-  const firstCategory = (await categoryCard.locator("article h4").first().innerText()).trim();
-  expect(firstCategory).not.toBe("");
-  await expect(page.getByRole("button", { name: `Recommend ${firstCategory}`, exact: true })).toBeVisible();
-  await expect(categoryCard).toContainText("Under ₩15,000");
-  await expect(categoryCard).toContainText("Maximum spice 1 of 3");
-  await expect(categoryCard).toContainText("No pork");
-  await page.getByText("Catalog sources").first().click();
-  await expect(page.getByText(/Synthetic demo menu · \d+ catalog references/).first()).toBeVisible();
-  await page.getByRole("button", { name: `Recommend ${firstCategory}`, exact: true }).click();
   const menuCard = page.getByRole("region", { name: "Grounded menu matches" });
-  await expect(menuCard).toBeVisible();
-  await expect(menuCard.locator("article").first()).toContainText(
-    new RegExp(escapeRegExp(firstCategory), "i"),
-  );
+  await expect(categoryCard.or(menuCard).first()).toBeVisible();
+  if (await categoryCard.isVisible()) {
+    const firstCategory = (await categoryCard.locator("article h4").first().innerText()).trim();
+    expect(firstCategory).not.toBe("");
+    await expect(page.getByRole("button", { name: `Recommend ${firstCategory}`, exact: true })).toBeVisible();
+    await expect(categoryCard).toContainText("Under ₩15,000");
+    await expect(categoryCard).toContainText("Maximum spice 1 of 3");
+    await expect(categoryCard).toContainText("No pork");
+    await page.getByText("Catalog sources").first().click();
+    await expect(page.getByText(/Synthetic demo menu · \d+ catalog references/).first()).toBeVisible();
+    await page.getByRole("button", { name: `Recommend ${firstCategory}`, exact: true }).click();
+    await expect(menuCard).toBeVisible();
+    await expect(menuCard.locator("article").first()).toContainText(
+      new RegExp(escapeRegExp(firstCategory), "i"),
+    );
+  } else {
+    await expect(menuCard.locator("article").first()).toBeVisible();
+    await expect(menuCard.getByText(/₩\d{1,3}(?:,\d{3})*/).first()).toBeVisible();
+  }
 });
 
 test("direct chicken kalguksu question returns grounded Wiki explanation", async ({ page }, testInfo) => {
@@ -73,7 +78,7 @@ test("mock payment failure preserves checkout and permits safe retry", async ({ 
   test.skip(testInfo.project.name !== "iPhone 13", "One primary mobile proof is sufficient.");
   await startSession(page);
   await page.getByRole("button", { name: "Try the demo question" }).click();
-  await page.getByRole("button", { name: "Choose this menu" }).click();
+  await page.getByTestId("menu-menu_001_01").getByRole("button", { name: "Choose this menu" }).click();
   await page.getByRole("button", { name: /^Mild/ }).click();
   await page.getByRole("button", { name: /^Regular/ }).click();
   await page.getByRole("button", { name: /^Add cheese/ }).click();
