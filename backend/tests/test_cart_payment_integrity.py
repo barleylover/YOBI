@@ -422,6 +422,17 @@ def test_oracle_checkout_normalizes_concurrent_idempotency_key_collision() -> No
     assert 'raise ValueError("IDEMPOTENCY_KEY_REUSED") from exc' in source
 
 
+def test_oracle_preserves_optional_empty_notes_in_required_varchar_columns() -> None:
+    add_source = " ".join(inspect.getsource(OracleYobiRepository.add_cart_item).split())
+    update_source = " ".join(inspect.getsource(OracleYobiRepository.update_cart_item).split())
+    delivery_source = " ".join(inspect.getsource(OracleYobiRepository.update_delivery).split())
+
+    assert "_oracle_required_text(item.user_note)" in add_source
+    assert "_oracle_logical_text(duplicate.get(\"user_note\"))" in add_source
+    assert "_oracle_required_text(replacement.user_note)" in update_source
+    assert "stored_user_note = _oracle_required_text(preference.user_note)" in delivery_source
+
+
 def test_one_confirmed_cart_cannot_fork_into_two_checkouts_or_orders(
     repository: SQLiteYobiRepository, profile_data: ProfileCreate
 ) -> None:

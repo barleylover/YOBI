@@ -72,6 +72,19 @@ EXPECTED_MAPPED_MENUS = 150
 EXPECTED_ORIGIN_DECLARATIONS = 30
 EXPECTED_MERCHANT_INGREDIENTS = 266
 EXPECTED_OPTION_EFFECTS = 4
+
+
+def _oracle_required_text(value: str) -> str:
+    """Keep API-level empty strings non-NULL in Oracle VARCHAR2 columns."""
+
+    return value or " "
+
+
+def _oracle_logical_text(value: object) -> str:
+    text = str(value or "")
+    return "" if text == " " else text
+
+
 EXPECTED_RUNTIME_COUNTS = {
     "service_area": 3,
     "menu_category": 20,
@@ -2213,7 +2226,8 @@ class OracleYobiRepository:
                         str(duplicate["menu_id"]) != item.menu_id
                         or int(duplicate["quantity"]) != item.quantity
                         or stored_option_ids != sorted(item.option_item_ids)
-                        or str(duplicate.get("user_note") or "") != item.user_note
+                        or _oracle_logical_text(duplicate.get("user_note"))
+                        != item.user_note
                     ):
                         raise ValueError("IDEMPOTENCY_KEY_REUSED")
                     return self.get_cart(session_id)
@@ -2245,7 +2259,7 @@ class OracleYobiRepository:
                     json.dumps({"name_en": menu["name_en"], "price": int(menu["price"])}),
                     json.dumps(options),
                     line_total,
-                    item.user_note,
+                    _oracle_required_text(item.user_note),
                     self._translate_note(item.user_note),
                     agent_request_key,
                     _now(),
@@ -2284,7 +2298,11 @@ class OracleYobiRepository:
                     if item.option_item_ids is not None
                     else [str(option["option_item_id"]) for option in current_options]
                 ),
-                user_note=item.user_note if item.user_note is not None else existing["user_note"],
+                user_note=(
+                    item.user_note
+                    if item.user_note is not None
+                    else _oracle_logical_text(existing["user_note"])
+                ),
             )
             menu, options, line_total = self._cart_item_values(connection, replacement)
             cursor.execute(
@@ -2299,7 +2317,7 @@ class OracleYobiRepository:
                 menu_snapshot=json.dumps({"name_en": menu["name_en"], "price": int(menu["price"])}),
                 option_snapshot=json.dumps(options),
                 line_total=line_total,
-                user_note=replacement.user_note,
+                user_note=_oracle_required_text(replacement.user_note),
                 korean_note=self._translate_note(replacement.user_note),
                 cart_item_id=cart_item_id,
             )
@@ -2590,6 +2608,7 @@ class OracleYobiRepository:
                     cart=cart_id,
                 )
             korean = self._translate_note(preference.user_note)
+            stored_user_note = _oracle_required_text(preference.user_note)
             cursor.execute(
                 """
                 MERGE INTO delivery_preference target
@@ -2608,9 +2627,9 @@ class OracleYobiRepository:
                 b_cutlery=int(preference.cutlery),
                 b_ring_bell=int(preference.ring_bell),
                 b_front_desk=int(preference.front_desk),
-                b_user_note=preference.user_note,
+                b_user_note=stored_user_note,
                 b_korean_note=korean,
-                b_back_translation=preference.user_note,
+                b_back_translation=stored_user_note,
             )
             cursor.execute(
                 "UPDATE cart SET version=version+1,confirmed=0,updated_at=:now WHERE cart_id=:id",
