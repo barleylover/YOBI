@@ -120,7 +120,7 @@ export function OnboardingPage() {
       if (!result.candidates.length) setError(selectionCopy.addressNotFound);
       requestAnimationFrame(() => candidateRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }));
     } catch (cause) {
-      setError(language === "English" ? actionableError(cause, selectionCopy.addressError) : selectionCopy.addressError);
+      setError(actionableError(cause, selectionCopy.addressError));
     } finally {
       setLoading(false);
     }
@@ -134,7 +134,7 @@ export function OnboardingPage() {
       const result = await api.confirmAddress(createdContext.session.session_id, candidate);
       finish(result.address_ref_id, `${candidate.hotel_name} · ${candidate.road_address}`, createdContext.session);
     } catch (cause) {
-      setError(language === "English" ? actionableError(cause, selectionCopy.confirmError) : selectionCopy.confirmError);
+      setError(actionableError(cause, selectionCopy.confirmError));
     } finally {
       setLoading(false);
     }
@@ -155,7 +155,7 @@ export function OnboardingPage() {
       setAddressNotice(language === "English" ? result.notice : selectionCopy.addressDescription);
       requestAnimationFrame(() => candidateRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }));
     } catch (cause) {
-      setError(language === "English" ? actionableError(cause, selectionCopy.demoImageError) : selectionCopy.demoImageError);
+      setError(actionableError(cause, selectionCopy.demoImageError));
     } finally {
       setLoading(false);
     }

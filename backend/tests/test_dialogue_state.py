@@ -194,6 +194,233 @@ def test_unknown_answer_does_not_trigger_recommendation(
     assert turn.readiness is not None and turn.readiness.may_recommend is False
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "I don't want you to recommend anything yet.",
+        "Don't recommend anything.",
+        "Do not recommend.",
+        "I don't want recommendations yet.",
+        "I don't need any recommendations right now.",
+        "Please don't give me recommendations.",
+    ],
+)
+def test_indirect_recommendation_hold_does_not_show_menu_cards(
+    repository: SQLiteYobiRepository,
+    message: str,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+    session = repository.create_session(profile.profile_id)
+
+    turn = _service(repository).respond(
+        session,
+        profile,
+        message,
+    )
+
+    assert turn.dialogue_act == DialogueAct.HOLD_RECOMMENDATION
+    assert turn.cards == []
+    persisted = repository.get_session(session.session_id)
+    assert persisted is not None
+    assert persisted.meal_need_state.recommendation_hold is True
+
+
+def test_sensory_negation_and_correction_replace_conflicting_preferences(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+    session = repository.create_session(profile.profile_id)
+    service = _service(repository)
+
+    service.respond(
+        session,
+        profile,
+        "I don't want warm food, don't want crispy food, and don't want spicy food.",
+    )
+    current = repository.get_session(session.session_id)
+    assert current is not None
+    assert {"warm", "crispy", "spicy"}.issubset(
+        current.meal_need_state.negative_preferences
+    )
+    assert "warm" not in current.meal_need_state.temperature_preferences
+    assert "crispy" not in current.meal_need_state.texture_preferences
+    assert current.meal_need_state.max_spiciness == 1
+
+    service.respond(
+        current,
+        profile,
+        "Actually spicy is fine, and I want cold food instead.",
+    )
+    corrected = repository.get_session(session.session_id)
+    assert corrected is not None
+    assert "spicy" not in corrected.meal_need_state.negative_preferences
+    assert "spicy" in corrected.meal_need_state.flavor_preferences
+    assert corrected.meal_need_state.max_spiciness == profile.spice_tolerance
+    assert corrected.meal_need_state.temperature_preferences == ["cold"]
+
+
+@pytest.mark.parametrize(
+    ("message", "negative", "positive_field"),
+    [
+        ("I don't like sweet food.", "sweet", "flavor_preferences"),
+        ("I dislike crispy food.", "crispy", "texture_preferences"),
+        ("I hate warm food.", "warm", "temperature_preferences"),
+        ("I don't like spicy food.", "spicy", "flavor_preferences"),
+    ],
+)
+def test_common_dislike_phrases_are_negative_preferences(
+    repository: SQLiteYobiRepository,
+    message: str,
+    negative: str,
+    positive_field: str,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+    session = repository.create_session(profile.profile_id)
+
+    _service(repository).respond(session, profile, message)
+
+    persisted = repository.get_session(session.session_id)
+    assert persisted is not None
+    assert negative in persisted.meal_need_state.negative_preferences
+    assert negative not in getattr(persisted.meal_need_state, positive_field)
+
+
+def test_sensory_question_does_not_relax_an_existing_spice_limit(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+    session = repository.create_session(profile.profile_id)
+    service = _service(repository)
+    service.respond(session, profile, "I prefer mild food.")
+    current = repository.get_session(session.session_id)
+    assert current is not None
+
+    service.respond(current, profile, "Is the sauce spicy?")
+
+    persisted = repository.get_session(session.session_id)
+    assert persisted is not None
+    assert persisted.meal_need_state.max_spiciness == 1
+    assert "spicy" not in persisted.meal_need_state.flavor_preferences
+
+
+def test_same_turn_positive_correction_wins_over_negative_flavor(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+    session = repository.create_session(profile.profile_id)
+
+    _service(repository).respond(
+        session,
+        profile,
+        "I don't want sweet, but actually sweet is fine.",
+    )
+
+    persisted = repository.get_session(session.session_id)
+    assert persisted is not None
+    assert "sweet" in persisted.meal_need_state.flavor_preferences
+    assert "sweet" not in persisted.meal_need_state.negative_preferences
+
+
+def test_last_same_turn_flavor_clause_wins(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+    session = repository.create_session(profile.profile_id)
+
+    _service(repository).respond(
+        session,
+        profile,
+        "Actually sweet is fine, but I don't want sweet.",
+    )
+
+    persisted = repository.get_session(session.session_id)
+    assert persisted is not None
+    assert "sweet" not in persisted.meal_need_state.flavor_preferences
+    assert "sweet" in persisted.meal_need_state.negative_preferences
+
+
+def test_last_korean_same_turn_flavor_clause_wins(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+    session = repository.create_session(profile.profile_id)
+
+    _service(repository).respond(
+        session,
+        profile,
+        "달콤한 건 싫었는데, 아니 이제는 달콤한 게 좋아요.",
+    )
+
+    persisted = repository.get_session(session.session_id)
+    assert persisted is not None
+    assert "sweet" in persisted.meal_need_state.flavor_preferences
+    assert "sweet" not in persisted.meal_need_state.negative_preferences
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [("How about cold food?", "cold"), ("What about something warm?", "warm")],
+)
+def test_sensory_suggestion_questions_capture_the_preference(
+    repository: SQLiteYobiRepository,
+    message: str,
+    expected: str,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+    session = repository.create_session(profile.profile_id)
+
+    _service(repository).respond(session, profile, message)
+
+    persisted = repository.get_session(session.session_id)
+    assert persisted is not None
+    assert expected in persisted.meal_need_state.temperature_preferences
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_spice"),
+    [
+        ("순한 음식 추천해줘", 1),
+        ("순하고 따뜻한 음식 추천해줘", 1),
+        ("순하게 만들어 주세요", 1),
+        ("순하지 않은 매운 음식 추천해줘", 3),
+        ("순한 음식 말고 매운 음식 추천해줘", 3),
+        ("I don't want mild food; recommend something spicy.", 3),
+        ("Mild food is not okay; recommend something spicy.", 3),
+    ],
+)
+def test_mild_word_forms_do_not_match_negation(
+    repository: SQLiteYobiRepository,
+    message: str,
+    expected_spice: int,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+    session = repository.create_session(profile.profile_id)
+
+    _service(repository).respond(session, profile, message)
+
+    persisted = repository.get_session(session.session_id)
+    assert persisted is not None
+    assert persisted.meal_need_state.max_spiciness == expected_spice
+
+
 def test_provider_context_labels_current_and_previous_dialogue_acts(
     repository: SQLiteYobiRepository, profile_data: ProfileCreate
 ) -> None:
@@ -251,6 +478,203 @@ def test_generic_dish_question_uses_wiki_explanation_without_recommendation(
     assert "recommend" not in turn.text.lower()
 
 
+def test_generic_explanation_does_not_show_a_hard_constraint_conflict(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+    session = repository.create_session(profile.profile_id)
+    service = _service(repository)
+    service.respond(session, profile, "No pork.")
+    current = repository.get_session(session.session_id)
+    assert current is not None
+
+    turn = service.respond(current, profile, "What is Gukbap?")
+
+    assert turn.dialogue_act == DialogueAct.EXPLAIN
+    assert [card.type for card in turn.cards] == ["menu_explanation"]
+    assert "menu" not in turn.cards[0].data
+    assert turn.cards[0].data["explanation"]["category"] == "Gukbap"
+    assert turn.cards[0].data["explanation"]["compatible_listing"] is False
+    assert "general synthetic Wiki knowledge" in turn.text
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Explain quantum mechanics.",
+        "Compare quantum mechanics and relativity.",
+        "Tell me about Seoul.",
+    ],
+)
+def test_targetless_information_request_asks_for_a_food_target(
+    repository: SQLiteYobiRepository,
+    message: str,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+    session = repository.create_session(profile.profile_id)
+
+    turn = _service(repository).respond(session, profile, message)
+
+    assert turn.dialogue_act == DialogueAct.COLLECT_NEEDS
+    assert turn.readiness is not None and turn.readiness.may_recommend is False
+    assert turn.cards == []
+    assert turn.recommendation_snapshot_id is None
+    assert "food" in turn.text.lower() or "menu" in turn.text.lower()
+
+
+@pytest.mark.parametrize(
+    ("initial", "target", "expected_act", "expected_card"),
+    [
+        ("Explain it.", "Bibimbap", DialogueAct.EXPLAIN, "menu_explanation"),
+        ("Compare them.", "Bibimbap", DialogueAct.COMPARE, "merchant_comparison"),
+    ],
+)
+def test_information_clarification_consumes_a_target_only_followup(
+    repository: SQLiteYobiRepository,
+    initial: str,
+    target: str,
+    expected_act: DialogueAct,
+    expected_card: str,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+    session = repository.create_session(profile.profile_id)
+    service = _service(repository)
+
+    clarification = service.respond(session, profile, initial)
+    persisted = repository.get_session(session.session_id)
+    assert persisted is not None
+    assert persisted.meal_need_state.pending_information_request is not None
+
+    resolved = service.respond(persisted, profile, target)
+
+    assert clarification.cards == []
+    assert resolved.dialogue_act == expected_act
+    assert [card.type for card in resolved.cards] == [expected_card]
+    final_session = repository.get_session(session.session_id)
+    assert final_session is not None
+    assert final_session.meal_need_state.pending_information_request is None
+
+
+def test_explanation_clarification_resolves_a_visible_snapshot_ordinal(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+    session = repository.create_session(profile.profile_id)
+    service = _service(repository)
+    recommendation = service.respond(
+        session,
+        profile,
+        "Recommend a mild savory meal under 15,000 won",
+    )
+    assert recommendation.recommendation_result is not None
+    expected = recommendation.recommendation_result.candidates[0].menu_id
+    current = repository.get_session(session.session_id)
+    assert current is not None
+
+    clarification = service.respond(current, profile, "Explain it.")
+    current = repository.get_session(session.session_id)
+    assert current is not None
+    resolved = service.respond(current, profile, "first menu")
+
+    assert clarification.dialogue_act == DialogueAct.COLLECT_NEEDS
+    assert resolved.dialogue_act == DialogueAct.EXPLAIN
+    assert resolved.cards[0].data["menu"]["menu_id"] == expected
+    final_session = repository.get_session(session.session_id)
+    assert final_session is not None
+    assert final_session.meal_need_state.pending_information_request is None
+
+
+def test_explanation_clarification_resolves_a_visible_snapshot_name(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+    session = repository.create_session(profile.profile_id)
+    service = _service(repository)
+    recommendation = service.respond(
+        session,
+        profile,
+        "Recommend a varied meal under 20,000 won",
+    )
+    assert recommendation.recommendation_result is not None
+    expected = recommendation.recommendation_result.candidates[0].menu_id
+    menu = repository.get_menu(expected, profile)
+    assert menu is not None
+    current = repository.get_session(session.session_id)
+    assert current is not None
+    service.respond(current, profile, "Explain it.")
+    current = repository.get_session(session.session_id)
+    assert current is not None
+
+    resolved = service.respond(current, profile, menu.name_en)
+
+    assert resolved.dialogue_act == DialogueAct.EXPLAIN
+    assert resolved.cards[0].data["menu"]["menu_id"] == expected
+
+
+@pytest.mark.parametrize("followup", ["and the second menu", "Compare the second menu"])
+def test_partial_snapshot_comparison_remembers_the_first_ordinal(
+    repository: SQLiteYobiRepository,
+    followup: str,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+    session = repository.create_session(profile.profile_id)
+    service = _service(repository)
+    recommendation = service.respond(
+        session,
+        profile,
+        "Recommend a varied meal under 20,000 won",
+    )
+    assert recommendation.recommendation_result is not None
+    expected = [
+        candidate.menu_id for candidate in recommendation.recommendation_result.candidates[:2]
+    ]
+    current = repository.get_session(session.session_id)
+    assert current is not None
+
+    clarification = service.respond(current, profile, "Compare the first menu")
+    current = repository.get_session(session.session_id)
+    assert current is not None
+    resolved = service.respond(current, profile, followup)
+
+    assert clarification.cards == []
+    assert current.meal_need_state.pending_information_request == "compare"
+    assert resolved.dialogue_act == DialogueAct.COMPARE
+    assert [item["menu_id"] for item in resolved.cards[0].data["merchants"]] == expected
+    final_session = repository.get_session(session.session_id)
+    assert final_session is not None
+    assert final_session.meal_need_state.pending_information_request is None
+
+
+def test_food_target_comparison_still_returns_grounded_merchants(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+    session = repository.create_session(profile.profile_id)
+
+    turn = _service(repository).respond(session, profile, "Compare bibimbap restaurants.")
+
+    assert turn.dialogue_act == DialogueAct.COMPARE
+    assert [card.type for card in turn.cards] == ["merchant_comparison"]
+    assert turn.cards[0].data["merchants"]
+    assert all(
+        item["menu_name"] and item["menu_id"] for item in turn.cards[0].data["merchants"]
+    )
+
+
 def test_natural_comparison_uses_the_latest_snapshot_candidates(
     repository: SQLiteYobiRepository, profile_data: ProfileCreate
 ) -> None:
@@ -275,6 +699,95 @@ def test_natural_comparison_uses_the_latest_snapshot_candidates(
     persisted = repository.get_session(session.session_id)
     assert persisted is not None
     assert persisted.meal_need_state.compared_menu_ids == expected
+
+
+def test_named_visible_menus_take_priority_over_category_comparison(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+    session = repository.create_session(profile.profile_id)
+    service = _service(repository)
+    recommendation = service.respond(
+        session,
+        profile,
+        "Recommend a varied meal under 20,000 won",
+    )
+    assert recommendation.recommendation_result is not None
+    assert len(recommendation.recommendation_result.candidates) >= 2
+    first_two = recommendation.recommendation_result.candidates[:2]
+    names = [repository.get_menu(candidate.menu_id, profile) for candidate in first_two]
+    assert all(menu is not None for menu in names)
+    current = repository.get_session(session.session_id)
+    assert current is not None
+
+    compared = service.respond(
+        current,
+        profile,
+        f"Compare {names[0].name_en} and {names[1].name_en}.",  # type: ignore[union-attr]
+    )
+
+    assert compared.dialogue_act == DialogueAct.COMPARE
+    assert compared.recommendation_snapshot_id == recommendation.recommendation_snapshot_id
+    assert [item["menu_id"] for item in compared.cards[0].data["merchants"]] == [
+        candidate.menu_id for candidate in first_two
+    ]
+
+
+def test_category_comparison_preserves_session_hard_constraints(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+    session = repository.create_session(profile.profile_id)
+    constrained = repository.update_dialogue_state(
+        session.session_id,
+        DialogueAct.REVISE,
+        MealNeedState(max_spiciness=1),
+        session.state.value,
+        session.state_version,
+    )
+
+    turn = _service(repository).respond(
+        constrained,
+        profile,
+        "Compare Tteokbokki restaurants.",
+    )
+
+    assert turn.dialogue_act == DialogueAct.COMPARE
+    for card in turn.cards:
+        for comparison in card.data.get("merchants", []):
+            menu = repository.get_menu(comparison["menu_id"], profile)
+            assert menu is not None and menu.spice_level <= 1
+    if not turn.cards:
+        assert "current hard constraints" in turn.text
+
+
+def test_category_comparison_followup_does_not_reject_an_old_snapshot_menu(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+    session = repository.create_session(profile.profile_id)
+    service = _service(repository)
+    service.respond(session, profile, "Recommend a varied meal under 20,000 won")
+    current = repository.get_session(session.session_id)
+    assert current is not None
+    comparison = service.respond(current, profile, "Compare Bibimbap restaurants.")
+    assert comparison.cards
+    followup_text = comparison.suggested_replies[1]
+    current = repository.get_session(session.session_id)
+    assert current is not None
+    rejected_before = list(current.meal_need_state.rejected_menu_ids)
+
+    service.respond(current, profile, followup_text)
+
+    persisted = repository.get_session(session.session_id)
+    assert persisted is not None
+    assert persisted.meal_need_state.rejected_menu_ids == rejected_before
 
 
 def test_natural_rejection_is_persisted_before_recommendation_refresh(
@@ -661,9 +1174,66 @@ def test_dialogue_removes_turn_rules_and_does_not_make_negatives_positive(
     assert negative_spicy.max_spiciness == 1
     assert "sweet" not in negative_sweet.add_flavor_preferences
     assert "sweet" in negative_sweet.add_negative_preferences
+
+    avoid_sweet = engine.merge(
+        repository.create_session(profile.profile_id).meal_need_state,
+        negative_sweet,
+        profile,
+    )
+    sweet_is_fine = engine.merge(
+        avoid_sweet,
+        engine.extract_delta("Actually sweet is fine"),
+        profile,
+    )
+    assert "sweet" not in sweet_is_fine.negative_preferences
+    assert "sweet" in sweet_is_fine.flavor_preferences
+    avoid_sweet_again = engine.merge(
+        sweet_is_fine,
+        engine.extract_delta("I do not want sweet food"),
+        profile,
+    )
+    assert "sweet" in avoid_sweet_again.negative_preferences
+    assert "sweet" not in avoid_sweet_again.flavor_preferences
     assert engine.extract_delta("Add it to my cart").dialogue_act == DialogueAct.ORDER_ACTION
     assert engine.extract_delta("Show my cart").dialogue_act == DialogueAct.ORDER_ACTION
     assert engine.extract_delta("장바구니 보여줘").dialogue_act == DialogueAct.ORDER_ACTION
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_act"),
+    [
+        (
+            "I don't want you to compare; just recommend something mild.",
+            DialogueAct.REQUEST_RECOMMENDATION,
+        ),
+        (
+            "Do not explain it; recommend something else.",
+            DialogueAct.REQUEST_RECOMMENDATION,
+        ),
+        ("비교 말고 순한 음식 추천해줘.", DialogueAct.REQUEST_RECOMMENDATION),
+        ("설명하지 말고 순한 음식 추천해줘.", DialogueAct.REQUEST_RECOMMENDATION),
+        ("Compare the recommendations.", DialogueAct.COMPARE),
+        ("Explain your recommendation.", DialogueAct.REQUEST_EXPLANATION),
+        ("Don't recommend yet; compare these menus.", DialogueAct.COMPARE),
+        ("Don't recommend yet; explain bibimbap.", DialogueAct.REQUEST_EXPLANATION),
+        ("Don't compare these.", DialogueAct.COLLECT_NEEDS),
+        ("설명하지 마.", DialogueAct.COLLECT_NEEDS),
+    ],
+)
+def test_negated_compare_or_explanation_does_not_override_the_requested_action(
+    message: str,
+    expected_act: DialogueAct,
+) -> None:
+    from app.services.dialogue_engine import DialogueEngine
+
+    assert DialogueEngine().extract_delta(message).dialogue_act == expected_act
+
+
+@pytest.mark.parametrize("message", ["순한 음식", "순하고 짭짤한 음식", "순하게 해주세요"])
+def test_korean_mild_inflection_updates_spice_constraint(message: str) -> None:
+    from app.services.dialogue_engine import DialogueEngine
+
+    assert DialogueEngine().extract_delta(message).max_spiciness == 1
 
 
 def test_latest_profile_rules_replace_stale_profile_snapshot(

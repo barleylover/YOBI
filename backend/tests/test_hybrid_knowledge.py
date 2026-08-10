@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from math import ceil
+
 from app.db.sqlite_repository import SQLiteYobiRepository
 from app.domain.dialogue import MealNeedState
 from app.domain.knowledge import ClaimStatus, SourceScope
 from app.domain.models import ProfileCreate
+from app.domain.recommendation import rerank_menu_candidates
 
 
 def test_wiki_core_and_menu_fact_constraints_filter_candidates(
@@ -100,6 +103,111 @@ def test_review_text_has_zero_recommendation_weight(
     ]
 
     assert after == before
+
+
+def test_structured_preferences_rerank_cold_refreshing_noodles(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+
+    results = repository.recommend_menus(
+        "cold refreshing noodles",
+        profile,
+        MealNeedState(
+            temperature_preferences=["cold"],
+            flavor_preferences=["light"],
+            preferred_categories=["noodles"],
+            max_spiciness=3,
+        ),
+        limit=3,
+    )
+
+    assert results
+    assert results[0].category == "Naengmyeon"
+    assert any("cold preference" in reason.lower() for reason in results[0].match_reasons)
+
+
+def test_temperature_contradiction_never_gets_a_positive_match_reason(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+    candidates = repository.search_menus(
+        "cold refreshing noodles",
+        profile,
+        budget_krw=None,
+        max_spiciness=3,
+        excluded_ingredients=[],
+        limit=40,
+    )
+    naengmyeon = next(menu for menu in candidates if menu.category == "Naengmyeon")
+
+    [reranked] = rerank_menu_candidates(
+        [naengmyeon],
+        MealNeedState(temperature_preferences=["warm"], max_spiciness=3),
+        {naengmyeon.merchant_id: "area_myeongdong"},
+        limit=1,
+    )
+
+    assert not any("warm preference" in reason.lower() for reason in reranked.match_reasons)
+    assert reranked.semantic_score < naengmyeon.semantic_score
+
+
+def test_negative_flavor_preference_is_an_explicit_candidate_filter(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+
+    results = repository.recommend_menus(
+        "savory meal, not sweet",
+        profile,
+        MealNeedState(
+            flavor_preferences=["savory"],
+            negative_preferences=["sweet"],
+            max_spiciness=3,
+        ),
+        limit=10,
+    )
+
+    assert results
+    assert all(
+        "sweet" not in f"{menu.category} {menu.description}".lower().replace("sweet-potato", "")
+        for menu in results
+    )
+    assert len({menu.category for menu in results[:3]}) >= 2
+
+
+def test_party_budget_accounts_for_required_portion_count(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+    party_size = 4
+    budget = 40_000
+
+    results = repository.recommend_menus(
+        "savory dinner for four people",
+        profile,
+        MealNeedState(
+            party_size=party_size,
+            budget_krw=budget,
+            flavor_preferences=["savory"],
+            max_spiciness=3,
+        ),
+        limit=10,
+    )
+
+    assert results
+    assert all(menu.price * ceil(party_size / menu.serves_max) <= budget for menu in results)
+    assert all(
+        any("for 4 people" in reason for reason in menu.match_reasons) for menu in results
+    )
 
 
 def test_severe_peanut_and_wheat_unknowns_fail_closed(

@@ -5,7 +5,6 @@ from itertools import permutations
 from app.core.config import Settings
 from app.db.sqlite_repository import SQLiteYobiRepository
 from app.domain.models import Card, ChatState, ProfileCreate
-from app.genai.contracts import GenAIErrorCode, GenAIProviderError
 from app.genai.tool_registry import ToolRegistry
 from app.services.chat_service import ChatService
 from app.services.demo_control import DemoControl
@@ -181,6 +180,38 @@ def test_server_narrative_uses_profile_language_and_discloses_parser_boundary(
             assert boundary in turn.text
 
 
+def test_deterministic_fallback_cards_use_the_preferred_language(
+    repository: SQLiteYobiRepository,
+) -> None:
+    cases = [
+        ("한국어", "가장 잘 맞는 후보"),
+        ("日本語", "有力候補"),
+        ("Español", "mejores coincidencias"),
+    ]
+
+    for language, expected in cases:
+        profile = repository.create_profile(
+            ProfileCreate(
+                consent_demo_data=True,
+                preferred_language=language,
+                dietary_rules=[],
+                spice_tolerance=1,
+            )
+        )
+        session = repository.create_session(profile.profile_id)
+        turn = ChatService(repository, Settings(), DemoControl()).respond(
+            session,
+            profile,
+            "Recommend a mild meal under 15,000 won.",
+        )
+
+        assert turn.fallback_used is True
+        assert [card.type for card in turn.cards] == ["menu_recommendations"]
+        assert expected in turn.text
+        if language == "한국어":
+            assert turn.cards[0].data["menus"][0]["name_ko"] in turn.text
+
+
 def test_server_grounded_result_is_localized_for_japanese_and_spanish(
     repository: SQLiteYobiRepository,
 ) -> None:
@@ -269,7 +300,7 @@ def test_chat_audit_stores_hashes_without_raw_message_or_session(
     assert row[2] == 0
 
 
-def test_chat_audit_preserves_exact_provider_capability_error(
+def test_server_owned_needs_question_does_not_call_configured_provider(
     repository: SQLiteYobiRepository, profile_data: ProfileCreate
 ) -> None:
     profile = repository.create_profile(profile_data)
@@ -280,21 +311,18 @@ def test_chat_audit_preserves_exact_provider_capability_error(
         configured = True
 
         def run(self, *args: object, **kwargs: object) -> object:
-            raise GenAIProviderError(
-                GenAIErrorCode.CAPABILITY_LIMIT_EXCEEDED,
-                retryable=False,
-            )
+            raise AssertionError("server-owned needs questions must not call the provider")
 
     service.agent = CapabilityFailingAgent()  # type: ignore[assignment]
     turn = service.respond(session, profile, "hi")
 
     with sqlite3.connect(repository.path) as connection:
         row = connection.execute(
-            "SELECT safe_error_code FROM audit_log "
+            "SELECT safe_error_code, fallback_used FROM audit_log "
             "WHERE tool = 'assistant_turn' ORDER BY created_at DESC LIMIT 1"
         ).fetchone()
-    assert turn.fallback_used is True
-    assert row == ("CAPABILITY_LIMIT_EXCEEDED",)
+    assert turn.fallback_used is False
+    assert row == (None, 0)
 
 
 def test_duplicate_menu_tool_results_render_one_deduplicated_carousel(

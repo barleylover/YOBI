@@ -175,7 +175,7 @@ def test_configured_provider_can_answer_greeting_without_tools(
     assert turn.fallback_used is False
 
 
-def test_greeting_model_cannot_smuggle_an_early_recommendation(
+def test_greeting_uses_server_owned_copy_without_calling_the_model(
     repository: Any, profile_data: Any
 ) -> None:
     profile = repository.create_profile(profile_data)
@@ -206,7 +206,6 @@ def test_greeting_model_cannot_smuggle_an_early_recommendation(
     turn = service.respond(session, profile, "hi")
 
     assert turn.cards == []
-    assert turn.fallback_used is True
-    assert turn.fallback_reason is not None
-    assert turn.fallback_reason.value == "GROUNDING_REJECTED"
+    assert turn.fallback_used is False
+    assert turn.fallback_reason is None
     assert "pizza" not in turn.text.lower()

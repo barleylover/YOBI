@@ -18,10 +18,11 @@ def test_release_archive_contains_knowledge_and_all_migrations() -> None:
     assert "006_knowledge_graph.sql" in source
     assert "007_service_area_and_mutation_idempotency.sql" in source
     assert "008_checkout_cart_version.sql" in source
+    assert "009_cart_confirmation_fingerprint.sql" in source
     assert "persist_runtime_release_policy" in source
     assert "actual_migration_list" in source
-    assert "Migration directory must contain exactly 001-008" in source
-    assert 'status["expected_migration_count"] == status["applied_migration_count"] == 8' in source
+    assert "Migration directory must contain exactly 001-009" in source
+    assert 'status["expected_migration_count"] == status["applied_migration_count"] == 9' in source
     assert 'status["latest_expected_migration"]' in source
     assert 'status["latest_applied_migration"]' in source
     assert 'raise SystemExit("MIGRATION_LEDGER_NOT_EXACT")' in source

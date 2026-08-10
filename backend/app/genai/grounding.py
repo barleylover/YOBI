@@ -42,6 +42,8 @@ class GroundedResponseValidator:
         "mandu",
         "naengmyeon",
         "dosirak",
+        "fried chicken",
+        "pizza",
         "gukbap",
         "hotteok",
         "seolleongtang",

@@ -353,6 +353,44 @@
       ]
     },
     {
+      "id": "korean_explicit_recommendation_is_localized",
+      "covers": ["korean_input", "localized_response", "explicit_recommendation"],
+      "profile": {
+        "preferred_language": "한국어",
+        "dietary_rules": [],
+        "allergy_severity": "mild",
+        "spice_tolerance": 3
+      },
+      "steps": [
+        {
+          "kind": "message",
+          "input": "순하고 짭짤한 음식 15000원 이하로 추천해줘.",
+          "expect": {
+            "dialogue_act": "RECOMMEND",
+            "readiness": "EXPLICIT_REQUEST",
+            "card_types": ["menu_recommendations"],
+            "snapshot": "present",
+            "text_contains_all": ["가장 잘 맞는 후보"],
+            "state": {
+              "equals": {
+                "budget_krw": 15000,
+                "max_spiciness": 1
+              },
+              "contains": {
+                "flavor_preferences": ["savory"]
+              }
+            },
+            "menus": {
+              "minimum_count": 1,
+              "maximum_price": 15000,
+              "maximum_spiciness": 1,
+              "all_synthetic": true
+            }
+          }
+        }
+      ]
+    },
+    {
       "id": "severe_allergy_unknown_is_not_reassured",
       "covers": ["explicit_recommendation", "unsafe_reassurance"],
       "profile": {

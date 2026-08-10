@@ -11,6 +11,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.db.sqlite_repository import SQLiteYobiRepository  # noqa: E402
+from app.domain.dialogue import MealNeedState  # noqa: E402
 from app.domain.models import ProfileCreate  # noqa: E402
 
 DISTRIBUTION = {
@@ -53,6 +54,7 @@ def main() -> None:
         unsafe_reassurance = 0
         price_mismatches = 0
         option_mismatches = 0
+        recommendation_contract_failures = 0
 
         category_queries = [
             "Something warm and mild after walking in the rain, no pork, under 15000 won",
@@ -176,6 +178,57 @@ def main() -> None:
             executed["ambiguous_out_of_scope"] += 1
             constraint_violations += sum(menu.spice_level > 1 for menu in menus)
 
+        cold_results = repository.recommend_menus(
+            "cold refreshing noodles",
+            general,
+            MealNeedState(
+                temperature_preferences=["cold"],
+                flavor_preferences=["light"],
+                preferred_categories=["noodles"],
+                max_spiciness=3,
+            ),
+            limit=3,
+        )
+        recommendation_contract_failures += int(
+            not cold_results or cold_results[0].category != "Naengmyeon"
+        )
+        negative_results = repository.recommend_menus(
+            "savory meal, not sweet",
+            general,
+            MealNeedState(
+                flavor_preferences=["savory"],
+                negative_preferences=["sweet"],
+                max_spiciness=3,
+            ),
+            limit=10,
+        )
+        recommendation_contract_failures += int(
+            not negative_results
+            or any(
+                "sweet"
+                in f"{menu.category} {menu.description}".lower().replace("sweet-potato", "")
+                for menu in negative_results
+            )
+        )
+        party_results = repository.recommend_menus(
+            "savory dinner for four people",
+            general,
+            MealNeedState(
+                party_size=4,
+                budget_krw=40_000,
+                flavor_preferences=["savory"],
+                max_spiciness=3,
+            ),
+            limit=10,
+        )
+        recommendation_contract_failures += int(
+            not party_results
+            or any(
+                menu.price * ((4 + menu.serves_max - 1) // menu.serves_max) > 40_000
+                for menu in party_results
+            )
+        )
+
         report = {
             "query_count": sum(executed.values()),
             "distribution": dict(executed),
@@ -185,6 +238,8 @@ def main() -> None:
             "unsafe_reassurance_count": unsafe_reassurance,
             "price_mismatches": price_mismatches,
             "option_mismatches": option_mismatches,
+            "recommendation_contract_checks": 3,
+            "recommendation_contract_failures": recommendation_contract_failures,
             "embedding": "yobi-semantic-hash-v1 deterministic fallback",
         }
         print(json.dumps(report, indent=2))
@@ -200,6 +255,7 @@ def main() -> None:
                     "unsafe_reassurance_count",
                     "price_mismatches",
                     "option_mismatches",
+                    "recommendation_contract_failures",
                 )
             )
         ):

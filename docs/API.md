@@ -17,7 +17,7 @@ FastAPI service is reachable internally.
 | GET | `/api/v1/menus/{id}/options` | DB-authoritative required options and deltas |
 | GET | `/api/v1/menus/{id}/evidence` | Evidence status, source, excerpt, action |
 | POST | `/api/v1/sessions/{id}/address/attachments` | Validated image; raw bytes not retained |
-| POST | `/api/v1/sessions/{id}/address/confirm` | Required candidate confirmation |
+| POST | `/api/v1/sessions/{id}/address/confirm` | Signed candidate confirmation, or exact manual match to a supported service-area address |
 | GET/POST | `/api/v1/sessions/{id}/cart` | Server-side totals and missing slots |
 | PATCH | `/api/v1/sessions/{id}/delivery` | Handoff, cutlery, bell, translated note |
 | POST | `/api/v1/sessions/{id}/cart/confirm` | Freezes a complete reviewable cart |
@@ -69,6 +69,14 @@ reviewed and confirmed again, receives a newer version, and therefore uses a new
 checkout key. The browser constructs that key only after confirmation as
 `checkout-{cart_id}-{confirmed.version}`. Existing rows remain compatible because the
 new columns are nullable; Migration 008 is additive and does not rewrite prior orders.
+Mock payment success revalidates the locked cart against that version and fingerprint
+before creating an order. A changed, repriced, or no-longer-confirmed cart is rejected
+as `CHECKOUT_STALE` and the pending checkout is not marked successful. Replaying an
+already successful checkout still returns its original order.
+Migration `009_cart_confirmation_fingerprint.sql` additionally stores the total-bound
+fingerprint on `CART` when the user confirms it. This catches a delivery-fee change
+even before the first checkout exists; legacy confirmed carts without the fingerprint
+must be reviewed and confirmed once before checkout.
 
 The agent exposes a dialogue-act-routed subset of a 14-function allowlist. It may
 apply cart, delivery-preference, or mock-checkout mutations only for an explicit user

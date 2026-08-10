@@ -41,6 +41,7 @@ def test_release_discovers_conversation_and_knowledge_migrations() -> None:
     assert "006_knowledge_graph.sql" in names
     assert "007_service_area_and_mutation_idempotency.sql" in names
     assert "008_checkout_cart_version.sql" in names
+    assert "009_cart_confirmation_fingerprint.sql" in names
 
 
 def test_conversation_migration_is_append_only_and_partial_rerun_safe() -> None:
@@ -119,6 +120,17 @@ def test_checkout_cart_version_migration_is_append_only_and_partial_rerun_safe()
         "SQLCODE != -1430" in statement or "SQLCODE != -955" in statement
         for statement in statements
     )
+
+
+def test_cart_confirmation_fingerprint_migration_is_append_only_and_rerun_safe() -> None:
+    path = ROOT / "database" / "migrations" / "009_cart_confirmation_fingerprint.sql"
+    source = path.read_text(encoding="utf-8")
+    statements = migrate.split_statements(source)
+
+    assert "DROP TABLE" not in source.upper()
+    assert len(statements) == 1
+    assert statements[0].startswith("BEGIN") and statements[0].endswith("END;")
+    assert "SQLCODE != -1430" in statements[0]
 
 
 def test_discovery_rejects_a_missing_migration_version(tmp_path: Path) -> None:

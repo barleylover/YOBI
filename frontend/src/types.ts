@@ -192,6 +192,8 @@ export interface MenuExplanation {
   portion: string;
   unknown_fields: string[];
   evidence_ids: string[];
+  category?: string;
+  compatible_listing?: boolean;
 }
 
 interface CardBase {
@@ -202,7 +204,7 @@ interface CardBase {
 export type CardPayload = CardBase & (
   | { type: "category_recommendations"; data: { categories: CategoryRecommendation[] } }
   | { type: "menu_recommendations"; data: { menus: MenuSummary[] } }
-  | { type: "menu_explanation"; data: { menu: MenuSummary; explanation: MenuExplanation } }
+  | { type: "menu_explanation"; data: { menu?: MenuSummary; explanation: MenuExplanation } }
   | { type: "dietary_evidence"; data: { evidence: Evidence[]; menu?: MenuSummary } }
   | { type: "merchant_comparison"; data: { merchants: MerchantComparison[] } }
   | { type: "preset_collection"; data: { kind: "weekly_ranking" | "kpop_demon_hunters"; entries: PresetEntry[] } }

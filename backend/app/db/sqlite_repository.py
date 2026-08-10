@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from app.db.schema_sqlite import SCHEMA_SQL
 from app.db.seed_data import CATALOG_VERSION, build_seed
+from app.domain.address import normalize_address_text
 from app.domain.dialogue import (
     ConstraintStrictness,
     ConversationEventInput,
@@ -51,6 +52,7 @@ from app.domain.models import (
     ProfileUpdate,
     Session,
 )
+from app.domain.recommendation import rerank_menu_candidates
 from app.knowledge.catalog_seed import (
     KNOWLEDGE_CATALOG_VERSION,
     KNOWLEDGE_RELEASE_ID,
@@ -103,6 +105,10 @@ def _now() -> str:
 
 def _id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex}"
+
+
+def _cart_fingerprint(cart_id: str, cart_version: int, total: int) -> str:
+    return hashlib.sha256(f"{cart_id}:{cart_version}:{total}".encode()).hexdigest()
 
 
 class SQLiteYobiRepository:
@@ -174,6 +180,11 @@ class SQLiteYobiRepository:
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_checkout_cart_version "
                 "ON mock_checkout(cart_id,cart_version)"
             )
+            cart_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(cart)").fetchall()
+            }
+            if "confirmed_fingerprint" not in cart_columns:
+                connection.execute("ALTER TABLE cart ADD COLUMN confirmed_fingerprint TEXT")
             session_columns = {
                 row["name"]
                 for row in connection.execute("PRAGMA table_info(chat_session)").fetchall()
@@ -797,7 +808,8 @@ class SQLiteYobiRepository:
                 """
                 SELECT ref.service_area_id
                 FROM cart JOIN address_ref ref ON ref.address_ref_id=cart.address_ref_id
-                WHERE cart.session_id=? AND ref.confirmed=1
+                JOIN service_area area ON area.service_area_id=ref.service_area_id
+                WHERE cart.session_id=? AND ref.confirmed=1 AND area.active=1
                 """,
                 (session_id,),
             ).fetchone()
@@ -1224,17 +1236,6 @@ class SQLiteYobiRepository:
             limit=RECOMMENDATION_CANDIDATE_CAP,
             constraint_strictness=meal_need_state.strictness,
         )
-        excluded_categories = {value.lower() for value in meal_need_state.excluded_categories}
-        rejected = set(meal_need_state.rejected_menu_ids)
-        soup_categories = {
-            "chicken kalguksu",
-            "samgyetang",
-            "sundubu",
-            "kimchi stew",
-            "gukbap",
-            "seolleongtang",
-            "eomuk",
-        }
         with self._connection() as connection:
             merchant_areas = {
                 row["merchant_id"]: row["service_area_id"]
@@ -1242,42 +1243,7 @@ class SQLiteYobiRepository:
                     "SELECT merchant_id, service_area_id FROM merchant"
                 ).fetchall()
             }
-        filtered: list[MenuSummary] = []
-        for menu in candidates:
-            category = menu.category.lower()
-            if menu.menu_id in rejected:
-                continue
-            if "soup" in excluded_categories and category in soup_categories:
-                continue
-            if any(excluded in category for excluded in excluded_categories if excluded != "soup"):
-                continue
-            if meal_need_state.service_area_id and (
-                merchant_areas.get(menu.merchant_id) != meal_need_state.service_area_id
-            ):
-                continue
-            if meal_need_state.party_size and menu.serves_max < min(meal_need_state.party_size, 2):
-                continue
-            preference_boost = 0.0
-            searchable = f"{menu.category} {menu.description} {menu.cultural_description}".lower()
-            for preference in (
-                *meal_need_state.temperature_preferences,
-                *meal_need_state.texture_preferences,
-                *meal_need_state.flavor_preferences,
-                *meal_need_state.preferred_categories,
-            ):
-                if preference.lower() in searchable:
-                    preference_boost += 0.06
-            filtered.append(
-                menu.model_copy(
-                    update={
-                        "semantic_score": round(
-                            min(1.0, menu.semantic_score + preference_boost), 4
-                        ),
-                    }
-                )
-            )
-        filtered.sort(key=lambda item: (item.semantic_score, -item.price), reverse=True)
-        return filtered[:limit]
+        return rerank_menu_candidates(candidates, meal_need_state, merchant_areas, limit)
 
     @staticmethod
     def _menu_summary(
@@ -1345,27 +1311,46 @@ class SQLiteYobiRepository:
             }
         )
 
+    def get_category_knowledge_source(self, category: str) -> str | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT menu_id FROM menu
+                WHERE lower(category)=lower(?)
+                ORDER BY CASE WHEN availability='AVAILABLE' THEN 0 ELSE 1 END, menu_id
+                LIMIT 1
+                """,
+                (category,),
+            ).fetchone()
+        return str(row["menu_id"]) if row else None
+
     def list_merchant_menus(
         self,
         merchant_id: str,
         profile: Profile,
         excluded_menu_ids: list[str],
         limit: int = 12,
+        meal_need_state: MealNeedState | None = None,
     ) -> list[MenuSummary]:
         safety_state = apply_profile_constraints(
-            MealNeedState(max_spiciness=profile.spice_tolerance),
+            meal_need_state.model_copy(deep=True)
+            if meal_need_state is not None
+            else MealNeedState(max_spiciness=profile.spice_tolerance),
             profile.dietary_rules,
             profile.religion_selection,
         )
+        if safety_state.max_spiciness is None:
+            safety_state.max_spiciness = profile.spice_tolerance
         with self._connection() as connection:
             rows = connection.execute(
                 """
-                SELECT m.*, r.name_en AS merchant_name, r.delivery_fee, r.eta_min, r.eta_max
+                SELECT m.*, r.name_en AS merchant_name, r.delivery_fee, r.eta_min, r.eta_max,
+                       r.service_area_id AS merchant_service_area_id
                 FROM menu m JOIN merchant r ON r.merchant_id=m.merchant_id
                 WHERE m.merchant_id=? AND m.availability='AVAILABLE' AND m.spice_level<=?
                 ORDER BY m.price, m.menu_id
                 """,
-                (merchant_id, profile.spice_tolerance),
+                (merchant_id, safety_state.max_spiciness),
             ).fetchall()
             hard_conflicts = {
                 str(row["menu_id"]): self._menu_hard_constraint_conflicts(
@@ -1378,8 +1363,9 @@ class SQLiteYobiRepository:
             }
         excluded = set(excluded_menu_ids)
         rules = set(profile.dietary_rules)
-        output: list[MenuSummary] = []
-        for row in rows:
+        candidates: list[MenuSummary] = []
+        merchant_areas: dict[str, str] = {}
+        for index, row in enumerate(rows):
             if row["menu_id"] in excluded:
                 continue
             if hard_conflicts.get(str(row["menu_id"])):
@@ -1396,19 +1382,20 @@ class SQLiteYobiRepository:
                 continue
             if "vegan" in rules and "vegan_option" not in tags:
                 continue
-            status = (
-                EvidenceStatus.VERIFIED
-                if "shellfish_sauce_absent" in tags
-                else EvidenceStatus.UNKNOWN
-            )
+            status = EvidenceStatus.UNKNOWN
+            if "shellfish_risk" in allergens:
+                status = EvidenceStatus.RISK_SIGNAL
+            elif "shellfish_sauce_absent" in tags:
+                status = EvidenceStatus.VERIFIED
             menu = self._menu_summary(
                 row,
                 ["More from the restaurant already selected"],
                 ["Cross-contamination is not verified"],
                 status,
-                1.0,
+                max(0.1, 0.6 - index * 0.001),
             )
-            output.append(
+            merchant_areas[menu.merchant_id] = str(row["merchant_service_area_id"])
+            candidates.append(
                 menu.model_copy(
                     update={
                         "evidence_ids": [
@@ -1417,9 +1404,7 @@ class SQLiteYobiRepository:
                     }
                 )
             )
-            if len(output) >= limit:
-                break
-        return output
+        return rerank_menu_candidates(candidates, safety_state, merchant_areas, limit)
 
     def get_evidence(self, menu_id: str) -> list[Evidence]:
         with self._connection() as connection:
@@ -1750,8 +1735,6 @@ class SQLiteYobiRepository:
             conflicts.append("menu:over_budget")
         if state.max_spiciness is not None and int(menu["spice_level"]) > state.max_spiciness:
             conflicts.append("menu:too_spicy")
-        if state.party_size and int(menu["serves_max"]) < min(state.party_size, 2):
-            conflicts.append("menu:portion_too_small")
         if menu_id in state.rejected_menu_ids:
             conflicts.append("menu:rejected")
         if state.service_area_id and menu["service_area_id"] != state.service_area_id:
@@ -1986,62 +1969,96 @@ class SQLiteYobiRepository:
         )
 
     def compare_merchants(
-        self, category: str, profile: Profile, limit: int = 3
+        self,
+        category: str,
+        profile: Profile,
+        limit: int = 3,
+        meal_need_state: MealNeedState | None = None,
     ) -> list[MerchantComparison]:
+        state = apply_profile_constraints(
+            meal_need_state.model_copy(deep=True)
+            if meal_need_state is not None
+            else MealNeedState(max_spiciness=profile.spice_tolerance),
+            profile.dietary_rules,
+            profile.religion_selection,
+        )
+        if state.max_spiciness is None:
+            state.max_spiciness = profile.spice_tolerance
         with self._connection() as connection:
             rows = connection.execute(
                 """
                 SELECT m.*, r.name_en AS merchant_name, r.delivery_fee, r.eta_min,
-                       r.eta_max, r.flavor_profile, r.packaging_signal
+                       r.eta_max, r.flavor_profile, r.packaging_signal,
+                       r.service_area_id AS merchant_service_area_id
                 FROM menu m JOIN merchant r ON r.merchant_id = m.merchant_id
                 WHERE lower(m.category) = lower(?) AND m.availability = 'AVAILABLE'
-                ORDER BY m.price, r.eta_min LIMIT ?
+                ORDER BY m.price, r.eta_min
                 """,
-                (category, limit),
+                (category,),
             ).fetchall()
-        comparisons = []
+            hard_conflicts = {
+                str(row["menu_id"]): self._menu_hard_constraint_conflicts(
+                    connection,
+                    str(row["menu_id"]),
+                    state,
+                    profile.allergy_severity,
+                )[0]
+                for row in rows
+            }
+        summaries: list[MenuSummary] = []
+        merchant_areas: dict[str, str] = {}
+        rows_by_menu = {str(row["menu_id"]): row for row in rows}
         for index, row in enumerate(rows):
+            if hard_conflicts[str(row["menu_id"])]:
+                continue
             allergens = set(json.loads(row["allergen_tags_json"]))
             tags = set(json.loads(row["dietary_tags_json"]))
             status = EvidenceStatus.UNKNOWN
-            note = "Ingredient and cross-contamination details are not verified."
             if "shellfish_risk" in allergens:
                 status = EvidenceStatus.RISK_SIGNAL
-                note = "The synthetic menu specification contains a shellfish risk signal."
             elif "shellfish_sauce_absent" in tags:
                 status = EvidenceStatus.VERIFIED
-                note = "Sauce marked seafood-free; cross-contamination remains unknown."
+            summary = self._menu_summary(
+                row,
+                ["Comparable listing for the requested food"],
+                ["Cross-contamination is not verified"],
+                status,
+                max(0.1, 0.6 - index * 0.001),
+            )
+            summaries.append(summary)
+            merchant_areas[summary.merchant_id] = str(row["merchant_service_area_id"])
+        ranked = rerank_menu_candidates(summaries, state, merchant_areas, limit)
+        comparisons: list[MerchantComparison] = []
+        for menu in ranked:
+            row = rows_by_menu[menu.menu_id]
+            dietary_note = "Ingredient and cross-contamination details are not verified."
+            if menu.evidence_status == EvidenceStatus.RISK_SIGNAL:
+                dietary_note = "The synthetic menu specification contains a shellfish risk signal."
+            elif menu.evidence_status == EvidenceStatus.VERIFIED:
+                dietary_note = "Sauce marked seafood-free; cross-contamination remains unknown."
             comparisons.append(
                 MerchantComparison(
-                    merchant_id=row["merchant_id"],
-                    merchant_name=row["merchant_name"],
-                    menu_id=row["menu_id"],
-                    menu_name=row["name_en"],
-                    price=row["price"],
-                    delivery_fee=row["delivery_fee"],
+                    merchant_id=menu.merchant_id,
+                    merchant_name=menu.merchant_name,
+                    menu_id=menu.menu_id,
+                    menu_name=menu.name_en,
+                    price=menu.price,
+                    delivery_fee=menu.delivery_fee,
                     eta=f"{row['eta_min']}-{row['eta_max']} min",
-                    portion="One-person portion" if row["serves_max"] == 1 else "Shareable portion",
+                    portion=(
+                        "One-person portion" if menu.serves_max == 1 else "Shareable portion"
+                    ),
                     flavor=row["flavor_profile"],
                     packaging_signal=row["packaging_signal"],
-                    dietary_status=status,
-                    dietary_note=note,
-                    best_for=(
-                        "First-time visitors who prefer a milder, creamier dish"
-                        if index == 0
-                        else "Travellers prioritising value and a larger portion"
-                    ),
+                    dietary_status=menu.evidence_status,
+                    dietary_note=dietary_note,
+                    best_for="; ".join(menu.match_reasons),
+                    evidence_ids=[
+                        evidence.evidence_id for evidence in self.get_evidence(menu.menu_id)
+                    ],
                 )
             )
-        return [
-            item.model_copy(
-                update={
-                    "evidence_ids": [
-                        evidence.evidence_id for evidence in self.get_evidence(item.menu_id)
-                    ]
-                }
-            )
-            for item in comparisons
-        ]
+        return comparisons
 
     def get_options(self, menu_id: str) -> list[OptionGroup]:
         with self._connection() as connection:
@@ -2094,16 +2111,25 @@ class SQLiteYobiRepository:
         return result
 
     def resolve_address(self, text: str, file_hash: str | None = None) -> list[AddressCandidate]:
-        normalized = text.lower().strip()
+        normalized = normalize_address_text(text)
         with self._connection() as connection:
-            rows = connection.execute("SELECT * FROM address_place ORDER BY place_id").fetchall()
+            rows = connection.execute(
+                """
+                SELECT place.* FROM address_place place
+                JOIN service_area area ON area.service_area_id=place.service_area_id
+                WHERE area.active=1 ORDER BY place.place_id
+                """
+            ).fetchall()
         scored = []
         for row in rows:
             aliases = json.loads(row["aliases_json"])
             haystack = " ".join([row["name_en"], row["name_ko"], *aliases]).lower()
+            normalized_road = normalize_address_text(str(row["road_address"]))
             score = (
                 0.98 if row["place_id"] == "hotel_demo_01" and "myeongdong" in normalized else 0.0
             )
+            if normalized_road in normalized:
+                score = max(score, 0.95)
             if normalized and any(token in haystack for token in normalized.split()):
                 score = max(score, 0.82)
             if file_hash and row["fixture_sha256"] == file_hash:
@@ -2132,7 +2158,12 @@ class SQLiteYobiRepository:
     def get_address_candidate(self, place_id: str) -> AddressCandidate | None:
         with self._connection() as connection:
             row = connection.execute(
-                "SELECT * FROM address_place WHERE place_id = ?", (place_id,)
+                """
+                SELECT place.* FROM address_place place
+                JOIN service_area area ON area.service_area_id=place.service_area_id
+                WHERE place.place_id=? AND area.active=1
+                """,
+                (place_id,),
             ).fetchone()
         if row is None:
             return None
@@ -2157,6 +2188,13 @@ class SQLiteYobiRepository:
     ) -> str:
         address_ref_id = _id("address")
         with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            active_area = connection.execute(
+                "SELECT 1 FROM service_area WHERE service_area_id=? AND active=1",
+                (candidate.service_area_id,),
+            ).fetchone()
+            if active_area is None:
+                raise ValueError("ADDRESS_OUTSIDE_SERVICE_AREA")
             connection.execute(
                 """
                 INSERT INTO address_ref (
@@ -2179,7 +2217,10 @@ class SQLiteYobiRepository:
             )
             cart_id = self._ensure_cart(connection, session_id)
             connection.execute(
-                "UPDATE cart SET address_ref_id = ?, version = version + 1, updated_at = ? WHERE cart_id = ?",
+                """
+                UPDATE cart SET address_ref_id = ?, version = version + 1,
+                  confirmed = 0, updated_at = ? WHERE cart_id = ?
+                """,
                 (address_ref_id, _now(), cart_id),
             )
         return address_ref_id
@@ -2190,7 +2231,8 @@ class SQLiteYobiRepository:
                 """
                 SELECT ref.service_area_id
                 FROM cart JOIN address_ref ref ON ref.address_ref_id=cart.address_ref_id
-                WHERE cart.session_id=? AND ref.confirmed=1
+                JOIN service_area area ON area.service_area_id=ref.service_area_id
+                WHERE cart.session_id=? AND ref.confirmed=1 AND area.active=1
                 """,
                 (session_id,),
             ).fetchone()
@@ -2466,8 +2508,10 @@ class SQLiteYobiRepository:
             address_area_row = (
                 connection.execute(
                     """
-                    SELECT service_area_id FROM address_ref
-                    WHERE address_ref_id=? AND session_id=? AND confirmed=1
+                    SELECT ref.service_area_id FROM address_ref ref
+                    JOIN service_area area ON area.service_area_id=ref.service_area_id
+                    WHERE ref.address_ref_id=? AND ref.session_id=? AND ref.confirmed=1
+                      AND area.active=1
                     """,
                     (cart["address_ref_id"], session_id),
                 ).fetchone()
@@ -2605,6 +2649,9 @@ class SQLiteYobiRepository:
             warnings.append("The confirmed address is outside this merchant's service area.")
         if items:
             warnings.append("Synthetic evidence only; cross-contamination may be unverified.")
+        current_fingerprint = _cart_fingerprint(
+            str(cart["cart_id"]), int(cart["version"]), subtotal + delivery_fee
+        )
         return CartPreview(
             cart_id=cart["cart_id"],
             session_id=session_id,
@@ -2618,7 +2665,10 @@ class SQLiteYobiRepository:
             minimum_order_amount=minimum_order_amount,
             minimum_order_shortfall=minimum_order_shortfall,
             ready_to_checkout=not missing,
-            confirmed=bool(cart["confirmed"]),
+            confirmed=(
+                bool(cart["confirmed"])
+                and cart["confirmed_fingerprint"] == current_fingerprint
+            ),
         )
 
     def update_delivery(self, session_id: str, preference: DeliveryPreferenceInput) -> CartPreview:
@@ -2688,8 +2738,10 @@ class SQLiteYobiRepository:
             raise ValueError("CART_INCOMPLETE")
         address = connection.execute(
             """
-            SELECT service_area_id FROM address_ref
-            WHERE address_ref_id = ? AND session_id = ? AND confirmed = 1
+            SELECT ref.service_area_id FROM address_ref ref
+            JOIN service_area area ON area.service_area_id=ref.service_area_id
+            WHERE ref.address_ref_id = ? AND ref.session_id = ? AND ref.confirmed = 1
+              AND area.active=1
             """,
             (cart["address_ref_id"], session_id),
         ).fetchone()
@@ -2864,21 +2916,38 @@ class SQLiteYobiRepository:
         if merchant is None or subtotal < int(merchant["min_order_amount"]):
             raise ValueError("MINIMUM_ORDER_NOT_MET")
 
+        current_total = subtotal + int(merchant["delivery_fee"])
         was_confirmed = bool(cart["confirmed"])
+        current_fingerprint = _cart_fingerprint(
+            str(cart["cart_id"]), int(cart["version"]), current_total
+        )
+        confirmation_stale = (
+            was_confirmed and cart["confirmed_fingerprint"] != current_fingerprint
+        )
+        changed = changed or confirmation_stale
         version_changed = False
         if confirm and (not was_confirmed or changed):
+            confirmed_version = int(cart["version"]) + 1
             connection.execute(
                 """
-                UPDATE cart SET confirmed = 1, version = version + 1, updated_at = ?
+                UPDATE cart SET confirmed = 1, version = version + 1,
+                  confirmed_fingerprint = ?, updated_at = ?
                 WHERE cart_id = ?
                 """,
-                (_now(), cart["cart_id"]),
+                (
+                    _cart_fingerprint(
+                        str(cart["cart_id"]), confirmed_version, current_total
+                    ),
+                    _now(),
+                    cart["cart_id"],
+                ),
             )
             version_changed = True
         elif changed:
             connection.execute(
                 """
-                UPDATE cart SET confirmed = 0, version = version + 1, updated_at = ?
+                UPDATE cart SET confirmed = 0, version = version + 1,
+                  confirmed_fingerprint = NULL, updated_at = ?
                 WHERE cart_id = ?
                 """,
                 (_now(), cart["cart_id"]),
@@ -2888,7 +2957,7 @@ class SQLiteYobiRepository:
             str(cart["cart_id"]),
             changed,
             was_confirmed,
-            subtotal + int(merchant["delivery_fee"]),
+            current_total,
             int(cart["version"]) + int(version_changed),
         )
 
@@ -2913,9 +2982,7 @@ class SQLiteYobiRepository:
                 # the user to review the new total.
                 pass
             else:
-                fingerprint = hashlib.sha256(
-                    f"{cart_id}:{cart_version}:{current_total}".encode()
-                ).hexdigest()
+                fingerprint = _cart_fingerprint(cart_id, cart_version, current_total)
                 existing = connection.execute(
                     "SELECT * FROM mock_checkout WHERE idempotency_key = ?",
                     (data.idempotency_key,),
@@ -2924,10 +2991,19 @@ class SQLiteYobiRepository:
                     if (
                         existing["cart_id"] != cart_id
                         or existing["cart_version"] != cart_version
-                        or existing["cart_fingerprint"] != fingerprint
                     ):
                         raise ValueError("IDEMPOTENCY_KEY_REUSED")
-                    checkout = self._checkout_from_row(existing)
+                    if existing["cart_fingerprint"] != fingerprint:
+                        connection.execute(
+                            """
+                            UPDATE cart SET confirmed=0,version=version+1,updated_at=?
+                            WHERE cart_id=? AND confirmed=1
+                            """,
+                            (_now(), cart_id),
+                        )
+                        changed = True
+                    else:
+                        checkout = self._checkout_from_row(existing)
                 else:
                     active = connection.execute(
                         """
@@ -2938,7 +3014,17 @@ class SQLiteYobiRepository:
                         (cart_id, cart_version),
                     ).fetchone()
                     if active:
-                        checkout = self._checkout_from_row(active)
+                        if active["cart_fingerprint"] != fingerprint:
+                            connection.execute(
+                                """
+                                UPDATE cart SET confirmed=0,version=version+1,updated_at=?
+                                WHERE cart_id=? AND confirmed=1
+                                """,
+                                (_now(), cart_id),
+                            )
+                            changed = True
+                        else:
+                            checkout = self._checkout_from_row(active)
                     else:
                         checkout_id = _id("checkout")
                         payment_url = f"/pay/{checkout_id}"
@@ -3001,7 +3087,11 @@ class SQLiteYobiRepository:
     def update_checkout(self, checkout_id: str, status: str) -> Checkout:
         if status not in {"SUCCEEDED", "FAILED", "CANCELED"}:
             raise ValueError("INVALID_PAYMENT_STATUS")
+        checkout_stale = False
+        order_id = None
+        updated: sqlite3.Row | None = None
         with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 "SELECT * FROM mock_checkout WHERE checkout_id = ?", (checkout_id,)
             ).fetchone()
@@ -3009,47 +3099,108 @@ class SQLiteYobiRepository:
                 raise KeyError("CHECKOUT_NOT_FOUND")
             if row["status"] == "SUCCEEDED" and status != "SUCCEEDED":
                 raise ValueError("PAYMENT_ALREADY_SUCCEEDED")
-            connection.execute(
-                "UPDATE mock_checkout SET status = ?, updated_at = ? WHERE checkout_id = ?",
-                (status, _now(), checkout_id),
-            )
-            order_id = None
             if status == "SUCCEEDED":
-                completed_other = connection.execute(
-                    """
-                    SELECT other.checkout_id FROM mock_checkout other
-                    JOIN mock_order placed ON placed.checkout_id=other.checkout_id
-                    WHERE other.cart_id=? AND other.checkout_id<>? LIMIT 1
-                    """,
-                    (row["cart_id"], checkout_id),
-                ).fetchone()
-                if completed_other:
-                    raise ValueError("CART_ORDER_ALREADY_COMPLETED")
                 existing_order = connection.execute(
                     "SELECT order_id FROM mock_order WHERE checkout_id = ?", (checkout_id,)
                 ).fetchone()
-                if existing_order:
+                if row["status"] == "SUCCEEDED" and existing_order:
                     order_id = existing_order["order_id"]
                 else:
-                    order_id = _id("YOBI-DEMO")
-                    cart_rows = connection.execute(
-                        "SELECT * FROM cart_item WHERE cart_id = ? ORDER BY created_at",
+                    cart_session = connection.execute(
+                        "SELECT session_id FROM cart WHERE cart_id = ?",
                         (row["cart_id"],),
-                    ).fetchall()
-                    snapshot = [dict(item) for item in cart_rows]
-                    eta = datetime.now(timezone.utc) + timedelta(minutes=35)
-                    connection.execute(
-                        """
-                        INSERT INTO mock_order (
-                          order_id, checkout_id, cart_snapshot_json, order_status,
-                          estimated_delivery_at, created_at
-                        ) VALUES (?, ?, ?, 'CONFIRMED', ?, ?)
-                        """,
-                        (order_id, checkout_id, json.dumps(snapshot), eta.isoformat(), _now()),
+                    ).fetchone()
+                    if cart_session is None:
+                        raise ValueError("CHECKOUT_STALE")
+                    try:
+                        (
+                            current_cart_id,
+                            cart_changed,
+                            cart_confirmed,
+                            current_total,
+                            current_version,
+                        ) = self._revalidate_cart(
+                            connection, str(cart_session["session_id"]), confirm=False
+                        )
+                    except ValueError as exc:
+                        raise ValueError("CHECKOUT_STALE") from exc
+                    current_fingerprint = _cart_fingerprint(
+                        current_cart_id, current_version, current_total
                     )
+                    fingerprint_changed = current_fingerprint != row["cart_fingerprint"]
+                    if (
+                        current_cart_id != row["cart_id"]
+                        or not cart_confirmed
+                        or cart_changed
+                        or current_version != row["cart_version"]
+                        or fingerprint_changed
+                    ):
+                        if (
+                            fingerprint_changed
+                            and not cart_changed
+                            and cart_confirmed
+                            and current_version == row["cart_version"]
+                        ):
+                            connection.execute(
+                                """
+                                UPDATE cart SET confirmed=0,version=version+1,updated_at=?
+                                WHERE cart_id=? AND confirmed=1
+                                """,
+                                (_now(), current_cart_id),
+                            )
+                        checkout_stale = True
+                    else:
+                        completed_other = connection.execute(
+                            """
+                            SELECT other.checkout_id FROM mock_checkout other
+                            JOIN mock_order placed ON placed.checkout_id=other.checkout_id
+                            WHERE other.cart_id=? AND other.checkout_id<>? LIMIT 1
+                            """,
+                            (row["cart_id"], checkout_id),
+                        ).fetchone()
+                        if completed_other:
+                            raise ValueError("CART_ORDER_ALREADY_COMPLETED")
+                        connection.execute(
+                            "UPDATE mock_checkout SET status = ?, updated_at = ? WHERE checkout_id = ?",
+                            (status, _now(), checkout_id),
+                        )
+                        if existing_order:
+                            order_id = existing_order["order_id"]
+                        else:
+                            order_id = _id("YOBI-DEMO")
+                            cart_rows = connection.execute(
+                                "SELECT * FROM cart_item WHERE cart_id = ? ORDER BY created_at",
+                                (row["cart_id"],),
+                            ).fetchall()
+                            snapshot = [dict(item) for item in cart_rows]
+                            eta = datetime.now(timezone.utc) + timedelta(minutes=35)
+                            connection.execute(
+                                """
+                                INSERT INTO mock_order (
+                                  order_id, checkout_id, cart_snapshot_json, order_status,
+                                  estimated_delivery_at, created_at
+                                ) VALUES (?, ?, ?, 'CONFIRMED', ?, ?)
+                                """,
+                                (
+                                    order_id,
+                                    checkout_id,
+                                    json.dumps(snapshot),
+                                    eta.isoformat(),
+                                    _now(),
+                                ),
+                            )
+            else:
+                connection.execute(
+                    "UPDATE mock_checkout SET status = ?, updated_at = ? WHERE checkout_id = ?",
+                    (status, _now(), checkout_id),
+                )
             updated = connection.execute(
                 "SELECT * FROM mock_checkout WHERE checkout_id = ?", (checkout_id,)
             ).fetchone()
+        if checkout_stale:
+            raise ValueError("CHECKOUT_STALE")
+        if updated is None:
+            raise RuntimeError("CHECKOUT_UPDATE_FAILED")
         return self._checkout_from_row(updated, order_id)
 
     def get_order(self, order_id: str) -> Order | None:

@@ -34,6 +34,8 @@ def test_golden_transcripts_cover_required_multiturn_acceptance_paths() -> None:
         "selection",
         "budget",
         "spice",
+        "korean_input",
+        "localized_response",
         "unsafe_reassurance",
     }.issubset(coverage)
     assert all(
@@ -52,8 +54,8 @@ def test_real_chat_service_acceptance_is_passing_and_deterministic() -> None:
     assert first["passed"] is True
     assert first["failures"] == []
     assert first["mode"] == "sqlite-real-chat-service-deterministic-fallback"
-    assert first["metrics"]["transcript_count"] == 8
-    assert first["metrics"]["message_turn_count"] == 15
+    assert first["metrics"]["transcript_count"] == 9
+    assert first["metrics"]["message_turn_count"] == 16
     assert first["metrics"]["event_count"] == 2
     assert first["metrics"]["knowledge_case_count"] == 3
     assert first["metrics"]["assertion_count"] > 0

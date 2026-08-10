@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from threading import Lock
 from time import monotonic
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from app.core.config import Settings
@@ -166,6 +166,130 @@ _INPUT_LANGUAGE_NOTICE = {
     ),
 }
 
+_TARGET_CLARIFICATION_COPY = {
+    "English": {
+        "explain": "Which food or visible menu would you like me to explain?",
+        "compare": (
+            "Which food should I compare across restaurants? For visible recommendations, "
+            "say first and second."
+        ),
+    },
+    "한국어": {
+        "explain": "어떤 음식이나 화면에 보이는 메뉴를 설명해 드릴까요?",
+        "compare": "어떤 음식을 가게별로 비교할까요? 화면의 메뉴라면 첫 번째와 두 번째라고 말해 주세요.",
+    },
+    "日本語": {
+        "explain": "どの料理、または画面に表示されているメニューを説明しますか？",
+        "compare": "どの料理を店舗ごとに比較しますか？表示中の候補なら first and second と入力してください。",
+    },
+    "Español": {
+        "explain": "¿Qué comida o menú visible quieres que explique?",
+        "compare": "¿Qué comida comparo entre restaurantes? Para los menús visibles, escribe first and second.",
+    },
+}
+
+_NO_COMPARISON_COPY = {
+    "English": (
+        "I could not find restaurant listings for that food that satisfy your current hard "
+        "constraints. Change a constraint or choose another food direction."
+    ),
+    "한국어": (
+        "현재 필수 조건을 모두 만족하는 해당 음식의 가게 메뉴를 찾지 못했어요. "
+        "조건을 바꾸거나 다른 음식 방향을 골라 주세요."
+    ),
+    "日本語": (
+        "現在の必須条件をすべて満たす店舗メニューが見つかりませんでした。"
+        "条件を変更するか、別の料理を選んでください。"
+    ),
+    "Español": (
+        "No encontré opciones de restaurantes para esa comida que cumplan todas tus "
+        "restricciones actuales. Cambia una restricción o elige otra comida."
+    ),
+}
+
+_NO_EXPLANATION_LISTING_COPY = {
+    "English": (
+        "I can explain that food generally, but no representative listing satisfies your "
+        "current hard constraints. Choose another food or revise a constraint first."
+    ),
+    "한국어": (
+        "음식 자체는 일반적으로 설명할 수 있지만, 현재 필수 조건을 만족하는 대표 메뉴가 "
+        "없어요. 다른 음식을 고르거나 조건을 먼저 바꿔 주세요."
+    ),
+    "日本語": (
+        "料理の一般的な説明はできますが、現在の必須条件を満たす代表メニューがありません。"
+        "別の料理を選ぶか、先に条件を変更してください。"
+    ),
+    "Español": (
+        "Puedo explicar la comida en general, pero no hay un menú representativo que cumpla "
+        "tus restricciones actuales. Elige otra comida o cambia una restricción."
+    ),
+}
+
+_INFORMATION_UI_COPY = {
+    "English": {
+        "explanation_title": "What {category} is like",
+        "explanation_subtitle": "General synthetic dish Wiki · representative demo listing",
+        "explanation_no_listing_subtitle": (
+            "General synthetic dish Wiki · no compatible listing shown"
+        ),
+        "explanation_replies": [
+            "Recommend this food when ready",
+            "Explain ingredients",
+            "Explain another dish",
+        ],
+        "comparison_title": "{category} comparison",
+        "comparison_subtitle": "Synthetic restaurants · shared comparison axes",
+        "comparison_replies": [
+            "Explain the first menu",
+            "Explain another food category",
+        ],
+    },
+    "한국어": {
+        "explanation_title": "{category} 알아보기",
+        "explanation_subtitle": "합성 음식 Wiki의 일반 정보 · 대표 데모 메뉴",
+        "explanation_no_listing_subtitle": "합성 음식 Wiki의 일반 정보 · 조건에 맞는 메뉴는 표시하지 않음",
+        "explanation_replies": ["이 음식 추천받기", "재료 설명", "다른 음식 설명 듣기"],
+        "comparison_title": "{category} 가게 비교",
+        "comparison_subtitle": "합성 가게 · 동일한 비교 기준",
+        "comparison_replies": ["첫 번째 메뉴 설명", "다른 음식 종류 설명"],
+    },
+    "日本語": {
+        "explanation_title": "{category}について",
+        "explanation_subtitle": "合成料理Wikiの一般情報・代表デモメニュー",
+        "explanation_no_listing_subtitle": "合成料理Wikiの一般情報・条件に合うメニューは非表示",
+        "explanation_replies": [
+            "この料理をおすすめして (Recommend this food)",
+            "材料を確認 (Explain ingredients)",
+            "別の料理を説明 (Explain another dish)",
+        ],
+        "comparison_title": "{category}の店舗比較",
+        "comparison_subtitle": "合成店舗・共通の比較基準",
+        "comparison_replies": [
+            "最初のメニューを説明 (Explain the first menu)",
+            "別の料理を見る (Explain another food category)",
+        ],
+    },
+    "Español": {
+        "explanation_title": "Sobre {category}",
+        "explanation_subtitle": "Información general de Wiki sintética · menú demo representativo",
+        "explanation_no_listing_subtitle": (
+            "Información general de Wiki sintética · sin menú compatible mostrado"
+        ),
+        "explanation_replies": [
+            "Recomienda esta comida (Recommend this food)",
+            "Preguntar por ingredientes (Explain ingredients)",
+            "Explicar otra comida (Explain another dish)",
+        ],
+        "comparison_title": "Comparación de {category}",
+        "comparison_subtitle": "Restaurantes sintéticos · mismos criterios",
+        "comparison_replies": [
+            "Explicar la primera opción (Explain the first menu)",
+            "Ver otra comida (Explain another food category)",
+        ],
+    },
+}
+
 _GROUNDED_COPY = {
     "English": {
         "menus": (
@@ -224,7 +348,7 @@ _GROUNDED_COPY = {
             "이 방향들을 더 좁힐 수 있어요."
         ),
         "explanation": (
-            "{name}: {description} 이 설명은 합성 음식 Wiki의 일반 지식이며, "
+            "{name}에 대한 합성 음식 Wiki의 일반 설명이에요. "
             "가게별로 확인되지 않은 내용은 아래에 따로 표시했어요."
         ),
         "comparison": "같은 메뉴 방향에 대한 가게별 근거 기반 차이를 보여드릴게요.",
@@ -271,7 +395,7 @@ _GROUNDED_COPY = {
             "選ぶ前に、さらに絞り込めます。"
         ),
         "explanation": (
-            "{name}: {description} これは合成食品 Wiki の一般知識です。"
+            "{name} についての合成食品 Wiki の一般説明です。"
             "店舗固有の未確認事項は下に明示しています。"
         ),
         "comparison": "同じメニューについて、根拠のある店舗間の違いを示します。",
@@ -319,7 +443,7 @@ _GROUNDED_COPY = {
             "de que elijas un menú concreto."
         ),
         "explanation": (
-            "{name}: {description} Este es conocimiento general del Wiki sintético; los datos "
+            "Esta es una explicación general de {name} del Wiki sintético; los datos "
             "desconocidos de cada restaurante siguen indicados abajo."
         ),
         "comparison": "Estas son las diferencias fundamentadas entre restaurantes para el mismo menú.",
@@ -492,6 +616,15 @@ class ChatService:
         fallback_reason: FallbackReason | None = None
         dialogue_update = self.dialogue.update(session.meal_need_state, profile, user_text)
         need_state = dialogue_update.state
+        if (
+            need_state.pending_information_request is not None
+            and dialogue_update.delta.dialogue_act != DialogueAct.COLLECT_NEEDS
+            and not (
+                need_state.pending_information_request == "compare"
+                and dialogue_update.delta.dialogue_act == DialogueAct.COMPARE
+            )
+        ):
+            need_state.pending_information_request = None
         if need_state.selected_menu_id is None and session.selected_menu_id:
             # Preserve selections created by pre-005 sessions until the user explicitly
             # changes them through the snapshot event contract.
@@ -511,6 +644,15 @@ class ChatService:
             use_fallback = False
             if turn.cards:
                 turn.dialogue_act = DialogueAct.RECOMMEND
+        elif pending_turn := self._pending_information_turn(
+            session,
+            profile,
+            user_text,
+            need_state,
+            dialogue_update.delta.dialogue_act,
+        ):
+            turn = pending_turn
+            use_fallback = False
         elif selection_turn := self._natural_snapshot_selection_turn(
             session,
             profile,
@@ -538,6 +680,14 @@ class ChatService:
         ):
             turn = comparison_turn
             use_fallback = False
+        elif category_comparison_turn := self._category_comparison_turn(
+            profile,
+            user_text,
+            need_state,
+            dialogue_update.delta.dialogue_act,
+        ):
+            turn = category_comparison_turn
+            use_fallback = False
         elif dialogue_update.delta.dialogue_act in {
             DialogueAct.REQUEST_EXPLANATION,
             DialogueAct.COLLECT_NEEDS,
@@ -561,6 +711,16 @@ class ChatService:
         ):
             turn = explanation_turn
             use_fallback = False
+        elif dialogue_update.delta.dialogue_act in {
+            DialogueAct.REQUEST_EXPLANATION,
+            DialogueAct.COMPARE,
+        } and self._catalog_category(user_text) is None:
+            turn = self._target_clarification_turn(
+                profile,
+                dialogue_update.delta.dialogue_act,
+                need_state,
+            )
+            use_fallback = False
         elif not readiness.may_recommend and dialogue_update.delta.dialogue_act not in {
             DialogueAct.REQUEST_EXPLANATION,
             DialogueAct.COMPARE,
@@ -570,45 +730,9 @@ class ChatService:
             turn = self._needs_collection_turn(
                 profile, dialogue_update.delta.dialogue_act, readiness
             )
-            if not use_fallback:
-                try:
-                    result = self.agent.run(
-                        user_text,
-                        self._dynamic_context(
-                            session,
-                            profile,
-                            need_state,
-                            readiness,
-                            dialogue_update.delta.dialogue_act,
-                        ),
-                        ToolRegistry(
-                            self.repository,
-                            profile,
-                            session.session_id,
-                            meal_need_state=need_state,
-                        ),
-                        allow_tools=False,
-                    )
-                    model_turn = turn.model_copy(update={"text": result.text})
-                    self.grounding.validate(
-                        model_turn,
-                        result.referenced_menu_ids,
-                        result.referenced_claim_ids,
-                    )
-                    self.grounding.validate_no_tool_dialogue(model_turn, result.response_kind)
-                    # Before readiness, the model may classify/phrase a candidate
-                    # narrative but never owns the rendered content. The server
-                    # question key is the bounded output contract, so an unseen dish
-                    # name or recommendation phrase cannot leak into the user turn.
-                except Exception as exc:
-                    fallback_reason = self._classify_fallback(exc)
-                    safe_error_code = (
-                        exc.code.value
-                        if isinstance(exc, GenAIProviderError)
-                        else fallback_reason.value
-                    )
-                    turn.fallback_used = True
-                    turn.fallback_reason = fallback_reason
+            # Missing-information prompts are a server-owned state-machine contract.
+            # Calling a model here would add cost and latency while its prose is
+            # intentionally discarded for grounding safety.
             use_fallback = False
         elif not use_fallback:
             try:
@@ -687,6 +811,9 @@ class ChatService:
             turn = fallback_turn or self._deterministic_turn(
                 session, profile, user_text, need_state
             )
+            fallback_language = self._narrative_language(profile.preferred_language)
+            if turn.cards and fallback_language in {"한국어", "日本語", "Español"}:
+                turn.text = self._server_grounded_text(turn, fallback_language)
             turn.fallback_used = True
             fallback_reason = fallback_reason or self._classify_fallback(None)
             turn.fallback_reason = fallback_reason
@@ -1305,16 +1432,40 @@ class ChatService:
         ):
             if any(marker in lowered for marker in markers):
                 referenced_indices.append(index)
+        ordinal_reference = bool(referenced_indices)
+        if not referenced_indices:
+            for index, candidate in enumerate(snapshot.result.candidates):
+                menu = self.repository.get_menu(candidate.menu_id, profile)
+                if menu is None:
+                    continue
+                compact = lowered.replace(" ", "")
+                if (
+                    menu.name_en.lower() in lowered
+                    or menu.name_ko.replace(" ", "") in compact
+                    or menu.category.lower() in lowered
+                ):
+                    referenced_indices.append(index)
+            referenced_indices = list(dict.fromkeys(referenced_indices))
+        if len(referenced_indices) < 2 and not ordinal_reference:
+            if self._catalog_category(user_text) is not None:
+                return None
+            referenced_indices = []
         if not referenced_indices:
             referenced_indices = list(range(min(3, len(snapshot.result.candidates))))
-        state.compared_menu_ids = list(
+        referenced_menu_ids = list(
             dict.fromkeys(
                 snapshot.result.candidates[index].menu_id
                 for index in referenced_indices
                 if index < len(snapshot.result.candidates)
             )
         )
+        if state.pending_information_request == "compare":
+            referenced_menu_ids = list(
+                dict.fromkeys([*state.compared_menu_ids, *referenced_menu_ids])
+            )
+        state.compared_menu_ids = referenced_menu_ids
         if len(state.compared_menu_ids) < 2:
+            state.pending_information_request = "compare"
             return self._make_turn(
                 "Please name at least two visible recommendations to compare.",
                 ChatState.CLARIFICATION,
@@ -1322,6 +1473,7 @@ class ChatService:
                 False,
                 dialogue_act=DialogueAct.COMPARE,
             )
+        state.pending_information_request = None
         return self._stored_comparison_turn(
             session,
             profile,
@@ -1334,6 +1486,7 @@ class ChatService:
         self, session: Session, profile: Profile, user_text: str
     ) -> AssistantTurn | None:
         lowered = user_text.lower()
+        compact = lowered.replace(" ", "")
         reference_markers = (
             "first menu",
             "second menu",
@@ -1348,8 +1501,6 @@ class ChatService:
             "두 번째 메뉴",
             "세 번째 메뉴",
         )
-        if not any(marker in lowered for marker in reference_markers):
-            return None
         snapshot = self.repository.get_recommendation_snapshot(session.session_id)
         if snapshot is None or not snapshot.result.candidates:
             return None
@@ -1357,8 +1508,28 @@ class ChatService:
             index = 1
         elif any(marker in lowered for marker in ("third", "3rd", "세 번째")):
             index = 2
-        else:
+        elif any(marker in lowered for marker in ("first", "1st", "첫 번째")):
             index = 0
+        else:
+            index = next(
+                (
+                    candidate_index
+                    for candidate_index, candidate in enumerate(snapshot.result.candidates)
+                    if (
+                        (menu := self.repository.get_menu(candidate.menu_id, profile))
+                        is not None
+                        and (
+                            menu.name_en.lower() in lowered
+                            or menu.name_ko.replace(" ", "") in compact
+                        )
+                    )
+                ),
+                -1,
+            )
+            if index < 0:
+                if not any(marker in lowered for marker in reference_markers):
+                    return None
+                index = 0
         if index >= len(snapshot.result.candidates):
             return self._make_turn(
                 "That earlier recommendation did not contain that many menus. Which visible menu would you like to explore?",
@@ -1384,7 +1555,7 @@ class ChatService:
         text = f"The {self._ordinal(index + 1)} menu was {menu.name_en}. {description} {analogy}"
         if unknowns:
             text += " The restaurant-specific details still marked as unknown are shown below."
-        return self._make_turn(
+        turn = self._make_turn(
             text,
             ChatState.MENU_EXPLANATION,
             [
@@ -1424,6 +1595,15 @@ class ChatService:
             [],
             dialogue_act=DialogueAct.EXPLAIN,
         )
+        language = self._narrative_language(profile.preferred_language)
+        if language != "English":
+            ui_copy = _INFORMATION_UI_COPY[language]
+            turn.cards[0].title = str(ui_copy["explanation_title"]).format(
+                category=menu.name_ko if language == "한국어" else menu.name_en
+            )
+            turn.cards[0].subtitle = str(ui_copy["explanation_subtitle"])
+            turn.text = self._server_grounded_text(turn, profile.preferred_language)
+        return turn
 
     def _generic_explanation_turn(
         self,
@@ -1434,39 +1614,31 @@ class ChatService:
     ) -> AssistantTurn | None:
         if requested_act != DialogueAct.REQUEST_EXPLANATION:
             return None
-        lowered = " ".join(user_text.lower().split())
-        compact = lowered.replace(" ", "")
-        aliases = {
-            "kimbap": "Gimbap",
-            "jajangmyeon": "Jjajangmyeon",
-            "soft tofu stew": "Sundubu",
-            "fish cake": "Eomuk",
-            "korean dumpling": "Mandu",
-            "lunch box": "Dosirak",
-        }
-        category: str | None = next(
-            (
-                name_en
-                for name_en, name_ko, _, _ in sorted(
-                    CATEGORIES,
-                    key=lambda item: max(len(item[0]), len(item[1])),
-                    reverse=True,
-                )
-                if name_en.lower() in lowered or name_ko.replace(" ", "") in compact
-            ),
-            None,
+        category = self._catalog_category(user_text)
+        if category is None:
+            return None
+        comparisons = self.repository.compare_merchants(
+            category,
+            profile,
+            limit=1,
+            meal_need_state=state,
         )
-        if category is None:
-            category = next(
-                (canonical for alias, canonical in aliases.items() if alias in lowered),
-                None,
+        compatible_listing = bool(comparisons)
+        source_menu_id = (
+            comparisons[0].menu_id
+            if comparisons
+            else self.repository.get_category_knowledge_source(category)
+        )
+        if source_menu_id is None:
+            language = self._narrative_language(profile.preferred_language)
+            return self._make_turn(
+                _NO_EXPLANATION_LISTING_COPY[language],
+                ChatState.CLARIFICATION,
+                [],
+                False,
+                dialogue_act=DialogueAct.EXPLAIN,
             )
-        if category is None:
-            return None
-        comparisons = self.repository.compare_merchants(category, profile, limit=1)
-        if not comparisons:
-            return None
-        menu = self.repository.get_menu(comparisons[0].menu_id, profile)
+        menu = self.repository.get_menu(source_menu_id, profile)
         if menu is None:
             return None
         knowledge = self.repository.get_grounded_menu_knowledge(
@@ -1509,26 +1681,250 @@ class ChatService:
             "concept_id": knowledge.concept_id,
             "concept_lineage": knowledge.concept_lineage,
             "general_wiki_explanation": True,
+            "category": category,
+            "compatible_listing": compatible_listing,
             "is_synthetic": True,
         }
-        return self._make_turn(
+        card_data: dict[str, Any] = {"explanation": explanation}
+        if compatible_listing:
+            card_data["menu"] = menu.model_dump(mode="json")
+        turn = self._make_turn(
             narrative,
             ChatState.MENU_EXPLANATION,
             [
                 Card(
                     type="menu_explanation",
                     title=f"What {category} is like",
-                    subtitle="General synthetic dish Wiki · representative demo listing",
-                    data={
-                        "menu": menu.model_dump(mode="json"),
-                        "explanation": explanation,
-                    },
+                    subtitle=(
+                        "General synthetic dish Wiki · representative demo listing"
+                        if compatible_listing
+                        else "General synthetic dish Wiki · no compatible listing shown"
+                    ),
+                    data=card_data,
                 )
             ],
             False,
             ["Recommend this food when ready", "Ask about ingredients", "Explain another dish"],
             dialogue_act=DialogueAct.EXPLAIN,
         )
+        language = self._narrative_language(profile.preferred_language)
+        ui_copy = _INFORMATION_UI_COPY[language]
+        turn.cards[0].title = str(ui_copy["explanation_title"]).format(category=category)
+        turn.cards[0].subtitle = str(
+            ui_copy[
+                "explanation_subtitle"
+                if compatible_listing
+                else "explanation_no_listing_subtitle"
+            ]
+        )
+        turn.suggested_replies = list(ui_copy["explanation_replies"])
+        if not compatible_listing:
+            turn.suggested_replies = turn.suggested_replies[1:]
+        if language == "English":
+            turn.suggested_replies[:2] = (
+                [f"Recommend {category}", f"Explain {category} ingredients"]
+                if compatible_listing
+                else [f"Explain {category} ingredients", "Explain another dish"]
+            )
+        elif language == "한국어":
+            turn.suggested_replies[:2] = (
+                [f"{category} 추천", f"{category} 재료 설명"]
+                if compatible_listing
+                else [f"{category} 재료 설명", "다른 음식 설명"]
+            )
+        elif language == "日本語":
+            turn.suggested_replies[:2] = (
+                [
+                    f"この料理をおすすめして (Recommend {category})",
+                    f"材料を確認 (Explain {category} ingredients)",
+                ]
+                if compatible_listing
+                else [
+                    f"材料を確認 (Explain {category} ingredients)",
+                    "別の料理を説明 (Explain another dish)",
+                ]
+            )
+        else:
+            turn.suggested_replies[:2] = (
+                [
+                    f"Recomienda esta comida (Recommend {category})",
+                    f"Preguntar por ingredientes (Explain {category} ingredients)",
+                ]
+                if compatible_listing
+                else [
+                    f"Preguntar por ingredientes (Explain {category} ingredients)",
+                    "Explicar otro plato (Explain another dish)",
+                ]
+            )
+        if language != "English":
+            turn.text = self._server_grounded_text(turn, profile.preferred_language)
+        return turn
+
+    @staticmethod
+    def _catalog_category(user_text: str) -> str | None:
+        lowered = " ".join(user_text.lower().split())
+        compact = lowered.replace(" ", "")
+        aliases = {
+            "kimbap": "Gimbap",
+            "jajangmyeon": "Jjajangmyeon",
+            "soft tofu stew": "Sundubu",
+            "fish cake": "Eomuk",
+            "korean dumpling": "Mandu",
+            "lunch box": "Dosirak",
+        }
+        category = next(
+            (
+                name_en
+                for name_en, name_ko, _, _ in sorted(
+                    CATEGORIES,
+                    key=lambda item: max(len(item[0]), len(item[1])),
+                    reverse=True,
+                )
+                if name_en.lower() in lowered or name_ko.replace(" ", "") in compact
+            ),
+            None,
+        )
+        if category is not None:
+            return category
+        return next(
+            (canonical for alias, canonical in aliases.items() if alias in lowered),
+            None,
+        )
+
+    def _target_clarification_turn(
+        self,
+        profile: Profile,
+        requested_act: DialogueAct,
+        state: MealNeedState,
+    ) -> AssistantTurn:
+        language = self._narrative_language(profile.preferred_language)
+        key: Literal["compare", "explain"] = (
+            "compare" if requested_act == DialogueAct.COMPARE else "explain"
+        )
+        state.pending_information_request = key
+        text = _TARGET_CLARIFICATION_COPY[language][key]
+        if language in _INPUT_LANGUAGE_NOTICE:
+            text += _INPUT_LANGUAGE_NOTICE[language]
+        return self._make_turn(
+            text,
+            ChatState.CLARIFICATION,
+            [],
+            False,
+            dialogue_act=DialogueAct.COLLECT_NEEDS,
+        )
+
+    def _pending_information_turn(
+        self,
+        session: Session,
+        profile: Profile,
+        user_text: str,
+        state: MealNeedState,
+        requested_act: DialogueAct,
+    ) -> AssistantTurn | None:
+        pending = state.pending_information_request
+        if pending is None or requested_act != DialogueAct.COLLECT_NEEDS:
+            return None
+        if pending == "explain":
+            snapshot_turn = self._snapshot_reference_turn(session, profile, user_text)
+            if snapshot_turn is not None:
+                if snapshot_turn.dialogue_act == DialogueAct.EXPLAIN:
+                    state.pending_information_request = None
+                return snapshot_turn
+        else:
+            snapshot_turn = self._natural_snapshot_comparison_turn(
+                session,
+                profile,
+                user_text,
+                state,
+                DialogueAct.COMPARE,
+            )
+            if snapshot_turn is not None:
+                if snapshot_turn.cards:
+                    state.pending_information_request = None
+                return snapshot_turn
+        category = self._catalog_category(user_text)
+        if category is None:
+            source_act = (
+                DialogueAct.COMPARE
+                if pending == "compare"
+                else DialogueAct.REQUEST_EXPLANATION
+            )
+            return self._target_clarification_turn(profile, source_act, state)
+        state.pending_information_request = None
+        if pending == "explain":
+            return self._generic_explanation_turn(
+                profile,
+                user_text,
+                state,
+                DialogueAct.REQUEST_EXPLANATION,
+            )
+        return self._category_comparison_turn(
+            profile,
+            user_text,
+            state,
+            DialogueAct.COMPARE,
+        )
+
+    def _category_comparison_turn(
+        self,
+        profile: Profile,
+        user_text: str,
+        state: MealNeedState,
+        requested_act: DialogueAct,
+    ) -> AssistantTurn | None:
+        if requested_act != DialogueAct.COMPARE:
+            return None
+        category = self._catalog_category(user_text)
+        if category is None:
+            return None
+        comparisons = self.repository.compare_merchants(
+            category,
+            profile,
+            meal_need_state=state,
+        )
+        if not comparisons:
+            language = self._narrative_language(profile.preferred_language)
+            return self._make_turn(
+                _NO_COMPARISON_COPY[language],
+                ChatState.CLARIFICATION,
+                [],
+                False,
+                dialogue_act=DialogueAct.COMPARE,
+            )
+        turn = self._make_turn(
+            f"Here are the grounded restaurant trade-offs for {category}. Prices, "
+            "delivery details, and unresolved dietary information remain visible.",
+            ChatState.MERCHANT_COMPARISON,
+            [
+                Card(
+                    type="merchant_comparison",
+                    title=f"{category} comparison",
+                    subtitle="Synthetic restaurants · shared comparison axes",
+                    data={
+                        "merchants": [item.model_dump(mode="json") for item in comparisons]
+                    },
+                )
+            ],
+            False,
+            ["Explain the first option", "Show another food direction"],
+            dialogue_act=DialogueAct.COMPARE,
+        )
+        language = self._narrative_language(profile.preferred_language)
+        ui_copy = _INFORMATION_UI_COPY[language]
+        turn.cards[0].title = str(ui_copy["comparison_title"]).format(category=category)
+        turn.cards[0].subtitle = str(ui_copy["comparison_subtitle"])
+        turn.suggested_replies = list(ui_copy["comparison_replies"])
+        if language == "English":
+            turn.suggested_replies[0] = f"Explain {category}"
+        elif language == "한국어":
+            turn.suggested_replies[0] = f"{category} 설명"
+        elif language == "日本語":
+            turn.suggested_replies[0] = f"この料理を説明 (Explain {category})"
+        else:
+            turn.suggested_replies[0] = f"Explicar esta comida (Explain {category})"
+        if language != "English":
+            turn.text = self._server_grounded_text(turn, profile.preferred_language)
+        return turn
 
     @staticmethod
     def _ordinal(value: int) -> str:
@@ -1576,7 +1972,9 @@ class ChatService:
         # A single agent turn can read options and then mutate the cart, or read the
         # cart and then create/complete checkout. Render the final authoritative
         # outcome, regardless of the order in which cards arrived from the provider.
-        copy = _GROUNDED_COPY[cls._narrative_language(preferred_language)]
+        language = cls._narrative_language(preferred_language)
+        copy = _GROUNDED_COPY[language]
+        menu_name_key = "name_ko" if language == "한국어" else "name_en"
         priority = {
             "order_complete": 0,
             "payment_cta": 1,
@@ -1600,9 +1998,9 @@ class ChatService:
                 menus = card.data.get("menus")
                 if isinstance(menus, list):
                     names = [
-                        str(menu.get("name_en"))
+                        str(menu.get(menu_name_key))
                         for menu in menus[:3]
-                        if isinstance(menu, dict) and menu.get("name_en")
+                        if isinstance(menu, dict) and menu.get(menu_name_key)
                     ]
                     if names:
                         return copy["menus"].format(names=", ".join(names))
@@ -1618,9 +2016,9 @@ class ChatService:
                         return copy["categories"].format(names=", ".join(names))
             if card.type == "menu_explanation":
                 menu = card.data.get("menu")
+                explanation = card.data.get("explanation")
                 if isinstance(menu, dict):
-                    name = menu.get("name_en")
-                    explanation = card.data.get("explanation")
+                    name = menu.get(menu_name_key)
                     description = menu.get("description")
                     if isinstance(explanation, dict):
                         description = explanation.get("description") or description
@@ -1641,6 +2039,24 @@ class ChatService:
                             name=name,
                             description=description,
                         )
+                if isinstance(explanation, dict):
+                    name = explanation.get("category")
+                    passages = explanation.get("wiki_passages")
+                    if isinstance(passages, list):
+                        description = next(
+                            (
+                                passage.get("content")
+                                for passage in passages
+                                if isinstance(passage, dict)
+                                and passage.get("facet") == "overview"
+                            ),
+                            None,
+                        )
+                        if name and description:
+                            return copy["explanation"].format(
+                                name=name,
+                                description=description,
+                            )
             if card.type == "merchant_comparison":
                 return copy["comparison"]
             if card.type == "dietary_evidence":
@@ -2361,26 +2777,18 @@ class ChatService:
                 ["Show the evidence", "Find a different menu"],
             )
 
-        if any(phrase in lowered for phrase in ("compare", "which place", "rose options")):
-            comparisons = self.repository.compare_merchants("Rose tteokbokki", profile)
-            text = (
-                "Here are the clearest trade-offs. I would start with Seoul Rose Tteokbokki for "
-                "the gentler spice level and explicit sauce evidence, while keeping the unknown "
-                "cross-contamination warning visible."
+        comparison_category = self._catalog_category(user_text)
+        if comparison_category and any(
+            phrase in lowered for phrase in ("compare", "which place", "rose options", "비교", "차이")
+        ):
+            comparison = self._category_comparison_turn(
+                profile,
+                user_text,
+                active_needs,
+                DialogueAct.COMPARE,
             )
-            card = Card(
-                type="merchant_comparison",
-                title="Rose tteokbokki comparison",
-                subtitle="Synthetic restaurants · shared comparison axes",
-                data={"merchants": [item.model_dump(mode="json") for item in comparisons]},
-            )
-            return self._make_turn(
-                text,
-                ChatState.MERCHANT_COMPARISON,
-                [card],
-                False,
-                ["Choose Seoul Rose Tteokbokki", "Explain the first option"],
-            )
+            if comparison is not None:
+                return comparison
 
         latest_snapshot = self.repository.get_recommendation_snapshot(session.session_id)
         first_demo_is_visible = bool(

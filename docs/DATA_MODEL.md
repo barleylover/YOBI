@@ -134,7 +134,12 @@ index. New checkouts are bound to the exact confirmed cart version and total; nu
 columns keep historical checkout rows readable by older additive-schema-compatible
 releases.
 
-Migrations `001`-`008` are append-only and checksum-protected. `005`-`008` use
+Migration `009_cart_confirmation_fingerprint.sql` adds nullable
+`confirmed_fingerprint` to `CART`. Confirmation binds the current cart version and
+server total (including delivery fee); checkout invalidates the confirmation if that
+fingerprint no longer matches, including before a first `MOCK_CHECKOUT` row exists.
+
+Migrations `001`-`009` are append-only and checksum-protected. `005`-`009` use
 already-exists-tolerant Oracle blocks so the same unmodified release can resume after
 Oracle's implicit DDL commits. No rollback script drops these additive objects; an app
 rollback must remain compatible with them.

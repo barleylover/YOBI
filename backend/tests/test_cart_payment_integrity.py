@@ -1,7 +1,11 @@
+import inspect
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 
+from app.db.oracle_repository import OracleYobiRepository
 from app.db.sqlite_repository import SQLiteYobiRepository
 from app.domain.dialogue import DialogueAct, MealNeedState
 from app.domain.models import (
@@ -12,6 +16,43 @@ from app.domain.models import (
     DeliveryPreferenceInput,
     ProfileCreate,
 )
+
+
+def test_sqlite_initialize_upgrades_checkout_columns_before_creating_index(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "legacy-checkout.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE mock_checkout (
+              checkout_id TEXT PRIMARY KEY,
+              cart_id TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL UNIQUE,
+              payment_method TEXT NOT NULL,
+              status TEXT NOT NULL,
+              amount INTEGER NOT NULL,
+              payment_url TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            )
+            """
+        )
+
+    repository = SQLiteYobiRepository(database_path)
+    repository.initialize()
+
+    with repository._connection() as connection:
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(mock_checkout)").fetchall()
+        }
+        indexes = {
+            row["name"]
+            for row in connection.execute("PRAGMA index_list(mock_checkout)").fetchall()
+        }
+    assert {"cart_version", "cart_fingerprint"}.issubset(columns)
+    assert "uq_checkout_cart_version" in indexes
 
 
 def _ready_cart(repository: SQLiteYobiRepository, profile_data: ProfileCreate) -> tuple[str, str]:
@@ -81,7 +122,7 @@ def test_checkout_and_order_are_idempotent(
     repository: SQLiteYobiRepository, profile_data: ProfileCreate
 ) -> None:
     session_id, _ = _ready_cart(repository, profile_data)
-    repository.confirm_cart(session_id)
+    confirmed = repository.confirm_cart(session_id)
     data = CheckoutCreate(
         idempotency_key="test-checkout-idempotency",
         payment_method="international_card",
@@ -91,9 +132,294 @@ def test_checkout_and_order_are_idempotent(
     assert first.checkout_id == second.checkout_id
 
     paid_once = repository.update_checkout(first.checkout_id, "SUCCEEDED")
+    repository.update_cart_item(
+        session_id,
+        confirmed.items[0].cart_item_id,
+        CartItemUpdate(quantity=2),
+    )
     paid_twice = repository.update_checkout(first.checkout_id, "SUCCEEDED")
     assert paid_once.order_id
     assert paid_once.order_id == paid_twice.order_id
+
+
+def test_saving_address_invalidates_confirmed_cart(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    session_id, _ = _ready_cart(repository, profile_data)
+    confirmed = repository.confirm_cart(session_id)
+
+    candidate = repository.resolve_address("YOBI Myeongdong Hotel")[0]
+    repository.save_address(session_id, candidate)
+
+    refreshed = repository.get_cart(session_id)
+    assert refreshed.confirmed is False
+    assert refreshed.version == confirmed.version + 1
+
+
+def test_payment_rejects_checkout_after_cart_changes(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    session_id, _ = _ready_cart(repository, profile_data)
+    confirmed = repository.confirm_cart(session_id)
+    checkout = repository.create_checkout(
+        session_id,
+        CheckoutCreate(
+            idempotency_key="stale-checkout-cart-change",
+            payment_method="international_card",
+        ),
+    )
+
+    repository.update_cart_item(
+        session_id,
+        confirmed.items[0].cart_item_id,
+        CartItemUpdate(quantity=2),
+    )
+
+    with pytest.raises(ValueError, match="CHECKOUT_STALE"):
+        repository.update_checkout(checkout.checkout_id, "SUCCEEDED")
+    unchanged = repository.get_checkout(checkout.checkout_id)
+    assert unchanged is not None
+    assert unchanged.status == "PENDING"
+    assert unchanged.order_id is None
+
+
+def test_old_checkout_does_not_invalidate_reconfirmed_cart(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    session_id, _ = _ready_cart(repository, profile_data)
+    first_confirmation = repository.confirm_cart(session_id)
+    checkout = repository.create_checkout(
+        session_id,
+        CheckoutCreate(
+            idempotency_key="old-checkout-after-reconfirm",
+            payment_method="international_card",
+        ),
+    )
+    repository.update_cart_item(
+        session_id,
+        first_confirmation.items[0].cart_item_id,
+        CartItemUpdate(quantity=2),
+    )
+    current_confirmation = repository.confirm_cart(session_id)
+
+    with pytest.raises(ValueError, match="CHECKOUT_STALE"):
+        repository.update_checkout(checkout.checkout_id, "SUCCEEDED")
+    unchanged_cart = repository.get_cart(session_id)
+    assert unchanged_cart.confirmed is True
+    assert unchanged_cart.version == current_confirmation.version
+    unchanged_checkout = repository.get_checkout(checkout.checkout_id)
+    assert unchanged_checkout is not None
+    assert unchanged_checkout.status == "PENDING"
+    assert unchanged_checkout.order_id is None
+
+
+def test_payment_rejects_checkout_after_catalog_repricing(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    session_id, _ = _ready_cart(repository, profile_data)
+    confirmed = repository.confirm_cart(session_id)
+    checkout = repository.create_checkout(
+        session_id,
+        CheckoutCreate(
+            idempotency_key="stale-checkout-catalog-change",
+            payment_method="international_card",
+        ),
+    )
+    with repository._connection() as connection:
+        connection.execute(
+            "UPDATE menu SET price = price + 500 WHERE menu_id = ?", ("menu_001_01",)
+        )
+
+    with pytest.raises(ValueError, match="CHECKOUT_STALE"):
+        repository.update_checkout(checkout.checkout_id, "SUCCEEDED")
+    unchanged = repository.get_checkout(checkout.checkout_id)
+    assert unchanged is not None
+    assert unchanged.status == "PENDING"
+    assert unchanged.order_id is None
+    refreshed = repository.get_cart(session_id)
+    assert refreshed.confirmed is False
+    assert refreshed.version == confirmed.version + 1
+    assert refreshed.items[0].unit_price == confirmed.items[0].unit_price + 500
+
+
+def test_payment_delivery_fee_change_invalidates_confirmed_cart(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    session_id, _ = _ready_cart(repository, profile_data)
+    confirmed = repository.confirm_cart(session_id)
+    checkout = repository.create_checkout(
+        session_id,
+        CheckoutCreate(
+            idempotency_key="stale-payment-delivery-fee",
+            payment_method="international_card",
+        ),
+    )
+    with repository._connection() as connection:
+        connection.execute(
+            "UPDATE merchant SET delivery_fee = delivery_fee + 1000 WHERE merchant_id = ?",
+            ("mer_001",),
+        )
+
+    with pytest.raises(ValueError, match="CHECKOUT_STALE"):
+        repository.update_checkout(checkout.checkout_id, "SUCCEEDED")
+    refreshed = repository.get_cart(session_id)
+    assert refreshed.confirmed is False
+    assert refreshed.version == confirmed.version + 1
+    assert refreshed.delivery_fee == confirmed.delivery_fee + 1000
+    unchanged = repository.get_checkout(checkout.checkout_id)
+    assert unchanged is not None
+    assert unchanged.status == "PENDING"
+    assert unchanged.order_id is None
+
+
+def test_first_checkout_requires_reconfirmation_after_delivery_fee_change(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    session_id, _ = _ready_cart(repository, profile_data)
+    confirmed = repository.confirm_cart(session_id)
+    with repository._connection() as connection:
+        connection.execute(
+            "UPDATE merchant SET delivery_fee = delivery_fee + 1000 WHERE merchant_id = ?",
+            ("mer_001",),
+        )
+
+    preview = repository.get_cart(session_id)
+    assert preview.confirmed is False
+    assert preview.total_price == confirmed.total_price + 1000
+    with pytest.raises(ValueError, match="CART_CHANGED_RECONFIRM_REQUIRED"):
+        repository.create_checkout(
+            session_id,
+            CheckoutCreate(
+                idempotency_key="first-checkout-after-fee-change",
+                payment_method="international_card",
+            ),
+        )
+
+    invalidated = repository.get_cart(session_id)
+    assert invalidated.confirmed is False
+    assert invalidated.version == confirmed.version + 1
+    reconfirmed = repository.confirm_cart(session_id)
+    checkout = repository.create_checkout(
+        session_id,
+        CheckoutCreate(
+            idempotency_key="first-checkout-after-fee-change-reconfirmed",
+            payment_method="international_card",
+        ),
+    )
+    assert reconfirmed.confirmed is True
+    assert checkout.amount == reconfirmed.total_price
+
+
+@pytest.mark.parametrize(
+    "retry_key",
+    ["delivery-fee-original-key", "delivery-fee-active-checkout-key"],
+    ids=["same-idempotency-key", "active-checkout"],
+)
+def test_checkout_reuse_rejects_delivery_fee_change(
+    repository: SQLiteYobiRepository,
+    profile_data: ProfileCreate,
+    retry_key: str,
+) -> None:
+    session_id, _ = _ready_cart(repository, profile_data)
+    confirmed = repository.confirm_cart(session_id)
+    first = repository.create_checkout(
+        session_id,
+        CheckoutCreate(
+            idempotency_key="delivery-fee-original-key",
+            payment_method="international_card",
+        ),
+    )
+    with repository._connection() as connection:
+        connection.execute(
+            "UPDATE merchant SET delivery_fee = delivery_fee + 1000 WHERE merchant_id = ?",
+            ("mer_001",),
+        )
+
+    with pytest.raises(ValueError, match="CART_CHANGED_RECONFIRM_REQUIRED"):
+        repository.create_checkout(
+            session_id,
+            CheckoutCreate(
+                idempotency_key=retry_key,
+                payment_method="international_card",
+            ),
+        )
+    invalidated = repository.get_cart(session_id)
+    assert invalidated.confirmed is False
+    assert invalidated.version == confirmed.version + 1
+    assert repository.get_checkout(first.checkout_id) == first
+
+    repository.confirm_cart(session_id)
+    replacement = repository.create_checkout(
+        session_id,
+        CheckoutCreate(
+            idempotency_key=f"{retry_key}-after-reconfirm",
+            payment_method="international_card",
+        ),
+    )
+    assert replacement.checkout_id != first.checkout_id
+    assert replacement.amount == first.amount + 1000
+
+
+def test_payment_validation_error_rolls_back_partial_repricing(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    session_id, _ = _ready_cart(repository, profile_data)
+    confirmed = repository.confirm_cart(session_id)
+    checkout = repository.create_checkout(
+        session_id,
+        CheckoutCreate(
+            idempotency_key="stale-checkout-validation-error",
+            payment_method="international_card",
+        ),
+    )
+    with repository._connection() as connection:
+        connection.execute(
+            "UPDATE menu SET price = price + 500 WHERE menu_id = ?", ("menu_001_01",)
+        )
+        connection.execute(
+            "UPDATE merchant SET min_order_amount = 999999 WHERE merchant_id = ?", ("mer_001",)
+        )
+
+    with pytest.raises(ValueError, match="CHECKOUT_STALE"):
+        repository.update_checkout(checkout.checkout_id, "SUCCEEDED")
+    refreshed = repository.get_cart(session_id)
+    assert refreshed.confirmed is True
+    assert refreshed.version == confirmed.version
+    assert refreshed.items[0].unit_price == confirmed.items[0].unit_price
+    unchanged = repository.get_checkout(checkout.checkout_id)
+    assert unchanged is not None
+    assert unchanged.status == "PENDING"
+    assert unchanged.order_id is None
+
+
+def test_oracle_cart_revalidation_locks_payment_catalog_rows() -> None:
+    source = " ".join(inspect.getsource(OracleYobiRepository._revalidate_cart).split())
+
+    assert (
+        "FOR UPDATE OF m.price, m.availability, r.delivery_fee, "
+        "r.min_order_amount, r.service_area_id"
+    ) in source
+    assert "FOR UPDATE OF i.price_delta, i.availability, g.menu_id" in source
+    assert "FOR UPDATE OF g.min_select, g.max_select" in source
+    assert "FOR UPDATE OF r.min_order_amount, r.delivery_fee" in source
+    assert "AND ref.confirmed=1 AND area.active=1 FOR UPDATE OF area.active" in source
+
+
+def test_address_save_serializes_service_area_activation_check() -> None:
+    sqlite_source = " ".join(inspect.getsource(SQLiteYobiRepository.save_address).split())
+    oracle_source = " ".join(inspect.getsource(OracleYobiRepository.save_address).split())
+
+    assert 'connection.execute("BEGIN IMMEDIATE")' in sqlite_source
+    assert "WHERE service_area_id=:id AND active=1 FOR UPDATE OF active" in oracle_source
+
+
+def test_oracle_checkout_normalizes_concurrent_idempotency_key_collision() -> None:
+    source = " ".join(inspect.getsource(OracleYobiRepository.create_checkout).split())
+
+    assert "except oracledb.IntegrityError as exc" in source
+    assert 'getattr(error, "code", None) != 1' in source
+    assert "SELECT * FROM mock_checkout WHERE idempotency_key=:key" in source
+    assert 'raise ValueError("IDEMPOTENCY_KEY_REUSED") from exc' in source
 
 
 def test_one_confirmed_cart_cannot_fork_into_two_checkouts_or_orders(
@@ -467,6 +793,31 @@ def test_confirmation_rejects_wrong_delivery_service_area(
     assert preview.ready_to_checkout is False
     assert "service_area" in preview.missing_slots
     with pytest.raises(ValueError, match="CART_SERVICE_AREA_MISMATCH"):
+        repository.confirm_cart(session_id)
+
+
+def test_confirmation_rejects_inactive_delivery_service_area(
+    repository: SQLiteYobiRepository,
+) -> None:
+    session_id, _ = _ready_cart(
+        repository,
+        ProfileCreate(
+            consent_demo_data=True,
+            dietary_rules=["shellfish_allergy"],
+            allergy_severity="severe",
+            spice_tolerance=1,
+        ),
+    )
+    with repository._connection() as connection:
+        connection.execute(
+            "UPDATE service_area SET active=0 WHERE service_area_id='area_myeongdong'"
+        )
+
+    preview = repository.get_cart(session_id)
+    assert preview.ready_to_checkout is False
+    assert "service_area" in preview.missing_slots
+    assert repository.get_address_candidate("hotel_demo_01") is None
+    with pytest.raises(ValueError, match="CART_INCOMPLETE"):
         repository.confirm_cart(session_id)
 
 

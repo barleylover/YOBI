@@ -185,6 +185,7 @@ CREATE TABLE IF NOT EXISTS cart (
   version INTEGER NOT NULL DEFAULT 1,
   status TEXT NOT NULL DEFAULT 'ACTIVE',
   confirmed INTEGER NOT NULL DEFAULT 0,
+  confirmed_fingerprint TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -229,9 +230,6 @@ CREATE TABLE IF NOT EXISTS mock_checkout (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
-
-CREATE UNIQUE INDEX IF NOT EXISTS uq_checkout_cart_version
-ON mock_checkout(cart_id, cart_version);
 
 CREATE TABLE IF NOT EXISTS mock_order (
   order_id TEXT PRIMARY KEY,

@@ -212,7 +212,9 @@ class ToolRegistry:
             elif name == "compare_merchants":
                 compare_args = CompareArgs.model_validate(payload)
                 comparisons = self.repository.compare_merchants(
-                    compare_args.category, self.profile
+                    compare_args.category,
+                    self.profile,
+                    meal_need_state=self.meal_need_state,
                 )
                 if self.meal_need_state is not None or self.session_id:
                     eligible_ids = {

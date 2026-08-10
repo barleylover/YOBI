@@ -1,5 +1,6 @@
 from app.db.seed_data import build_seed, seed_counts
 from app.db.sqlite_repository import SQLiteYobiRepository
+from app.domain.dialogue import MealNeedState
 from app.domain.models import EvidenceStatus, ProfileCreate, ProfileUpdate
 
 
@@ -87,6 +88,45 @@ def test_same_merchant_followup_excludes_carted_and_dietary_conflicting_menus(
     assert all(menu.merchant_id == "mer_001" for menu in menus)
     assert all(menu.menu_id != "menu_001_01" for menu in menus)
     assert all(menu.spice_level <= profile.spice_tolerance for menu in menus)
+
+
+def test_same_merchant_followup_respects_explicit_spice_revision(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, spice_tolerance=1, dietary_rules=[])
+    )
+
+    menus = repository.list_merchant_menus(
+        "mer_002",
+        profile,
+        [],
+        limit=12,
+        meal_need_state=MealNeedState(max_spiciness=3),
+    )
+
+    assert menus
+    assert any(menu.spice_level > profile.spice_tolerance for menu in menus)
+    assert all(menu.spice_level <= 3 for menu in menus)
+
+
+def test_same_merchant_followup_preserves_shellfish_risk_evidence(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, spice_tolerance=3, dietary_rules=[])
+    )
+
+    menus = repository.list_merchant_menus(
+        "mer_002",
+        profile,
+        [],
+        limit=12,
+        meal_need_state=MealNeedState(max_spiciness=3),
+    )
+
+    risky = next(menu for menu in menus if menu.menu_id == "menu_002_01")
+    assert risky.evidence_status is EvidenceStatus.RISK_SIGNAL
 
 
 def test_option_conflict_names_the_dietary_rule_it_applies_to(

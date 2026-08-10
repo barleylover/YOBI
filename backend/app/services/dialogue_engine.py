@@ -73,14 +73,66 @@ class DialogueEngine:
         lowered = " ".join(text.lower().strip().split())
         normalized_greeting = lowered.strip("!?., ")
         is_greeting = normalized_greeting in self._greetings
-        held = any(marker in lowered for marker in self._hold_markers)
-        explicit = any(marker in lowered for marker in self._explicit_request_markers)
+        indirect_hold = bool(
+            re.search(
+                r"\b(?:do\s+not|don['’]?t)\s+(?:want|need)\s+"
+                r"(?:you\s+)?to\s+recommend(?:\s+anything)?(?:\s+yet)?\b|"
+                r"\b(?:do\s+not|don['’]?t)\s+recommend\s+(?:anything\s+)?"
+                r"(?:yet|right\s+now)\b",
+                lowered,
+            )
+            or re.search(
+                r"\b(?:do\s+not|don['’]?t)\s+recommend"
+                r"(?:\s+(?:me\s+)?anything)?(?=[.!?,]|$)",
+                lowered,
+            )
+            or re.search(
+                r"\b(?:do\s+not|don['’]?t)\s+(?:want|need)\s+"
+                r"(?:any\s+)?recommendations?(?:\s+(?:yet|right\s+now))?\b|"
+                r"\b(?:do\s+not|don['’]?t)\s+give\s+me\s+"
+                r"(?:any\s+)?recommendations?\b",
+                lowered,
+            )
+        )
+        held = indirect_hold or any(marker in lowered for marker in self._hold_markers)
+        explicit_text = re.sub(
+            r"\b(?:do\s+not|don['’]?t)\s+"
+            r"(?:(?:want|need)\s+(?:you\s+)?to\s+)?recommend"
+            r"(?:\s+anything)?(?:\s+(?:yet|right\s+now))?\b",
+            "",
+            lowered,
+        )
+        explicit_text = re.sub(r"추천(?:하지\s*마|하지\s*말|은?\s*말고)", "", explicit_text)
+        explicit = bool(re.search(r"\brecommend\b", explicit_text)) or "추천" in explicit_text
+        explicit = explicit or any(
+            marker in lowered
+            for marker in self._explicit_request_markers
+            if marker not in {"recommend", "추천"}
+        )
         correction = any(
             marker in lowered
             for marker in ("actually", "instead", "changed my mind", "정정", "아니")
         )
-        comparison = any(marker in lowered for marker in ("compare", "difference", "비교", "차이"))
-        explanation = any(
+        comparison_negated = bool(
+            re.search(
+                r"\b(?:do\s+not|don['’]?t)\s+"
+                r"(?:(?:want|need)\s+(?:you\s+)?to\s+)?compare\b",
+                lowered,
+            )
+            or re.search(r"비교(?:는|은|도)?\s*(?:말고|하지)", lowered)
+        )
+        explanation_negated = bool(
+            re.search(
+                r"\b(?:do\s+not|don['’]?t)\s+"
+                r"(?:(?:want|need)\s+(?:you\s+)?to\s+)?explain\b",
+                lowered,
+            )
+            or re.search(r"설명(?:은|는|도)?\s*(?:말고|하지)", lowered)
+        )
+        comparison = not comparison_negated and any(
+            marker in lowered for marker in ("compare", "difference", "비교", "차이")
+        )
+        explanation = not explanation_negated and any(
             marker in lowered
             for marker in (
                 "explain",
@@ -145,14 +197,19 @@ class DialogueEngine:
             act = DialogueAct.REJECT
         elif comparison:
             act = DialogueAct.COMPARE
-        elif explanation:
+        elif explanation and held:
             act = DialogueAct.REQUEST_EXPLANATION
         elif held:
             act = DialogueAct.HOLD_RECOMMENDATION
+        elif explicit:
+            # Negated comparison/explanation requests have already been removed,
+            # so "don't compare; recommend" follows the requested action without
+            # breaking ordinary requests such as "compare the recommendations".
+            act = DialogueAct.REQUEST_RECOMMENDATION
+        elif explanation:
+            act = DialogueAct.REQUEST_EXPLANATION
         elif correction:
             act = DialogueAct.REVISE
-        elif explicit:
-            act = DialogueAct.REQUEST_RECOMMENDATION
 
         actual_recommendation_request = act == DialogueAct.REQUEST_RECOMMENDATION
         delta = PreferenceDelta(
@@ -182,6 +239,27 @@ class DialogueEngine:
         elif any(marker in lowered for marker in ("two of us", "for two", "둘이", "2명")):
             delta.party_size = 2
 
+        korean_mild_negative = bool(
+            re.search(r"순한[^.!?]{0,12}(?:싫|말고|원하지\s*않|아니)", lowered)
+        )
+        english_mild_negative = any(
+            phrase in lowered
+            for phrase in (
+                "not mild",
+                "no mild",
+                "don't want mild",
+                "do not want mild",
+                "mild is not okay",
+                "mild is not fine",
+            )
+        ) or bool(
+            re.search(r"\bmild(?:\s+\w+){0,2}\s+is\s+not\s+(?:okay|fine)\b", lowered)
+        )
+        positive_english_mild = "mild" in lowered and not english_mild_negative
+        positive_korean_mild = (
+            ("순한" in lowered or bool(re.search(r"순하(?:고|게)(?!\s*않)", lowered)))
+            and not korean_mild_negative
+        )
         if any(
             marker in lowered
             for marker in (
@@ -189,12 +267,10 @@ class DialogueEngine:
                 "no spice",
                 "don't want spicy",
                 "do not want spicy",
-                "mild",
                 "can't handle spicy",
                 "안 맵",
-                "순한",
             )
-        ):
+        ) or positive_english_mild or positive_korean_mild:
             delta.max_spiciness = 1
         elif any(marker in lowered for marker in ("medium spicy", "moderately spicy", "보통 맵")):
             delta.max_spiciness = 2
@@ -204,7 +280,9 @@ class DialogueEngine:
         ):
             delta.max_spiciness = 3
 
-        self._extract_sensory(delta, lowered)
+        self._extract_sensory(delta, lowered, correction)
+        if delta.restore_spice_tolerance:
+            delta.max_spiciness = None
         self._extract_categories(delta, lowered)
         self._extract_constraints(delta, lowered)
 
@@ -215,22 +293,138 @@ class DialogueEngine:
         return delta
 
     @staticmethod
-    def _extract_sensory(delta: PreferenceDelta, lowered: str) -> None:
+    def _extract_sensory(
+        delta: PreferenceDelta,
+        lowered: str,
+        correction: bool,
+    ) -> None:
+        preference_signal = any(
+            marker in lowered
+            for marker in (
+                "want",
+                "prefer",
+                "like",
+                "recommend",
+                "not ",
+                "no ",
+                "don't",
+                "do not",
+                "avoid",
+                "actually",
+                "instead",
+                "좋아",
+                "원해",
+                "싫",
+                "말고",
+                "추천",
+            )
+        )
+        suggestion_question = bool(re.search(r"\b(?:how|what)\s+about\b", lowered))
+        if (
+            "?" in lowered
+            and not preference_signal
+            and not suggestion_question
+            and re.search(r"\b(?:is|are|does|do|how|what)\b", lowered)
+        ):
+            return
+
+        def negative_position(markers: tuple[str, ...]) -> int:
+            latest = -1
+            for marker in markers:
+                if marker.isascii():
+                    for phrase in (
+                        f"not {marker}",
+                        f"no {marker}",
+                        f"don't want {marker}",
+                        f"do not want {marker}",
+                        f"don't like {marker}",
+                        f"do not like {marker}",
+                        f"dislike {marker}",
+                        f"hate {marker}",
+                        f"avoid {marker}",
+                        f"instead of {marker}",
+                        f"{marker} is not okay",
+                        f"{marker} is not fine",
+                    ):
+                        latest = max(latest, lowered.rfind(phrase))
+                else:
+                    latest = max(
+                        latest,
+                        *(
+                            match.start()
+                            for match in re.finditer(
+                                rf"{re.escape(marker)}[^.!?]{{0,12}}"
+                                r"(?:싫|말고|원하지\s*않|빼)",
+                                lowered,
+                            )
+                        ),
+                        -1,
+                    )
+            return latest
+
+        def positive_correction_position(markers: tuple[str, ...]) -> int:
+            latest = -1
+            for marker in markers:
+                for phrase in (
+                    f"actually {marker}",
+                    f"{marker} is okay",
+                    f"{marker} is fine",
+                    f"i like {marker}",
+                    f"i want {marker}",
+                    f"i prefer {marker}",
+                ):
+                    latest = max(latest, lowered.rfind(phrase))
+                if not marker.isascii():
+                    latest = max(
+                        latest,
+                        *(
+                            match.start()
+                            for match in re.finditer(
+                                rf"{re.escape(marker)}[^.!?]{{0,12}}(?:괜찮|좋아|원해)",
+                                lowered,
+                            )
+                        ),
+                        -1,
+                    )
+            return latest
+
+        def is_negative(markers: tuple[str, ...]) -> bool:
+            return negative_position(markers) > positive_correction_position(markers)
+
+        def is_positive_correction(markers: tuple[str, ...]) -> bool:
+            return positive_correction_position(markers) > negative_position(markers)
+
         temperature_markers: dict[str, tuple[str, ...]] = {
             "warm": ("warm", "hot food", "따뜻", "뜨끈"),
             "cold": ("cold", "chilled", "차가운", "시원한"),
         }
         for value, markers in temperature_markers.items():
-            if any(marker in lowered for marker in markers):
+            if not any(marker in lowered for marker in markers):
+                continue
+            if is_negative(markers) and not is_positive_correction(markers):
+                delta.add_negative_preferences.append(value)
+                delta.remove_temperature_preferences.append(value)
+            else:
                 delta.add_temperature_preferences.append(value)
+                delta.remove_negative_preferences.append(value)
+        if correction and len(set(delta.add_temperature_preferences)) == 1:
+            preferred = delta.add_temperature_preferences[0]
+            opposite = "cold" if preferred == "warm" else "warm"
+            delta.remove_temperature_preferences.append(opposite)
         texture_markers: dict[str, tuple[str, ...]] = {
             "chewy": ("chewy", "쫄깃"),
             "crispy": ("crispy", "crunchy", "바삭"),
             "soft": ("soft", "silky", "부드러"),
         }
         for value, markers in texture_markers.items():
-            if any(marker in lowered for marker in markers):
+            if not any(marker in lowered for marker in markers):
+                continue
+            if is_negative(markers) and not is_positive_correction(markers):
+                delta.add_negative_preferences.append(value)
+                delta.remove_texture_preferences.append(value)
+            else:
                 delta.add_texture_preferences.append(value)
+                delta.remove_negative_preferences.append(value)
         flavor_markers: dict[str, tuple[str, ...]] = {
             "savory": ("savory", "savoury", "감칠맛", "짭짤"),
             "sweet": ("sweet", "달콤", "단맛"),
@@ -242,22 +436,33 @@ class DialogueEngine:
         for value, markers in flavor_markers.items():
             if not any(marker in lowered for marker in markers):
                 continue
-            negative = any(
-                phrase in lowered
-                for marker in markers
-                for phrase in (
-                    f"not {marker}",
-                    f"no {marker}",
-                    f"don't want {marker}",
-                    f"do not want {marker}",
-                    f"avoid {marker}",
-                    f"{marker} 싫",
+            negative_at = negative_position(markers)
+            if value == "spicy":
+                negative_at = max(
+                    negative_at,
+                    *(lowered.rfind(marker) for marker in ("안 맵", "맵지")),
                 )
-            ) or (value == "spicy" and any(marker in lowered for marker in ("안 맵", "맵지")))
+            negative = negative_at > positive_correction_position(markers)
             if negative:
                 delta.add_negative_preferences.append(value)
+                delta.remove_flavor_preferences.append(value)
             else:
                 delta.add_flavor_preferences.append(value)
+                delta.remove_negative_preferences.append(value)
+                if value == "spicy" and (
+                    is_positive_correction(markers)
+                    or any(
+                        phrase in lowered
+                        for phrase in (
+                            "want spicy",
+                            "prefer spicy",
+                            "like spicy",
+                            "매운 거 좋아",
+                            "매운 음식 원",
+                        )
+                    )
+                ):
+                    delta.restore_spice_tolerance = True
 
     @staticmethod
     def _extract_categories(delta: PreferenceDelta, lowered: str) -> None:
@@ -440,6 +645,10 @@ class DialogueEngine:
             value = getattr(delta, scalar)
             if value is not None:
                 setattr(state, scalar, value)
+        if (
+            delta.max_spiciness is None and delta.restore_spice_tolerance
+        ):
+            state.max_spiciness = profile.spice_tolerance
         if delta.recommendation_hold is not None:
             state.recommendation_hold = delta.recommendation_hold
         if delta.strictness is not None:
@@ -473,7 +682,11 @@ class DialogueEngine:
             ),
             ("dietary_rules", delta.add_dietary_rules, delta.remove_dietary_rules),
             ("positive_preferences", delta.add_positive_preferences, []),
-            ("negative_preferences", delta.add_negative_preferences, []),
+            (
+                "negative_preferences",
+                delta.add_negative_preferences,
+                delta.remove_negative_preferences,
+            ),
         ):
             values = [value for value in getattr(state, field) if value not in set(removals)]
             for value in additions:

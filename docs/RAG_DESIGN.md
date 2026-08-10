@@ -37,7 +37,10 @@ The final recommendation path combines deterministic filtering and semantic rank
    because shared-kitchen cross-contact is unresolved.
 6. Expand the search text with accumulated temperature, texture, flavour, and
    category preferences, then combine lexical boosts with semantic similarity.
-7. Exclude rejected menus and rerank the remaining candidates. Return only the
+7. Exclude rejected menus and explicit negative preferences, then rerank structured
+   temperature, texture, flavour, and category matches. For a party, estimate the
+   required portion count and apply the budget to that total rather than one unit.
+8. Reduce repeated categories/merchants in the ordered shortlist. Return only the
    server-built `RecommendationResult` and its claim/passage references.
 
 Oracle performs `VECTOR_DISTANCE(..., COSINE)` over filtered menu vectors and the

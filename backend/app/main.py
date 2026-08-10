@@ -20,6 +20,7 @@ from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging, log_event, safe_session_hash
 from app.db.repository import YobiRepository
 from app.dependencies import get_chat_service, get_demo_control, get_repository
+from app.domain.address import normalize_address_text
 from app.domain.dialogue import ConversationEventInput, ConversationEventResult, ConversationView
 from app.domain.models import (
     AddressCandidate,
@@ -150,6 +151,13 @@ class DemoResetRequest(BaseModel):
 
 def _not_found(code: str) -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": code})
+
+
+def _require_session(repository: YobiRepository, session_id: str) -> Session:
+    session = repository.get_session(session_id)
+    if session is None:
+        raise _not_found("SESSION_NOT_FOUND")
+    return session
 
 
 def _demo_authorized(
@@ -291,9 +299,7 @@ def reset_session(session_id: str, repository: YobiRepository = Depends(get_repo
 def _resolve_session_profile(
     repository: YobiRepository, session_id: str
 ) -> tuple[Session, Profile]:
-    session = repository.get_session(session_id)
-    if not session:
-        raise _not_found("SESSION_NOT_FOUND")
+    session = _require_session(repository, session_id)
     profile = repository.get_profile(session.profile_id)
     if not profile:
         raise _not_found("PROFILE_NOT_FOUND")
@@ -462,14 +468,14 @@ def list_merchant_menus(
     excluded_menu_ids = [value for value in exclude.split(",") if value]
     return [
         menu.model_dump(mode="json")
-        for menu in repository.recommend_menus(
-            "available menus from this restaurant",
+        for menu in repository.list_merchant_menus(
+            merchant_id,
             profile,
-            session.meal_need_state,
-            limit=150,
+            excluded_menu_ids,
+            limit=12,
+            meal_need_state=session.meal_need_state,
         )
-        if menu.merchant_id == merchant_id and menu.menu_id not in excluded_menu_ids
-    ][:12]
+    ]
 
 
 def _validate_image(
@@ -612,6 +618,23 @@ def resolve_address_text(
     )
 
 
+def _save_address_in_active_area(
+    repository: YobiRepository,
+    session_id: str,
+    candidate: AddressCandidate,
+    source_image_hash: str | None = None,
+) -> str:
+    try:
+        return repository.save_address(session_id, candidate, source_image_hash)
+    except ValueError as exc:
+        if str(exc) != "ADDRESS_OUTSIDE_SERVICE_AREA":
+            raise
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "ADDRESS_OUTSIDE_SERVICE_AREA"},
+        ) from exc
+
+
 @app.post("/api/v1/sessions/{session_id}/address/confirm")
 def confirm_address(
     session_id: str,
@@ -622,18 +645,53 @@ def confirm_address(
     if not repository.get_session(session_id):
         raise _not_found("SESSION_NOT_FOUND")
     if data.manual is not None:
+        manual = data.manual
+        candidates = repository.resolve_address(
+            " ".join(
+                (manual.hotel_name, manual.road_address, manual.postal_code, manual.city)
+            )
+        )
+        canonical = next(
+            (
+                candidate
+                for candidate in candidates
+                if candidate.place_id != "manual"
+                and candidate.confidence >= 0.8
+                and candidate.service_area_id
+                and normalize_address_text(candidate.road_address)
+                == normalize_address_text(manual.road_address)
+                and (
+                    not normalize_address_text(manual.postal_code)
+                    or normalize_address_text(candidate.postal_code)
+                    == normalize_address_text(manual.postal_code)
+                )
+                and normalize_address_text(candidate.city)
+                == normalize_address_text(manual.city)
+            ),
+            None,
+        )
+        if canonical is None:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "ADDRESS_OUTSIDE_SERVICE_AREA"},
+            )
         candidate = AddressCandidate(
             place_id="manual",
-            hotel_name=data.manual.hotel_name,
-            road_address=data.manual.road_address,
-            postal_code=data.manual.postal_code,
-            city=data.manual.city,
-            delivery_hint=data.manual.delivery_hint,
-            confidence=0.5,
+            hotel_name=manual.hotel_name,
+            road_address=manual.road_address,
+            postal_code=manual.postal_code,
+            city=manual.city,
+            service_area_id=canonical.service_area_id,
+            delivery_hint=manual.delivery_hint,
+            confidence=canonical.confidence,
             source="manual",
             needs_confirmation=True,
         )
-        return {"address_ref_id": repository.save_address(session_id, candidate)}
+        return {
+            "address_ref_id": _save_address_in_active_area(
+                repository, session_id, candidate
+            )
+        }
     try:
         claims = AddressCandidateTokenCodec(current_settings).decode(
             data.candidate_token or "", session_id
@@ -645,14 +703,18 @@ def confirm_address(
         ) from exc
     stored_candidate = repository.get_address_candidate(str(claims["place_id"]))
     if stored_candidate is None:
-        raise _not_found("ADDRESS_CANDIDATE_NOT_FOUND")
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "ADDRESS_OUTSIDE_SERVICE_AREA"},
+        )
     candidate = AddressCandidate(
         **stored_candidate.model_dump(exclude={"source", "confidence"}),
         source=claims["source"],
         confidence=float(claims["confidence"]),
     )
     return {
-        "address_ref_id": repository.save_address(
+        "address_ref_id": _save_address_in_active_area(
+            repository,
             session_id,
             candidate,
             str(claims["source_image_hash"]) if claims.get("source_image_hash") else None,
@@ -662,8 +724,7 @@ def confirm_address(
 
 @app.get("/api/v1/sessions/{session_id}/cart", response_model=CartPreview)
 def get_cart(session_id: str, repository: YobiRepository = Depends(get_repository)) -> CartPreview:
-    if not repository.get_session(session_id):
-        raise _not_found("SESSION_NOT_FOUND")
+    _require_session(repository, session_id)
     return repository.get_cart(session_id)
 
 
@@ -674,8 +735,7 @@ def add_cart_item(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     repository: YobiRepository = Depends(get_repository),
 ) -> CartPreview:
-    if not repository.get_session(session_id):
-        raise _not_found("SESSION_NOT_FOUND")
+    _require_session(repository, session_id)
     if idempotency_key is not None and not 8 <= len(idempotency_key) <= 100:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -699,6 +759,7 @@ def update_cart_item(
     data: CartItemUpdate,
     repository: YobiRepository = Depends(get_repository),
 ) -> CartPreview:
+    _require_session(repository, session_id)
     try:
         return repository.update_cart_item(session_id, cart_item_id, data)
     except KeyError as exc:
@@ -716,6 +777,7 @@ def delete_cart_item(
     cart_item_id: str,
     repository: YobiRepository = Depends(get_repository),
 ) -> CartPreview:
+    _require_session(repository, session_id)
     try:
         return repository.delete_cart_item(session_id, cart_item_id)
     except KeyError as exc:
@@ -728,6 +790,7 @@ def update_delivery(
     data: DeliveryPreferenceInput,
     repository: YobiRepository = Depends(get_repository),
 ) -> CartPreview:
+    _require_session(repository, session_id)
     try:
         return repository.update_delivery(session_id, data)
     except ValueError as exc:
@@ -738,6 +801,7 @@ def update_delivery(
 def confirm_cart(
     session_id: str, repository: YobiRepository = Depends(get_repository)
 ) -> CartPreview:
+    _require_session(repository, session_id)
     try:
         return repository.confirm_cart(session_id)
     except ValueError as exc:
@@ -750,6 +814,7 @@ def create_checkout(
     data: CheckoutCreate,
     repository: YobiRepository = Depends(get_repository),
 ) -> Checkout:
+    _require_session(repository, session_id)
     try:
         return repository.create_checkout(session_id, data)
     except ValueError as exc:

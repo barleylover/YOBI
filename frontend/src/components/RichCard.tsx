@@ -131,7 +131,7 @@ export function RichCard({ card, onChooseMenu, onQuickReply, disabled = false }:
     return (
       <section className="explanation-card" aria-label={card.title}>
         <div className="card-heading"><p className="eyebrow">{copy.whyMatch}</p><h3>{localizedCatalog ? dynamicCopy.menuMatches : card.title}</h3>{!localizedCatalog && <p>{card.subtitle}</p>}</div>
-        <article><h4>{menuName(menu, language)}</h4><p>{localizedCatalog ? dynamicCopy.catalogDescription : explanation.cultural_analogy}</p><p><strong>{journeyCopy.portion}:</strong> {localizedCatalog ? dynamicCopy.catalogDescription : explanation.portion} · <strong>{copy.spice}:</strong> {menu.spice_level} / 3</p>{(localizedCatalog && explanation.unknown_fields.length ? [dynamicCopy.riskUnknown] : explanation.unknown_fields).map((item) => <p className="risk-copy" key={item}>{item}</p>)}<details className="source-drawer"><summary>{copy.evidence}</summary><span>{explanation.evidence_ids.length} grounded references</span></details></article>
+        <article><h4>{menu ? menuName(menu, language) : explanation.category}</h4><p>{localizedCatalog ? dynamicCopy.catalogDescription : explanation.cultural_analogy}</p>{menu && <p><strong>{journeyCopy.portion}:</strong> {localizedCatalog ? dynamicCopy.catalogDescription : explanation.portion} · <strong>{copy.spice}:</strong> {menu.spice_level} / 3</p>}{(localizedCatalog && explanation.unknown_fields.length ? [dynamicCopy.riskUnknown] : explanation.unknown_fields).map((item) => <p className="risk-copy" key={item}>{item}</p>)}<details className="source-drawer"><summary>{copy.evidence}</summary><span>{explanation.evidence_ids.length} grounded references</span></details></article>
       </section>
     );
   }

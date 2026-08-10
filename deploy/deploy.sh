@@ -26,6 +26,7 @@ readonly EXPECTED_MIGRATIONS=(
   006_knowledge_graph.sql
   007_service_area_and_mutation_idempotency.sql
   008_checkout_cart_version.sql
+  009_cart_confirmation_fingerprint.sql
 )
 for migration in "${EXPECTED_MIGRATIONS[@]}"; do
   [[ -f "$ROOT_DIR/database/migrations/$migration" ]] \
@@ -38,7 +39,7 @@ actual_migration_list="$(
   done | LC_ALL=C sort
 )"
 [[ "$actual_migration_list" == "$expected_migration_list" ]] \
-  || { printf 'Migration directory must contain exactly 001-008.\n' >&2; exit 1; }
+  || { printf 'Migration directory must contain exactly 001-009.\n' >&2; exit 1; }
 
 compartment_id="$(oci iam compartment list --profile "$PROFILE" --region "$REGION" --all \
   --compartment-id-in-subtree true --query "data[?name=='${COMPARTMENT_NAME}' && \"lifecycle-state\"=='ACTIVE'].id | [0]" --raw-output)"
@@ -291,13 +292,13 @@ sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \
   'from deploy.secure_bootstrap import Settings, verify_database
 status = verify_database(Settings())
 if not (
-    status["expected_migration_count"] == status["applied_migration_count"] == 8
+    status["expected_migration_count"] == status["applied_migration_count"] == 9
     and status["latest_expected_migration"]
     == status["latest_applied_migration"]
-    == "008"
+    == "009"
 ):
     raise SystemExit("MIGRATION_LEDGER_NOT_EXACT")
-print("Verified exact migrations=001-008 runtime_user=YOBI_APP")'
+print("Verified exact migrations=001-009 runtime_user=YOBI_APP")'
 old_knowledge_release_id="$(run_knowledge_manager get-active)"
 knowledge_restore_required=true
 sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \

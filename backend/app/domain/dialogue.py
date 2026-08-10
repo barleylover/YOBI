@@ -79,6 +79,7 @@ class MealNeedState(BaseModel):
     option_selections: dict[str, list[str]] = Field(default_factory=dict)
     option_risk_acknowledged: list[str] = Field(default_factory=list)
     recommendation_hold: bool = False
+    pending_information_request: Literal["explain", "compare"] | None = None
     strictness: ConstraintStrictness = ConstraintStrictness.STRICT
     last_question_key: str | None = None
 
@@ -108,6 +109,8 @@ class PreferenceDelta(BaseModel):
     remove_dietary_rules: list[str] = Field(default_factory=list)
     add_positive_preferences: list[str] = Field(default_factory=list)
     add_negative_preferences: list[str] = Field(default_factory=list)
+    remove_negative_preferences: list[str] = Field(default_factory=list)
+    restore_spice_tolerance: bool = False
     recommendation_hold: bool | None = None
     strictness: ConstraintStrictness | None = None
     explicit_recommendation_request: bool = False

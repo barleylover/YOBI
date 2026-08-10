@@ -13,6 +13,7 @@ import oracledb
 from app.core.config import Settings
 from app.db.oracle_pool import OraclePool
 from app.db.seed_data import CATALOG_VERSION
+from app.domain.address import normalize_address_text
 from app.domain.dialogue import (
     ConstraintStrictness,
     ConversationEventInput,
@@ -51,6 +52,7 @@ from app.domain.models import (
     ProfileUpdate,
     Session,
 )
+from app.domain.recommendation import rerank_menu_candidates
 from app.knowledge.catalog_seed import KNOWLEDGE_CATALOG_VERSION, KNOWLEDGE_RELEASE_ID
 from app.knowledge.resolver import (
     allergen_constraint_conflicts,
@@ -97,6 +99,10 @@ def _now() -> datetime:
 
 def _id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex}"
+
+
+def _cart_fingerprint(cart_id: str, cart_version: int, total: int) -> str:
+    return hashlib.sha256(f"{cart_id}:{cart_version}:{total}".encode()).hexdigest()
 
 
 def _value(value: Any) -> Any:
@@ -637,7 +643,8 @@ class OracleYobiRepository:
                 """
                 SELECT ref.service_area_id
                 FROM cart JOIN address_ref ref ON ref.address_ref_id=cart.address_ref_id
-                WHERE cart.session_id=:session_id AND ref.confirmed=1
+                JOIN service_area area ON area.service_area_id=ref.service_area_id
+                WHERE cart.session_id=:session_id AND ref.confirmed=1 AND area.active=1
                 """,
                 session_id=session_id,
             )
@@ -1049,56 +1056,11 @@ class OracleYobiRepository:
             limit=RECOMMENDATION_CANDIDATE_CAP,
             constraint_strictness=meal_need_state.strictness,
         )
-        excluded_categories = {value.lower() for value in meal_need_state.excluded_categories}
-        rejected = set(meal_need_state.rejected_menu_ids)
-        soup_categories = {
-            "chicken kalguksu",
-            "samgyetang",
-            "sundubu",
-            "kimchi stew",
-            "gukbap",
-            "seolleongtang",
-            "eomuk",
-        }
         with self.pool.connection() as connection:
             cursor = connection.cursor()
             cursor.execute("SELECT merchant_id, service_area_id FROM merchant")
             merchant_areas = {str(row[0]): str(row[1]) for row in cursor.fetchall()}
-        filtered: list[MenuSummary] = []
-        for menu in candidates:
-            category = menu.category.lower()
-            if menu.menu_id in rejected:
-                continue
-            if "soup" in excluded_categories and category in soup_categories:
-                continue
-            if any(excluded in category for excluded in excluded_categories if excluded != "soup"):
-                continue
-            if meal_need_state.service_area_id and (
-                merchant_areas.get(menu.merchant_id) != meal_need_state.service_area_id
-            ):
-                continue
-            if meal_need_state.party_size and menu.serves_max < min(meal_need_state.party_size, 2):
-                continue
-            searchable = f"{menu.category} {menu.description} {menu.cultural_description}".lower()
-            boost = sum(
-                0.06
-                for preference in (
-                    *meal_need_state.temperature_preferences,
-                    *meal_need_state.texture_preferences,
-                    *meal_need_state.flavor_preferences,
-                    *meal_need_state.preferred_categories,
-                )
-                if preference.lower() in searchable
-            )
-            filtered.append(
-                menu.model_copy(
-                    update={
-                        "semantic_score": round(min(1.0, menu.semantic_score + boost), 4),
-                    }
-                )
-            )
-        filtered.sort(key=lambda item: (item.semantic_score, -item.price), reverse=True)
-        return filtered[:limit]
+        return rerank_menu_candidates(candidates, meal_need_state, merchant_areas, limit)
 
     @staticmethod
     def _menu_summary(
@@ -1168,33 +1130,51 @@ class OracleYobiRepository:
             }
         )
 
+    def get_category_knowledge_source(self, category: str) -> str | None:
+        with self.pool.connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                SELECT menu_id FROM menu
+                WHERE lower(category)=lower(:category)
+                ORDER BY CASE WHEN availability='AVAILABLE' THEN 0 ELSE 1 END, menu_id
+                FETCH FIRST 1 ROWS ONLY
+                """,
+                category=category,
+            )
+            row = cursor.fetchone()
+        return str(row[0]) if row else None
+
     def list_merchant_menus(
         self,
         merchant_id: str,
         profile: Profile,
         excluded_menu_ids: list[str],
         limit: int = 12,
+        meal_need_state: MealNeedState | None = None,
     ) -> list[MenuSummary]:
         safety_state = apply_profile_constraints(
-            MealNeedState(max_spiciness=profile.spice_tolerance),
+            meal_need_state.model_copy(deep=True)
+            if meal_need_state is not None
+            else MealNeedState(max_spiciness=profile.spice_tolerance),
             profile.dietary_rules,
             profile.religion_selection,
         )
+        if safety_state.max_spiciness is None:
+            safety_state.max_spiciness = profile.spice_tolerance
         with self.pool.connection() as connection:
             cursor = connection.cursor()
             cursor.execute(
                 """
-                SELECT * FROM (
-                  SELECT m.*, r.name_en AS merchant_name, r.delivery_fee, r.eta_min, r.eta_max
-                  FROM menu m JOIN merchant r ON r.merchant_id=m.merchant_id
-                  WHERE m.merchant_id=:merchant_id AND m.availability='AVAILABLE'
-                    AND m.spice_level<=:spice
-                  ORDER BY m.price, m.menu_id
-                ) WHERE ROWNUM<=:candidate_limit
+                SELECT m.*, r.name_en AS merchant_name, r.delivery_fee, r.eta_min, r.eta_max,
+                  r.service_area_id AS merchant_service_area_id
+                FROM menu m JOIN merchant r ON r.merchant_id=m.merchant_id
+                WHERE m.merchant_id=:merchant_id AND m.availability='AVAILABLE'
+                  AND m.spice_level<=:spice
+                ORDER BY m.price, m.menu_id
                 """,
                 merchant_id=merchant_id,
-                spice=profile.spice_tolerance,
-                candidate_limit=max(limit * 3, 24),
+                spice=safety_state.max_spiciness,
             )
             rows = _rows(cursor)
             hard_conflicts = {
@@ -1208,8 +1188,9 @@ class OracleYobiRepository:
             }
         excluded = set(excluded_menu_ids)
         rules = set(profile.dietary_rules)
-        output: list[MenuSummary] = []
-        for row in rows:
+        candidates: list[MenuSummary] = []
+        merchant_areas: dict[str, str] = {}
+        for index, row in enumerate(rows):
             if row["menu_id"] in excluded:
                 continue
             if hard_conflicts.get(str(row["menu_id"])):
@@ -1226,19 +1207,20 @@ class OracleYobiRepository:
                 continue
             if "vegan" in rules and "vegan_option" not in tags:
                 continue
-            status = (
-                EvidenceStatus.VERIFIED
-                if "shellfish_sauce_absent" in tags
-                else EvidenceStatus.UNKNOWN
-            )
+            status = EvidenceStatus.UNKNOWN
+            if "shellfish_risk" in allergens:
+                status = EvidenceStatus.RISK_SIGNAL
+            elif "shellfish_sauce_absent" in tags:
+                status = EvidenceStatus.VERIFIED
             menu = self._menu_summary(
                 row,
                 ["More from the restaurant already selected"],
                 ["Cross-contamination is not verified"],
                 status,
-                1.0,
+                max(0.1, 0.6 - index * 0.001),
             )
-            output.append(
+            merchant_areas[menu.merchant_id] = str(row["merchant_service_area_id"])
+            candidates.append(
                 menu.model_copy(
                     update={
                         "evidence_ids": [
@@ -1247,9 +1229,7 @@ class OracleYobiRepository:
                     }
                 )
             )
-            if len(output) >= limit:
-                break
-        return output
+        return rerank_menu_candidates(candidates, safety_state, merchant_areas, limit)
 
     def get_evidence(self, menu_id: str) -> list[Evidence]:
         with self.pool.connection() as connection:
@@ -1582,8 +1562,6 @@ class OracleYobiRepository:
             conflicts.append("menu:over_budget")
         if state.max_spiciness is not None and int(menu["spice_level"]) > state.max_spiciness:
             conflicts.append("menu:too_spicy")
-        if state.party_size and int(menu["serves_max"]) < min(state.party_size, 2):
-            conflicts.append("menu:portion_too_small")
         if menu_id in state.rejected_menu_ids:
             conflicts.append("menu:rejected")
         if state.service_area_id and menu.get("service_area_id") != state.service_area_id:
@@ -1844,69 +1822,98 @@ class OracleYobiRepository:
         )
 
     def compare_merchants(
-        self, category: str, profile: Profile, limit: int = 3
+        self,
+        category: str,
+        profile: Profile,
+        limit: int = 3,
+        meal_need_state: MealNeedState | None = None,
     ) -> list[MerchantComparison]:
+        state = apply_profile_constraints(
+            meal_need_state.model_copy(deep=True)
+            if meal_need_state is not None
+            else MealNeedState(max_spiciness=profile.spice_tolerance),
+            profile.dietary_rules,
+            profile.religion_selection,
+        )
+        if state.max_spiciness is None:
+            state.max_spiciness = profile.spice_tolerance
         with self.pool.connection() as connection:
             cursor = connection.cursor()
             cursor.execute(
                 """
-                SELECT * FROM (
-                  SELECT m.*, r.name_en AS merchant_name, r.delivery_fee, r.eta_min,
-                    r.eta_max, r.flavor_profile, r.packaging_signal
-                  FROM menu m JOIN merchant r ON r.merchant_id=m.merchant_id
-                  WHERE LOWER(m.category)=LOWER(:category) AND m.availability='AVAILABLE'
-                  ORDER BY m.price, r.eta_min
-                ) WHERE ROWNUM <= :limit
+                SELECT m.*, r.name_en AS merchant_name, r.delivery_fee, r.eta_min,
+                  r.eta_max, r.flavor_profile, r.packaging_signal,
+                  r.service_area_id AS merchant_service_area_id
+                FROM menu m JOIN merchant r ON r.merchant_id=m.merchant_id
+                WHERE LOWER(m.category)=LOWER(:category) AND m.availability='AVAILABLE'
+                ORDER BY m.price, r.eta_min
                 """,
                 category=category,
-                limit=limit,
             )
             rows = _rows(cursor)
-        result = []
+            hard_conflicts = {
+                str(row["menu_id"]): self._menu_hard_constraint_conflicts(
+                    connection,
+                    str(row["menu_id"]),
+                    state,
+                    profile.allergy_severity,
+                )[0]
+                for row in rows
+            }
+        summaries: list[MenuSummary] = []
+        merchant_areas: dict[str, str] = {}
+        rows_by_menu = {str(row["menu_id"]): row for row in rows}
         for index, row in enumerate(rows):
+            if hard_conflicts[str(row["menu_id"])]:
+                continue
             allergens = set(_json(row["allergen_tags_json"]))
             tags = set(_json(row["dietary_tags_json"]))
             status = EvidenceStatus.UNKNOWN
-            note = "Ingredient and cross-contamination details are not verified."
             if "shellfish_risk" in allergens:
                 status = EvidenceStatus.RISK_SIGNAL
-                note = "The synthetic menu specification contains a shellfish risk signal."
             elif "shellfish_sauce_absent" in tags:
                 status = EvidenceStatus.VERIFIED
-                note = "Sauce marked seafood-free; cross-contamination remains unknown."
+            summary = self._menu_summary(
+                row,
+                ["Comparable listing for the requested food"],
+                ["Cross-contamination is not verified"],
+                status,
+                max(0.1, 0.6 - index * 0.001),
+            )
+            summaries.append(summary)
+            merchant_areas[summary.merchant_id] = str(row["merchant_service_area_id"])
+        ranked = rerank_menu_candidates(summaries, state, merchant_areas, limit)
+        result: list[MerchantComparison] = []
+        for menu in ranked:
+            row = rows_by_menu[menu.menu_id]
+            dietary_note = "Ingredient and cross-contamination details are not verified."
+            if menu.evidence_status == EvidenceStatus.RISK_SIGNAL:
+                dietary_note = "The synthetic menu specification contains a shellfish risk signal."
+            elif menu.evidence_status == EvidenceStatus.VERIFIED:
+                dietary_note = "Sauce marked seafood-free; cross-contamination remains unknown."
             result.append(
                 MerchantComparison(
-                    merchant_id=row["merchant_id"],
-                    merchant_name=row["merchant_name"],
-                    menu_id=row["menu_id"],
-                    menu_name=row["name_en"],
-                    price=int(row["price"]),
-                    delivery_fee=int(row["delivery_fee"]),
+                    merchant_id=menu.merchant_id,
+                    merchant_name=menu.merchant_name,
+                    menu_id=menu.menu_id,
+                    menu_name=menu.name_en,
+                    price=menu.price,
+                    delivery_fee=menu.delivery_fee,
                     eta=f"{int(row['eta_min'])}-{int(row['eta_max'])} min",
                     portion=(
-                        "One-person portion" if row["serves_max"] == 1 else "Shareable portion"
+                        "One-person portion" if menu.serves_max == 1 else "Shareable portion"
                     ),
                     flavor=row["flavor_profile"],
                     packaging_signal=row["packaging_signal"],
-                    dietary_status=status,
-                    dietary_note=note,
-                    best_for=(
-                        "First-time visitors who prefer a milder, creamier dish"
-                        if index == 0
-                        else "Travellers prioritising value and a larger portion"
-                    ),
+                    dietary_status=menu.evidence_status,
+                    dietary_note=dietary_note,
+                    best_for="; ".join(menu.match_reasons),
+                    evidence_ids=[
+                        evidence.evidence_id for evidence in self.get_evidence(menu.menu_id)
+                    ],
                 )
             )
-        return [
-            item.model_copy(
-                update={
-                    "evidence_ids": [
-                        evidence.evidence_id for evidence in self.get_evidence(item.menu_id)
-                    ]
-                }
-            )
-            for item in result
-        ]
+        return result
 
     def get_options(self, menu_id: str) -> list[OptionGroup]:
         with self.pool.connection() as connection:
@@ -1963,16 +1970,25 @@ class OracleYobiRepository:
     def resolve_address(self, text: str, file_hash: str | None = None) -> list[AddressCandidate]:
         with self.pool.connection() as connection:
             cursor = connection.cursor()
-            cursor.execute("SELECT * FROM address_place ORDER BY place_id")
+            cursor.execute(
+                """
+                SELECT place.* FROM address_place place
+                JOIN service_area area ON area.service_area_id=place.service_area_id
+                WHERE area.active=1 ORDER BY place.place_id
+                """
+            )
             rows = _rows(cursor)
-        normalized = text.lower().strip()
+        normalized = normalize_address_text(text)
         scored: list[tuple[float, dict[str, Any]]] = []
         for row in rows:
             aliases = _json(row["aliases_json"])
             haystack = " ".join([row["name_en"], row["name_ko"], *aliases]).lower()
+            normalized_road = normalize_address_text(str(row["road_address"]))
             score = (
                 0.98 if row["place_id"] == "hotel_demo_01" and "myeongdong" in normalized else 0.0
             )
+            if normalized_road in normalized:
+                score = max(score, 0.95)
             if normalized and any(token in haystack for token in normalized.split()):
                 score = max(score, 0.82)
             if file_hash and row["fixture_sha256"] == file_hash:
@@ -2001,7 +2017,14 @@ class OracleYobiRepository:
     def get_address_candidate(self, place_id: str) -> AddressCandidate | None:
         with self.pool.connection() as connection:
             cursor = connection.cursor()
-            cursor.execute("SELECT * FROM address_place WHERE place_id=:id", id=place_id)
+            cursor.execute(
+                """
+                SELECT place.* FROM address_place place
+                JOIN service_area area ON area.service_area_id=place.service_area_id
+                WHERE place.place_id=:id AND area.active=1
+                """,
+                id=place_id,
+            )
             row = _row(cursor)
         if row is None:
             return None
@@ -2029,6 +2052,16 @@ class OracleYobiRepository:
             cursor = connection.cursor()
             cursor.execute(
                 """
+                SELECT 1 FROM service_area
+                WHERE service_area_id=:id AND active=1
+                FOR UPDATE OF active
+                """,
+                id=candidate.service_area_id,
+            )
+            if cursor.fetchone() is None:
+                raise ValueError("ADDRESS_OUTSIDE_SERVICE_AREA")
+            cursor.execute(
+                """
                 INSERT INTO address_ref(address_ref_id,session_id,source_type,source_image_hash,
                   place_id,hotel_name,road_address,extraction_confidence,service_area_id,
                   confirmed,created_at)
@@ -2049,7 +2082,10 @@ class OracleYobiRepository:
             )
             cart_id = self._ensure_cart(connection, session_id)
             cursor.execute(
-                "UPDATE cart SET address_ref_id=:address,version=version+1,updated_at=:now WHERE cart_id=:cart",
+                """
+                UPDATE cart SET address_ref_id=:address,version=version+1,
+                  confirmed=0,updated_at=:now WHERE cart_id=:cart
+                """,
                 address=address_ref_id,
                 now=_now(),
                 cart=cart_id,
@@ -2063,7 +2099,8 @@ class OracleYobiRepository:
                 """
                 SELECT ref.service_area_id
                 FROM cart JOIN address_ref ref ON ref.address_ref_id=cart.address_ref_id
-                WHERE cart.session_id=:session_id AND ref.confirmed=1
+                JOIN service_area area ON area.service_area_id=ref.service_area_id
+                WHERE cart.session_id=:session_id AND ref.confirmed=1 AND area.active=1
                 """,
                 session_id=session_id,
             )
@@ -2368,9 +2405,10 @@ class OracleYobiRepository:
             if cart.get("address_ref_id"):
                 cursor.execute(
                     """
-                    SELECT service_area_id FROM address_ref
-                    WHERE address_ref_id=:address_ref_id AND session_id=:session_id
-                      AND confirmed=1
+                    SELECT ref.service_area_id FROM address_ref ref
+                    JOIN service_area area ON area.service_area_id=ref.service_area_id
+                    WHERE ref.address_ref_id=:address_ref_id AND ref.session_id=:session_id
+                      AND ref.confirmed=1 AND area.active=1
                     """,
                     address_ref_id=cart["address_ref_id"],
                     session_id=session_id,
@@ -2509,6 +2547,9 @@ class OracleYobiRepository:
             warnings.append("The confirmed address is outside this merchant's service area.")
         if items:
             warnings.append("Synthetic evidence only; cross-contamination may be unverified.")
+        current_fingerprint = _cart_fingerprint(
+            str(cart["cart_id"]), int(cart["version"]), subtotal + delivery_fee
+        )
         return CartPreview(
             cart_id=cart["cart_id"],
             session_id=session_id,
@@ -2522,7 +2563,10 @@ class OracleYobiRepository:
             minimum_order_amount=minimum_order_amount,
             minimum_order_shortfall=minimum_order_shortfall,
             ready_to_checkout=not missing,
-            confirmed=bool(cart["confirmed"]),
+            confirmed=(
+                bool(cart["confirmed"])
+                and cart.get("confirmed_fingerprint") == current_fingerprint
+            ),
         )
 
     def update_delivery(self, session_id: str, preference: DeliveryPreferenceInput) -> CartPreview:
@@ -2602,8 +2646,11 @@ class OracleYobiRepository:
             raise ValueError("CART_INCOMPLETE")
         cursor.execute(
             """
-            SELECT service_area_id FROM address_ref
-            WHERE address_ref_id=:address AND session_id=:session_id AND confirmed=1
+            SELECT ref.service_area_id FROM address_ref ref
+            JOIN service_area area ON area.service_area_id=ref.service_area_id
+            WHERE ref.address_ref_id=:address AND ref.session_id=:session_id
+              AND ref.confirmed=1 AND area.active=1
+            FOR UPDATE OF area.active
             """,
             address=cart["address_ref_id"],
             session_id=session_id,
@@ -2642,6 +2689,8 @@ class OracleYobiRepository:
                        r.service_area_id AS merchant_service_area_id
                 FROM menu m JOIN merchant r ON r.merchant_id=m.merchant_id
                 WHERE m.menu_id=:id AND m.availability='AVAILABLE'
+                FOR UPDATE OF m.price, m.availability, r.delivery_fee,
+                  r.min_order_amount, r.service_area_id
                 """,
                 id=line["menu_id"],
             )
@@ -2704,6 +2753,7 @@ class OracleYobiRepository:
                     SELECT i.*, g.menu_id FROM menu_option_item i
                     JOIN menu_option_group g ON g.option_group_id=i.option_group_id
                     WHERE i.option_item_id=:id AND i.availability='AVAILABLE'
+                    FOR UPDATE OF i.price_delta, i.availability, g.menu_id
                     """,
                     id=option_id,
                 )
@@ -2733,8 +2783,9 @@ class OracleYobiRepository:
                 option_total += int(option["price_delta"])
             cursor.execute(
                 """
-                SELECT option_group_id, min_select, max_select
-                FROM menu_option_group WHERE menu_id=:id
+                SELECT g.option_group_id, g.min_select, g.max_select
+                FROM menu_option_group g WHERE g.menu_id=:id
+                FOR UPDATE OF g.min_select, g.max_select
                 """,
                 id=menu["menu_id"],
             )
@@ -2784,21 +2835,37 @@ class OracleYobiRepository:
         if len(merchant_ids) != 1:
             raise ValueError("CART_MULTIPLE_MERCHANTS")
         cursor.execute(
-            "SELECT min_order_amount, delivery_fee FROM merchant WHERE merchant_id=:id",
+            """
+            SELECT r.min_order_amount, r.delivery_fee FROM merchant r WHERE r.merchant_id=:id
+            FOR UPDATE OF r.min_order_amount, r.delivery_fee
+            """,
             id=next(iter(merchant_ids)),
         )
         merchant = _row(cursor)
         if merchant is None or subtotal < int(merchant["min_order_amount"]):
             raise ValueError("MINIMUM_ORDER_NOT_MET")
 
+        current_total = subtotal + int(merchant["delivery_fee"])
         was_confirmed = bool(cart["confirmed"])
+        current_fingerprint = _cart_fingerprint(
+            str(cart["cart_id"]), int(cart["version"]), current_total
+        )
+        confirmation_stale = (
+            was_confirmed and cart.get("confirmed_fingerprint") != current_fingerprint
+        )
+        changed = changed or confirmation_stale
         version_changed = False
         if confirm and (not was_confirmed or changed):
+            confirmed_version = int(cart["version"]) + 1
             cursor.execute(
                 """
-                UPDATE cart SET confirmed=1,version=version+1,updated_at=:now
+                UPDATE cart SET confirmed=1,version=version+1,
+                  confirmed_fingerprint=:fingerprint,updated_at=:now
                 WHERE cart_id=:id
                 """,
+                fingerprint=_cart_fingerprint(
+                    str(cart["cart_id"]), confirmed_version, current_total
+                ),
                 now=_now(),
                 id=cart["cart_id"],
             )
@@ -2806,7 +2873,8 @@ class OracleYobiRepository:
         elif changed:
             cursor.execute(
                 """
-                UPDATE cart SET confirmed=0,version=version+1,updated_at=:now
+                UPDATE cart SET confirmed=0,version=version+1,
+                  confirmed_fingerprint=NULL,updated_at=:now
                 WHERE cart_id=:id
                 """,
                 now=_now(),
@@ -2817,7 +2885,7 @@ class OracleYobiRepository:
             str(cart["cart_id"]),
             changed,
             was_confirmed,
-            subtotal + int(merchant["delivery_fee"]),
+            current_total,
             int(cart["version"]) + int(version_changed),
         )
 
@@ -2840,9 +2908,7 @@ class OracleYobiRepository:
                 pass
             else:
                 cursor = connection.cursor()
-                fingerprint = hashlib.sha256(
-                    f"{cart_id}:{cart_version}:{current_total}".encode()
-                ).hexdigest()
+                fingerprint = _cart_fingerprint(cart_id, cart_version, current_total)
                 cursor.execute(
                     "SELECT * FROM mock_checkout WHERE idempotency_key=:key",
                     key=data.idempotency_key,
@@ -2852,10 +2918,20 @@ class OracleYobiRepository:
                     if (
                         existing["cart_id"] != cart_id
                         or int(existing["cart_version"] or -1) != cart_version
-                        or existing["cart_fingerprint"] != fingerprint
                     ):
                         raise ValueError("IDEMPOTENCY_KEY_REUSED")
-                    checkout = self._checkout(existing)
+                    if existing["cart_fingerprint"] != fingerprint:
+                        cursor.execute(
+                            """
+                            UPDATE cart SET confirmed=0,version=version+1,updated_at=:now
+                            WHERE cart_id=:id AND confirmed=1
+                            """,
+                            now=_now(),
+                            id=cart_id,
+                        )
+                        changed = True
+                    else:
+                        checkout = self._checkout(existing)
                 else:
                     cursor.execute(
                         """
@@ -2870,37 +2946,69 @@ class OracleYobiRepository:
                     )
                     active = _row(cursor)
                     if active:
-                        checkout = self._checkout(active)
+                        if active["cart_fingerprint"] != fingerprint:
+                            cursor.execute(
+                                """
+                                UPDATE cart SET confirmed=0,version=version+1,updated_at=:now
+                                WHERE cart_id=:id AND confirmed=1
+                                """,
+                                now=_now(),
+                                id=cart_id,
+                            )
+                            changed = True
+                        else:
+                            checkout = self._checkout(active)
                     else:
                         checkout_id = _id("checkout")
                         now = _now()
-                        cursor.execute(
-                            """
-                            INSERT INTO mock_checkout(checkout_id,cart_id,idempotency_key,
-                              payment_method,status,amount,payment_url,cart_version,
-                              cart_fingerprint,created_at,updated_at)
-                            VALUES (:1,:2,:3,:4,'PENDING',:5,:6,:7,:8,:9,:10)
-                            """,
-                            [
-                                checkout_id,
-                                cart_id,
-                                data.idempotency_key,
-                                data.payment_method,
-                                current_total,
-                                f"/pay/{checkout_id}",
-                                cart_version,
-                                fingerprint,
-                                now,
-                                now,
-                            ],
-                        )
-                        cursor.execute(
-                            "SELECT * FROM mock_checkout WHERE checkout_id=:id", id=checkout_id
-                        )
-                        created = _row(cursor)
-                        if created is None:
-                            raise RuntimeError("CHECKOUT_CREATION_FAILED")
-                        checkout = self._checkout(created)
+                        try:
+                            cursor.execute(
+                                """
+                                INSERT INTO mock_checkout(checkout_id,cart_id,idempotency_key,
+                                  payment_method,status,amount,payment_url,cart_version,
+                                  cart_fingerprint,created_at,updated_at)
+                                VALUES (:1,:2,:3,:4,'PENDING',:5,:6,:7,:8,:9,:10)
+                                """,
+                                [
+                                    checkout_id,
+                                    cart_id,
+                                    data.idempotency_key,
+                                    data.payment_method,
+                                    current_total,
+                                    f"/pay/{checkout_id}",
+                                    cart_version,
+                                    fingerprint,
+                                    now,
+                                    now,
+                                ],
+                            )
+                        except oracledb.IntegrityError as exc:
+                            error = exc.args[0] if exc.args else None
+                            if getattr(error, "code", None) != 1:
+                                raise
+                            cursor.execute(
+                                "SELECT * FROM mock_checkout WHERE idempotency_key=:key",
+                                key=data.idempotency_key,
+                            )
+                            raced = _row(cursor)
+                            if raced is None:
+                                raise
+                            if (
+                                raced["cart_id"] != cart_id
+                                or int(raced["cart_version"] or -1) != cart_version
+                            ):
+                                raise ValueError("IDEMPOTENCY_KEY_REUSED") from exc
+                            if raced["cart_fingerprint"] != fingerprint:
+                                raise ValueError("CART_CHANGED_RECONFIRM_REQUIRED") from exc
+                            checkout = self._checkout(raced)
+                        else:
+                            cursor.execute(
+                                "SELECT * FROM mock_checkout WHERE checkout_id=:id", id=checkout_id
+                            )
+                            created = _row(cursor)
+                            if created is None:
+                                raise RuntimeError("CHECKOUT_CREATION_FAILED")
+                            checkout = self._checkout(created)
         if changed:
             raise ValueError("CART_CHANGED_RECONFIRM_REQUIRED")
         if checkout is None:
@@ -2933,8 +3041,35 @@ class OracleYobiRepository:
     def update_checkout(self, checkout_id: str, status: str) -> Checkout:
         if status not in {"SUCCEEDED", "FAILED", "CANCELED"}:
             raise ValueError("INVALID_PAYMENT_STATUS")
+        checkout_stale = False
+        order_id = None
+        updated: dict[str, Any] | None = None
         with self.pool.connection() as connection:
             cursor = connection.cursor()
+            cursor.execute("SELECT * FROM mock_checkout WHERE checkout_id=:id", id=checkout_id)
+            observed = _row(cursor)
+            if not observed:
+                raise KeyError("CHECKOUT_NOT_FOUND")
+
+            cart_state: tuple[str, bool, bool, int, int] | None = None
+            cart_error: ValueError | None = None
+            if status == "SUCCEEDED" and observed["status"] != "SUCCEEDED":
+                cursor.execute(
+                    "SELECT session_id FROM cart WHERE cart_id=:id", id=observed["cart_id"]
+                )
+                cart_session = cursor.fetchone()
+                if cart_session is None:
+                    cart_error = ValueError("CART_INCOMPLETE")
+                else:
+                    try:
+                        # Lock the cart before the checkout row, matching create_checkout's
+                        # lock order and preventing a payment/order snapshot race.
+                        cart_state = self._revalidate_cart(
+                            connection, str(cart_session[0]), confirm=False
+                        )
+                    except ValueError as exc:
+                        cart_error = exc
+
             cursor.execute(
                 "SELECT * FROM mock_checkout WHERE checkout_id=:id FOR UPDATE", id=checkout_id
             )
@@ -2943,57 +3078,121 @@ class OracleYobiRepository:
                 raise KeyError("CHECKOUT_NOT_FOUND")
             if row["status"] == "SUCCEEDED" and status != "SUCCEEDED":
                 raise ValueError("PAYMENT_ALREADY_SUCCEEDED")
-            cursor.execute(
-                "UPDATE mock_checkout SET status=:status,updated_at=:now WHERE checkout_id=:id",
-                status=status,
-                now=_now(),
-                id=checkout_id,
-            )
-            order_id = None
             if status == "SUCCEEDED":
-                cursor.execute(
-                    """
-                    SELECT other.checkout_id FROM mock_checkout other
-                    JOIN mock_order placed ON placed.checkout_id=other.checkout_id
-                    WHERE other.cart_id=:cart_id AND other.checkout_id<>:checkout_id
-                      AND ROWNUM=1
-                    """,
-                    cart_id=row["cart_id"],
-                    checkout_id=checkout_id,
-                )
-                if cursor.fetchone() is not None:
-                    raise ValueError("CART_ORDER_ALREADY_COMPLETED")
                 cursor.execute(
                     "SELECT order_id FROM mock_order WHERE checkout_id=:id", id=checkout_id
                 )
                 existing = cursor.fetchone()
-                if existing:
+                if row["status"] == "SUCCEEDED" and existing:
                     order_id = existing[0]
                 else:
-                    order_id = _id("YOBI-DEMO")
-                    cursor.execute(
-                        "SELECT * FROM cart_item WHERE cart_id=:id ORDER BY created_at",
-                        id=row["cart_id"],
+                    if cart_state is None and cart_error is None:
+                        cursor.execute(
+                            "SELECT session_id FROM cart WHERE cart_id=:id", id=row["cart_id"]
+                        )
+                        cart_session = cursor.fetchone()
+                        if cart_session is None:
+                            cart_error = ValueError("CART_INCOMPLETE")
+                        else:
+                            try:
+                                cart_state = self._revalidate_cart(
+                                    connection, str(cart_session[0]), confirm=False
+                                )
+                            except ValueError as exc:
+                                cart_error = exc
+                    if cart_error is not None or cart_state is None:
+                        raise ValueError("CHECKOUT_STALE") from cart_error
+                    (
+                        current_cart_id,
+                        cart_changed,
+                        cart_confirmed,
+                        current_total,
+                        current_version,
+                    ) = cart_state
+                    current_fingerprint = _cart_fingerprint(
+                        current_cart_id, current_version, current_total
                     )
-                    snapshot = _rows(cursor)
-                    for item in snapshot:
-                        item["created_at"] = str(item["created_at"])
-                    cursor.execute(
-                        """
-                        INSERT INTO mock_order(order_id,checkout_id,cart_snapshot_json,order_status,
-                          estimated_delivery_at,created_at)
-                        VALUES (:1,:2,:3,'CONFIRMED',:4,:5)
-                        """,
-                        [
-                            order_id,
-                            checkout_id,
-                            json.dumps(snapshot),
-                            _now() + timedelta(minutes=35),
-                            _now(),
-                        ],
+                    fingerprint_changed = current_fingerprint != row["cart_fingerprint"]
+                    checkout_version = (
+                        int(row["cart_version"]) if row["cart_version"] is not None else -1
                     )
+                    checkout_stale = (
+                        current_cart_id != row["cart_id"]
+                        or not cart_confirmed
+                        or cart_changed
+                        or current_version != checkout_version
+                        or fingerprint_changed
+                    )
+                    if (
+                        fingerprint_changed
+                        and not cart_changed
+                        and cart_confirmed
+                        and current_version == checkout_version
+                    ):
+                        cursor.execute(
+                            """
+                            UPDATE cart SET confirmed=0,version=version+1,updated_at=:now
+                            WHERE cart_id=:id AND confirmed=1
+                            """,
+                            now=_now(),
+                            id=current_cart_id,
+                        )
+                    if not checkout_stale:
+                        cursor.execute(
+                            """
+                            SELECT other.checkout_id FROM mock_checkout other
+                            JOIN mock_order placed ON placed.checkout_id=other.checkout_id
+                            WHERE other.cart_id=:cart_id AND other.checkout_id<>:checkout_id
+                              AND ROWNUM=1
+                            """,
+                            cart_id=row["cart_id"],
+                            checkout_id=checkout_id,
+                        )
+                        if cursor.fetchone() is not None:
+                            raise ValueError("CART_ORDER_ALREADY_COMPLETED")
+                        cursor.execute(
+                            "UPDATE mock_checkout SET status=:status,updated_at=:now WHERE checkout_id=:id",
+                            status=status,
+                            now=_now(),
+                            id=checkout_id,
+                        )
+                        if existing:
+                            order_id = existing[0]
+                        else:
+                            order_id = _id("YOBI-DEMO")
+                            cursor.execute(
+                                "SELECT * FROM cart_item WHERE cart_id=:id ORDER BY created_at",
+                                id=row["cart_id"],
+                            )
+                            snapshot = _rows(cursor)
+                            for item in snapshot:
+                                item["created_at"] = str(item["created_at"])
+                            cursor.execute(
+                                """
+                                INSERT INTO mock_order(
+                                  order_id,checkout_id,cart_snapshot_json,order_status,
+                                  estimated_delivery_at,created_at
+                                ) VALUES (:1,:2,:3,'CONFIRMED',:4,:5)
+                                """,
+                                [
+                                    order_id,
+                                    checkout_id,
+                                    json.dumps(snapshot),
+                                    _now() + timedelta(minutes=35),
+                                    _now(),
+                                ],
+                            )
+            else:
+                cursor.execute(
+                    "UPDATE mock_checkout SET status=:status,updated_at=:now WHERE checkout_id=:id",
+                    status=status,
+                    now=_now(),
+                    id=checkout_id,
+                )
             cursor.execute("SELECT * FROM mock_checkout WHERE checkout_id=:id", id=checkout_id)
             updated = _row(cursor)
+        if checkout_stale:
+            raise ValueError("CHECKOUT_STALE")
         if updated is None:
             raise RuntimeError("CHECKOUT_UPDATE_FAILED")
         return self._checkout(updated, order_id)
