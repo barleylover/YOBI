@@ -5,32 +5,83 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from app.knowledge.catalog_seed import build_knowledge_catalog_seed
+from app.knowledge.authoring import parse_document
+from app.knowledge.catalog_seed import build_knowledge_catalog_seed, default_knowledge_root
+from app.knowledge.resolver import INGREDIENT_ALIASES
 
-CATALOG_VERSION = "demo-2026.08.09-knowledge-v2"
-UPDATED_AT = "2026-08-08"
+CATALOG_VERSION = "demo-2026.08.11-knowledge-v3"
+UPDATED_AT = "2026-08-11"
 
+def _spice_level(name_en: str, searchable_text: str) -> int:
+    lowered = f"{name_en} {searchable_text}".casefold()
+    if any(marker in lowered for marker in ("white jjamppong", "rose", "gungjung", "mild")):
+        return 1
+    if any(
+        marker in lowered
+        for marker in ("spicy", "tteokbokki", "jjamppong", "kimchi stew", "kimchi-jjigae", "sundubu")
+    ):
+        return 3
+    if any(marker in lowered for marker in ("bibim", "seasoned fried chicken", "gochujang")):
+        return 2
+    return 1
+
+
+def _wiki_menu_templates() -> list[dict[str, Any]]:
+    documents = [parse_document(path) for path in sorted(default_knowledge_root().rglob("*.md"))]
+    front_by_id = {doc.front_matter.concept_id: doc.front_matter for doc in documents}
+
+    def family_id(concept_id: str) -> str:
+        current = front_by_id[concept_id]
+        visited: set[str] = set()
+        while current.concept_type == "VARIANT" and current.parents:
+            if current.concept_id in visited:
+                break
+            visited.add(current.concept_id)
+            current = front_by_id[current.parents[0].concept_id]
+        return current.concept_id
+
+    templates: list[dict[str, Any]] = []
+    for document in documents:
+        front = document.front_matter
+        if front.concept_type == "CUISINE":
+            continue
+        searchable = " ".join(document.facets.values())
+        templates.append(
+            {
+                "concept_id": front.concept_id,
+                "concept_type": front.concept_type,
+                "family_id": family_id(front.concept_id),
+                "category": front.name_en,
+                "name_ko": front.name_ko,
+                "name_en": front.name_en,
+                "aliases": front.aliases,
+                "description": document.facets["overview"],
+                "cultural_description": (
+                    f"{document.facets['culture']} {document.facets['analogy']}"
+                ),
+                "flavor_text": f"{document.facets['taste']} {document.facets['texture']}",
+                "spice_level": _spice_level(front.name_en, searchable),
+                "wiki_allergens": [claim.allergen_id.removeprefix("allergen_") for claim in front.allergens],
+                "wiki_ingredients": [claim.ingredient_id for claim in front.ingredients],
+            }
+        )
+    return sorted(templates, key=lambda row: (str(row["family_id"]), str(row["concept_id"])))
+
+
+WIKI_MENU_TEMPLATES = _wiki_menu_templates()
+TEMPLATE_BY_CATEGORY = {str(row["category"]): row for row in WIKI_MENU_TEMPLATES}
+TEMPLATES_BY_FAMILY: dict[str, list[dict[str, Any]]] = {}
+for _template in WIKI_MENU_TEMPLATES:
+    TEMPLATES_BY_FAMILY.setdefault(str(_template["family_id"]), []).append(_template)
+FAMILY_IDS = sorted(TEMPLATES_BY_FAMILY)
 CATEGORIES = [
-    ("Tteokbokki", "떡볶이", 3, "sweet-spicy gochujang and chewy rice cakes"),
-    ("Rose tteokbokki", "로제 떡볶이", 1, "creamy, gently sweet sauce and chewy rice cakes"),
-    ("Chicken kalguksu", "닭칼국수", 1, "rich chicken broth with thick wheat noodles"),
-    ("Bibimbap", "비빔밥", 1, "warm rice and seasoned vegetables mixed at the table"),
-    ("Gimbap", "김밥", 1, "seaweed rice rolls with colourful fillings"),
-    ("Korean fried chicken", "한국식 치킨", 2, "crisp fried chicken with a glossy sauce"),
-    ("Samgyetang", "삼계탕", 1, "whole young chicken in a gentle ginseng broth"),
-    ("Jjajangmyeon", "짜장면", 1, "springy noodles in a savoury black bean sauce"),
-    ("Sundubu", "순두부찌개", 3, "silky tofu stew served bubbling hot"),
-    ("Bulgogi", "불고기", 1, "sweet-savoury soy-marinated beef"),
-    ("Kimchi stew", "김치찌개", 3, "tangy fermented kimchi stew"),
-    ("Japchae", "잡채", 1, "glossy sweet-potato noodles and vegetables"),
-    ("Mandu", "만두", 1, "Korean dumplings with a juicy filling"),
-    ("Naengmyeon", "냉면", 1, "chilled buckwheat noodles with a bright broth"),
-    ("Dosirak", "도시락", 1, "a balanced Korean lunch box"),
-    ("Pizza", "피자", 1, "a crisp delivery pizza with generous toppings"),
-    ("Gukbap", "국밥", 1, "rice served with a deeply savoury Korean soup"),
-    ("Hotteok", "호떡", 1, "a warm griddled pancake with a sweet nutty filling"),
-    ("Seolleongtang", "설렁탕", 1, "a mild milky beef-bone soup with rice"),
-    ("Eomuk", "어묵", 1, "springy fish cake with a light warm broth"),
+    (
+        str(template["category"]),
+        str(template["name_ko"]),
+        int(template["spice_level"]),
+        str(template["description"]),
+    )
+    for template in WIKI_MENU_TEMPLATES
 ]
 
 SERVICE_AREAS = {
@@ -75,16 +126,148 @@ PRESET_MERCHANT_NAMES = {
 }
 
 
-def _merchant_name(index: int) -> tuple[str, str, str]:
+FOCUS_CATEGORY_OVERRIDES = {
+    1: "Rose tteokbokki",
+    2: "Tteokbokki",
+    3: "Chicken kalguksu",
+    4: "Bibimbap",
+    5: "Gimbap",
+    6: "Korean fried chicken",
+    7: "Samgyetang",
+    8: "Jjajangmyeon",
+    9: "Sundubu",
+    10: "Bulgogi",
+    21: "Korean fried chicken",
+    22: "Seasoned fried chicken",
+    23: "Pizza",
+    24: "Jjajangmyeon",
+    25: "Tteokbokki",
+    26: "Gimbap",
+    27: "Gukbap",
+    28: "Hotteok",
+    29: "Seolleongtang",
+    30: "Eomuk",
+}
+
+
+def _focus_family(index: int) -> str:
+    category = FOCUS_CATEGORY_OVERRIDES.get(index)
+    template = TEMPLATE_BY_CATEGORY.get(category or "")
+    if template is not None:
+        return str(template["family_id"])
+    return FAMILY_IDS[(index - 1) % len(FAMILY_IDS)]
+
+
+def _related_templates(focus_family: str) -> list[dict[str, Any]]:
+    focus_index = FAMILY_IDS.index(focus_family)
+    related_families = [
+        FAMILY_IDS[(focus_index + offset) % len(FAMILY_IDS)] for offset in (1, 2, 3)
+    ]
+    return [template for family in related_families for template in TEMPLATES_BY_FAMILY[family]]
+
+
+def _template_for_menu(merchant_index: int, menu_index: int, focus_family: str) -> dict[str, Any]:
+    pool = TEMPLATES_BY_FAMILY[focus_family] if menu_index <= 7 else _related_templates(focus_family)
+    if merchant_index == 27:
+        # Preserve one explicit shellfish-absence demo merchant for the severe-allergy
+        # presentation path. The restaurant still carries an UNKNOWN cross-contact
+        # warning; it simply does not also sell an oyster/shellfish Wiki variant that
+        # would create a contradictory merchant-wide kitchen signal.
+        shellfish_free_pool = [
+            template
+            for template in pool
+            if "shellfish_risk" not in template["wiki_allergens"]
+            and "ingredient_shellfish" not in template["wiki_ingredients"]
+        ]
+        if shellfish_free_pool:
+            pool = shellfish_free_pool
+    return pool[(merchant_index * 3 + menu_index - 1) % len(pool)]
+
+
+def _menu_price(category: str, merchant_index: int, menu_index: int) -> int:
+    lowered = category.casefold()
+    if any(marker in lowered for marker in ("pizza", "fried chicken", "tangsuyuk")):
+        base = 17000
+    elif any(marker in lowered for marker in ("bingsu", "croffle", "hotteok", "eomuk")):
+        base = 5500
+    elif any(marker in lowered for marker in ("baekban", "samgyetang", "gukbap", "seolleongtang")):
+        base = 10500
+    else:
+        base = 8500
+    return base + ((merchant_index * 5 + menu_index * 3) % 9) * 500
+
+
+def _listing_from_template(
+    template: dict[str, Any], merchant_index: int, menu_index: int
+) -> dict[str, Any]:
+    ko_modifiers = ("정통", "대표", "푸짐한", "수제", "담백한", "든든한", "매콤한", "고소한", "한그릇", "나눔")
+    en_modifiers = (
+        "Classic",
+        "Signature",
+        "Generous",
+        "Handmade",
+        "Gentle",
+        "Hearty",
+        "Spicy",
+        "Rich",
+        "One-bowl",
+        "Shareable",
+    )
+    modifier_index = (merchant_index + menu_index - 2) % len(ko_modifiers)
+    for offset in range(len(ko_modifiers)):
+        candidate_index = (modifier_index + offset) % len(ko_modifiers)
+        english_repeats = (
+            en_modifiers[candidate_index].casefold()
+            == str(template["name_en"]).split(maxsplit=1)[0].casefold()
+        )
+        korean_repeats = ko_modifiers[candidate_index] == "매콤한" and str(
+            template["name_ko"]
+        ).startswith(("매운", "매콤"))
+        if not english_repeats and not korean_repeats:
+            modifier_index = candidate_index
+            break
+    category = str(template["category"])
+    return {
+        "category": category,
+        "name_ko": f"{ko_modifiers[modifier_index]} {template['name_ko']}",
+        "name_en": f"{en_modifiers[modifier_index]} {template['name_en']}",
+        "description": str(template["description"]),
+        "cultural_description": str(template["cultural_description"]),
+        "price": _menu_price(category, merchant_index, menu_index),
+        "spice_level": int(template["spice_level"]),
+        "dietary_tags": [
+            "shareable" if menu_index % 4 == 0 else "one_person",
+            "wiki_mapped_demo",
+        ],
+        "allergen_tags": (
+            list(template["wiki_allergens"])[:3]
+            if (merchant_index * 10 + menu_index) % 20 < 7
+            else []
+        ),
+        "evidence_status": "VERIFIED"
+        if (merchant_index * 10 + menu_index) % 20 < 7
+        else "UNKNOWN",
+    }
+
+
+def _merchant_name(index: int, focus_family: str) -> tuple[str, str, str]:
     if index in PRESET_MERCHANT_NAMES:
         return PRESET_MERCHANT_NAMES[index]
     if index <= len(MERCHANT_NAMES):
         return MERCHANT_NAMES[index - 1]
     district = ("Myeongdong", "Hongdae", "Gangnam")[(index - 1) % 3]
+    district_ko = ("명동", "홍대", "강남")[(index - 1) % 3]
+    focus = TEMPLATES_BY_FAMILY[focus_family][0]
+    suffix_ko, suffix_en = (
+        ("식탁", "Table"),
+        ("공방", "Kitchen"),
+        ("한상", "Dining"),
+        ("마루", "House"),
+    )[index % 4]
     return (
-        f"요비 데모 키친 {index:02d}",
-        f"YOBI Demo Kitchen {district} {index:02d}",
-        "clear menu descriptions and reliable demo packaging",
+        f"{district_ko} {focus['name_ko']} {suffix_ko}",
+        f"{district} {focus['name_en']} {suffix_en}",
+        f"a focused {str(focus['name_en']).lower()} menu with a few related Korean choices",
     )
 
 
@@ -295,9 +478,10 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
     option_groups: list[dict[str, Any]] = []
     option_items: list[dict[str, Any]] = []
 
-    for merchant_index in range(1, 31):
+    for merchant_index in range(1, 61):
         merchant_id = f"mer_{merchant_index:03d}"
-        name_ko, name_en, flavor = _merchant_name(merchant_index)
+        focus_family = _focus_family(merchant_index)
+        name_ko, name_en, flavor = _merchant_name(merchant_index, focus_family)
         service_area = (
             "Myeongdong"
             if merchant_index in PRESET_MERCHANT_NAMES
@@ -326,7 +510,7 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
             }
         )
 
-        for menu_index in range(1, 6):
+        for menu_index in range(1, 11):
             menu_id = f"menu_{merchant_index:03d}_{menu_index:02d}"
             canonical = _canonical_menu(merchant_index, menu_index)
             if canonical:
@@ -351,24 +535,11 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
                     ),
                 ]
             else:
-                category_index = (merchant_index * 3 + menu_index - 1) % len(CATEGORIES)
-                category_en, category_ko, base_spice, flavor_text = CATEGORIES[category_index]
-                spice_level = max(1, min(3, base_spice + ((merchant_index + menu_index) % 3 - 1)))
-                item = {
-                    "category": category_en,
-                    "name_ko": f"{category_ko} 데모 {menu_index}",
-                    "name_en": f"{category_en} house style {menu_index}",
-                    "description": f"A synthetic house variation featuring {flavor_text}.",
-                    "cultural_description": (
-                        f"A friendly introduction to {category_en.lower()}, described through taste, "
-                        "texture and portion rather than a literal translation."
-                    ),
-                    "price": 8500 + ((merchant_index * 7 + menu_index * 3) % 12) * 500,
-                    "spice_level": spice_level,
-                    "dietary_tags": ["demo_estimate", "one_person"],
-                    "allergen_tags": ["unknown_cross_contamination"],
-                    "evidence_status": "UNKNOWN",
-                }
+                item = _listing_from_template(
+                    _template_for_menu(merchant_index, menu_index, focus_family),
+                    merchant_index,
+                    menu_index,
+                )
                 if menu_id == "menu_001_02":
                     item["dietary_tags"].append("shellfish_sauce_absent")
                     item["evidence_status"] = "VERIFIED"
@@ -397,12 +568,27 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
                     "cultural_description": item["cultural_description"],
                     "price": item["price"],
                     "serves_min": 1,
-                    "serves_max": 1 if menu_index % 3 else 2,
+                    "serves_max": (
+                        3
+                        if any(
+                            marker in str(item["category"]).casefold()
+                            for marker in ("pizza", "fried chicken", "tangsuyuk")
+                        )
+                        else (2 if menu_index % 3 == 0 else 1)
+                    ),
                     "spice_level": item["spice_level"],
                     "dietary_tags_json": json.dumps(item["dietary_tags"]),
                     "allergen_tags_json": json.dumps(item["allergen_tags"]),
                     "semantic_text": semantic_text,
-                    "availability": "AVAILABLE",
+                    "availability": (
+                        "AVAILABLE"
+                        if canonical or menu_id == "menu_001_02" or (merchant_index * 10 + menu_index) % 20 < 17
+                        else (
+                            "SOLD_OUT"
+                            if (merchant_index * 10 + menu_index) % 20 < 19
+                            else "PAUSED"
+                        )
+                    ),
                     "is_synthetic": 1,
                     "updated_at": UPDATED_AT,
                 }
@@ -411,12 +597,13 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
             if menu_id == "menu_001_01":
                 evidence_rows = [
                     (
-                        "shellfish_sauce",
+                        "shellfish_risk_absence",
                         "VERIFIED",
                         "SYNTHETIC_RESTAURANT_DECLARATION",
                         "The demo sauce specification lists no seafood or shellfish ingredients.",
                         "high",
-                        "Cross-contamination is still unverified; confirm with the restaurant if severe.",
+                        "Use only as menu-level demo evidence; shared-kitchen cross-contamination "
+                        "remains unknown.",
                     ),
                     (
                         "cross_contamination",
@@ -430,12 +617,13 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
             elif menu_id == "menu_001_02":
                 evidence_rows = [
                     (
-                        "shellfish_sauce",
+                        "shellfish_risk_absence",
                         "VERIFIED",
-                        "SYNTHETIC_RESTAURANT_DECLARATION",
+                        "SYNTHETIC_MENU_SPEC",
                         "The seeded menu specification lists no shellfish ingredient or shellfish sauce.",
                         "high",
-                        "Cross-contamination remains unverified; confirm directly if severe.",
+                        "Use only as menu-level demo evidence; shared-kitchen cross-contamination "
+                        "remains unknown.",
                     ),
                     (
                         "cross_contamination",
@@ -485,8 +673,8 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
                     ),
                 ]
 
-            for evidence_index, row in enumerate(evidence_rows, 1):
-                claim_type, status, source_type, excerpt, band, action = row
+            for evidence_index, evidence_spec in enumerate(evidence_rows, 1):
+                claim_type, status, source_type, excerpt, band, action = evidence_spec
                 evidence.append(
                     {
                         "evidence_id": f"ev_{merchant_index:03d}_{menu_index:02d}_{evidence_index}",
@@ -699,15 +887,46 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
         }
         for name_en, name_ko, spice, description in CATEGORIES
     ]
+    knowledge_catalog = build_knowledge_catalog_seed(menus)
+    knowledge_release_id = knowledge_catalog.compiled_release.release_id
+    claims_by_concept: dict[str, list[dict[str, Any]]] = {}
+    allergen_claims_by_concept: dict[str, list[dict[str, Any]]] = {}
+    for claim in knowledge_catalog.compiled_release.claims:
+        if claim["claim_type"] == "INGREDIENT":
+            claims_by_concept.setdefault(str(claim["concept_id"]), []).append(claim)
+        elif claim["claim_type"] == "ALLERGEN":
+            allergen_claims_by_concept.setdefault(str(claim["concept_id"]), []).append(claim)
+    ancestors_by_concept: dict[str, list[str]] = {}
+    for closure_row in sorted(
+        knowledge_catalog.compiled_release.closure,
+        key=lambda item: (str(item["descendant_concept_id"]), int(item["depth"])),
+    ):
+        if not closure_row["inherit_claims"]:
+            continue
+        ancestors_by_concept.setdefault(str(closure_row["descendant_concept_id"]), []).append(
+            str(closure_row["ancestor_concept_id"])
+        )
+    mapping_by_menu = {
+        str(row["menu_id"]): str(row["concept_id"])
+        for row in knowledge_catalog.menu_concept_maps
+        if row["concept_id"]
+    }
     dietary_codes = sorted({tag for menu in menus for tag in json.loads(menu["dietary_tags_json"])})
-    dietary_attributes = [
+    dietary_attributes_by_id = {
+        row["attribute_id"]: row
+        for row in [
         {
             "attribute_id": f"diet_{code}",
             "code": code,
             "display_name": code.replace("_", " ").title(),
         }
         for code in dietary_codes
-    ]
+        ]
+    }
+    dietary_attributes_by_id.update(
+        {row["attribute_id"]: row for row in knowledge_catalog.dietary_attributes}
+    )
+    dietary_attributes = [dietary_attributes_by_id[key] for key in sorted(dietary_attributes_by_id)]
     menu_dietary_attributes = [
         {
             "menu_id": menu["menu_id"],
@@ -718,8 +937,6 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
         for menu in menus
         for code in json.loads(menu["dietary_tags_json"])
     ]
-    knowledge_catalog = build_knowledge_catalog_seed(menus)
-    knowledge_release_id = knowledge_catalog.compiled_release.release_id
     allergen_codes = sorted(
         {tag for menu in menus for tag in json.loads(menu["allergen_tags_json"])}
     )
@@ -748,10 +965,151 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
         for menu in menus
         for code in json.loads(menu["allergen_tags_json"])
     ]
+    menu_allergens.extend(
+        [
+            {
+                "menu_id": menu_id,
+                "allergen_id": "allergen_shellfish_risk",
+                "status": "ABSENT",
+                "evidence_id": f"ev_{menu_id[5:8]}_{menu_id[9:11]}_1",
+                "cross_contamination_status": "UNKNOWN",
+            }
+            for menu_id in ("menu_001_01", "menu_001_02")
+        ]
+    )
+    menu_allergen_keys = {(row["menu_id"], row["allergen_id"]) for row in menu_allergens}
+    evidence_by_id = {str(row["evidence_id"]): row for row in evidence}
+    explicit_absence_menu_ids = {
+        str(row["menu_id"]) for row in menu_allergens if row["status"] == "ABSENT"
+    }
+    protected_evidence_menu_ids = {
+        "menu_001_01",
+        "menu_002_01",
+        "menu_003_01",
+    }
+    supported_allergens = (
+        "shellfish_risk",
+        "fish",
+        "milk",
+        "egg",
+        "peanut",
+        "tree_nut",
+        "wheat",
+        "soy",
+        "sesame",
+    )
+    merchant_by_id = {str(row["merchant_id"]): row for row in merchants}
+    menu_by_id = {str(row["menu_id"]): row for row in menus}
+    explicit_absence_area_pairs = {
+        (
+            str(merchant_by_id[str(menu_by_id[str(row["menu_id"])]["merchant_id"])][
+                "service_area_id"
+            ]),
+            str(row["allergen_id"]),
+        )
+        for row in menu_allergens
+        if row["status"] == "ABSENT"
+    }
+
+    def wiki_has_allergen_ingredient(menu_id: str, allergen_code: str) -> bool:
+        allergy = "shellfish" if allergen_code == "shellfish_risk" else allergen_code
+        risk_ingredients = INGREDIENT_ALIASES[allergy]
+        concept_id = mapping_by_menu[menu_id]
+        ingredient_risk = any(
+            claim["ingredient_id"] in risk_ingredients
+            and claim["assertion_status"]
+            in {"CONFIRMED_PRESENT", "PRESUMED_PRESENT", "POSSIBLE", "CONFLICTING"}
+            for ancestor_id in ancestors_by_concept.get(concept_id, [concept_id])
+            for claim in claims_by_concept.get(ancestor_id, [])
+        )
+        allergen_id = f"allergen_{allergen_code}"
+        allergen_risk = any(
+            claim["allergen_id"] == allergen_id
+            and claim["assertion_status"]
+            in {"CONFIRMED_PRESENT", "PRESUMED_PRESENT", "POSSIBLE", "CONFLICTING"}
+            for ancestor_id in ancestors_by_concept.get(concept_id, [concept_id])
+            for claim in allergen_claims_by_concept.get(ancestor_id, [])
+        )
+        return ingredient_risk or allergen_risk
+
+    # Each service area has a small, explicit menu-level absence record for every onboarding
+    # allergy. Cross-contact remains UNKNOWN, so this is an explainable alternative, not a safety
+    # certification.
+    for service_area_id in sorted(SERVICE_AREAS[name][0] for name in SERVICE_AREAS):
+        area_menu_ids = [
+            str(menu["menu_id"])
+            for menu in menus
+            if menu["availability"] == "AVAILABLE"
+            and merchant_by_id[str(menu["merchant_id"])]["service_area_id"] == service_area_id
+        ]
+        for code in supported_allergens:
+            allergen_id = f"allergen_{code}"
+            if (service_area_id, allergen_id) in explicit_absence_area_pairs:
+                continue
+            candidates = sorted(
+                (
+                    menu_id
+                    for menu_id in area_menu_ids
+                    if (menu_id, allergen_id) not in menu_allergen_keys
+                    and menu_id not in explicit_absence_menu_ids
+                    and menu_id not in protected_evidence_menu_ids
+                    and not wiki_has_allergen_ingredient(menu_id, code)
+                    and (
+                        int(str(menu_by_id[menu_id]["merchant_id"]).removeprefix("mer_")) % 5
+                        != 0
+                    )
+                    and str(menu_by_id[menu_id]["merchant_id"]) != "mer_027"
+                ),
+                key=lambda menu_id: (int(menu_by_id[menu_id]["spice_level"]), menu_id),
+            )
+            if not candidates:
+                raise ValueError(
+                    f"NO_EXPLICIT_ABSENCE_DEMO_CANDIDATE:{service_area_id}:{code}"
+                )
+            menu_id = candidates[0]
+            evidence_id = f"ev_{menu_id[5:8]}_{menu_id[9:11]}_1"
+            evidence_row = evidence_by_id[evidence_id]
+            evidence_row.update(
+                {
+                    "claim_type": f"{code}_absence",
+                    "status": "VERIFIED",
+                    "source_type": "SYNTHETIC_MENU_SPEC",
+                    "excerpt": (
+                        f"The synthetic menu declaration explicitly marks {code.replace('_', ' ')} "
+                        "as absent for this demo item."
+                    ),
+                    "confidence_band": "high",
+                    "suggested_action": (
+                        "Use only as menu-level demo evidence; shared-kitchen cross-contamination "
+                        "remains unknown."
+                    ),
+                }
+            )
+            allergen_row = {
+                "menu_id": menu_id,
+                "allergen_id": allergen_id,
+                "status": "ABSENT",
+                "evidence_id": evidence_id,
+                "cross_contamination_status": "UNKNOWN",
+            }
+            menu_allergens.append(allergen_row)
+            menu_allergen_keys.add((menu_id, allergen_id))
+            explicit_absence_menu_ids.add(menu_id)
+            explicit_absence_area_pairs.add((service_area_id, allergen_id))
     ingredients = knowledge_catalog.ingredients
     explicit_menu_facts: dict[str, list[tuple[str, str]]] = {
-        "menu_001_01": [("ingredient_dairy_cream", "CONFIRMED_PRESENT")],
-        "menu_002_01": [("ingredient_fish_cake", "CONFIRMED_PRESENT")],
+        "menu_001_01": [
+            ("ingredient_dairy_cream", "CONFIRMED_PRESENT"),
+            ("ingredient_sauce", "CONFIRMED_PRESENT"),
+        ],
+        "menu_002_01": [
+            ("ingredient_fish_cake", "CONFIRMED_PRESENT"),
+            ("ingredient_sauce", "CONFIRMED_PRESENT"),
+        ],
+        "menu_001_04": [
+            ("ingredient_cheese", "CONFIRMED_PRESENT"),
+            ("ingredient_rice_cake", "CONFIRMED_PRESENT"),
+        ],
         "menu_003_01": [
             ("ingredient_chicken", "CONFIRMED_PRESENT"),
             ("ingredient_chicken_broth", "CONFIRMED_PRESENT"),
@@ -760,6 +1118,34 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
         "menu_024_01": [("ingredient_pork", "CONFIRMED_PRESENT")],
         "menu_027_01": [("ingredient_pork", "CONFIRMED_PRESENT")],
     }
+    for menu in menus:
+        menu_id = str(menu["menu_id"])
+        if menu_id in {"menu_001_01", "menu_002_01", "menu_001_04"}:
+            # Keep the canonical acceptance menus intentionally mixed-scope and the
+            # replacement declaration at exactly its authored two facts. This
+            # demonstrates menu-over-Wiki precedence without turning every stable
+            # food fact into a restaurant declaration.
+            continue
+        if (
+            (int(menu_id[5:8]) * 10 + int(menu_id[9:11])) % 20 >= 7
+            and menu_id not in explicit_menu_facts
+        ):
+            continue
+        concept_id = mapping_by_menu[menu_id]
+        ingredient_ids = list(
+            dict.fromkeys(
+                str(claim["ingredient_id"])
+                for ancestor_id in ancestors_by_concept.get(concept_id, [concept_id])
+                for claim in claims_by_concept.get(ancestor_id, [])
+                if claim["assertion_status"] == "PRESUMED_PRESENT"
+                and claim["ingredient_id"]
+            )
+        )[:5]
+        if len(ingredient_ids) < 2:
+            continue
+        explicit_menu_facts.setdefault(menu_id, []).extend(
+            (ingredient_id, "CONFIRMED_PRESENT") for ingredient_id in ingredient_ids
+        )
     menu_ingredients = [
         {
             "menu_id": menu_id,
@@ -769,19 +1155,8 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
             "is_optional": 0,
         }
         for menu_id, facts in sorted(explicit_menu_facts.items())
-        for ingredient_id, status in facts
+        for ingredient_id, status in list(dict(facts).items())[:5]
     ]
-    claims_by_concept: dict[str, list[dict[str, Any]]] = {}
-    for claim in knowledge_catalog.compiled_release.claims:
-        if claim["claim_type"] != "INGREDIENT" or claim["ingredient_role"] not in {
-            "DEFINING",
-            "CORE",
-        }:
-            continue
-        claims_by_concept.setdefault(str(claim["concept_id"]), []).append(claim)
-    mapping_by_menu = {
-        row["menu_id"]: row["concept_id"] for row in knowledge_catalog.menu_concept_maps
-    }
     menus_by_merchant: dict[str, list[dict[str, Any]]] = {}
     for menu in menus:
         menus_by_merchant.setdefault(str(menu["merchant_id"]), []).append(menu)
@@ -789,20 +1164,28 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
     merchant_ingredients: list[dict[str, Any]] = []
     for merchant in merchants:
         merchant_id = str(merchant["merchant_id"])
+        merchant_index = int(merchant_id.removeprefix("mer_"))
+        if merchant_index % 5 != 0 and merchant_index != 27:
+            continue
         ingredient_ids = sorted(
             {
                 str(claim["ingredient_id"])
                 for menu in menus_by_merchant[merchant_id]
-                for claim in claims_by_concept.get(str(mapping_by_menu[menu["menu_id"]]), [])
+                for ancestor_id in ancestors_by_concept.get(
+                    str(mapping_by_menu[menu["menu_id"]]),
+                    [str(mapping_by_menu[menu["menu_id"]])],
+                )
+                for claim in claims_by_concept.get(ancestor_id, [])
+                if claim["assertion_status"] == "PRESUMED_PRESENT"
             }
         )
         declaration_id = f"origin_{merchant_id}"
         ingredient_names = {row["ingredient_id"]: row["name_en"] for row in ingredients}
         rendered = ", ".join(ingredient_names[item] for item in ingredient_ids)
         raw_text = (
-            "Synthetic demo origin declaration for this merchant. Reviewed core ingredients "
-            f"used across its catalog include: {rendered}. This merchant-wide list does not "
-            "prove that every ingredient is present in every menu."
+            "Synthetic demo shared-kitchen declaration for this merchant. Ingredients used "
+            f"somewhere in the kitchen include: {rendered}. This merchant-wide list is only a "
+            "cross-contact signal and does not prove presence in any individual menu."
         )
         merchant_origin_declarations.append(
             {
@@ -829,7 +1212,7 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
                 "ingredient_id": ingredient_id,
                 "declaration_id": declaration_id,
                 "status": "CONFIRMED_PRESENT",
-                "origin_text": "Listed in the synthetic merchant-wide origin declaration",
+                "origin_text": "Listed only as a synthetic shared-kitchen cross-contact signal",
                 "source_ref": f"synthetic-origin:{merchant_id}",
                 "is_synthetic": 1,
                 "updated_at": UPDATED_AT,

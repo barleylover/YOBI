@@ -25,6 +25,7 @@ from app.domain.dialogue import (
 )
 from app.domain.dietary import apply_profile_constraints, known_allergen_conflicts
 from app.domain.knowledge import (
+    ClaimStatus,
     GroundedMenuKnowledge,
     GroundedPassage,
     KnowledgeSourceKind,
@@ -52,25 +53,35 @@ from app.domain.models import (
     ProfileUpdate,
     Session,
 )
-from app.domain.recommendation import rerank_menu_candidates
+from app.domain.recommendation import (
+    operational_menu_signal,
+    rerank_menu_candidates,
+    wiki_operational_retrieval_score,
+)
 from app.knowledge.catalog_seed import KNOWLEDGE_CATALOG_VERSION, KNOWLEDGE_RELEASE_ID
 from app.knowledge.resolver import (
     allergen_constraint_conflicts,
     category_constraint_conflicts,
+    confirmed_allergen_absence_signals,
     ingredient_constraint_conflicts,
     merchant_cross_contact_conflicts,
     resolve_allergen_claims,
+    resolve_dietary_claims,
     resolve_ingredient_claims,
     resolve_merchant_ingredient_claims,
+    resolve_preparation_claims,
     severe_allergy_conflicts,
 )
+from app.rag.embeddings import hybrid_knowledge_chunk_score
 from app.rag.providers import choose_embedding_provider
 
-RECOMMENDATION_CANDIDATE_CAP = 40
+# The demo corpus is intentionally bounded at 600 menus. Keep every hard-filtered
+# candidate until the structured-preference reranker has applied its 25% share.
+RECOMMENDATION_CANDIDATE_CAP = 600
 RECOMMENDATION_PASSAGE_LIMIT = 3
-EXPECTED_MAPPED_MENUS = 150
-EXPECTED_ORIGIN_DECLARATIONS = 30
-EXPECTED_MERCHANT_INGREDIENTS = 266
+EXPECTED_MAPPED_MENUS = 600
+EXPECTED_ORIGIN_DECLARATIONS = 13
+EXPECTED_MERCHANT_INGREDIENTS = 119
 EXPECTED_OPTION_EFFECTS = 4
 
 
@@ -87,21 +98,21 @@ def _oracle_logical_text(value: object) -> str:
 
 EXPECTED_RUNTIME_COUNTS = {
     "service_area": 3,
-    "menu_category": 20,
-    "merchant": 30,
-    "menu": 150,
-    "menu_knowledge": 150,
-    "menu_option_group": 302,
-    "menu_option_item": 605,
-    "review_snippet": 600,
-    "evidence": 300,
+    "menu_category": 100,
+    "merchant": 60,
+    "menu": 600,
+    "menu_knowledge": 600,
+    "menu_option_group": 1202,
+    "menu_option_item": 2405,
+    "review_snippet": 2400,
+    "evidence": 1200,
     "address_place": 20,
-    "ingredient": 47,
-    "menu_ingredient": 7,
+    "ingredient": 54,
+    "menu_ingredient": 565,
     "allergen": 10,
-    "menu_allergen": 162,
-    "dietary_attribute": 15,
-    "menu_dietary_attribute": 317,
+    "menu_allergen": 595,
+    "dietary_attribute": 20,
+    "menu_dietary_attribute": 1217,
     "option_dietary_conflict": 1,
 }
 
@@ -867,61 +878,43 @@ class OracleYobiRepository:
         )
         safety_state.strictness = constraint_strictness
         query_vector = array("f", self.embedding_provider.embed([query], "SEARCH_QUERY")[0])
-        severe_shellfish = (
-            "shellfish_allergy" in profile.dietary_rules and profile.allergy_severity == "severe"
-        )
         vegan_required = "vegan" in profile.dietary_rules
         severe_allergies = profile.allergy_severity == "severe"
         with self.pool.connection() as connection:
             cursor = connection.cursor()
             cursor.execute(
                 """
-                SELECT * FROM (
-                  SELECT m.*, r.name_en AS merchant_name, r.delivery_fee, r.eta_min, r.eta_max,
-                    VECTOR_DISTANCE(m.embedding_vector, :query_vector, COSINE) AS vector_distance
-                  FROM menu m JOIN merchant r ON r.merchant_id = m.merchant_id
-                  WHERE m.availability = 'AVAILABLE'
-                    AND m.price <= :budget
-                    AND m.spice_level <= :spice
-                    AND m.embedding_vector IS NOT NULL
-                    AND (:severe_shellfish = 0 OR (
-                      EXISTS (
-                        SELECT 1 FROM menu_dietary_attribute mda
-                        JOIN dietary_attribute da ON da.attribute_id=mda.attribute_id
-                        WHERE mda.menu_id=m.menu_id AND da.code='shellfish_sauce_absent'
-                          AND mda.status='VERIFIED'
-                      )
-                      AND NOT EXISTS (
-                        SELECT 1 FROM menu_allergen ma
-                        JOIN allergen a ON a.allergen_id=ma.allergen_id
-                        WHERE ma.menu_id=m.menu_id AND a.code='shellfish_risk'
-                      )
-                    ))
-                    AND (:vegan_required = 0 OR EXISTS (
-                      SELECT 1 FROM menu_dietary_attribute mda
-                      JOIN dietary_attribute da ON da.attribute_id=mda.attribute_id
-                      WHERE mda.menu_id=m.menu_id AND da.code='vegan_option'
-                        AND mda.status='VERIFIED'
-                    ))
-                    AND (:exclude_pork = 0 OR NOT JSON_EXISTS(m.allergen_tags_json, '$?(@ == "pork")'))
-                  ORDER BY vector_distance, m.price
-                ) WHERE ROWNUM <= :candidate_limit
+                SELECT m.*, r.name_en AS merchant_name, r.delivery_fee, r.eta_min, r.eta_max,
+                  VECTOR_DISTANCE(m.embedding_vector, :query_vector, COSINE) AS vector_distance
+                FROM menu m JOIN merchant r ON r.merchant_id = m.merchant_id
+                WHERE m.availability = 'AVAILABLE'
+                  AND m.price <= :budget
+                  AND m.spice_level <= :spice
+                  AND m.embedding_vector IS NOT NULL
+                  AND (:vegan_required = 0 OR EXISTS (
+                    SELECT 1 FROM menu_dietary_attribute mda
+                    JOIN dietary_attribute da ON da.attribute_id=mda.attribute_id
+                    WHERE mda.menu_id=m.menu_id AND da.code='vegan_option'
+                      AND mda.status='VERIFIED'
+                  ))
+                  AND (:exclude_pork = 0 OR NOT JSON_EXISTS(m.allergen_tags_json, '$?(@ == "pork")'))
+                ORDER BY vector_distance, m.price
                 """,
                 query_vector=query_vector,
                 budget=budget,
                 spice=spice,
-                severe_shellfish=int(severe_shellfish),
                 vegan_required=int(vegan_required),
                 exclude_pork=int("pork" in {item.lower() for item in excluded_ingredients}),
-                candidate_limit=min(
-                    RECOMMENDATION_CANDIDATE_CAP,
-                    max(16, min(limit, RECOMMENDATION_CANDIDATE_CAP) * 4),
-                ),
             )
             rows = _rows(cursor)
             candidate_ids = [str(row["menu_id"]) for row in rows]
             grounded = self._bulk_resolved_knowledge_claims(connection, candidate_ids)
-            knowledge = self._bulk_knowledge_passages(connection, candidate_ids, query_vector)
+            knowledge = self._bulk_knowledge_passages(
+                connection,
+                candidate_ids,
+                query_vector,
+                query=query,
+            )
             evidence_by_menu: dict[str, list[str]] = defaultdict(list)
             if candidate_ids:
                 bind_names = [f"evidence_menu_{index}" for index in range(len(candidate_ids))]
@@ -939,7 +932,6 @@ class OracleYobiRepository:
                         str(evidence_row["evidence_id"])
                     )
 
-        lowered = query.lower()
         scored: list[MenuSummary] = []
         for row in rows:
             menu_id = str(row["menu_id"])
@@ -949,21 +941,14 @@ class OracleYobiRepository:
                 continue
             menu_similarity = max(0.0, 1.0 - float(row["vector_distance"]))
             knowledge_similarity, passage_ids = knowledge.get(menu_id, (0.0, []))
-            boost = 0.0
-            if "red rice cake" in lowered and "tteokbokki" in row["category"].lower():
-                boost += 0.45
-            if any(term in lowered for term in ("rain", "broth", "noodle", "soup")) and row[
-                "category"
-            ] in {"Chicken kalguksu", "Samgyetang", "Sundubu"}:
-                boost += 0.18
-            if any(term in lowered for term in ("mild", "not spicy")) and row["spice_level"] <= 1:
-                boost += 0.16
-            if "vegan" in lowered and "vegan_option" in tags:
-                boost += 0.4
+            operational_signal = operational_menu_signal(
+                menu_similarity,
+                price=int(row["price"]),
+                budget=budget,
+                delivery_fee=int(row["delivery_fee"]),
+                eta_max=int(row["eta_max"]),
+            )
             reasons = [f"Matches your spice tolerance (level {int(row['spice_level'])} of 3)"]
-            if "creamy pasta" in profile.favorite_foods and "rose" in row["category"].lower():
-                boost += 0.2
-                reasons.append("Creamy profile connects with a favourite food you selected")
             risks: list[str] = []
             status = EvidenceStatus.UNKNOWN
             if "shellfish_sauce_absent" in tags:
@@ -976,30 +961,13 @@ class OracleYobiRepository:
                 menu_id, ([], [], [])
             )
             conflicts = ingredient_constraint_conflicts(ingredient_claims, safety_state)
-            mastered_shellfish = (
-                "shellfish_sauce_absent" in tags and "shellfish_risk" not in allergens
-            )
-            ignored_allergies = (
-                {"shellfish"}
-                if mastered_shellfish
-                and "shellfish_allergy"
-                in {*safety_state.dietary_rules, *safety_state.profile_dietary_rules}
-                else set()
-            )
-            conflicts.extend(
-                allergen_constraint_conflicts(
-                    allergen_claims,
-                    safety_state,
-                    ignored_allergies=ignored_allergies,
-                )
-            )
+            conflicts.extend(allergen_constraint_conflicts(allergen_claims, safety_state))
             if profile.allergy_severity == "severe":
                 conflicts.extend(
                     severe_allergy_conflicts(
                         ingredient_claims,
                         allergen_claims,
                         safety_state.dietary_rules,
-                        shellfish_mastered_absence=mastered_shellfish,
                     )
                 )
             conflicts.extend(
@@ -1011,8 +979,24 @@ class OracleYobiRepository:
             )
             if conflicts:
                 continue
+            absent_allergies, cross_contact_unknown = confirmed_allergen_absence_signals(
+                allergen_claims,
+                safety_state.dietary_rules,
+            )
+            for allergy in absent_allergies:
+                reasons.append(
+                    "Synthetic menu specification marks "
+                    f"{allergy.replace('_', ' ')} absent"
+                )
+            if absent_allergies:
+                status = EvidenceStatus.VERIFIED
+            if cross_contact_unknown and "Cross-contamination is not verified" not in risks:
+                risks.append("Cross-contamination is not verified")
             # Reviews remain display-only and intentionally contribute exactly zero.
-            similarity = 0.75 * menu_similarity + 0.25 * knowledge_similarity + boost
+            similarity = wiki_operational_retrieval_score(
+                knowledge_similarity,
+                operational_signal,
+            )
             claim_ids = list(
                 dict.fromkeys(
                     [claim.source_id for claim in ingredient_claims]
@@ -1030,7 +1014,7 @@ class OracleYobiRepository:
                 )
             )
         scored.sort(key=lambda item: (item.semantic_score, -item.price), reverse=True)
-        return scored[:limit]
+        return scored[: min(limit, RECOMMENDATION_CANDIDATE_CAP)]
 
     def recommend_menus(
         self,
@@ -1212,12 +1196,6 @@ class OracleYobiRepository:
             allergens = set(_json(row["allergen_tags_json"]))
             if profile.allergy_severity == "severe" and known_allergen_conflicts(allergens, rules):
                 continue
-            if (
-                "shellfish_allergy" in rules
-                and profile.allergy_severity == "severe"
-                and "shellfish_sauce_absent" not in tags
-            ):
-                continue
             if "vegan" in rules and "vegan_option" not in tags:
                 continue
             status = EvidenceStatus.UNKNOWN
@@ -1282,7 +1260,7 @@ class OracleYobiRepository:
         if concept_id:
             cursor.execute(
                 """
-                SELECT claim.*, ingredient.name_en, closure.depth,
+                SELECT claim.*, ingredient.name_en, ingredient.name_ko, closure.depth,
                        claim.release_id AS source_version
                 FROM dish_concept_closure closure
                 JOIN concept_claim claim
@@ -1318,7 +1296,8 @@ class OracleYobiRepository:
             wiki_allergen_rows = _rows(cursor)
         cursor.execute(
             """
-            SELECT fact.*, ingredient.name_en, fact.source_id AS source_version
+            SELECT fact.*, ingredient.name_en, ingredient.name_ko,
+                   fact.source_id AS source_version
             FROM menu_ingredient fact
             JOIN ingredient ON ingredient.ingredient_id=fact.ingredient_id
             WHERE fact.menu_id=:menu_id
@@ -1345,7 +1324,8 @@ class OracleYobiRepository:
             binds.update(dict(zip(bind_names, selected_options)))
             cursor.execute(
                 f"""
-                SELECT effect.*, ingredient.name_en, effect.option_item_id AS source_id,
+                SELECT effect.*, ingredient.name_en, ingredient.name_ko,
+                       effect.option_item_id AS source_id,
                        effect.release_id AS source_version
                 FROM option_ingredient_effect effect
                 JOIN ingredient ON ingredient.ingredient_id=effect.ingredient_id
@@ -1392,7 +1372,7 @@ class OracleYobiRepository:
 
         cursor.execute(
             f"""
-            SELECT mapping.menu_id,claim.*,ingredient.name_en,closure.depth,
+            SELECT mapping.menu_id,claim.*,ingredient.name_en,ingredient.name_ko,closure.depth,
                    claim.release_id AS source_version
             FROM menu_concept_map mapping
             JOIN dish_concept_closure closure
@@ -1432,7 +1412,8 @@ class OracleYobiRepository:
         wiki_allergens = _rows(cursor)
         cursor.execute(
             f"""
-            SELECT fact.menu_id,fact.*,ingredient.name_en,fact.source_id AS source_version
+            SELECT fact.menu_id,fact.*,ingredient.name_en,ingredient.name_ko,
+                   fact.source_id AS source_version
             FROM menu_ingredient fact
             JOIN ingredient ON ingredient.ingredient_id=fact.ingredient_id
             WHERE fact.menu_id IN ({in_clause})
@@ -1453,7 +1434,8 @@ class OracleYobiRepository:
         menu_allergens = _rows(cursor)
         cursor.execute(
             f"""
-            SELECT menu.menu_id,fact.*,ingredient.name_en,declaration.source_version
+            SELECT menu.menu_id,fact.*,ingredient.name_en,ingredient.name_ko,
+                   declaration.source_version
             FROM menu
             JOIN merchant_ingredient fact ON fact.merchant_id=menu.merchant_id
             JOIN merchant_origin_declaration declaration
@@ -1502,6 +1484,8 @@ class OracleYobiRepository:
         connection: oracledb.Connection,
         menu_ids: list[str],
         query_vector: array[float],
+        *,
+        query: str = "",
     ) -> dict[str, tuple[float, list[str]]]:
         unique_ids = list(dict.fromkeys(menu_ids))
         if not unique_ids:
@@ -1512,7 +1496,8 @@ class OracleYobiRepository:
         cursor = connection.cursor()
         cursor.execute(
             f"""
-            SELECT mapping.menu_id,chunk.chunk_id,
+            SELECT mapping.menu_id,chunk.chunk_id,chunk.facet,
+                   concept.canonical_name_ko,concept.canonical_name_en,concept.aliases_json,
                    VECTOR_DISTANCE(chunk.embedding_vector,:query_vector,COSINE) distance
             FROM knowledge_runtime_state state
             JOIN knowledge_release release ON release.release_id=state.active_release_id
@@ -1525,6 +1510,9 @@ class OracleYobiRepository:
             JOIN knowledge_chunk chunk
               ON chunk.release_id=closure.release_id
              AND chunk.concept_id=closure.ancestor_concept_id
+            JOIN dish_concept concept
+              ON concept.release_id=chunk.release_id
+             AND concept.concept_id=chunk.concept_id
             WHERE state.state_key='ACTIVE' AND release.status='READY'
               AND mapping.menu_id IN ({','.join(':' + name for name in menu_bind_names)})
               AND chunk.embedding_vector IS NOT NULL
@@ -1536,8 +1524,23 @@ class OracleYobiRepository:
         )
         grouped: dict[str, list[tuple[float, str]]] = defaultdict(list)
         for row in _rows(cursor):
+            aliases = [
+                str(row.get("canonical_name_ko") or ""),
+                str(row.get("canonical_name_en") or ""),
+            ]
+            if row.get("aliases_json"):
+                aliases.extend(str(alias) for alias in _json(row["aliases_json"]))
+            vector_similarity = max(0.0, 1.0 - float(row["distance"]))
             grouped[str(row["menu_id"])].append(
-                (max(0.0, 1.0 - float(row["distance"])), str(row["chunk_id"]))
+                (
+                    hybrid_knowledge_chunk_score(
+                        query,
+                        vector_similarity,
+                        str(row.get("facet") or ""),
+                        aliases,
+                    ),
+                    str(row["chunk_id"]),
+                )
             )
         result: dict[str, tuple[float, list[str]]] = {}
         for menu_id, values in grouped.items():
@@ -1586,7 +1589,7 @@ class OracleYobiRepository:
         )
         cursor.execute(
             """
-            SELECT fact.*,ingredient.name_en,declaration.source_version
+            SELECT fact.*,ingredient.name_en,ingredient.name_ko,declaration.source_version
             FROM menu
             JOIN knowledge_runtime_state state ON state.state_key='ACTIVE'
             JOIN merchant_ingredient fact
@@ -1610,42 +1613,13 @@ class OracleYobiRepository:
             ]
         )
         conflicts.extend(ingredient_constraint_conflicts(ingredient_claims, state))
-        cursor.execute(
-            """
-            SELECT CASE WHEN EXISTS (
-              SELECT 1 FROM menu_dietary_attribute mda
-              JOIN dietary_attribute da ON da.attribute_id=mda.attribute_id
-              WHERE mda.menu_id=:menu_id AND da.code='shellfish_sauce_absent'
-                AND mda.status='VERIFIED'
-            ) AND NOT EXISTS (
-              SELECT 1 FROM menu_allergen ma
-              JOIN allergen a ON a.allergen_id=ma.allergen_id
-              WHERE ma.menu_id=:menu_id AND a.code='shellfish_risk'
-            ) THEN 1 ELSE 0 END FROM dual
-            """,
-            menu_id=menu_id,
-        )
-        mastered_shellfish = int(cursor.fetchone()[0]) == 1
-        ignored_allergies = (
-            {"shellfish"}
-            if mastered_shellfish
-            and "shellfish_allergy" in {*state.dietary_rules, *state.profile_dietary_rules}
-            else set()
-        )
-        conflicts.extend(
-            allergen_constraint_conflicts(
-                allergen_claims,
-                state,
-                ignored_allergies=ignored_allergies,
-            )
-        )
+        conflicts.extend(allergen_constraint_conflicts(allergen_claims, state))
         if allergy_severity == "severe":
             conflicts.extend(
                 severe_allergy_conflicts(
                     ingredient_claims,
                     allergen_claims,
                     state.dietary_rules,
-                    shellfish_mastered_absence=mastered_shellfish,
                 )
             )
         conflicts.extend(
@@ -1694,6 +1668,8 @@ class OracleYobiRepository:
             passages: list[GroundedPassage] = []
             concept_lineage: list[str] = []
             available_facets: list[str] = []
+            wiki_dietary_rows: list[dict[str, Any]] = []
+            wiki_preparation_rows: list[dict[str, Any]] = []
             if release_id and concept_id:
                 cursor.execute(
                     """
@@ -1723,24 +1699,81 @@ class OracleYobiRepository:
                 available_facets = [str(row[0]) for row in cursor.fetchall()]
                 cursor.execute(
                     """
-                    SELECT * FROM (
-                      SELECT chunk.chunk_id,chunk.document_id,chunk.concept_id,chunk.facet,
-                             chunk.content,
-                             VECTOR_DISTANCE(chunk.embedding_vector,:query_vector,COSINE) distance
-                      FROM knowledge_chunk chunk
-                      JOIN dish_concept_closure closure
-                        ON closure.release_id=chunk.release_id
-                       AND closure.ancestor_concept_id=chunk.concept_id
-                      WHERE chunk.release_id=:release_id
-                        AND closure.descendant_concept_id=:concept_id
-                        AND closure.inherit_claims=1
-                        AND chunk.embedding_vector IS NOT NULL
-                      ORDER BY distance,chunk.chunk_id
-                    ) WHERE ROWNUM<=5
+                    SELECT claim.*,da.code,da.display_name,closure.depth,
+                           claim.release_id AS source_version
+                    FROM dish_concept_closure closure
+                    JOIN concept_claim claim
+                      ON claim.release_id=closure.release_id
+                     AND claim.concept_id=closure.ancestor_concept_id
+                    JOIN dietary_attribute da ON da.attribute_id=claim.attribute_id
+                    WHERE closure.release_id=:release_id
+                      AND closure.descendant_concept_id=:concept_id
+                      AND closure.inherit_claims=1 AND claim.claim_type='DIETARY'
+                      AND (closure.depth=0 OR claim.inheritance_mode='INHERIT')
+                    """,
+                    release_id=release_id,
+                    concept_id=concept_id,
+                )
+                wiki_dietary_rows = _rows(cursor)
+                cursor.execute(
+                    """
+                    SELECT claim.*,closure.depth,claim.release_id AS source_version
+                    FROM dish_concept_closure closure
+                    JOIN concept_claim claim
+                      ON claim.release_id=closure.release_id
+                     AND claim.concept_id=closure.ancestor_concept_id
+                    WHERE closure.release_id=:release_id
+                      AND closure.descendant_concept_id=:concept_id
+                      AND closure.inherit_claims=1 AND claim.claim_type='PREPARATION'
+                      AND (closure.depth=0 OR claim.inheritance_mode='INHERIT')
+                    """,
+                    release_id=release_id,
+                    concept_id=concept_id,
+                )
+                wiki_preparation_rows = _rows(cursor)
+                cursor.execute(
+                    """
+                    SELECT chunk.chunk_id,chunk.document_id,chunk.concept_id,chunk.facet,
+                           chunk.content,concept.canonical_name_ko,
+                           concept.canonical_name_en,concept.aliases_json,
+                           VECTOR_DISTANCE(chunk.embedding_vector,:query_vector,COSINE) distance
+                    FROM knowledge_chunk chunk
+                    JOIN dish_concept_closure closure
+                      ON closure.release_id=chunk.release_id
+                     AND closure.ancestor_concept_id=chunk.concept_id
+                    JOIN dish_concept concept
+                      ON concept.release_id=chunk.release_id
+                     AND concept.concept_id=chunk.concept_id
+                    WHERE chunk.release_id=:release_id
+                      AND closure.descendant_concept_id=:concept_id
+                      AND closure.inherit_claims=1
+                      AND chunk.embedding_vector IS NOT NULL
+                    ORDER BY chunk.chunk_id
                     """,
                     query_vector=query_vector,
                     release_id=release_id,
                     concept_id=concept_id,
+                )
+                ranked_passages: list[tuple[float, dict[str, Any]]] = []
+                for row in _rows(cursor):
+                    aliases = [
+                        str(row["canonical_name_ko"]),
+                        str(row["canonical_name_en"]),
+                        *[str(alias) for alias in _json(row["aliases_json"])],
+                    ]
+                    ranked_passages.append(
+                        (
+                            hybrid_knowledge_chunk_score(
+                                search_text,
+                                max(0.0, 1.0 - float(row["distance"])),
+                                str(row["facet"]),
+                                aliases,
+                            ),
+                            row,
+                        )
+                    )
+                ranked_passages.sort(
+                    key=lambda item: (-item[0], str(item[1]["chunk_id"]))
                 )
                 passages = [
                     GroundedPassage(
@@ -1751,9 +1784,9 @@ class OracleYobiRepository:
                         content=row["content"],
                         source_kind=KnowledgeSourceKind.SYNTHETIC_WIKI,
                         source_version=release_id,
-                        score=round(max(0.0, 1.0 - float(row["distance"])), 4),
+                        score=round(score, 4),
                     )
-                    for row in _rows(cursor)
+                    for score, row in ranked_passages[:5]
                 ]
             else:
                 cursor.execute(
@@ -1779,6 +1812,20 @@ class OracleYobiRepository:
                 ]
             cursor.execute(
                 """
+                SELECT fact.*,da.code,da.display_name,
+                       fact.evidence_id AS source_id,'catalog' AS source_version
+                FROM menu_dietary_attribute fact
+                JOIN dietary_attribute da ON da.attribute_id=fact.attribute_id
+                WHERE fact.menu_id=:menu_id
+                ORDER BY fact.attribute_id
+                """,
+                menu_id=menu_id,
+            )
+            menu_dietary_rows = _rows(cursor)
+            dietary_claims = resolve_dietary_claims(wiki_dietary_rows, menu_dietary_rows)
+            preparation_claims = resolve_preparation_claims(wiki_preparation_rows)
+            cursor.execute(
+                """
                 SELECT declaration.raw_text,declaration.declaration_id
                 FROM menu
                 JOIN merchant_origin_declaration declaration
@@ -1793,7 +1840,7 @@ class OracleYobiRepository:
             origin_rows = _rows(cursor)
             cursor.execute(
                 """
-                SELECT fact.*,ingredient.name_en,declaration.source_version
+                SELECT fact.*,ingredient.name_en,ingredient.name_ko,declaration.source_version
                 FROM menu
                 JOIN knowledge_runtime_state state ON state.state_key='ACTIVE'
                 JOIN merchant_ingredient fact
@@ -1817,6 +1864,15 @@ class OracleYobiRepository:
                     for row in _rows(cursor)
                 ]
             )
+            cross_contact_unknowns = [
+                (
+                    f"{claim.code}: menu-specific absence is recorded, but cross-contact "
+                    "is UNKNOWN; this is not a safety certification."
+                )
+                for claim in allergen_claims
+                if claim.status is ClaimStatus.CONFIRMED_ABSENT
+                and claim.cross_contamination_status == "UNKNOWN"
+            ]
         return GroundedMenuKnowledge(
             menu_id=menu_id,
             release_id=release_id,
@@ -1825,12 +1881,15 @@ class OracleYobiRepository:
             available_facets=available_facets,
             ingredient_claims=ingredient_claims,
             allergen_claims=allergen_claims,
+            dietary_claims=dietary_claims,
+            preparation_claims=preparation_claims,
             merchant_ingredient_claims=merchant_claims,
             passages=passages,
             merchant_origin_notes=[str(row["raw_text"]) for row in origin_rows],
             unknowns=[
                 "Merchant-specific recipe differences are unknown unless a menu fact overrides the Wiki.",
                 "Shared-kitchen cross-contact is not confirmed by the synthetic Wiki or origin declaration.",
+                *cross_contact_unknowns,
             ],
         )
 
@@ -2449,37 +2508,6 @@ class OracleYobiRepository:
                 )
                 vegan_required = "vegan" in dietary_rules
                 for row in rows:
-                    conflicts = (
-                        known_allergen_conflicts(
-                            set(_json(row["allergen_tags_json"])), dietary_rules
-                        )
-                        if profile_row["allergy_severity"] == "severe"
-                        else set()
-                    )
-                    for conflict in sorted(conflicts - {"shellfish"}):
-                        dietary_conflicts.append(
-                            f"Remove {row['menu_name']} to continue; it is flagged for {conflict.replace('_', ' ')}."
-                        )
-                    if severe_shellfish:
-                        cursor.execute(
-                            """
-                            SELECT CASE WHEN EXISTS (
-                              SELECT 1 FROM menu_dietary_attribute mda
-                              JOIN dietary_attribute da ON da.attribute_id=mda.attribute_id
-                              WHERE mda.menu_id=:id AND da.code='shellfish_sauce_absent'
-                                AND mda.status='VERIFIED'
-                            ) AND NOT EXISTS (
-                              SELECT 1 FROM menu_allergen ma
-                              JOIN allergen a ON a.allergen_id=ma.allergen_id
-                              WHERE ma.menu_id=:id AND a.code='shellfish_risk'
-                            ) THEN 1 ELSE 0 END FROM dual
-                            """,
-                            id=row["menu_id"],
-                        )
-                        if int(cursor.fetchone()[0]) != 1:
-                            dietary_conflicts.append(
-                                f"Remove {row['menu_name']} to continue; its shellfish safety is not verified."
-                            )
                     if vegan_required:
                         cursor.execute(
                             """
@@ -2724,30 +2752,6 @@ class OracleYobiRepository:
             ):
                 raise ValueError("CART_SERVICE_AREA_MISMATCH")
             merchant_ids.add(str(menu["merchant_id"]))
-            if profile["allergy_severity"] == "severe" and (
-                known_allergen_conflicts(set(_json(menu["allergen_tags_json"])), dietary_rules)
-                - {"shellfish"}
-            ):
-                raise ValueError("CART_DIETARY_CONFLICT")
-            if severe_shellfish:
-                cursor.execute(
-                    """
-                    SELECT CASE WHEN
-                      EXISTS (
-                        SELECT 1 FROM menu_dietary_attribute mda
-                        JOIN dietary_attribute da ON da.attribute_id=mda.attribute_id
-                        WHERE mda.menu_id=:id AND da.code='shellfish_sauce_absent'
-                          AND mda.status='VERIFIED'
-                      ) AND NOT EXISTS (
-                        SELECT 1 FROM menu_allergen ma
-                        JOIN allergen a ON a.allergen_id=ma.allergen_id
-                        WHERE ma.menu_id=:id AND a.code='shellfish_risk'
-                      ) THEN 1 ELSE 0 END FROM dual
-                    """,
-                    id=menu["menu_id"],
-                )
-                if int(cursor.fetchone()[0]) != 1:
-                    raise ValueError("CART_DIETARY_CONFLICT")
             if vegan_required:
                 cursor.execute(
                     """

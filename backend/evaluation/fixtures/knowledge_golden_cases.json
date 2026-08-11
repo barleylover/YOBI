@@ -23,7 +23,7 @@
         "minimum_evidence_count": 2,
         "required_evidence": [
           {
-            "claim_type": "shellfish_sauce",
+            "claim_type": "shellfish_risk_absence",
             "status": "VERIFIED",
             "source_type": "SYNTHETIC_RESTAURANT_DECLARATION"
           },

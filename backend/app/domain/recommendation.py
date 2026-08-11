@@ -19,28 +19,33 @@ _SOUP_CATEGORIES = {
 }
 
 _PREFERENCE_ALIASES: dict[str, tuple[str, ...]] = {
-    "cold": ("cold", "chilled", "refreshing", "bright broth", "naengmyeon"),
-    "warm": ("warm", "hot", "broth", "soup", "stew", "griddled"),
-    "chewy": ("chewy", "springy", "rice cake"),
-    "crispy": ("crispy", "crisp", "crunchy", "fried"),
-    "soft": ("soft", "silky", "tender"),
-    "savory": ("savory", "savoury", "umami", "broth", "black bean"),
-    "sweet": ("sweet", "sweeter", "sugary"),
-    "creamy": ("creamy", "cream", "milky"),
-    "spicy": ("spicy", "hot sauce", "gochujang", "chilli", "chili"),
-    "light": ("light", "refreshing", "bright", "clean"),
-    "hearty": ("hearty", "filling", "rich", "whole chicken"),
+    "cold": ("cold", "chilled", "refreshing", "bright broth", "naengmyeon", "차가운", "시원한"),
+    "warm": ("warm", "hot", "broth", "soup", "stew", "griddled", "따뜻한", "뜨거운"),
+    "chewy": ("chewy", "springy", "rice cake", "쫄깃한"),
+    "crispy": ("crispy", "crisp", "crunchy", "fried", "바삭한", "아삭한"),
+    "soft": ("soft", "silky", "tender", "부드러운"),
+    "savory": ("savory", "savoury", "umami", "broth", "black bean", "고소한", "감칠맛"),
+    "sweet": ("sweet", "sweeter", "sugary", "달콤한"),
+    "creamy": ("creamy", "cream", "milky", "크리미한", "부드러운"),
+    "spicy": ("spicy", "hot sauce", "gochujang", "chilli", "chili", "매운"),
+    "light": ("light", "refreshing", "bright", "clean", "담백한", "가벼운"),
+    "hearty": ("hearty", "filling", "rich", "whole chicken", "든든한", "푸짐한"),
 }
 
 _TEMPERATURE_CONTRADICTIONS: dict[str, tuple[str, ...]] = {
-    "cold": ("warm", "piping hot", "bubbling hot", "griddled"),
-    "warm": ("cold", "chilled", "iced"),
+    "cold": ("warm", "piping hot", "bubbling hot", "griddled", "따뜻한", "뜨거운"),
+    "warm": ("cold", "chilled", "iced", "차가운", "시원한"),
 }
+
+WIKI_SEMANTIC_WEIGHT = 0.60
+STRUCTURED_PREFERENCE_WEIGHT = 0.25
+OPERATIONAL_MENU_WEIGHT = 0.15
+_RETRIEVAL_WEIGHT = WIKI_SEMANTIC_WEIGHT + OPERATIONAL_MENU_WEIGHT
 
 
 def _searchable_text(menu: MenuSummary) -> str:
     return " ".join(
-        (menu.category, menu.name_en, menu.description, menu.cultural_description)
+        (menu.category, menu.name_en, menu.name_ko, menu.description, menu.cultural_description)
     ).lower()
 
 
@@ -59,35 +64,93 @@ def _matches_preference(text: str, preference: str) -> bool:
     return any(_contains_term(text, alias) for alias in aliases)
 
 
-def _preference_score(
+def _structured_preference_score(
     menu: MenuSummary,
     state: MealNeedState,
 ) -> tuple[float, list[str]]:
     text = _searchable_text(menu)
-    score_delta = 0.0
+    scores: list[float] = []
     reasons: list[str] = []
     for preference in state.temperature_preferences:
         contradictions = _TEMPERATURE_CONTRADICTIONS.get(preference.lower(), ())
         if any(_contains_term(text, term) for term in contradictions):
-            score_delta -= 0.18
+            scores.append(0.0)
             continue
         if _matches_preference(text, preference):
-            score_delta += 0.24
+            scores.append(1.0)
             reasons.append(f"Matches your {preference.lower()} preference")
+        else:
+            scores.append(0.45)
 
-    weighted_preferences = (
-        (state.texture_preferences, 0.10),
-        (state.flavor_preferences, 0.14),
-        (state.preferred_categories, 0.10),
-        (state.positive_preferences, 0.08),
+    structured_preferences = (
+        state.texture_preferences,
+        state.flavor_preferences,
+        state.preferred_categories,
+        state.positive_preferences,
     )
-    for preferences, weight in weighted_preferences:
+    for preferences in structured_preferences:
         for preference in preferences:
             if _matches_preference(text, preference):
-                score_delta += weight
+                scores.append(1.0)
                 reasons.append(f"Matches your {preference.lower()} preference")
+            else:
+                scores.append(0.45)
 
-    return score_delta, reasons
+    if not scores:
+        return 0.5, reasons
+    return sum(scores) / len(scores), reasons
+
+
+def operational_menu_signal(
+    menu_similarity: float,
+    *,
+    price: int,
+    budget: int,
+    delivery_fee: int,
+    eta_max: int,
+) -> float:
+    """Score only stable menu relevance and synthetic delivery operating data."""
+
+    safe_budget = max(budget, 1)
+    price_fit = 1.0 - 0.5 * min(price / safe_budget, 1.0)
+    fee_fit = 1.0 - min(max(delivery_fee, 0), 6000) / 6000
+    eta_fit = 1.0 - min(max(eta_max - 15, 0), 75) / 75
+    score = (
+        0.65 * max(0.0, min(1.0, menu_similarity))
+        + 0.10 * price_fit
+        + 0.10 * fee_fit
+        + 0.15 * eta_fit
+    )
+    return max(0.0, min(1.0, score))
+
+
+def wiki_operational_retrieval_score(
+    wiki_similarity: float,
+    operational_signal: float,
+) -> float:
+    """Normalize the 60% Wiki + 15% operational retrieval stage to ``[0, 1]``."""
+
+    weighted = (
+        WIKI_SEMANTIC_WEIGHT * max(0.0, min(1.0, wiki_similarity))
+        + OPERATIONAL_MENU_WEIGHT * max(0.0, min(1.0, operational_signal))
+    )
+    return weighted / _RETRIEVAL_WEIGHT
+
+
+def final_hybrid_recommendation_score(
+    retrieval_score: float,
+    structured_preference_score: float,
+) -> float:
+    """Compose the final 60/25/15 Wiki, preference, and operational score."""
+
+    return max(
+        0.0,
+        min(
+            1.0,
+            _RETRIEVAL_WEIGHT * retrieval_score
+            + STRUCTURED_PREFERENCE_WEIGHT * structured_preference_score,
+        ),
+    )
 
 
 def _diversified_order(candidates: Sequence[MenuSummary], limit: int) -> list[MenuSummary]:
@@ -146,7 +209,7 @@ def rerank_menu_candidates(
         if state.budget_krw is not None and estimated_total > state.budget_krw:
             continue
 
-        score_delta, preference_reasons = _preference_score(menu, state)
+        structured_score, preference_reasons = _structured_preference_score(menu, state)
         reasons = list(dict.fromkeys([*menu.match_reasons, *preference_reasons]))
         if state.party_size is not None:
             party_label = "person" if state.party_size == 1 else "people"
@@ -158,7 +221,11 @@ def rerank_menu_candidates(
             menu.model_copy(
                 update={
                     "semantic_score": round(
-                        max(0.0, min(1.0, menu.semantic_score + score_delta)), 4
+                        final_hybrid_recommendation_score(
+                            menu.semantic_score,
+                            structured_score,
+                        ),
+                        4,
                     ),
                     "match_reasons": reasons,
                 }

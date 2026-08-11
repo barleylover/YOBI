@@ -5,6 +5,7 @@
   "name_ko": "김밥",
   "name_en": "Gimbap",
   "aliases": [
+    "김밥",
     "kimbap",
     "Korean seaweed rice roll"
   ],
@@ -75,6 +76,34 @@
       "allergen_id": "allergen_sesame",
       "status": "POSSIBLE",
       "source_ref": "YOBI synthetic culinary knowledge review: Gimbap v1"
+    }
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Egg, fish cake, meat or seafood may be included",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: gimbap structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegetarian_possible",
+      "value_text": "A vegetarian roll is possible only after all fillings and seasoning are confirmed",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: gimbap structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegan_possible",
+      "value_text": "A vegan roll requires explicit confirmation of egg, fish cake, meat and sauce",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: gimbap structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "rolled_and_sliced",
+      "value_text": "Seasoned rice and fillings are rolled in seaweed and sliced",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: gimbap structured claims v1"
     }
   ],
   "source_type": "SYNTHETIC_WIKI",

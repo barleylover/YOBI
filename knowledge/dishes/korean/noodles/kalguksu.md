@@ -5,6 +5,7 @@
   "name_ko": "칼국수",
   "name_en": "Kalguksu",
   "aliases": [
+    "칼국수 면요리",
     "Korean knife-cut noodles",
     "knife-cut noodle soup"
   ],
@@ -41,6 +42,28 @@
       "allergen_id": "allergen_wheat",
       "status": "PRESUMED_PRESENT",
       "source_ref": "The demo Wiki canonical kalguksu profile uses wheat noodles"
+    }
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Meat, fish or shellfish broth may be used",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: kalguksu structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegetarian_possible",
+      "value_text": "A vegetable-broth version is possible but not implied by the family name",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: kalguksu structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "simmered",
+      "value_text": "Knife-cut wheat noodles are boiled or simmered in broth",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: kalguksu structured claims v1"
     }
   ],
   "source_type": "SYNTHETIC_WIKI",

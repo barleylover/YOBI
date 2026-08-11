@@ -159,6 +159,23 @@ def test_extended_read_tools_are_grounded_and_confirmation_safe(repository, prof
     assert categories["categories"]
     explanation = registry.execute("explain_menu", '{"menu_id":"menu_003_01"}')
     assert explanation["explanation"]["evidence_ids"]
+    assert explanation["explanation"]["dietary_claims"]
+    assert explanation["explanation"]["preparation_claims"]
+    dietary = registry.execute("get_dietary_evidence", '{"menu_id":"menu_003_01"}')
+    assert dietary["menu_id"] == "menu_003_01"
+    assert dietary["dietary_claims"]
+    assert dietary["preparation_claims"]
+    assert dietary["wiki_passages"]
+    assert dietary["grounded_passage_ids"]
+    assert {
+        claim["source_id"]
+        for claim in [*dietary["dietary_claims"], *dietary["preparation_claims"]]
+    }.issubset(dietary["grounded_claim_ids"])
+    compact_dietary = AgentLoop._compact_tool_result("get_dietary_evidence", dietary)
+    assert compact_dietary["dietary_claims"]
+    assert compact_dietary["preparation_claims"]
+    assert compact_dietary["wiki_passages"]
+    assert compact_dietary["grounded_passage_ids"]
     address = registry.execute("resolve_address", '{"text":"YOBI Myeongdong Hotel"}')
     assert address["requires_confirmation"] is True
     note = registry.execute(

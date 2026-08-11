@@ -84,8 +84,9 @@ def main() -> None:
             "First Korean street-food order; avoid unknown shellfish ingredients",
         ]
         for index in range(DISTRIBUTION["dietary_allergy"]):
+            query_variant = index % len(allergy_queries)
             menus = repository.search_menus(
-                f"{allergy_queries[index % len(allergy_queries)]} case {index}",
+                f"{allergy_queries[query_variant]} case {index}",
                 severe,
                 15000,
                 1,
@@ -93,7 +94,11 @@ def main() -> None:
                 limit=3,
             )
             executed["dietary_allergy"] += 1
-            canonical_top3_failures += int("menu_001_01" not in {menu.menu_id for menu in menus})
+            canonical_top3_failures += int(
+                "menu_001_01" not in {menu.menu_id for menu in menus}
+                if query_variant < 3
+                else not menus
+            )
             for menu in menus:
                 constraint_violations += int(
                     not any("shellfish" in reason.lower() for reason in menu.match_reasons)

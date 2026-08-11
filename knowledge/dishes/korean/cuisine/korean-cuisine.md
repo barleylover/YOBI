@@ -5,6 +5,7 @@
   "name_ko": "한식",
   "name_en": "Korean cuisine",
   "aliases": [
+    "한식",
     "Korean food",
     "Hansik"
   ],

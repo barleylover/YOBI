@@ -18,7 +18,12 @@ from app.genai.contracts import GenAIErrorCode, GenAIProvider, GenAIProviderErro
 from app.genai.prompts import prompt_for_profile
 from app.genai.providers import choose_genai_provider
 from app.genai.rate_limit import retry_delay_seconds
-from app.genai.response_contract import model_narrative_text_config, parse_model_narrative
+from app.genai.response_contract import (
+    GroundingScope,
+    UncertaintyCode,
+    model_narrative_text_config,
+    parse_model_narrative,
+)
 from app.genai.tool_registry import ToolRegistry
 from app.genai.tool_schemas import select_tools
 
@@ -29,6 +34,9 @@ class AgentResult:
     tool_results: list[tuple[str, dict[str, Any]]]
     referenced_menu_ids: list[str] | None = None
     referenced_claim_ids: list[str] | None = None
+    referenced_passage_ids: list[str] | None = None
+    grounding_scope: GroundingScope | None = None
+    uncertainty_codes: list[UncertaintyCode] | None = None
     structured_output: bool = False
     response_kind: str | None = None
     provider_error_code: GenAIErrorCode | None = None
@@ -158,6 +166,9 @@ class AgentLoop:
                     tool_results=tool_results,
                     referenced_menu_ids=parsed.narrative.referenced_menu_ids,
                     referenced_claim_ids=parsed.narrative.referenced_claim_ids,
+                    referenced_passage_ids=parsed.narrative.referenced_passage_ids,
+                    grounding_scope=parsed.narrative.grounding_scope,
+                    uncertainty_codes=parsed.narrative.uncertainty_codes,
                     structured_output=parsed.structured,
                     response_kind=parsed.narrative.response_kind,
                 )
@@ -394,11 +405,19 @@ class AgentLoop:
             }
         if name == "get_dietary_evidence":
             return {
+                "menu_id": result.get("menu_id"),
                 "evidence": result.get("evidence", [])[:4],
                 "ingredient_claims": result.get("ingredient_claims", [])[:12],
                 "allergen_claims": result.get("allergen_claims", [])[:12],
+                "dietary_claims": result.get("dietary_claims", [])[:12],
+                "preparation_claims": result.get("preparation_claims", [])[:8],
+                "merchant_ingredient_claims": result.get(
+                    "merchant_ingredient_claims", []
+                )[:8],
+                "wiki_passages": result.get("wiki_passages", [])[:5],
                 "unknown_fields": result.get("unknown_fields", [])[:6],
                 "grounded_claim_ids": result.get("grounded_claim_ids", [])[:24],
+                "grounded_passage_ids": result.get("grounded_passage_ids", [])[:8],
             }
         if name == "explain_menu":
             explanation = result.get("explanation", {})

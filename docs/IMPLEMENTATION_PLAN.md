@@ -1,6 +1,7 @@
 # YOBI MVP implementation plan
 
 Date: 2026-08-06 KST
+Wiki-centric demo update: 2026-08-11 KST
 
 ## Authority and conflict resolution
 
@@ -12,7 +13,7 @@ Date: 2026-08-06 KST
 
 The current MVP target is an English-speaking foreign tourist entering by QR, not a long-term resident. Onboarding is a visual form. A booking screenshot is supported. Payment is always mock. The production LLM path is `/20231130/actions/v1`, model `xai.grok-4.3`, with no `project=` parameter.
 
-## Confirmed starting state
+## Confirmed starting state (historical, 2026-08-06)
 
 - This app workspace initially contained only the two master documents and four reference files.
 - No Git repository or application source existed in this directory.
@@ -30,7 +31,9 @@ The current MVP target is an English-speaking foreign tourist entering by QR, no
 ### Phase 2 - data and Oracle
 
 - Oracle-specific sequential migrations and checksum ledger.
-- Deterministic seed: 3 service areas, 30 merchants, 150 menus, at least 250 option items, 600 review snippets, 300 evidence rows, and 20 hotels.
+- Deterministic seed, expanded for the presentation demo: 3 service areas, 60
+  merchants, 600 menus, 1,202 option groups, 2,405 option items, 2,400 zero-weight
+  review snippets, 1,200 evidence rows, and 20 address fixtures.
 - Hard dietary filters plus 1536-dimensional semantic embeddings and `VECTOR_DISTANCE(..., COSINE)` retrieval.
 - Secure `YOBI_APP` bootstrap; ADMIN is never a runtime account.
 
@@ -51,6 +54,35 @@ The current MVP target is an English-speaking foreign tourist entering by QR, no
 - Nginx, systemd, release/rollback scripts, preflight, demo reset, prewarm, current-URL QR, and safe logging.
 - Secure user-run bootstrap only when secret input is genuinely required, followed by migration, seed, deployment, public smoke tests, and three consecutive canonical E2E passes.
 
+### Phase 6 - internal menu knowledge graph demo
+
+- Treat the internal Wiki as the primary recommendation/explanation source. Merchant
+  description prose and all review text contribute `0` to ranking and safety.
+- Model reusable food knowledge only to family/variant level, such as
+  `김밥 → 참치김밥·치즈김밥`; a merchant-specific product name maps to one of those
+  concepts instead of creating a merchant node.
+- Compile 102 reusable documents (`2` cuisine, `30` family, `70` variant) into 100
+  relations, 281 closure rows, 1,997 structured claims, and 918 searchable facet
+  chunks; map all 600 menus across 100 menu categories. Claims are 361 ingredient,
+  371 allergen, 247 dietary, 100 preparation, and 918 facet rows.
+- Search by exact Korean/English alias, Korean facet term, and vector similarity after
+  hard safety/availability filtering. Keep all surviving demo candidates with a
+  `600` cap, enforce party-sized budget and negative preferences before final output,
+  and compose ranking as `60%` Wiki, `25%` structured preference, and `15%`
+  operational/menu metadata. The operational signal uses menu relevance, price,
+  delivery fee, and ETA—not rating.
+- Keep the synthetic merchant/menu feed realistically incomplete: only 206 menus have
+  ingredient declarations (565 rows) and 221 have allergen declarations (595 rows).
+  Keep 13 origins and 119 merchant ingredients cross-contact-only. Explicit
+  absence alternatives require `VERIFIED` synthetic menu evidence while cross-contact
+  stays `UNKNOWN`. Missing information stays unknown; shared-kitchen facts are
+  cross-contact warnings only.
+- Require generated explanations to return grounded passage IDs, scope, and
+  uncertainty codes using `OPTION > MENU > VARIANT_WIKI > FAMILY_WIKI` precedence.
+- Use base catalog `demo-2026.08.11-knowledge-v3`, knowledge catalog contract
+  `demo-knowledge-catalog-2026.08.11-v3`, and migration ledger `001`–`009`. Local
+  verification and OCI/public deployment remain separate gates.
+
 ## Scope boundaries
 
 - No real Yogiyo data or API.
@@ -58,4 +90,3 @@ The current MVP target is an English-speaking foreign tourist entering by QR, no
 - Synthetic claims are visibly labelled.
 - No OCI resource deletion, scaling, IAM expansion, new VM, load balancer, Kubernetes, or dedicated AI cluster.
 - K-Food Passport is deferred until the canonical flow is stable.
-

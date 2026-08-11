@@ -1,5 +1,9 @@
 # Data model
 
+> Counts below describe the 2026-08-11 local v3 seed contract. The existing OCI
+> deployment was last verified with the historical v2 catalog and has not yet been
+> migrated/seeded with this v3 data.
+
 YOBI keeps ordering facts, conversation state, and menu knowledge in one relational
 contract. Oracle is the deployed database and SQLite is the local contract-compatible
 implementation. Oracle schema changes are applied only by the sequential migration
@@ -19,12 +23,27 @@ order idempotency remain server-authoritative. `AUDIT_LOG` is the safe operation
 event sink. `SCHEMA_MIGRATION` records each immutable migration filename, SHA-256
 checksum, and application time.
 
-The deterministic seed currently expects 3 service areas, 20 categories, 30
-merchants, 150 menus, 150 legacy menu-knowledge rows, 300 evidence rows, 600 review
-snippets, 302 option groups, 605 option items, 20 address fixtures, 47 normalized
-ingredients, 10 allergens, and 15 dietary attributes. All demo-owned rows are
-synthetic. Exact counts are enforced in `scripts/seed_demo.py`; changing the catalog
-requires changing its fixture and integrity expectations together.
+The deterministic Wiki-centric seed currently expects 3 service areas, 100 categories,
+60 merchants, 600 menus, 600 legacy menu-knowledge rows, 1,200 evidence rows, 2,400
+review snippets, 1,202 option groups, 2,405 option items, and 20 address fixtures. The
+normalized taxonomy contains 54 ingredients, 10 allergens, and 20 dietary attributes.
+Nine allergen codes match onboarding choices; the tenth legacy-compatible row is the
+shared-kitchen `cross_contamination_unknown` marker, not an additional user allergy.
+All demo-owned rows are synthetic. Exact counts are enforced in
+`scripts/seed_demo.py`; changing the catalog requires changing its fixture and
+integrity expectations together. The base catalog version is
+`demo-2026.08.11-knowledge-v3`.
+
+The seed deliberately does not pretend that every merchant publishes a complete
+recipe or allergen specification. Menu-level ingredient facts cover 206 of 600 menus
+(565 rows), allergen facts cover 221 menus (595 rows), and dietary attributes contain
+1,217 menu links. The remaining gaps stay unknown and are resolved with reusable Wiki
+family/variant knowledge, never fabricated merchant prose. The 2,400 reviews remain
+available for display compatibility but carry ranking and safety weight `0`.
+Each merchant has a ten-menu roster biased toward one dominant food family plus
+related variants, rather than a random copy of the full catalog. Availability is 510
+`AVAILABLE`, 60 `SOLD_OUT`, and 30 `PAUSED`, so the demo exercises availability
+filtering without needing additional locations.
 
 ## Conversation state and recommendation snapshots
 
@@ -73,14 +92,17 @@ YAML validated by Pydantic, and every document must contain the nine facets
 dangling parents, unknown facets, unclassified ingredient/allergen IDs, and a
 `DEFINING`/`CORE` claim that is not `PRESUMED_PRESENT`.
 
-The compiled demo contract currently contains 29 concepts/documents, 27 relations,
-66 closure rows, 411 claims, 261 facet chunks, 150 menu mappings, 30 merchant
-origin declarations, 266 normalized merchant ingredients, and 4 option ingredient
-effects. Its `knowledge-demo-<24 hex>` release ID is derived from the
+The compiled demo contract currently contains 102 concepts/documents (`2` cuisine,
+`30` family, `70` variant), 100 relations, 281 closure rows, 1,997 claims, 918 facet
+chunks, and 600 `MAPPED` menu rows. The claims break down into 361 ingredient, 371
+allergen, 247 dietary, 100 preparation, and 918 facet claims. Supplemental release
+data contains 13 merchant origin declarations, 119 merchant ingredient rows used only
+as shared-kitchen cross-contact signals, and 4 option ingredient effects. Its
+`knowledge-demo-<24 hex>` release ID is derived from the
 normalized authored paths/content, catalog version, and compiler contract instead of
 being a mutable hand-written version. Reusing an ID with a different manifest fails;
-the loader never replaces release-scoped graph rows in place. The associated catalog
-contract is `demo-knowledge-catalog-2026.08.09-v2`. The authoring default uses
+the loader never replaces release-scoped graph rows in place. The associated knowledge
+catalog contract is `demo-knowledge-catalog-2026.08.11-v3`. The authoring default uses
 `yobi-semantic-hash-v1`, dimension 1536, embedding version `2026-08-06`; deployment
 may re-embed the authored release with the separately configured embedding provider.
 The active release is marked `READY` only after exact counts and non-null chunk
@@ -108,7 +130,12 @@ Concept claims and specific facts do not have equal meaning:
    claims are instead conservative shared-kitchen/cross-contact signals for strict,
    explicit religious, and severe-allergy filtering.
 4. A missing Wiki claim stays unknown. It never becomes `CONFIRMED_ABSENT`.
-5. `UNKNOWN`, possible cross-contact, and synthetic Wiki knowledge cannot be phrased
+5. The explicit demo alternatives use menu-scoped absence backed by `VERIFIED`
+   synthetic menu evidence, while keeping cross-contact `UNKNOWN`; this supports a
+   qualified alternative, not an allergy-safe certification.
+   The alternatives are distributed across the three demo areas and are not tied to
+   a supposedly allergy-safe merchant or real-world certification.
+6. `UNKNOWN`, possible cross-contact, and synthetic Wiki knowledge cannot be phrased
    as allergy-safe, halal-certified, or medically verified.
 
 The legacy `MENU_KNOWLEDGE`, normalized menu relations, and `EVIDENCE` tables remain
@@ -118,10 +145,15 @@ with the active concept release rather than deleting or silently redefining them
 ## Search, service area, and mutation compatibility
 
 Oracle menu and chunk vectors are `VECTOR(1536, FLOAT32)`. Search applies service
-area, availability, price, spice, and dietary/ingredient hard filters before semantic
-ranking. Severe shellfish profiles retain the stricter verified-sauce-absence rule
-and an independent cross-contact warning. SQLite stores equivalent vectors as JSON
-and computes cosine similarity in application code.
+area, availability, spice, and dietary/ingredient hard safety filters before bulk
+Wiki scoring. A cap of `600` preserves every surviving demo candidate through exact
+alias, Korean facet, and vector matching. Party-sized budget and explicit negative
+preferences are enforced before final output. Final ranking is exactly `60%` Wiki,
+`25%` structured preference, and `15%` operational/menu metadata; the operational
+signal uses menu semantic relevance, price, delivery fee, and ETA. Rating, merchant
+prose, and reviews contribute `0`. Severe shellfish profiles retain the stricter
+verified-sauce-absence rule and an independent cross-contact warning. SQLite stores
+equivalent vectors as JSON and computes cosine similarity in application code.
 
 Migration `007_service_area_and_mutation_idempotency.sql` adds `service_area_id` to
 `ADDRESS_PLACE` and `ADDRESS_REF`, and `agent_request_key` to `CART_ITEM`. The unique

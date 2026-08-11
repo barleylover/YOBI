@@ -4,7 +4,7 @@
   "concept_type": "FAMILY",
   "name_ko": "피자",
   "name_en": "Pizza",
-  "aliases": ["delivery pizza"],
+  "aliases": ["피자", "delivery pizza"],
   "version": "demo-wiki-2026.08.09-v1",
   "language": "en",
   "parents": [],
@@ -17,6 +17,34 @@
   "allergens": [
     {"allergen_id": "allergen_wheat", "status": "PRESUMED_PRESENT", "source_ref": "The canonical demo dough is wheat-based"},
     {"allergen_id": "allergen_milk", "status": "PRESUMED_PRESENT", "source_ref": "The canonical demo pizza uses dairy cheese"}
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Dairy cheese is presumed present and meat toppings are possible",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: pizza structured claims v1"
+    },
+    {
+      "attribute_id": "diet_pork_possible",
+      "value_text": "Pork toppings are possible but not universal",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: pizza structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegetarian_possible",
+      "value_text": "A vegetarian topping set is possible after cheese and sauce are accepted",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: pizza structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "baked",
+      "value_text": "Dough, cheese, sauce and toppings are assembled and baked",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: pizza structured claims v1"
+    }
   ],
   "source_type": "SYNTHETIC_WIKI",
   "source_refs": ["YOBI synthetic culinary knowledge review: Pizza v1"],

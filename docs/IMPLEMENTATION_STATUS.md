@@ -1,13 +1,13 @@
 # YOBI MVP implementation status
 
-Last updated: 2026-08-09 KST
+Last updated: 2026-08-11 KST
 
-> Historical sections below remain evidence for the public MVP/UI releases that
-> predate the chatbot-improvement migrations `005`–`008`. The current Phase status is
-> tracked in `CHATBOT_IMPROVEMENT_IMPLEMENTATION.md`; exact final test and live
-> OCI/Public evidence is in `TEST_REPORT.md`.
+> The 2026-08-11 Wiki-centric catalog and recommendation changes described first are
+> present only in the local working tree. They have not been committed, pushed,
+> deployed to OCI, or verified through the public demo in this checkpoint. Do not
+> combine them with the older live evidence below.
 
-> Chatbot-improvement release `20260809T084353Z-704f74712d9d` is live on the existing
+> Historical release `20260809T084353Z-704f74712d9d` remains live on the existing
 > OCI VM/ADB. Migrations `001`–`008`, catalog
 > `demo-2026.08.09-knowledge-v2`, immutable knowledge release
 > `knowledge-demo-1c7dd5378736fc75567ba871`, public readiness/security, full public
@@ -15,6 +15,54 @@ Last updated: 2026-08-09 KST
 > MyPy (62 files), backend Pytest (223), legacy evaluation (100 queries), chatbot
 > acceptance (345 assertions), frontend lint/Vitest (11 tests), and the 1,796-module
 > build. Draft PR #1 remains OPEN/Draft; it is not merged.
+
+## 2026-08-11 local Wiki-centric demo refactor
+
+The current local catalog makes reusable menu knowledge—not merchant descriptions or
+reviews—the primary source for recommendation and explanation. It contains 60
+synthetic merchants and 600 synthetic menus across 100 categories, all mapped to
+family/variant concepts. The Wiki contains 102 concepts/documents (`2` cuisine, `30`
+family, `70` variant), 100 relations, 281 closure rows, 1,997 claims, and 918 chunks.
+Claim totals are 361 ingredient, 371 allergen, 247 dietary, 100 preparation, and 918
+facet claims.
+
+The catalog intentionally resembles an incomplete marketplace feed. Menu-specific
+ingredient declarations cover 206 menus (565 rows), allergen declarations cover 221
+menus (595 rows), and dietary links contain 1,217 rows across 20 attributes. Thirteen
+merchant origin declarations and 119 merchant ingredient rows are limited to
+shared-kitchen cross-contact context. Four option effects remain menu-option specific.
+The 2,400 review rows are display-compatible synthetic data with ranking and safety
+weight `0`; merchant free-text descriptions also contribute `0`.
+
+Retrieval applies hard safety and availability filters before bulk Wiki scoring. A
+`600` cap retains every surviving demo candidate through exact Korean/English aliases,
+Korean facets, vectors, and structured reranking. Party-sized budget and negative
+preferences are enforced before final output. The final score is exactly `60%` Wiki,
+`25%` structured preference, and `15%` operational/menu metadata; that operational
+signal uses menu semantic relevance, price, delivery fee, and ETA—not rating. The LLM
+contract uses evidence precedence
+`OPTION > MENU > VARIANT_WIKI > FAMILY_WIKI` and carries referenced passage IDs,
+grounding scope, and uncertainty codes so possible, unknown, and not-provided facts
+cannot be strengthened into certainty.
+
+Ingredient, allergen/dietary, and preparation questions now preserve their requested
+facet through deterministic and model-tool paths. Korean server text uses taxonomy
+names and scoped status labels rather than exposing English Wiki prose, while the
+frontend renders the structured claims and keeps raw English passages in a collapsed
+supporting-evidence section. All nine onboarding allergens and five safety dietary
+signals remain visible; operational tags are excluded from the risk section.
+
+Explicit absence alternatives are backed by `VERIFIED` synthetic menu evidence while
+cross-contact remains `UNKNOWN`. They can support a qualified alternative but cannot
+be described as allergy-safe.
+
+The local source packages checksum migrations `001`–`009` and uses base catalog
+`demo-2026.08.11-knowledge-v3` plus knowledge catalog contract
+`demo-knowledge-catalog-2026.08.11-v3`. Local final gates passed: backend Pytest 348,
+100-query recommendation evaluation, 369-assertion chatbot acceptance, Ruff, Mypy
+(64 files), frontend lint/6 files/16 tests/production build, and fresh SQLite exact readiness
+with zero FK violations. No 2026-08-11 Oracle migration, seed, OCI GenAI, `/readyz`,
+public browser, or rollback result is claimed here; full details are in `TEST_REPORT.md`.
 
 ## Historical public baseline status
 
@@ -41,7 +89,7 @@ Confirmed live for the historical baseline only:
 - Public full-order API smoke and Primary iPhone E2E three consecutive passes.
 - `/etc/yobi/yobi.env` remains `root:root` mode `0600`; no values were printed.
 
-## Chatbot-improvement status
+## Historical 2026-08-09 chatbot-improvement status
 
 The multi-turn dialogue, knowledge graph, grounded hybrid retrieval, provider
 capability/readiness, and release-safety implementation is deployed from

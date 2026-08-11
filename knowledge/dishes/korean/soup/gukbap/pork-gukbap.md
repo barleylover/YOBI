@@ -5,6 +5,7 @@
   "name_ko": "돼지국밥",
   "name_en": "Pork gukbap",
   "aliases": [
+    "돼지 국밥",
     "dwaeji gukbap",
     "Korean pork soup with rice"
   ],
@@ -46,6 +47,34 @@
       "allergen_id": "allergen_shellfish_risk",
       "status": "POSSIBLE",
       "source_ref": "Fermented accompaniments or shared stock preparation can introduce seafood"
+    }
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Pork defines the dish",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: pork-gukbap structured claims v1"
+    },
+    {
+      "attribute_id": "diet_pork_possible",
+      "value_text": "Pork is presumed present",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: pork-gukbap structured claims v1"
+    },
+    {
+      "attribute_id": "diet_halal_not_verified",
+      "value_text": "Pork makes the common concept incompatible with halal requirements",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: pork-gukbap structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "simmered",
+      "value_text": "Pork and pork broth are simmered and served with rice",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: pork-gukbap structured claims v1"
     }
   ],
   "source_type": "SYNTHETIC_WIKI",

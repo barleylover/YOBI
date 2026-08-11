@@ -5,6 +5,7 @@
   "name_ko": "참치김밥",
   "name_en": "Tuna gimbap",
   "aliases": [
+    "참치 김밥",
     "tuna kimbap",
     "Korean tuna rice roll"
   ],
@@ -38,6 +39,28 @@
       "allergen_id": "allergen_egg",
       "status": "POSSIBLE",
       "source_ref": "Mayonnaise and egg-strip fillings are common but not universal"
+    }
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Tuna defines the variant",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: tuna-gimbap structured claims v1"
+    },
+    {
+      "attribute_id": "diet_halal_not_verified",
+      "value_text": "Mayonnaise, seasoning and shared preparation are not halal-verified by the Wiki",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: tuna-gimbap structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "rolled_and_sliced",
+      "value_text": "Tuna and other fillings are rolled with rice in seaweed and sliced",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: tuna-gimbap structured claims v1"
     }
   ],
   "source_type": "SYNTHETIC_WIKI",

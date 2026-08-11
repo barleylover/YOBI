@@ -2,18 +2,59 @@
 
 - 기준 명세: `YOBI_CHATBOT_IMPROVEMENT_CODEX_GOAL.md`
 - 작업 브랜치: `codex/master-spec-completion`
-- 점검일: 2026-08-09 KST
+- 점검일: 2026-08-11 KST
 - 상태 의미: **연결됨**은 현재 작업 트리의 실제 런타임 경로가 존재한다는 뜻이며,
   **PASS**는 해당 경계의 실제 검증을 통과했다는 뜻이다. 로컬, Oracle, OCI GenAI,
   Public, Git/Draft PR 증거는 서로 대체하지 않고 별도로 기록한다.
 
 이 문서는 구현 파일 목록을 완료 증거로 대신하지 않는다. 로컬 전체 검증, Oracle
-Migration/seed, OCI release 전환, Public E2E, Git push는 서로 다른 증거다. 각 경계의
-최종 결과는 아래 Phase 7 표와 `TEST_REPORT.md`에 기록한다.
+Migration/seed, OCI release 전환, Public E2E, Git push는 서로 다른 증거다. 특히
+아래 2026-08-11 항목은 **로컬 작업 트리 구현 상태**이며 아직 OCI/Public 증거가
+아니다. 2026-08-09 배포 기록은 그 뒤에 역사적 증거로 보존한다.
+
+## 2026-08-11 내부 메뉴 지식 그래프 기반 데모 개선
+
+현재 로컬 구현은 가게 설명과 리뷰 대신 재사용 가능한 음식 Wiki를 추천·설명의
+중심에 둔다. 지식 노드는 특정 가게 상품이 아니라 `FAMILY`와 `VARIANT` 수준까지
+내려간다. 예를 들어 가게별 참치김밥 상품은 공통 `참치김밥` 지식에 매핑되고,
+가게 이름을 포함한 별도 Wiki 노드를 만들지 않는다.
+
+| 영역 | 현재 로컬 계약 |
+|---|---|
+| 목업 catalog | 60 가게, 600 메뉴, 1,200 evidence, 1,202 option group, 2,405 option item |
+| Wiki graph | 102 concept/document (`CUISINE` 2/`FAMILY` 30/`VARIANT` 70), relation 100, closure 281, claim 1,997, chunk 918, 600 `MAPPED` menu |
+| claim 구성 | ingredient 361, allergen 371, dietary 247, preparation 100, facet 918 |
+| 불완전 메뉴 사실 | ingredient: 206 메뉴/565행, allergen: 221 메뉴/595행, dietary: 20 속성/1,217행 |
+| 가게·옵션 범위 | origin 13, shared-kitchen cross-contact ingredient 119, option effect 4 |
+| 리뷰 | 2,400 합성 행 유지, ranking/safety/LLM grounded context 가중치 `0` |
+| 버전 | base catalog `demo-2026.08.11-knowledge-v3`, knowledge catalog `demo-knowledge-catalog-2026.08.11-v3`, migration package `001`–`009` |
+
+검색은 서비스 지역·가용성·알레르기·식단 하드 필터를 먼저 적용한다. cap `600`은
+남은 데모 후보 전체를 exact 한국어/영어 alias, 한국어 facet, vector, 구조화
+rerank까지 보존한다. 인원수 기준 총비용·예산·부정 선호는 최종 출력 전에 적용한다.
+최종 점수는 정확히 **Wiki 60% + 구조화 선호 25% + 운영/메뉴 메타데이터 15%**로
+합성한다. 운영 신호는 메뉴 semantic relevance, 가격, 배달비, ETA만 사용하고 rating,
+리뷰, 가게 설명 prose는 점수와 안전 판정에 참여하지 않는다.
+
+생성 프롬프트와 validator의 근거 우선순위는
+`OPTION > MENU > VARIANT_WIKI > FAMILY_WIKI`다. 응답 계약은 기존 menu/claim ID에
+`referenced_passage_ids`, `grounding_scope`, `uncertainty_codes`를 추가한다. 따라서
+Wiki의 `POSSIBLE`/`UNKNOWN`, 메뉴의 `NOT_PROVIDED`, 가게 공유주방 정보는 확정 재료,
+확정 부재, 안전 인증처럼 강화할 수 없다.
+
+명시적 부재 대안은 `VERIFIED` 합성 메뉴 evidence를 가진 메뉴 범위 사실만 사용하며,
+교차접촉 상태는 계속 `UNKNOWN`이다. 따라서 설명 가능한 대안이지 알레르기 안전
+인증은 아니다.
+
+이 로컬 변경의 전체 테스트, Oracle seed/migration, OCI GenAI, health/readiness,
+공개 브라우저, rollback 검증 결과는 완료 후 `TEST_REPORT.md`에 별도로 기록해야
+한다. 현재 공개 환경은 아래 2026-08-09 release이며 이 v3 catalog가 아니다.
+
+## 2026-08-09 배포 기록 (역사적)
 
 ## 핵심 결과
 
-현재 작업 트리는 단순한 “메시지 → 즉시 검색” 경로를 다음 구조로 확장한다.
+2026-08-09 배포 작업은 단순한 “메시지 → 즉시 검색” 경로를 다음 구조로 확장했다.
 
 ```text
 사용자 발화
@@ -31,9 +72,9 @@ Migration/seed, OCI release 전환, Public E2E, Git push는 서로 다른 증거
 미기재는 부재가 아니다. 합성 리뷰는 저장·표시 호환성을 위해 남아 있지만 추천과
 안전 가중치는 모두 `0`이다.
 
-## Phase 0~7 매트릭스
+## 역사적 Phase 0~7 매트릭스
 
-| Phase | 현재 작업 트리 상태 | 실제 산출물 | 최종 증거 상태 |
+| Phase | 2026-08-09 당시 상태 | 당시 산출물 | 역사적 증거 상태 |
 |---|---|---|---|
 | 0. 계약·기준선·평가 | 연결됨 | `domain/dialogue.py`, `domain/knowledge.py`, `genai/contracts.py`, `evaluation/fixtures/*.json` | 로컬 PASS: legacy 100 queries + acceptance 345 assertions, 모든 failure counter 0 |
 | 1. 대화 상태·readiness | 연결됨 | `services/dialogue_engine.py`, `services/chat_service.py`, `test_dialogue_state.py` | 로컬 backend/acceptance/E2E PASS |
@@ -44,7 +85,7 @@ Migration/seed, OCI release 전환, Public E2E, Git push는 서로 다른 증거
 | 6. LLM 품질·fallback | 연결됨 | provider/capability adapter, DialogueAct tool routing, structured narrative, response validator, 오류 분류·retry | OCI 주 모델·fallback 모델·실제 오류 분류·Oracle fallback PASS |
 | 7. 통합·배포 | PASS | 배포 archive preflight, checksum migration, SHA release identity, release marker/정확한 rollback, 문서와 acceptance runner | release 활성화, Public 21개, Primary 3회, NSG cleanup PASS |
 
-## Phase별 구현 근거
+## 역사적 Phase별 구현 근거
 
 ### Phase 0 — 실행 가능한 계약
 
@@ -150,9 +191,9 @@ response, grounding rejection은 안전 코드로 분류된다. model narrative�
 존재하는 menu/claim/passage만 참조할 수 있고 내부 tool/ID 노출은 거절된다. 생성
 model 전환은 embedding model/version을 변경하지 않는다.
 
-### Phase 7 — 최종 로컬·Oracle·OCI·Public 증거
+### 역사적 Phase 7 — 2026-08-09 로컬·Oracle·OCI·Public 증거
 
-| Gate | 명령/증거 | 현재 문서 상태 |
+| Gate | 명령/증거 | 2026-08-09 역사적 증거 상태 |
 |---|---|---|
 | Backend lint | `.venv/bin/ruff check backend scripts deploy/*.py` | PASS — zero errors |
 | Backend type | `MYPYPATH=backend:scripts:. .venv/bin/mypy --explicit-package-bases --python-version 3.12 backend/app backend/evaluation scripts deploy/release_state.py deploy/run_with_runtime_env.py deploy/secure_bootstrap.py` | PASS — 62 source files |

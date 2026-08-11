@@ -15,32 +15,30 @@ from app.knowledge.authoring import (
     parse_document,
 )
 
-KNOWLEDGE_CATALOG_VERSION = "demo-knowledge-catalog-2026.08.09-v2"
-KNOWLEDGE_UPDATED_AT = "2026-08-09"
-KNOWLEDGE_COMPILER_CONTRACT = "yobi-knowledge-compiler-v1"
+KNOWLEDGE_CATALOG_VERSION = "demo-knowledge-catalog-2026.08.11-v3"
+KNOWLEDGE_UPDATED_AT = "2026-08-11"
+KNOWLEDGE_COMPILER_CONTRACT = "yobi-knowledge-compiler-v2"
 
-CATEGORY_CONCEPT_MAP: dict[str, str] = {
-    "Tteokbokki": "dish_tteokbokki",
-    "Rose tteokbokki": "dish_rose_tteokbokki",
-    "Chicken kalguksu": "dish_chicken_kalguksu",
-    "Bibimbap": "dish_bibimbap",
-    "Gimbap": "dish_gimbap",
-    "Korean fried chicken": "dish_korean_fried_chicken",
-    "Samgyetang": "dish_samgyetang",
-    "Jjajangmyeon": "dish_jjajangmyeon",
-    "Sundubu": "dish_sundubu",
-    "Bulgogi": "dish_bulgogi",
-    "Kimchi stew": "dish_kimchi_stew",
-    "Japchae": "dish_japchae",
-    "Mandu": "dish_mandu",
-    "Naengmyeon": "dish_naengmyeon",
-    "Dosirak": "dish_dosirak",
-    "Pizza": "dish_pizza",
-    "Gukbap": "dish_gukbap",
-    "Hotteok": "dish_hotteok",
-    "Seolleongtang": "dish_seolleongtang",
-    "Eomuk": "dish_eomuk",
-}
+def _authored_category_concept_map() -> dict[str, str]:
+    """Map every reusable FAMILY/VARIANT Wiki node to a menu-category label.
+
+    The authored corpus is the authority. This prevents a hand-maintained category map from
+    drifting as the demo Wiki grows, while CUISINE nodes remain hierarchy-only concepts.
+    """
+
+    root = Path(__file__).resolve().parents[3] / "knowledge" / "dishes"
+    rows: dict[str, str] = {}
+    for path in sorted(root.rglob("*.md")):
+        front = parse_document(path).front_matter
+        if front.concept_type == "CUISINE":
+            continue
+        if front.name_en in rows:
+            raise ValueError(f"DUPLICATE_CATEGORY_NAME:{front.name_en}")
+        rows[front.name_en] = front.concept_id
+    return rows
+
+
+CATEGORY_CONCEPT_MAP: dict[str, str] = _authored_category_concept_map()
 
 # These three seeded menu names explicitly identify a reviewed child variant. All other generated
 # "house style" names remain mapped at category level rather than receiving an invented subtype.
@@ -61,6 +59,7 @@ INGREDIENT_GROUPS: dict[str, str] = {
     "ingredient_assorted_side_dishes": "prepared_component",
     "ingredient_beef": "animal_protein",
     "ingredient_beef_bone_broth": "broth_stock",
+    "ingredient_bean_sprouts": "vegetable_aromatic",
     "ingredient_black_bean_paste": "sauce_seasoning",
     "ingredient_broth": "broth_stock",
     "ingredient_brown_sugar": "sweetener",
@@ -69,6 +68,7 @@ INGREDIENT_GROUPS: dict[str, str] = {
     "ingredient_chicken": "animal_protein",
     "ingredient_chicken_broth": "broth_stock",
     "ingredient_chili_seasoning": "sauce_seasoning",
+    "ingredient_chocolate": "sweetener",
     "ingredient_chilled_broth": "broth_stock",
     "ingredient_dairy_cream": "dairy",
     "ingredient_egg": "animal_protein",
@@ -80,6 +80,8 @@ INGREDIENT_GROUPS: dict[str, str] = {
     "ingredient_glutinous_rice": "grain_starch",
     "ingredient_gochujang": "sauce_seasoning",
     "ingredient_kimchi": "fermented_vegetable",
+    "ingredient_mackerel": "seafood",
+    "ingredient_mango": "fruit",
     "ingredient_mixed_filling": "prepared_component",
     "ingredient_mixed_seeds": "seed_nut",
     "ingredient_mixed_vegetables": "vegetable_aromatic",
@@ -88,14 +90,17 @@ INGREDIENT_GROUPS: dict[str, str] = {
     "ingredient_pork": "animal_protein",
     "ingredient_rice": "grain_starch",
     "ingredient_rice_cake": "grain_starch",
+    "ingredient_red_bean": "legume",
     "ingredient_sauce": "sauce_seasoning",
     "ingredient_seaweed": "sea_vegetable",
     "ingredient_sesame_oil": "oil_fat",
     "ingredient_shellfish": "seafood",
+    "ingredient_shaved_ice": "prepared_component",
     "ingredient_soft_tofu": "soy_product",
     "ingredient_soy_sauce": "sauce_seasoning",
     "ingredient_starch": "grain_starch",
     "ingredient_sugar": "sweetener",
+    "ingredient_sweet_potato": "vegetable_aromatic",
     "ingredient_sweet_potato_noodles": "grain_starch",
     "ingredient_tofu": "soy_product",
     "ingredient_tomato_sauce": "sauce_seasoning",
@@ -123,11 +128,23 @@ ALLERGEN_NAMES: dict[str, tuple[str, str, str]] = {
     "allergen_egg": ("egg", "Egg", "달걀"),
     "allergen_fish": ("fish", "Fish", "생선"),
     "allergen_milk": ("milk", "Milk", "우유"),
+    "allergen_peanut": ("peanut", "Peanut", "땅콩"),
     "allergen_sesame": ("sesame", "Sesame", "참깨"),
     "allergen_shellfish_risk": ("shellfish_risk", "Shellfish risk", "갑각류 위험 가능성"),
     "allergen_soy": ("soy", "Soy", "대두"),
     "allergen_tree_nut": ("tree_nut", "Tree nuts", "견과류"),
     "allergen_wheat": ("wheat", "Wheat", "밀"),
+}
+
+# Wiki dietary claims are intentionally broad, reusable demo classifications. They describe
+# common dish-level possibilities, never certification for a specific merchant menu.
+DIETARY_ATTRIBUTE_NAMES: dict[str, tuple[str, str]] = {
+    "diet_alcohol_possible": ("Alcohol possible", "주류 성분 가능성"),
+    "diet_contains_animal_product": ("Animal product commonly used", "동물성 재료 일반 사용"),
+    "diet_halal_not_verified": ("Halal status not verified", "할랄 여부 미확인"),
+    "diet_pork_possible": ("Pork possible", "돼지고기 가능성"),
+    "diet_vegan_possible": ("Vegan variation possible", "비건 변형 가능"),
+    "diet_vegetarian_possible": ("Vegetarian variation possible", "채식 변형 가능"),
 }
 
 
@@ -139,6 +156,7 @@ class KnowledgeCatalogSeed(BaseModel):
     compiled_release: CompiledKnowledgeRelease
     ingredients: list[dict[str, Any]]
     allergens: list[dict[str, Any]]
+    dietary_attributes: list[dict[str, Any]]
     menu_concept_maps: list[dict[str, Any]]
 
     def table_payloads(self) -> dict[str, list[dict[str, Any]]]:
@@ -152,6 +170,7 @@ class KnowledgeCatalogSeed(BaseModel):
         return {
             "ingredient": self.ingredients,
             "allergen": self.allergens,
+            "dietary_attribute": self.dietary_attributes,
             "dish_concept": compiled.concepts,
             "dish_relation": compiled.relations,
             "dish_concept_closure": compiled.closure,
@@ -222,9 +241,12 @@ def knowledge_release_id_for_root(
 KNOWLEDGE_RELEASE_ID = knowledge_release_id_for_root(default_knowledge_root())
 
 
-def _taxonomy_rows(root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _taxonomy_rows(
+    root: Path,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     ingredient_names: dict[str, set[tuple[str, str]]] = defaultdict(set)
     allergen_ids: set[str] = set()
+    dietary_attribute_ids: set[str] = set()
     for path in sorted(root.rglob("*.md")):
         front = parse_document(path).front_matter
         for ingredient in front.ingredients:
@@ -232,6 +254,7 @@ def _taxonomy_rows(root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any
                 (ingredient.name_ko.strip(), ingredient.name_en.strip())
             )
         allergen_ids.update(allergen.allergen_id for allergen in front.allergens)
+        dietary_attribute_ids.update(dietary.attribute_id for dietary in front.dietary)
 
     unclassified = sorted(set(ingredient_names) - INGREDIENT_GROUPS.keys())
     if unclassified:
@@ -239,6 +262,9 @@ def _taxonomy_rows(root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any
     unknown_allergens = sorted(allergen_ids - ALLERGEN_NAMES.keys())
     if unknown_allergens:
         raise ValueError(f"UNCLASSIFIED_ALLERGENS:{','.join(unknown_allergens)}")
+    unknown_dietary = sorted(dietary_attribute_ids - DIETARY_ATTRIBUTE_NAMES.keys())
+    if unknown_dietary:
+        raise ValueError(f"UNCLASSIFIED_DIETARY_ATTRIBUTES:{','.join(unknown_dietary)}")
 
     ingredients: list[dict[str, Any]] = []
     for ingredient_id, names in sorted(ingredient_names.items()):
@@ -264,7 +290,15 @@ def _taxonomy_rows(root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any
         }
         for allergen_id in sorted(allergen_ids)
     ]
-    return ingredients, allergens
+    dietary_attributes = [
+        {
+            "attribute_id": attribute_id,
+            "code": attribute_id.removeprefix("diet_"),
+            "display_name": DIETARY_ATTRIBUTE_NAMES[attribute_id][0],
+        }
+        for attribute_id in sorted(dietary_attribute_ids)
+    ]
+    return ingredients, allergens, dietary_attributes
 
 
 def _menu_concept_rows(
@@ -396,7 +430,7 @@ def build_knowledge_catalog_seed(
         release_id=resolved_release_id,
         catalog_version=catalog_version,
     )
-    ingredients, allergens = _taxonomy_rows(root)
+    ingredients, allergens, dietary_attributes = _taxonomy_rows(root)
     ingredient_ids = {row["ingredient_id"] for row in ingredients}
     allergen_ids = {row["allergen_id"] for row in allergens}
     claim_ingredient_ids = {
@@ -413,6 +447,7 @@ def build_knowledge_catalog_seed(
         compiled_release=compiled,
         ingredients=ingredients,
         allergens=allergens,
+        dietary_attributes=dietary_attributes,
         menu_concept_maps=_menu_concept_rows(
             menus,
             compiled,

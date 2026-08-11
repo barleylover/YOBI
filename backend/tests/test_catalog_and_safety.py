@@ -6,12 +6,12 @@ from app.domain.models import EvidenceStatus, ProfileCreate, ProfileUpdate
 
 def test_seed_meets_master_minimums() -> None:
     counts = seed_counts()
-    assert counts["merchants"] == 30
-    assert counts["menus"] == 150
-    assert counts["knowledge"] == 150
-    assert counts["reviews"] == 600
-    assert counts["evidence"] == 300
-    assert counts["option_items"] >= 250
+    assert counts["merchants"] == 60
+    assert counts["menus"] == 600
+    assert counts["knowledge"] == 600
+    assert counts["reviews"] == 2400
+    assert counts["evidence"] == 1200
+    assert counts["option_items"] >= 1200
     assert counts["hotels"] == 20
 
 
@@ -78,7 +78,9 @@ def test_profile_can_be_updated_without_replacing_identity(
 def test_same_merchant_followup_excludes_carted_and_dietary_conflicting_menus(
     repository: SQLiteYobiRepository, profile_data: ProfileCreate
 ) -> None:
-    profile = repository.create_profile(profile_data)
+    profile = repository.create_profile(
+        profile_data.model_copy(update={"spice_tolerance": 3})
+    )
 
     menus = repository.list_merchant_menus(
         "mer_001", profile, ["menu_001_01"], limit=12

@@ -1199,6 +1199,29 @@ def test_dialogue_removes_turn_rules_and_does_not_make_negatives_positive(
     assert engine.extract_delta("장바구니 보여줘").dialogue_act == DialogueAct.ORDER_ACTION
 
 
+def test_dietary_identity_statements_remain_constraints_but_food_questions_explain() -> None:
+    from app.services.dialogue_engine import DialogueEngine
+
+    engine = DialogueEngine()
+    for message, expected_rule in (
+        ("난 비건이야", "vegan"),
+        ("나는 할랄 식단이야", "halal"),
+        ("저는 채식이에요", "vegetarian"),
+    ):
+        delta = engine.extract_delta(message)
+        assert delta.dialogue_act == DialogueAct.COLLECT_NEEDS
+        assert expected_rule in delta.add_dietary_rules
+
+    for question in (
+        "김밥은 비건이야?",
+        "김밥은 할랄 식단에 맞아?",
+        "김밥은 채식으로 먹을 수 있어?",
+    ):
+        delta = engine.extract_delta(question)
+        assert delta.dialogue_act == DialogueAct.REQUEST_EXPLANATION
+        assert delta.add_dietary_rules == []
+
+
 @pytest.mark.parametrize(
     ("message", "expected_act"),
     [

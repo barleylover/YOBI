@@ -5,6 +5,7 @@
   "name_ko": "쟁반짜장",
   "name_en": "Tray jjajang",
   "aliases": [
+    "쟁반 짜장",
     "jaengban jjajang",
     "shared platter black-bean noodles"
   ],
@@ -49,6 +50,34 @@
       "allergen_id": "allergen_shellfish_risk",
       "status": "POSSIBLE",
       "source_ref": "Seafood versions and shared wok preparation are common"
+    }
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Seafood, pork or egg may be present",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: tray-jjajang structured claims v1"
+    },
+    {
+      "attribute_id": "diet_pork_possible",
+      "value_text": "Pork is possible but not required by the variant",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: tray-jjajang structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegetarian_possible",
+      "value_text": "A vegetarian version requires explicit confirmation of sauce and toppings",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: tray-jjajang structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "wok_fried_and_mixed",
+      "value_text": "A large portion of noodles and toppings is wok-finished with black bean sauce",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: tray-jjajang structured claims v1"
     }
   ],
   "source_type": "SYNTHETIC_WIKI",

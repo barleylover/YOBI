@@ -41,6 +41,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryRules, on
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const restoreCartOnMount = useRef(cartQuantity > 0);
+  const transitionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -66,7 +67,13 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryRules, on
         restoreCartOnMount.current = false;
       })
       .catch((cause) => { if (active) setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry); });
-    return () => { active = false; };
+    return () => {
+      active = false;
+      if (transitionTimer.current !== null) {
+        clearTimeout(transitionTimer.current);
+        transitionTimer.current = null;
+      }
+    };
   }, [activeMenu.menu_id, journeyCopy.retry, language, sessionId, setCartQuantity]);
 
   useEffect(() => setActiveMenu(menu), [menu]);
@@ -90,8 +97,12 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryRules, on
         unlockedOptions.has(optionId),
       );
       setSelections((current) => ({ ...current, [group.option_group_id]: optionId }));
-      if (groupIndex < groups.length - 1) setTimeout(() => setGroupIndex((value) => value + 1), 160);
-      else setTimeout(() => setPhase("note"), 160);
+      if (transitionTimer.current !== null) clearTimeout(transitionTimer.current);
+      transitionTimer.current = setTimeout(() => {
+        transitionTimer.current = null;
+        if (groupIndex < groups.length - 1) setGroupIndex((value) => value + 1);
+        else setPhase("note");
+      }, 160);
     } catch (cause) {
       setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
     } finally {

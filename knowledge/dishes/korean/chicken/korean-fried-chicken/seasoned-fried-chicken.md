@@ -5,6 +5,7 @@
   "name_ko": "양념치킨",
   "name_en": "Seasoned fried chicken",
   "aliases": [
+    "양념 치킨",
     "yangnyeom chicken",
     "Korean glazed fried chicken"
   ],
@@ -46,6 +47,28 @@
       "allergen_id": "allergen_wheat",
       "status": "POSSIBLE",
       "source_ref": "Coating and sauce can contain wheat"
+    }
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Chicken defines the dish",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: seasoned-fried-chicken structured claims v1"
+    },
+    {
+      "attribute_id": "diet_halal_not_verified",
+      "value_text": "Chicken sourcing, sauce and fryer handling are not halal-verified by the Wiki",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: seasoned-fried-chicken structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "deep_fried_and_glazed",
+      "value_text": "Fried chicken is coated in a sweet-savory red seasoning glaze",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: seasoned-fried-chicken structured claims v1"
     }
   ],
   "source_type": "SYNTHETIC_WIKI",

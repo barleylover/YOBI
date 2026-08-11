@@ -4,7 +4,7 @@
   "concept_type": "FAMILY",
   "name_ko": "국밥",
   "name_en": "Gukbap",
-  "aliases": ["Korean soup with rice"],
+  "aliases": ["국밥", "Korean soup with rice"],
   "version": "demo-wiki-2026.08.09-v1",
   "language": "en",
   "parents": [{"concept_id": "dish_korean_cuisine", "relation_type": "IS_A", "inherit_claims": false, "source_ref": "YOBI synthetic taxonomy: Korean cuisine hierarchy v1"}],
@@ -17,6 +17,34 @@
   "allergens": [
     {"allergen_id": "allergen_soy", "status": "POSSIBLE", "source_ref": "Broth seasoning can include soy"},
     {"allergen_id": "allergen_shellfish_risk", "status": "POSSIBLE", "source_ref": "Broth or fermented accompaniments can introduce seafood"}
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Meat, seafood or animal stock is common but varies by subtype",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: gukbap structured claims v1"
+    },
+    {
+      "attribute_id": "diet_halal_not_verified",
+      "value_text": "Protein sourcing and broth preparation are not halal-verified by the family Wiki",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: gukbap structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegetarian_possible",
+      "value_text": "A vegetarian subtype is possible only when broth and toppings are confirmed",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: gukbap structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "simmered",
+      "value_text": "Broth and toppings are simmered and served with rice",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: gukbap structured claims v1"
+    }
   ],
   "source_type": "SYNTHETIC_WIKI",
   "source_refs": ["YOBI synthetic culinary knowledge review: Gukbap v1"],

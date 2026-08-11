@@ -5,6 +5,7 @@ from itertools import permutations
 from app.core.config import Settings
 from app.db.sqlite_repository import SQLiteYobiRepository
 from app.domain.models import Card, ChatState, ProfileCreate
+from app.genai.grounding import GroundedResponseValidator
 from app.genai.tool_registry import ToolRegistry
 from app.services.chat_service import ChatService
 from app.services.demo_control import DemoControl
@@ -212,6 +213,137 @@ def test_deterministic_fallback_cards_use_the_preferred_language(
             assert turn.cards[0].data["menus"][0]["name_ko"] in turn.text
 
 
+def test_korean_wiki_explanation_uses_the_requested_grounded_facet(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(
+            consent_demo_data=True,
+            preferred_language="한국어",
+            dietary_rules=[],
+        )
+    )
+    cases = [
+        ("김밥 재료 설명", "ingredients", "재료 근거", "Rice and seaweed are core"),
+        ("김밥 알레르기 위험 알려줘", "safety", "알레르기·식단 위험 근거", "Egg, soy"),
+        ("김밥은 어떻게 조리해?", "preparation", "일반적인 조리법", "rolled in seaweed"),
+    ]
+
+    responses: list[str] = []
+    for message, expected_facet, expected_detail, forbidden_english in cases:
+        session = repository.create_session(profile.profile_id)
+        turn = ChatService(repository, Settings(), DemoControl()).respond(
+            session,
+            profile,
+            message,
+        )
+
+        explanation = turn.cards[0].data["explanation"]
+        assert explanation["requested_facet"] == expected_facet
+        assert expected_detail in turn.text
+        assert expected_detail in explanation["localized_descriptions"]["한국어"]
+        assert forbidden_english not in turn.text
+        responses.append(turn.text)
+
+    assert len(set(responses)) == len(cases)
+
+
+def test_korean_explain_tool_uses_the_original_query_and_localized_facet(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(
+            consent_demo_data=True,
+            preferred_language="한국어",
+            dietary_rules=[],
+        )
+    )
+    session = repository.create_session(profile.profile_id)
+    query = "비빔밥 재료 설명"
+    result = ToolRegistry(
+        repository,
+        profile,
+        session.session_id,
+        user_query=query,
+    ).execute("explain_menu", '{"menu_id":"menu_003_01"}')
+    service = ChatService(repository, Settings(), DemoControl())
+
+    turn = service._turn_from_tool_results(
+        session,
+        "model prose is replaced by the server",
+        [("explain_menu", result)],
+        source_query=query,
+    )
+    turn.text = service._server_grounded_text(turn, profile.preferred_language)
+
+    explanation = turn.cards[0].data["explanation"]
+    assert explanation["requested_facet"] == "ingredients"
+    assert "재료 근거" in turn.text
+    assert "Warm rice with" not in turn.text
+
+
+def test_korean_dietary_questions_explain_wiki_without_changing_profile_rules(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(
+            consent_demo_data=True,
+            preferred_language="한국어",
+            dietary_rules=[],
+        )
+    )
+    cases = [
+        ("김밥은 비건이야?", "비건 가능 여부"),
+        ("김밥은 할랄 식단에 맞아?", "할랄 인증"),
+        ("김밥은 채식으로 먹을 수 있어?", "채식 가능 여부"),
+    ]
+
+    for message, expected in cases:
+        session = repository.create_session(profile.profile_id)
+        turn = ChatService(repository, Settings(), DemoControl()).respond(
+            session,
+            profile,
+            message,
+        )
+        saved = repository.get_session(session.session_id)
+
+        assert [card.type for card in turn.cards] == ["menu_explanation"]
+        assert turn.cards[0].data["explanation"]["requested_facet"] == "safety"
+        assert expected in turn.text
+        assert saved is not None and saved.meal_need_state.dietary_rules == []
+
+
+def test_korean_safety_explanation_does_not_truncate_supported_allergens(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(
+            consent_demo_data=True,
+            preferred_language="한국어",
+            dietary_rules=[],
+        )
+    )
+    session = repository.create_session(profile.profile_id)
+    query = "이 메뉴 알레르기 위험 알려줘"
+    result = ToolRegistry(
+        repository,
+        profile,
+        session.session_id,
+        user_query=query,
+    ).execute("explain_menu", '{"menu_id":"menu_060_08"}')
+    service = ChatService(repository, Settings(), DemoControl())
+    turn = service._turn_from_tool_results(
+        session,
+        "model prose is replaced by the server",
+        [("explain_menu", result)],
+        source_query=query,
+    )
+    turn.text = service._server_grounded_text(turn, profile.preferred_language)
+
+    for label in ("달걀", "생선", "우유", "참깨", "갑각류·조개류", "대두", "밀"):
+        assert label in turn.text
+
+
 def test_server_grounded_result_is_localized_for_japanese_and_spanish(
     repository: SQLiteYobiRepository,
 ) -> None:
@@ -347,6 +479,52 @@ def test_duplicate_menu_tool_results_render_one_deduplicated_carousel(
     assert turn.suggested_replies == ["Compare these", "Something else", "Show dietary evidence"]
 
 
+def test_dietary_evidence_card_preserves_grounding_scope_and_passage_inventory(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    profile = repository.create_profile(profile_data)
+    session = repository.create_session(profile.profile_id)
+    result = ToolRegistry(repository, profile, session.session_id).execute(
+        "get_dietary_evidence", '{"menu_id":"menu_003_01"}'
+    )
+
+    turn = ChatService(repository, Settings(), DemoControl())._turn_from_tool_results(
+        session,
+        "The structured Wiki evidence is shown below.",
+        [("get_dietary_evidence", result)],
+    )
+
+    assert [card.type for card in turn.cards] == ["dietary_evidence"]
+    data = turn.cards[0].data
+    assert data["dietary_claims"]
+    assert data["preparation_claims"]
+    assert data["wiki_passages"]
+    scoped_claim_ids = {
+        claim["source_id"]
+        for key in (
+            "ingredient_claims",
+            "allergen_claims",
+            "dietary_claims",
+            "preparation_claims",
+            "merchant_ingredient_claims",
+        )
+        for claim in data[key]
+    }
+    assert set(data["grounded_claim_ids"]) == scoped_claim_ids
+    preparation_claim_id = data["preparation_claims"][0]["source_id"]
+    passage_id = data["wiki_passages"][0]["chunk_id"]
+    assert preparation_claim_id in data["grounded_claim_ids"]
+    assert passage_id in data["grounded_passage_ids"]
+    GroundedResponseValidator().validate(
+        turn,
+        [],
+        [preparation_claim_id],
+        [passage_id],
+        "WIKI_GENERAL",
+        [],
+    )
+
+
 def test_grounded_category_tool_results_offer_bound_category_followups(
     repository: SQLiteYobiRepository, profile_data: ProfileCreate
 ) -> None:
@@ -370,7 +548,9 @@ def test_grounded_category_tool_results_offer_bound_category_followups(
 def test_weekly_ranking_is_fixed_and_does_not_enter_fallback(
     repository: SQLiteYobiRepository,
 ) -> None:
-    profile = repository.create_profile(ProfileCreate(consent_demo_data=True, spice_tolerance=3))
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
     session = repository.create_session(profile.profile_id)
 
     turn = ChatService(repository, Settings(), DemoControl()).respond(
@@ -399,7 +579,9 @@ def test_weekly_ranking_is_fixed_and_does_not_enter_fallback(
 def test_weekly_ranking_omits_item_above_current_spice_limit(
     repository: SQLiteYobiRepository,
 ) -> None:
-    profile = repository.create_profile(ProfileCreate(consent_demo_data=True, spice_tolerance=1))
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=1)
+    )
     session = repository.create_session(profile.profile_id)
 
     turn = ChatService(repository, Settings(), DemoControl()).respond(
@@ -414,7 +596,9 @@ def test_weekly_ranking_omits_item_above_current_spice_limit(
 def test_kpop_food_collection_is_fixed_and_orderable(
     repository: SQLiteYobiRepository,
 ) -> None:
-    profile = repository.create_profile(ProfileCreate(consent_demo_data=True))
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[])
+    )
     session = repository.create_session(profile.profile_id)
 
     turn = ChatService(repository, Settings(), DemoControl()).respond(
@@ -433,3 +617,23 @@ def test_kpop_food_collection_is_fixed_and_orderable(
         menu = entry["menu"]
         assert menu["price"] > 0
         assert repository.get_options(menu["menu_id"])
+
+
+def test_preset_collection_does_not_bypass_severe_shellfish_constraint(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = repository.create_profile(
+        ProfileCreate(
+            consent_demo_data=True,
+            dietary_rules=["shellfish_allergy"],
+            allergy_severity="severe",
+        )
+    )
+    session = repository.create_session(profile.profile_id)
+
+    turn = ChatService(repository, Settings(), DemoControl()).respond(
+        session, profile, "Show me the foods from K-POP Demon Hunters", "kpop_demon_hunters"
+    )
+
+    assert turn.cards == []
+    assert "none of this preset collection satisfies" in turn.text.casefold()

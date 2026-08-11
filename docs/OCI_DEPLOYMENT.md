@@ -11,6 +11,13 @@ and three consecutive Primary runs passed. The approved temporary current-source
 state is TCP 22 `0`, existing TCP 80 `1`. See `TEST_REPORT.md` for exact data and
 GenAI smoke evidence.
 
+The 2026-08-11 Wiki-centric working tree is newer than that verified deployment. Its
+release package contains migrations `001`–`009`, base catalog
+`demo-2026.08.11-knowledge-v3`, and knowledge catalog contract
+`demo-knowledge-catalog-2026.08.11-v3`, but it has **not** been applied to Oracle or
+deployed/verified on the OCI public demo at this checkpoint. The commands and gates
+below describe what a future deployment must prove; they are not live evidence.
+
 ```bash
 make test
 make build
@@ -82,7 +89,7 @@ state; secret values are never returned to the local shell.
 `deploy/deploy.sh` now builds a release-specific virtual environment before changing
 `/opt/yobi/current`. The release archive includes `knowledge/`, the complete
 `database/migrations/` directory, and the application/evaluation code. Packaging
-fails early unless every immutable/additive migration `001`–`008` and the knowledge
+fails early unless every immutable/additive migration `001`–`009` and the knowledge
 authoring directory are present. The archive SHA-256 becomes part of the release ID;
 the VM verifies the uploaded checksum and records it in a release manifest before
 installation. Each transfer uses a release-and-nonce-specific file under the SSH
@@ -91,7 +98,7 @@ exact path, owner, non-writable mode, and checksum, and removes that exact uploa
 success or failure.
 Deployment applies only checksum-safe
 pending migrations, performs an idempotent seed upsert, switches the symlink, and
-requires the exact eight-row migration ledger, current symlink, health, and readiness.
+requires the exact nine-row migration ledger, current symlink, health, and readiness.
 If any preparation, activation, or metadata step fails after a prior release was
 verified, it restores that exact release and rechecks both endpoints. It does not
 recreate the VM/ADB, broaden IAM, or repeat secure bootstrap.
@@ -128,7 +135,7 @@ bound SQL, an expected-current guard, commit, and readback, then restores and ve
 the prior application release.
 
 Before pending DDL runs, the migration runner validates the filename and checksum of
-every migration known to the release. Oracle DDL commits implicitly, so `005`–`008`
+every migration known to the release. Oracle DDL commits implicitly, so `005`–`009`
 are additive and every statement treats its already-created column, table, or
 index as a successful resume condition. If a process stops partway through any
 migration, no `SCHEMA_MIGRATION` record is written; rerun the same unmodified release
@@ -154,7 +161,7 @@ switching application code. A target that contains the knowledge manager but lac
 trusted state is rejected. If activation, health/readiness, or rollback metadata fails,
 the script restores the original knowledge pointer first, then the original current
 symlink, and verifies both endpoints. It does not delete migration rows, remove the
-additive `005`–`008` schema, or delete either knowledge release.
+additive `005`–`009` schema, or delete either knowledge release.
 
 A genuinely historical v1 target with no knowledge manager/state takes the explicit
 legacy compatibility path and leaves the current knowledge pointer untouched. This
@@ -165,24 +172,41 @@ requires a separately designed and verified snapshot/restore contract before rol
 A legacy root-owned `/opt/yobi/shared/previous_release` may be read only as a validated
 fallback; all new writes go to the protected control path.
 
-## Chatbot-improvement deployment gate
+## Wiki-centric deployment gate
 
-Do not deploy the chatbot revision until the local full backend suite, chatbot
-acceptance runner, frontend lint/test/build, and local product E2E all pass. The
+Do not deploy the 2026-08-11 Wiki-centric revision until the local full backend suite,
+chatbot acceptance runner, frontend lint/test/build, and local product E2E all pass. The
 required commands and evidence fields are listed in
 `CHATBOT_IMPROVEMENT_IMPLEMENTATION.md` and `TEST_REPORT.md`.
 
 Migration/seed activation for this revision must establish all of the following in
 one release window:
 
-- `SCHEMA_MIGRATION` contains checksum-verified `005`, `006`, `007`, and `008` in addition
-  to immutable `001`–`004`;
-- the new catalog version is active and all 150 menus have a `MAPPED` concept row;
+- `SCHEMA_MIGRATION` is exactly checksum-verified `001`–`009`;
+- base catalog `demo-2026.08.11-knowledge-v3` is active, the knowledge release uses
+  catalog contract `demo-knowledge-catalog-2026.08.11-v3`, and all 600 menus have a
+  `MAPPED` family/variant concept row;
 - the active `KNOWLEDGE_RELEASE` is `READY`, its expected and actual graph counts
   exactly match the six observed release-scoped tables, its manifest/corpus ID match
   the running code, and no active knowledge chunk vector is null;
-- supplemental release counts are exactly 150 menu mappings, 30 origin declarations,
-  266 merchant ingredients, and 4 option effects;
+- release-scoped graph counts are exactly 102 concepts/documents (`2` cuisine, `30`
+  family, `70` variant), 100 relations, 281 closure rows, 1,997 claims, and 918 chunks;
+  claim types are exactly 361 ingredient, 371 allergen, 247 dietary, 100 preparation,
+  and 918 facet;
+- supplemental release counts are exactly 600 menu mappings, 13 origin declarations,
+  119 shared-kitchen cross-contact merchant ingredients, and 4 option effects;
+- base catalog counts include 60 merchants, 600 menus, 1,200 evidence rows, 2,400
+  zero-weight reviews, 100 menu categories, 1,202 option groups, and 2,405 option items;
+- normalized menu facts are exactly 54 ingredients/565 menu rows covering 206 menus,
+  10 allergen rows (9 onboarding allergens plus the cross-contact marker)/595 menu
+  rows covering 221 menus, and 20 dietary attributes/1,217 menu rows; missing menu
+  facts remain unknown rather than being filled from merchant prose;
+- every explicit absence alternative is menu-scoped, backed by `VERIFIED` synthetic
+  menu evidence, and retains `UNKNOWN` cross-contact status;
+- retrieval hard-filters safety and availability before bulk Wiki scoring, retains all
+  surviving demo candidates under cap `600`, and enforces party-sized budget and
+  negative preferences before final output; its operational signal uses menu semantic
+  relevance, price, delivery fee, and ETA, never rating;
 - the active knowledge embedding model, dimension, and version match the runtime
   embedding provider; every menu vector has the same runtime metadata; chunk metadata
   matches the release; and required option min/max/availability cardinality is valid;

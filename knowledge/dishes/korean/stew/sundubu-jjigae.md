@@ -5,6 +5,7 @@
   "name_ko": "순두부찌개",
   "name_en": "Sundubu jjigae",
   "aliases": [
+    "순두부 찌개",
     "soft tofu stew",
     "soon tofu stew"
   ],
@@ -75,6 +76,40 @@
       "allergen_id": "allergen_egg",
       "status": "POSSIBLE",
       "source_ref": "YOBI synthetic culinary knowledge review: Sundubu jjigae v1"
+    }
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Seafood, meat stock or egg may be present",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: sundubu-jjigae structured claims v1"
+    },
+    {
+      "attribute_id": "diet_pork_possible",
+      "value_text": "Pork is possible in some variants",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: sundubu-jjigae structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegetarian_possible",
+      "value_text": "A vegetarian version requires confirmation of broth, seafood and egg",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: sundubu-jjigae structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegan_possible",
+      "value_text": "A vegan version requires explicit confirmation of broth and toppings",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: sundubu-jjigae structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "simmered",
+      "value_text": "Soft tofu and toppings are simmered in a seasoned stew broth",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: sundubu-jjigae structured claims v1"
     }
   ],
   "source_type": "SYNTHETIC_WIKI",

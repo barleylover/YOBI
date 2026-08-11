@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import json
 from array import array
+from math import isclose
 from unittest.mock import MagicMock
 
 from app.db.oracle_repository import OracleYobiRepository
@@ -10,6 +11,10 @@ from app.db.seed_data import CATALOG_VERSION
 from app.db.sqlite_repository import SQLiteYobiRepository
 from app.domain.dialogue import ConstraintStrictness, MealNeedState
 from app.domain.models import ProfileCreate
+from app.domain.recommendation import (
+    final_hybrid_recommendation_score,
+    wiki_operational_retrieval_score,
+)
 from app.rag.embeddings import deterministic_embedding
 
 
@@ -77,13 +82,51 @@ def test_both_recommendation_paths_exclude_legacy_menu_knowledge_from_ranking() 
         source = inspect.getsource(repository_type.search_menus)
         assert "_bulk_knowledge_passages" in source
         assert "menu_knowledge" not in source
-        assert "0.25 * knowledge" in source
+        assert "wiki_operational_retrieval_score" in source
+        assert "0.75 * menu_similarity" not in source
+
+
+def test_hybrid_score_is_exactly_wiki_60_preference_25_operational_15() -> None:
+    wiki_score = 0.8
+    preference_score = 0.6
+    operational_score = 0.4
+
+    retrieval = wiki_operational_retrieval_score(wiki_score, operational_score)
+    final = final_hybrid_recommendation_score(retrieval, preference_score)
+
+    expected = 0.60 * wiki_score + 0.25 * preference_score + 0.15 * operational_score
+    assert isclose(final, expected)
 
 
 def test_merchant_scope_is_cross_contact_not_menu_presence(
     repository: SQLiteYobiRepository,
 ) -> None:
-    knowledge = repository.get_grounded_menu_knowledge("menu_027_02")
+    with repository._connection() as connection:
+        candidate_ids = [
+            str(row[0])
+            for row in connection.execute(
+                """
+                SELECT DISTINCT menu.menu_id
+                FROM menu
+                JOIN knowledge_runtime_state state ON state.state_key='ACTIVE'
+                JOIN merchant_ingredient fact
+                  ON fact.release_id=state.active_release_id
+                 AND fact.merchant_id=menu.merchant_id
+                WHERE fact.ingredient_id='ingredient_pork'
+                ORDER BY menu.menu_id
+                """
+            ).fetchall()
+        ]
+    menu_id, knowledge = next(
+        (candidate_id, grounded)
+        for candidate_id in candidate_ids
+        if (
+            grounded := repository.get_grounded_menu_knowledge(candidate_id)
+        ).merchant_ingredient_claims
+        and not any(
+            claim.ingredient_id == "ingredient_pork" for claim in grounded.ingredient_claims
+        )
+    )
     merchant_pork = [
         claim
         for claim in knowledge.merchant_ingredient_claims
@@ -91,13 +134,14 @@ def test_merchant_scope_is_cross_contact_not_menu_presence(
     ]
 
     assert merchant_pork
+    assert all(claim.name_ko for claim in merchant_pork)
     assert not any(
         claim.ingredient_id == "ingredient_pork" for claim in knowledge.ingredient_claims
     )
     with repository._connection() as connection:
         strict_conflicts, strict_claim_ids = repository._menu_hard_constraint_conflicts(
             connection,
-            "menu_027_02",
+            menu_id,
             MealNeedState(
                 excluded_ingredients=["pork"],
                 strictness=ConstraintStrictness.STRICT,
@@ -106,7 +150,7 @@ def test_merchant_scope_is_cross_contact_not_menu_presence(
         )
         exploratory_conflicts, _ = repository._menu_hard_constraint_conflicts(
             connection,
-            "menu_027_02",
+            menu_id,
             MealNeedState(
                 excluded_ingredients=["pork"],
                 strictness=ConstraintStrictness.EXPLORATORY,

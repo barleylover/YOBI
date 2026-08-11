@@ -5,6 +5,7 @@
   "name_ko": "채소 비빔밥",
   "name_en": "Vegetable bibimbap",
   "aliases": [
+    "야채비빔밥",
     "vegetable mixed rice bowl",
     "namul bibimbap"
   ],
@@ -51,6 +52,34 @@
       "allergen_id": "allergen_sesame",
       "status": "POSSIBLE",
       "source_ref": "Sesame oil or seeds are common but not universal"
+    }
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Egg or animal-derived seasoning may still be present",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: vegetable-bibimbap structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegetarian_possible",
+      "value_text": "A vegetarian preparation is commonly possible after egg and sauce are confirmed",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: vegetable-bibimbap structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegan_possible",
+      "value_text": "A vegan preparation requires confirmation of egg, sauce and cooking fats",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: vegetable-bibimbap structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "assembled_and_mixed",
+      "value_text": "Rice and vegetable toppings are assembled and mixed with seasoning",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: vegetable-bibimbap structured claims v1"
     }
   ],
   "source_type": "SYNTHETIC_WIKI",

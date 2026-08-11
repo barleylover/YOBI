@@ -5,6 +5,7 @@
   "name_ko": "한국식 중화요리",
   "name_en": "Korean-Chinese cuisine",
   "aliases": [
+    "한국 중식",
     "Korean Chinese food",
     "Junghwa yori"
   ],

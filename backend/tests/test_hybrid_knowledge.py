@@ -7,6 +7,65 @@ from app.domain.dialogue import MealNeedState
 from app.domain.knowledge import ClaimStatus, SourceScope
 from app.domain.models import ProfileCreate
 from app.domain.recommendation import rerank_menu_candidates
+from app.rag.embeddings import (
+    hybrid_knowledge_chunk_score,
+    routed_knowledge_facets,
+)
+
+
+def test_bilingual_wiki_facet_router_is_deterministic() -> None:
+    assert routed_knowledge_facets("어떤 재료가 들어가?")[0] == "ingredients"
+    assert routed_knowledge_facets("알레르기 위험이 있어?")[0] == "safety"
+    assert routed_knowledge_facets("무슨 맛이야?")[0] == "taste"
+    assert routed_knowledge_facets("식감이 쫄깃해?")[0] == "texture"
+    assert routed_knowledge_facets("따뜻하게 먹어?")[0] == "temperature"
+    assert routed_knowledge_facets("어떻게 조리해?")[0] == "preparation"
+    for safety_query in (
+        "할랄 식단이야?",
+        "Is this halal?",
+        "비건으로 먹을 수 있어?",
+        "vegan dietary option",
+        "채식 메뉴인가요?",
+        "vegetarian religious restriction",
+    ):
+        assert routed_knowledge_facets(safety_query)[0] == "safety"
+
+
+def test_exact_korean_alias_and_requested_facet_beat_vector_only_noise() -> None:
+    routed = hybrid_knowledge_chunk_score(
+        "참치김밥의 알레르기를 알려줘",
+        0.0,
+        "safety",
+        ["참치김밥", "tuna gimbap"],
+    )
+    unrelated = hybrid_knowledge_chunk_score(
+        "참치김밥의 알레르기를 알려줘",
+        0.1,
+        "culture",
+        ["치즈김밥", "cheese gimbap"],
+    )
+
+    assert routed > unrelated
+
+
+def test_korean_questions_retrieve_the_requested_active_wiki_facet_first(
+    repository: SQLiteYobiRepository,
+) -> None:
+    queries = {
+        "어떤 재료가 들어가?": "ingredients",
+        "알레르기 위험이 있어?": "safety",
+        "무슨 맛이야?": "taste",
+        "식감이 쫄깃해?": "texture",
+        "따뜻하게 먹어?": "temperature",
+        "할랄 식단에 맞아?": "safety",
+        "비건으로 먹을 수 있어?": "safety",
+        "Is this suitable for a vegetarian religious diet?": "safety",
+    }
+
+    for query, expected_facet in queries.items():
+        knowledge = repository.get_grounded_menu_knowledge("menu_001_01", query=query)
+        assert knowledge.release_id
+        assert knowledge.passages[0].facet == expected_facet
 
 
 def test_wiki_core_and_menu_fact_constraints_filter_candidates(
@@ -64,12 +123,79 @@ def test_missing_wiki_claim_never_becomes_confirmed_absent_and_option_can_overri
     )
     assert fish_cake.status is ClaimStatus.CONFIRMED_ABSENT
     assert fish_cake.source_scope is SourceScope.OPTION
+    assert fish_cake.name_ko == "어묵"
+    assert fish_cake.model_dump(mode="json")["name_ko"] == "어묵"
+
+
+def test_grounded_knowledge_exposes_structured_dietary_and_preparation_claims(
+    repository: SQLiteYobiRepository,
+) -> None:
+    knowledge = repository.get_grounded_menu_knowledge(
+        "menu_001_01", query="할랄 비건 채식 식단과 조리법"
+    )
+
+    assert knowledge.dietary_claims
+    assert knowledge.preparation_claims
+    assert any(
+        claim.source_scope is SourceScope.DISH_CONCEPT
+        and claim.status in {ClaimStatus.POSSIBLE, ClaimStatus.PRESUMED_PRESENT}
+        for claim in knowledge.dietary_claims
+    )
+    assert any(
+        claim.source_scope is SourceScope.MENU for claim in knowledge.dietary_claims
+    )
+    assert all(
+        claim.source_scope is SourceScope.DISH_CONCEPT
+        for claim in knowledge.preparation_claims
+    )
+    structured_ids = {
+        claim.source_id
+        for claim in [*knowledge.dietary_claims, *knowledge.preparation_claims]
+    }
+    assert structured_ids.issubset(knowledge.claim_ids)
+
+
+def test_explicit_allergen_absence_preserves_unknown_cross_contact(
+    repository: SQLiteYobiRepository,
+) -> None:
+    with repository._connection() as connection:
+        row = connection.execute(
+            """
+            SELECT menu_id,allergen_id FROM menu_allergen
+            WHERE status='ABSENT' AND cross_contamination_status='UNKNOWN'
+            ORDER BY menu_id,allergen_id LIMIT 1
+            """
+        ).fetchone()
+    assert row is not None
+
+    knowledge = repository.get_grounded_menu_knowledge(str(row["menu_id"]), query="allergy")
+    absence = next(
+        claim
+        for claim in knowledge.allergen_claims
+        if claim.allergen_id == row["allergen_id"]
+    )
+    assert absence.status is ClaimStatus.CONFIRMED_ABSENT
+    assert absence.cross_contamination_status == "UNKNOWN"
+    assert any("not a safety certification" in item for item in knowledge.unknowns)
 
 
 def test_merchant_origin_is_visible_but_not_promoted_to_every_menu_fact(
     repository: SQLiteYobiRepository,
 ) -> None:
-    knowledge = repository.get_grounded_menu_knowledge("menu_001_02")
+    with repository._connection() as connection:
+        menu_id = str(
+            connection.execute(
+                """
+                SELECT menu.menu_id
+                FROM menu
+                JOIN merchant_origin_declaration declaration
+                  ON declaration.merchant_id=menu.merchant_id
+                ORDER BY menu.menu_id
+                LIMIT 1
+                """
+            ).fetchone()[0]
+        )
+    knowledge = repository.get_grounded_menu_knowledge(menu_id)
 
     assert knowledge.merchant_origin_notes
     assert all("merchant-wide" in note.lower() for note in knowledge.merchant_origin_notes)
@@ -210,10 +336,53 @@ def test_party_budget_accounts_for_required_portion_count(
     )
 
 
-def test_severe_peanut_and_wheat_unknowns_fail_closed(
+def test_party_budget_filter_runs_before_any_retrieval_truncation(
     repository: SQLiteYobiRepository,
 ) -> None:
-    for allergy in ("peanut_allergy", "wheat_allergy"):
+    profile = repository.create_profile(
+        ProfileCreate(consent_demo_data=True, dietary_rules=[], spice_tolerance=3)
+    )
+    party_size = 6
+    budget = 20_000
+
+    results = repository.recommend_menus(
+        "meal for 6",
+        profile,
+        MealNeedState(party_size=party_size, budget_krw=budget, max_spiciness=3),
+        limit=10,
+    )
+
+    assert results
+    assert all(menu.price * ceil(party_size / menu.serves_max) <= budget for menu in results)
+
+
+def test_each_service_area_has_a_qualified_alternative_for_all_onboarding_allergies(
+    repository: SQLiteYobiRepository,
+) -> None:
+    with repository._connection() as connection:
+        expected_areas = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT service_area_id FROM service_area WHERE active=1"
+            ).fetchall()
+        }
+        merchant_areas = {
+            str(row[0]): str(row[1])
+            for row in connection.execute(
+                "SELECT merchant_id,service_area_id FROM merchant"
+            ).fetchall()
+        }
+    for allergy, allergen_code in (
+        ("shellfish_allergy", "shellfish_risk"),
+        ("fish_allergy", "fish"),
+        ("milk_allergy", "milk"),
+        ("egg_allergy", "egg"),
+        ("peanut_allergy", "peanut"),
+        ("tree_nut_allergy", "tree_nut"),
+        ("wheat_allergy", "wheat"),
+        ("soy_allergy", "soy"),
+        ("sesame_allergy", "sesame"),
+    ):
         profile = repository.create_profile(
             ProfileCreate(
                 consent_demo_data=True,
@@ -223,20 +392,31 @@ def test_severe_peanut_and_wheat_unknowns_fail_closed(
             )
         )
 
-        assert (
-            repository.search_menus(
-                "a mild meal",
-                profile,
-                budget_krw=30000,
-                max_spiciness=3,
-                excluded_ingredients=[],
-                limit=150,
-            )
-            == []
+        results = repository.recommend_menus(
+            "a mild meal",
+            profile,
+            MealNeedState(budget_krw=30_000, max_spiciness=3),
+            limit=600,
         )
+        assert results
+        assert {merchant_areas[menu.merchant_id] for menu in results} == expected_areas
+        for menu in results:
+            knowledge = repository.get_grounded_menu_knowledge(menu.menu_id, query="allergy")
+            matching = [
+                claim for claim in knowledge.allergen_claims if claim.code == allergen_code
+            ]
+            assert matching
+            assert all(claim.status is ClaimStatus.CONFIRMED_ABSENT for claim in matching)
+            assert all(claim.source_scope is SourceScope.MENU for claim in matching)
+            assert all(claim.cross_contamination_status == "UNKNOWN" for claim in matching)
+            assert "Cross-contamination is not verified" in menu.risk_hints
+            assert any(
+                allergen_code.removesuffix("_risk").replace("_", " ") in reason.lower()
+                for reason in menu.match_reasons
+            )
 
 
-def test_shellfish_mastered_menu_fact_preserves_existing_demo_path(
+def test_canonical_shellfish_alternative_requires_scoped_absence_and_unknown_cross_contact(
     repository: SQLiteYobiRepository,
 ) -> None:
     profile = repository.create_profile(
@@ -249,13 +429,21 @@ def test_shellfish_mastered_menu_fact_preserves_existing_demo_path(
     )
 
     results = repository.recommend_menus(
-        "warm soup and rice",
+        "creamy mild rice cakes",
         profile,
         MealNeedState(max_spiciness=3),
         limit=150,
     )
 
-    assert "menu_027_01" in {menu.menu_id for menu in results}
+    matched = next(menu for menu in results if menu.menu_id == "menu_001_01")
+    assert "Cross-contamination is not verified" in matched.risk_hints
+    knowledge = repository.get_grounded_menu_knowledge("menu_001_01", query="shellfish")
+    absence = next(
+        claim for claim in knowledge.allergen_claims if claim.code == "shellfish_risk"
+    )
+    assert absence.status is ClaimStatus.CONFIRMED_ABSENT
+    assert absence.source_scope is SourceScope.MENU
+    assert absence.cross_contamination_status == "UNKNOWN"
 
 
 def test_explicit_islam_profile_excludes_grounded_pork_without_nationality_inference(

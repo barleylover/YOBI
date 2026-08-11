@@ -97,12 +97,14 @@ class ToolRegistry:
         session_id: str | None = None,
         meal_need_state: MealNeedState | None = None,
         mutation_idempotency_key: str | None = None,
+        user_query: str | None = None,
     ) -> None:
         self.repository = repository
         self.profile = profile
         self.session_id = session_id
         self.meal_need_state = meal_need_state
         self.mutation_idempotency_key = mutation_idempotency_key
+        self.user_query = user_query
         self.logger = logging.getLogger("yobi")
 
     def execute(self, name: str, raw_arguments: str) -> dict[str, Any]:
@@ -149,7 +151,10 @@ class ToolRegistry:
                 evidence = self.repository.get_evidence(menu_args.menu_id)
                 knowledge = self.repository.get_grounded_menu_knowledge(
                     menu_args.menu_id,
-                    query=f"{explained_menu.name_en} taste texture ingredients safety",
+                    query=(
+                        self.user_query
+                        or f"{explained_menu.name_en} taste texture ingredients safety"
+                    ),
                     option_item_ids=self._selected_option_ids(menu_args.menu_id),
                 )
                 result = {
@@ -167,6 +172,13 @@ class ToolRegistry:
                         ],
                         "allergen_claims": [
                             claim.model_dump(mode="json") for claim in knowledge.allergen_claims
+                        ],
+                        "dietary_claims": [
+                            claim.model_dump(mode="json") for claim in knowledge.dietary_claims
+                        ],
+                        "preparation_claims": [
+                            claim.model_dump(mode="json")
+                            for claim in knowledge.preparation_claims
                         ],
                         "merchant_ingredient_claims": [
                             claim.model_dump(mode="json")
@@ -192,6 +204,7 @@ class ToolRegistry:
                     option_item_ids=self._selected_option_ids(evidence_args.menu_id),
                 )
                 result = {
+                    "menu_id": evidence_args.menu_id,
                     "evidence": [
                         item.model_dump(mode="json")
                         for item in self.repository.get_evidence(evidence_args.menu_id)
@@ -202,12 +215,24 @@ class ToolRegistry:
                     "allergen_claims": [
                         claim.model_dump(mode="json") for claim in knowledge.allergen_claims
                     ],
+                    "dietary_claims": [
+                        claim.model_dump(mode="json") for claim in knowledge.dietary_claims
+                    ],
+                    "preparation_claims": [
+                        claim.model_dump(mode="json") for claim in knowledge.preparation_claims
+                    ],
                     "merchant_ingredient_claims": [
                         claim.model_dump(mode="json")
                         for claim in knowledge.merchant_ingredient_claims
                     ],
+                    "wiki_passages": [
+                        passage.model_dump(mode="json") for passage in knowledge.passages
+                    ],
                     "unknown_fields": knowledge.unknowns,
                     "grounded_claim_ids": knowledge.claim_ids,
+                    "grounded_passage_ids": [
+                        passage.chunk_id for passage in knowledge.passages
+                    ],
                 }
             elif name == "compare_merchants":
                 compare_args = CompareArgs.model_validate(payload)

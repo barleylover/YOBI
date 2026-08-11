@@ -1,5 +1,9 @@
 # RAG and hybrid recommendation design
 
+> This document describes the 2026-08-11 local v3 design. The existing OCI public
+> demo still runs the historical 2026-08-09 v2 release; no v3 Oracle/public result is
+> implied here.
+
 YOBI does not let an LLM invent or select the final menu set. The server first builds
 and validates cumulative meal needs, then produces a grounded candidate result. The
 model may explain that result in natural language, but the body, cards, prices,
@@ -21,11 +25,12 @@ selection, rejection, comparison, and “the second menu” references.
 
 ## Candidate and safety pipeline
 
-The final recommendation path combines deterministic filtering and semantic ranking:
+The final recommendation path makes the internal food Wiki the primary retrieval
+authority while keeping deterministic safety and ordering rules outside the LLM:
 
 1. Merge profile rules with the cumulative conversation state.
-2. Apply service area, merchant/menu availability, budget, spice, and normalized
-   hard dietary/allergen constraints.
+2. Apply service area, merchant/menu availability, spice, and normalized hard
+   dietary/allergen constraints before any Wiki score is calculated.
 3. Map each candidate to the active knowledge release and resolve inherited Wiki
    claims through `DISH_CONCEPT_CLOSURE`.
 4. Treat Wiki `DEFINING`/`CORE` ingredients as `PRESUMED_PRESENT`; eliminate a menu
@@ -35,28 +40,41 @@ The final recommendation path combines deterministic filtering and semantic rank
    not prove menu presence, but they conservatively exclude a candidate when they
    conflict with a strict request, an explicit religious rule, or a severe allergy
    because shared-kitchen cross-contact is unresolved.
-6. Expand the search text with accumulated temperature, texture, flavour, and
-   category preferences, then combine lexical boosts with semantic similarity.
-7. Exclude rejected menus and explicit negative preferences, then rerank structured
-   temperature, texture, flavour, and category matches. For a party, estimate the
-   required portion count and apply the budget to that total rather than one unit.
+6. Search the active Wiki with exact Korean/English aliases, Korean facet terms, and
+   vector similarity. The cap is `600`, so every demo menu that survives the safety
+   and availability filters remains available through bulk Wiki scoring and the
+   structured rerank.
+7. Apply rejected-menu and explicit negative preferences, party-sized total cost, and
+   budget before final output. Compose the surviving candidates' final score as
+   exactly `60%` Wiki retrieval, `25%` structured temperature/texture/flavour/category
+   preference, and `15%` operational menu signal. The operational signal uses menu
+   semantic relevance, price, delivery fee, and ETA—not rating or merchant prose.
 8. Reduce repeated categories/merchants in the ordered shortlist. Return only the
    server-built `RecommendationResult` and its claim/passage references.
 
-Oracle performs `VECTOR_DISTANCE(..., COSINE)` over filtered menu vectors and the
-active immutable `KNOWLEDGE_CHUNK` vectors, using a `0.75` menu / `0.25` knowledge
-similarity blend before deterministic preference boosts. Legacy `MENU_KNOWLEDGE`
-vectors have no recommendation weight. Candidate retrieval is explicitly capped at
-40, and claim, passage, and evidence rows are loaded set-wise for that bounded set;
-the final result retains the top three chunk IDs and resolved claim IDs per menu.
-SQLite implements the same contract with deterministic embeddings and
-application-side cosine similarity; it is local contract evidence, not Oracle Vector
-Search evidence.
+Explanation requests preserve the original user query through deterministic and
+model-tool paths. Ingredient, safety/dietary/religious, preparation, taste, texture,
+temperature, and overview terms route to the corresponding Wiki facet. Korean text is
+rendered from Korean taxonomy labels and server-owned uncertainty phrases; the UI
+shows structured ingredient/allergen/dietary/preparation claims and keeps English
+source passages as collapsed supporting evidence rather than the primary answer.
 
-Review snippets are retained only as visibly synthetic display/backward-compatible
-data. Their recommendation weight is `0`, their safety weight is `0`, and review text
-is not supplied as grounded LLM context. Changing a review must not change candidate
-order or an allergy decision.
+Oracle performs `VECTOR_DISTANCE(..., COSINE)` over the active immutable
+`KNOWLEDGE_CHUNK` vectors and combines it with exact-alias and facet matches. The
+knowledge signal therefore remains `60%` of the final score; structured preferences
+are `25%`, and operational/menu metadata is `15%`. Legacy `MENU_KNOWLEDGE` vectors,
+merchant free-text descriptions, and reviews have no recommendation weight. Hard
+filters run before bulk Wiki scoring so an unsafe menu cannot re-enter through
+semantic similarity. Claim, passage, and evidence rows are loaded set-wise, and the
+final result retains the top three chunk IDs and resolved claim IDs per menu. SQLite
+implements the same contract with deterministic embeddings and application-side
+cosine similarity; it is local contract evidence, not Oracle Vector Search evidence.
+
+The 2,400 review snippets are retained only as visibly synthetic display/backward-
+compatible data. Their recommendation weight is `0`, their safety weight is `0`, and
+review text is not supplied as grounded LLM context. Merchant description prose is
+also excluded from ranking and grounding. Changing either free-text source must not
+change candidate order or an allergy decision.
 
 ## Wiki inheritance and override rules
 
@@ -73,6 +91,9 @@ claim about a real restaurant recipe.
   that every menu contains the ingredient.
 - Unknown cross-contact remains a warning even when a sauce-level ingredient is
   marked absent.
+- Demo alternatives may use a menu-scoped absence only when it has `VERIFIED`
+  synthetic menu evidence. Its cross-contact status still remains
+  `UNKNOWN`, so the claim is explainable evidence rather than a safety guarantee.
 
 This resolution contract is used by recommendation filtering, `explain_menu`,
 `get_dietary_evidence`, snapshot references, and the grounded response validator.
@@ -81,18 +102,26 @@ This resolution contract is used by recommendation filtering, `explain_menu`,
 
 Markdown files under `knowledge/dishes/` are the editable Wiki source. Strict front
 matter declares concept identity, parent edges, ingredient roles/status, allergen
-status, sources, synthetic status, and review status. Each document supplies nine
-named explanation facets. The compiler validates and normalizes the graph, creates a
-closure table, emits stable claim/document/chunk IDs and hashes, and embeds each
-facet.
+status, dietary attributes, preparation, sources, synthetic status, and review status.
+Each document supplies nine named explanation facets. The compiler validates and
+normalizes the graph, creates a closure table, emits stable claim/document/chunk IDs
+and hashes, and embeds each facet. The current demo corpus intentionally stops at
+reusable food families and variants; it never creates a concept for a particular
+merchant's branded menu name.
 
 Loaders stage a `KNOWLEDGE_RELEASE` as `LOADING`, insert only that immutable release's owned
 rows, verify exact counts and non-null vectors, then mark it `READY` and switch
 `KNOWLEDGE_RUNTIME_STATE`. `/readyz` fails when the active release is absent, not
 ready, has a missing/invalid manifest, declared counts that differ from observed
-counts, anything other than exactly 150 mappings/30 origins/266 merchant ingredients/
-4 option effects, null or metadata-incompatible chunks, incompatible menu vectors,
-or invalid required-option cardinality.
+counts, anything other than exactly 600 mappings/13 origin declarations/119 merchant
+cross-contact ingredient rows/4 option effects, null or metadata-incompatible chunks,
+incompatible menu vectors, or invalid required-option cardinality. The base catalog is
+`demo-2026.08.11-knowledge-v3` and the knowledge catalog contract is
+`demo-knowledge-catalog-2026.08.11-v3`; the compiled corpus contains 102 concepts/
+documents (`2` cuisine, `30` family, `70` variant), 100 relations, 281 closure rows,
+1,997 claims, and 918 facet chunks. Claims are exactly 361 ingredient, 371 allergen,
+247 dietary, 100 preparation, and 918 facet rows. All 600 menus across 100 menu
+categories are mapped.
 
 The authoring default is `yobi-semantic-hash-v1`, 1536 dimensions, version
 `2026-08-06`. The release path explicitly pins seed and query embedding to the
@@ -134,12 +163,16 @@ than sleeping through an interactive request. The fallback preserves the current
 
 ## Grounded response contract
 
-Model output is normalized into a short narrative plus optional referenced menu and
-claim IDs. `GroundedResponseValidator` rejects references not present in the
-server-owned cards/result, internal tool names, internal IDs in user-visible prose,
-or stronger claims than the grounded payload supports. General Wiki passages are
-labelled as synthetic food knowledge; menu-specific specifications and unknowns are
-shown separately.
+Model output is normalized into a short narrative plus referenced menu, claim, and
+passage IDs, a `grounding_scope`, and explicit `uncertainty_codes`. Evidence precedence
+is `OPTION > MENU > VARIANT_WIKI > FAMILY_WIKI`. `GroundedResponseValidator` rejects
+references not present in the server-owned cards/result, internal tool names, internal
+IDs in user-visible prose, scope mismatches, unsupported uncertainty codes, or
+stronger claims than the grounded payload supports. In particular, `POSSIBLE`,
+`UNKNOWN`, and `NOT_PROVIDED` cannot be strengthened into presence, absence, or safety.
+General Wiki passages are labelled as synthetic food knowledge; menu-specific
+specifications and unknowns are shown separately. Merchant-scope structured facts may
+only contribute the `CROSS_CONTACT_UNKNOWN` uncertainty, never a menu recipe claim.
 
 Cart/delivery/check-out tools accept only an explicit matching user act. The server
 revalidates options, price, cart readiness, and state transitions. Agent cart inserts

@@ -5,6 +5,7 @@
   "name_ko": "치즈김밥",
   "name_en": "Cheese gimbap",
   "aliases": [
+    "치즈 김밥",
     "cheese kimbap",
     "Korean cheese rice roll"
   ],
@@ -33,6 +34,28 @@
       "allergen_id": "allergen_milk",
       "status": "PRESUMED_PRESENT",
       "source_ref": "Cheese defines the demo Wiki cheese gimbap concept"
+    }
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Dairy cheese defines the variant",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: cheese-gimbap structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegetarian_possible",
+      "value_text": "A meat-free cheese roll is possible after other fillings are confirmed",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: cheese-gimbap structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "rolled_and_sliced",
+      "value_text": "Cheese and other fillings are rolled with rice in seaweed and sliced",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: cheese-gimbap structured claims v1"
     }
   ],
   "source_type": "SYNTHETIC_WIKI",

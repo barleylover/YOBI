@@ -25,6 +25,7 @@ from app.domain.dialogue import (
 )
 from app.domain.dietary import apply_profile_constraints, known_allergen_conflicts
 from app.domain.knowledge import (
+    ClaimStatus,
     GroundedMenuKnowledge,
     GroundedPassage,
     KnowledgeSourceKind,
@@ -52,7 +53,11 @@ from app.domain.models import (
     ProfileUpdate,
     Session,
 )
-from app.domain.recommendation import rerank_menu_candidates
+from app.domain.recommendation import (
+    operational_menu_signal,
+    rerank_menu_candidates,
+    wiki_operational_retrieval_score,
+)
 from app.knowledge.catalog_seed import (
     KNOWLEDGE_CATALOG_VERSION,
     KNOWLEDGE_RELEASE_ID,
@@ -61,40 +66,51 @@ from app.knowledge.catalog_seed import (
 from app.knowledge.resolver import (
     allergen_constraint_conflicts,
     category_constraint_conflicts,
+    confirmed_allergen_absence_signals,
     ingredient_constraint_conflicts,
     merchant_cross_contact_conflicts,
     resolve_allergen_claims,
+    resolve_dietary_claims,
     resolve_ingredient_claims,
     resolve_merchant_ingredient_claims,
+    resolve_preparation_claims,
     severe_allergy_conflicts,
 )
 from app.knowledge.sqlite_store import load_sqlite_release
-from app.rag.embeddings import cosine_similarity, deterministic_embedding
+from app.rag.embeddings import (
+    cosine_similarity,
+    deterministic_embedding,
+    hybrid_knowledge_chunk_score,
+)
 from app.rag.providers import DeterministicEmbeddingProvider
 
-RECOMMENDATION_CANDIDATE_CAP = 40
+# The demo corpus is intentionally bounded at 600 menus. Keep every hard-filtered
+# candidate until the structured-preference reranker has applied its 25% share;
+# truncating at 40 here can create false empty results for party budgets and drop the
+# best sensory match before the final 60/25/15 score exists.
+RECOMMENDATION_CANDIDATE_CAP = 600
 RECOMMENDATION_PASSAGE_LIMIT = 3
-EXPECTED_MAPPED_MENUS = 150
-EXPECTED_ORIGIN_DECLARATIONS = 30
-EXPECTED_MERCHANT_INGREDIENTS = 266
+EXPECTED_MAPPED_MENUS = 600
+EXPECTED_ORIGIN_DECLARATIONS = 13
+EXPECTED_MERCHANT_INGREDIENTS = 119
 EXPECTED_OPTION_EFFECTS = 4
 EXPECTED_RUNTIME_COUNTS = {
     "service_area": 3,
-    "menu_category": 20,
-    "merchant": 30,
-    "menu": 150,
-    "menu_knowledge": 150,
-    "menu_option_group": 302,
-    "menu_option_item": 605,
-    "review_snippet": 600,
-    "evidence": 300,
+    "menu_category": 100,
+    "merchant": 60,
+    "menu": 600,
+    "menu_knowledge": 600,
+    "menu_option_group": 1202,
+    "menu_option_item": 2405,
+    "review_snippet": 2400,
+    "evidence": 1200,
     "address_place": 20,
-    "ingredient": 47,
-    "menu_ingredient": 7,
+    "ingredient": 54,
+    "menu_ingredient": 565,
     "allergen": 10,
-    "menu_allergen": 162,
-    "dietary_attribute": 15,
-    "menu_dietary_attribute": 317,
+    "menu_allergen": 595,
+    "dietary_attribute": 20,
+    "menu_dietary_attribute": 1217,
     "option_dietary_conflict": 1,
 }
 
@@ -200,15 +216,8 @@ class SQLiteYobiRepository:
             seed = build_seed()
             if existing:
                 self._backfill_normalized_catalog(connection, seed)
+                self._prune_stale_catalog_dimensions(connection, seed)
                 self._load_knowledge_catalog(connection, seed)
-                connection.execute(
-                    """
-                    UPDATE user_profile SET spice_tolerance = CASE
-                      WHEN spice_tolerance <= 1 THEN 1
-                      WHEN spice_tolerance <= 3 THEN 2
-                      ELSE 3 END
-                    """
-                )
                 return
             self._insert_rows(connection, "service_area", seed["service_areas"])
             self._insert_rows(connection, "menu_category", seed["menu_categories"])
@@ -263,9 +272,31 @@ class SQLiteYobiRepository:
     def _backfill_normalized_catalog(
         cls, connection: sqlite3.Connection, seed: dict[str, list[dict[str, Any]]]
     ) -> None:
-        connection.executemany(
-            "DELETE FROM menu_ingredient WHERE menu_id=?",
-            [(row["menu_id"],) for row in seed["menus"]],
+        cls._delete_stale_menu_relation_rows(
+            connection,
+            table="menu_ingredient",
+            value_column="ingredient_id",
+            menu_ids=[str(row["menu_id"]) for row in seed["menus"]],
+            rows=seed["menu_ingredients"],
+        )
+        cls._delete_stale_menu_relation_rows(
+            connection,
+            table="menu_allergen",
+            value_column="allergen_id",
+            menu_ids=[str(row["menu_id"]) for row in seed["menus"]],
+            rows=seed["menu_allergens"],
+        )
+        cls._delete_stale_menu_relation_rows(
+            connection,
+            table="menu_dietary_attribute",
+            value_column="attribute_id",
+            menu_ids=[str(row["menu_id"]) for row in seed["menus"]],
+            rows=seed["menu_dietary_attributes"],
+        )
+        cls._delete_stale_option_conflicts(
+            connection,
+            menu_ids=[str(row["menu_id"]) for row in seed["menus"]],
+            rows=seed["option_dietary_conflicts"],
         )
         for table, seed_key, keys in (
             ("service_area", "service_areas", ("service_area_id",)),
@@ -295,6 +326,143 @@ class SQLiteYobiRepository:
             ("address_place", "hotels", ("place_id",)),
         ):
             cls._upsert_rows(connection, table, seed[seed_key], keys)
+
+    @staticmethod
+    def _delete_stale_menu_relation_rows(
+        connection: sqlite3.Connection,
+        *,
+        table: str,
+        value_column: str,
+        menu_ids: list[str],
+        rows: list[dict[str, Any]],
+    ) -> None:
+        """Delete relation keys retired from deterministic seed menus, not whole tables."""
+
+        allowed_by_menu: dict[str, list[str]] = defaultdict(list)
+        for row in rows:
+            allowed_by_menu[str(row["menu_id"])].append(str(row[value_column]))
+        grouped: dict[int, list[tuple[str, ...]]] = defaultdict(list)
+        for menu_id in menu_ids:
+            allowed = tuple(sorted(set(allowed_by_menu[menu_id])))
+            grouped[len(allowed)].append((menu_id, *allowed))
+        for allowed_count, parameters in grouped.items():
+            absent_clause = (
+                f" AND {value_column} NOT IN ({','.join('?' for _ in range(allowed_count))})"
+                if allowed_count
+                else ""
+            )
+            connection.executemany(
+                f"DELETE FROM {table} WHERE menu_id=?{absent_clause}",
+                parameters,
+            )
+
+    @staticmethod
+    def _delete_stale_option_conflicts(
+        connection: sqlite3.Connection,
+        *,
+        menu_ids: list[str],
+        rows: list[dict[str, Any]],
+    ) -> None:
+        allowed = sorted(
+            {
+                (str(row["option_item_id"]), str(row["rule_code"]))
+                for row in rows
+            }
+        )
+        allowed_clause = (
+            " AND NOT ("
+            + " OR ".join(
+                "(option_dietary_conflict.option_item_id=? "
+                "AND option_dietary_conflict.rule_code=?)"
+                for _ in allowed
+            )
+            + ")"
+            if allowed
+            else ""
+        )
+        parameters = [
+            (menu_id, *(value for pair in allowed for value in pair))
+            for menu_id in menu_ids
+        ]
+        connection.executemany(
+            """
+            DELETE FROM option_dietary_conflict
+            WHERE EXISTS (
+              SELECT 1
+              FROM menu_option_item item
+              JOIN menu_option_group option_group
+                ON option_group.option_group_id=item.option_group_id
+              WHERE item.option_item_id=option_dietary_conflict.option_item_id
+                AND option_group.menu_id=?
+            )
+            """
+            + allowed_clause,
+            parameters,
+        )
+
+    @classmethod
+    def _prune_stale_catalog_dimensions(
+        cls,
+        connection: sqlite3.Connection,
+        seed: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        """Prune retired dimensions only when no runtime or historical release still needs them."""
+
+        for table, id_column, seed_key, references in (
+            (
+                "menu_category",
+                "category_id",
+                "menu_categories",
+                ("SELECT 1 FROM menu WHERE menu.category_id=menu_category.category_id",),
+            ),
+            (
+                "ingredient",
+                "ingredient_id",
+                "ingredients",
+                (
+                    "SELECT 1 FROM menu_ingredient fact "
+                    "WHERE fact.ingredient_id=ingredient.ingredient_id",
+                    "SELECT 1 FROM concept_claim claim "
+                    "WHERE claim.ingredient_id=ingredient.ingredient_id",
+                    "SELECT 1 FROM merchant_ingredient fact "
+                    "WHERE fact.ingredient_id=ingredient.ingredient_id",
+                    "SELECT 1 FROM option_ingredient_effect effect "
+                    "WHERE effect.ingredient_id=ingredient.ingredient_id",
+                ),
+            ),
+            (
+                "allergen",
+                "allergen_id",
+                "allergens",
+                (
+                    "SELECT 1 FROM menu_allergen fact "
+                    "WHERE fact.allergen_id=allergen.allergen_id",
+                    "SELECT 1 FROM concept_claim claim "
+                    "WHERE claim.allergen_id=allergen.allergen_id",
+                ),
+            ),
+            (
+                "dietary_attribute",
+                "attribute_id",
+                "dietary_attributes",
+                (
+                    "SELECT 1 FROM menu_dietary_attribute fact "
+                    "WHERE fact.attribute_id=dietary_attribute.attribute_id",
+                    "SELECT 1 FROM concept_claim claim "
+                    "WHERE claim.attribute_id=dietary_attribute.attribute_id",
+                ),
+            ),
+        ):
+            allowed_ids = [str(row[id_column]) for row in seed[seed_key]]
+            placeholders = ",".join("?" for _ in allowed_ids)
+            reference_guards = "".join(
+                f" AND NOT EXISTS ({reference})" for reference in references
+            )
+            connection.execute(
+                f"DELETE FROM {table} "
+                f"WHERE {id_column} NOT IN ({placeholders}){reference_guards}",
+                allowed_ids,
+            )
 
     @staticmethod
     def _upsert_rows(
@@ -1014,10 +1182,6 @@ class SQLiteYobiRepository:
         )
         safety_state.strictness = constraint_strictness
         query_vector = deterministic_embedding(f"query: {query}")
-        lowered = query.lower()
-        severe_shellfish = (
-            "shellfish_allergy" in profile.dietary_rules and profile.allergy_severity == "severe"
-        )
         vegan_required = "vegan" in profile.dietary_rules
         severe_allergies = profile.allergy_severity == "severe"
         excluded = {item.lower() for item in excluded_ingredients}
@@ -1032,7 +1196,6 @@ class SQLiteYobiRepository:
             ).fetchall()
             prelim: list[
                 tuple[
-                    float,
                     float,
                     sqlite3.Row,
                     list[str],
@@ -1051,8 +1214,6 @@ class SQLiteYobiRepository:
                     continue
                 if "pork" in excluded and "pork" in allergen_tags:
                     continue
-                if severe_shellfish and "shellfish_sauce_absent" not in dietary_tags:
-                    continue
                 if vegan_required and "vegan_option" not in dietary_tags:
                     continue
                 menu_similarity = max(
@@ -1062,25 +1223,14 @@ class SQLiteYobiRepository:
                         deterministic_embedding(f"document: {row['semantic_text']}"),
                     ),
                 )
-                boost = 0.0
-                if "red rice cake" in lowered and "tteokbokki" in row["category"].lower():
-                    boost += 0.45
-                if any(term in lowered for term in ("rain", "broth", "noodle", "soup")) and row[
-                    "category"
-                ] in {"Chicken kalguksu", "Samgyetang", "Sundubu"}:
-                    boost += 0.18
-                if any(term in lowered for term in ("mild", "not spicy")) and row[
-                    "spice_level"
-                ] <= 1:
-                    boost += 0.16
-                if any(term in lowered for term in ("vegan", "plant")) and (
-                    "vegan_option" in dietary_tags
-                ):
-                    boost += 0.4
+                operational_signal = operational_menu_signal(
+                    menu_similarity,
+                    price=int(row["price"]),
+                    budget=budget,
+                    delivery_fee=int(row["delivery_fee"]),
+                    eta_max=int(row["eta_max"]),
+                )
                 reasons = [f"Matches your spice tolerance (level {row['spice_level']} of 3)"]
-                if "creamy pasta" in profile.favorite_foods and "rose" in row["category"].lower():
-                    boost += 0.2
-                    reasons.append("Creamy profile connects with a favourite food you selected")
                 risks: list[str] = []
                 status = EvidenceStatus.UNKNOWN
                 if "shellfish_sauce_absent" in dietary_tags:
@@ -1091,8 +1241,7 @@ class SQLiteYobiRepository:
                     risks.append("Some dietary details are not verified")
                 prelim.append(
                     (
-                        menu_similarity,
-                        boost,
+                        operational_signal,
                         row,
                         reasons,
                         risks,
@@ -1102,17 +1251,16 @@ class SQLiteYobiRepository:
                     )
                 )
 
-            prelim.sort(
-                key=lambda item: (item[0] + item[1], -int(item[2]["price"])), reverse=True
-            )
-            candidate_limit = min(
-                RECOMMENDATION_CANDIDATE_CAP,
-                max(16, min(limit, RECOMMENDATION_CANDIDATE_CAP) * 4),
-            )
-            prelim = prelim[:candidate_limit]
-            candidate_ids = [str(item[2]["menu_id"]) for item in prelim]
+            # Do not pre-truncate by menu text: every hard-filtered demo menu gets one
+            # batched active-Wiki score before the candidate cap is applied.
+            candidate_ids = [str(item[1]["menu_id"]) for item in prelim]
             grounded = self._bulk_resolved_knowledge_claims(connection, candidate_ids)
-            knowledge = self._bulk_knowledge_passages(connection, candidate_ids, query_vector)
+            knowledge = self._bulk_knowledge_passages(
+                connection,
+                candidate_ids,
+                query_vector,
+                query=query,
+            )
             evidence_by_menu: dict[str, list[str]] = defaultdict(list)
             if candidate_ids:
                 placeholders = ",".join("?" for _ in candidate_ids)
@@ -1129,36 +1277,21 @@ class SQLiteYobiRepository:
 
         scored: list[MenuSummary] = []
         for (
-            menu_similarity,
-            boost,
+            operational_signal,
             row,
             reasons,
             risks,
             status,
-            dietary_tags,
-            allergen_tags,
+            _dietary_tags,
+            _allergen_tags,
         ) in prelim:
             menu_id = str(row["menu_id"])
             ingredient_claims, allergen_claims, merchant_claims = grounded.get(
                 menu_id, ([], [], [])
             )
             conflicts = ingredient_constraint_conflicts(ingredient_claims, safety_state)
-            mastered_shellfish = (
-                "shellfish_sauce_absent" in dietary_tags and "shellfish_risk" not in allergen_tags
-            )
-            ignored_allergies = (
-                {"shellfish"}
-                if mastered_shellfish
-                and "shellfish_allergy"
-                in {*safety_state.dietary_rules, *safety_state.profile_dietary_rules}
-                else set()
-            )
             conflicts.extend(
-                allergen_constraint_conflicts(
-                    allergen_claims,
-                    safety_state,
-                    ignored_allergies=ignored_allergies,
-                )
+                allergen_constraint_conflicts(allergen_claims, safety_state)
             )
             if profile.allergy_severity == "severe":
                 conflicts.extend(
@@ -1166,7 +1299,6 @@ class SQLiteYobiRepository:
                         ingredient_claims,
                         allergen_claims,
                         safety_state.dietary_rules,
-                        shellfish_mastered_absence=mastered_shellfish,
                     )
                 )
             conflicts.extend(
@@ -1178,8 +1310,24 @@ class SQLiteYobiRepository:
             )
             if conflicts:
                 continue
+            absent_allergies, cross_contact_unknown = confirmed_allergen_absence_signals(
+                allergen_claims,
+                safety_state.dietary_rules,
+            )
+            for allergy in absent_allergies:
+                reasons.append(
+                    "Synthetic menu specification marks "
+                    f"{allergy.replace('_', ' ')} absent"
+                )
+            if absent_allergies:
+                status = EvidenceStatus.VERIFIED
+            if cross_contact_unknown and "Cross-contamination is not verified" not in risks:
+                risks.append("Cross-contamination is not verified")
             knowledge_score, passage_ids = knowledge.get(menu_id, (0.0, []))
-            combined_score = 0.75 * menu_similarity + 0.25 * knowledge_score + boost
+            combined_score = wiki_operational_retrieval_score(
+                knowledge_score,
+                operational_signal,
+            )
             claim_ids = list(
                 dict.fromkeys(
                     [claim.source_id for claim in ingredient_claims]
@@ -1197,7 +1345,7 @@ class SQLiteYobiRepository:
                 )
             )
         scored.sort(key=lambda item: (item.semantic_score, -item.price), reverse=True)
-        return scored[:limit]
+        return scored[: min(limit, RECOMMENDATION_CANDIDATE_CAP)]
 
     def recommend_menus(
         self,
@@ -1374,12 +1522,6 @@ class SQLiteYobiRepository:
             allergens = set(json.loads(row["allergen_tags_json"]))
             if profile.allergy_severity == "severe" and known_allergen_conflicts(allergens, rules):
                 continue
-            if (
-                "shellfish_allergy" in rules
-                and profile.allergy_severity == "severe"
-                and "shellfish_sauce_absent" not in tags
-            ):
-                continue
             if "vegan" in rules and "vegan_option" not in tags:
                 continue
             status = EvidenceStatus.UNKNOWN
@@ -1443,7 +1585,7 @@ class SQLiteYobiRepository:
                 dict(row)
                 for row in connection.execute(
                     """
-                    SELECT claim.*, ingredient.name_en, closure.depth,
+                    SELECT claim.*, ingredient.name_en, ingredient.name_ko, closure.depth,
                            claim.release_id AS source_version
                     FROM dish_concept_closure closure
                     JOIN concept_claim claim
@@ -1479,7 +1621,8 @@ class SQLiteYobiRepository:
             dict(row)
             for row in connection.execute(
                 """
-                SELECT fact.*, ingredient.name_en, fact.source_id AS source_version
+                SELECT fact.*, ingredient.name_en, ingredient.name_ko,
+                       fact.source_id AS source_version
                 FROM menu_ingredient fact
                 JOIN ingredient ON ingredient.ingredient_id=fact.ingredient_id
                 WHERE fact.menu_id=?
@@ -1508,7 +1651,8 @@ class SQLiteYobiRepository:
                 dict(row)
                 for row in connection.execute(
                     f"""
-                    SELECT effect.*, ingredient.name_en, effect.option_item_id AS source_id,
+                    SELECT effect.*, ingredient.name_en, ingredient.name_ko,
+                           effect.option_item_id AS source_id,
                            effect.release_id AS source_version
                     FROM option_ingredient_effect effect
                     JOIN ingredient ON ingredient.ingredient_id=effect.ingredient_id
@@ -1554,7 +1698,7 @@ class SQLiteYobiRepository:
 
         wiki_ingredients = connection.execute(
             f"""
-            SELECT mapping.menu_id,claim.*,ingredient.name_en,closure.depth,
+            SELECT mapping.menu_id,claim.*,ingredient.name_en,ingredient.name_ko,closure.depth,
                    claim.release_id AS source_version
             FROM menu_concept_map mapping
             JOIN dish_concept_closure closure
@@ -1592,7 +1736,8 @@ class SQLiteYobiRepository:
         ).fetchall()
         menu_ingredients = connection.execute(
             f"""
-            SELECT fact.menu_id,fact.*,ingredient.name_en,fact.source_id AS source_version
+            SELECT fact.menu_id,fact.*,ingredient.name_en,ingredient.name_ko,
+                   fact.source_id AS source_version
             FROM menu_ingredient fact
             JOIN ingredient ON ingredient.ingredient_id=fact.ingredient_id
             WHERE fact.menu_id IN ({placeholders})
@@ -1611,7 +1756,8 @@ class SQLiteYobiRepository:
         ).fetchall()
         merchant_ingredients = connection.execute(
             f"""
-            SELECT menu.menu_id,fact.*,ingredient.name_en,declaration.source_version
+            SELECT menu.menu_id,fact.*,ingredient.name_en,ingredient.name_ko,
+                   declaration.source_version
             FROM menu
             JOIN merchant_ingredient fact ON fact.merchant_id=menu.merchant_id
             JOIN merchant_origin_declaration declaration
@@ -1660,6 +1806,8 @@ class SQLiteYobiRepository:
         connection: sqlite3.Connection,
         menu_ids: list[str],
         query_vector: list[float],
+        *,
+        query: str = "",
     ) -> dict[str, tuple[float, list[str]]]:
         """Return the strongest active knowledge-chunk signal for each candidate menu."""
 
@@ -1669,7 +1817,8 @@ class SQLiteYobiRepository:
         placeholders = ",".join("?" for _ in unique_ids)
         rows = connection.execute(
             f"""
-            SELECT mapping.menu_id,chunk.chunk_id,chunk.embedding_vector_json
+            SELECT mapping.menu_id,chunk.chunk_id,chunk.facet,chunk.embedding_vector_json,
+                   concept.canonical_name_ko,concept.canonical_name_en,concept.aliases_json
             FROM knowledge_runtime_state state
             JOIN knowledge_release release ON release.release_id=state.active_release_id
             JOIN menu_concept_map mapping
@@ -1681,6 +1830,9 @@ class SQLiteYobiRepository:
             JOIN knowledge_chunk chunk
               ON chunk.release_id=closure.release_id
              AND chunk.concept_id=closure.ancestor_concept_id
+            JOIN dish_concept concept
+              ON concept.release_id=chunk.release_id
+             AND concept.concept_id=chunk.concept_id
             WHERE state.state_key='ACTIVE' AND release.status='READY'
               AND mapping.menu_id IN ({placeholders})
               AND chunk.embedding_vector_json IS NOT NULL
@@ -1692,11 +1844,22 @@ class SQLiteYobiRepository:
         ).fetchall()
         grouped: dict[str, list[tuple[float, str]]] = defaultdict(list)
         for row in rows:
+            aliases = [
+                str(row["canonical_name_ko"]),
+                str(row["canonical_name_en"]),
+                *[str(alias) for alias in json.loads(str(row["aliases_json"]))],
+            ]
+            vector_similarity = cosine_similarity(
+                query_vector,
+                json.loads(str(row["embedding_vector_json"])),
+            )
             grouped[str(row["menu_id"])].append(
                 (
-                    cosine_similarity(
-                        query_vector,
-                        json.loads(str(row["embedding_vector_json"])),
+                    hybrid_knowledge_chunk_score(
+                        query,
+                        vector_similarity,
+                        str(row["facet"]),
+                        aliases,
                     ),
                     str(row["chunk_id"]),
                 )
@@ -1746,7 +1909,7 @@ class SQLiteYobiRepository:
         )
         merchant_rows = connection.execute(
             """
-            SELECT fact.*,ingredient.name_en,declaration.source_version
+            SELECT fact.*,ingredient.name_en,ingredient.name_ko,declaration.source_version
             FROM menu
             JOIN knowledge_runtime_state state ON state.state_key='ACTIVE'
             JOIN merchant_ingredient fact
@@ -1770,41 +1933,13 @@ class SQLiteYobiRepository:
             ]
         )
         conflicts.extend(ingredient_constraint_conflicts(ingredient_claims, state))
-        mastered_shellfish = connection.execute(
-            """
-            SELECT CASE WHEN EXISTS (
-              SELECT 1 FROM menu_dietary_attribute mda
-              JOIN dietary_attribute da ON da.attribute_id=mda.attribute_id
-              WHERE mda.menu_id=? AND da.code='shellfish_sauce_absent'
-                AND mda.status='VERIFIED'
-            ) AND NOT EXISTS (
-              SELECT 1 FROM menu_allergen ma
-              JOIN allergen a ON a.allergen_id=ma.allergen_id
-              WHERE ma.menu_id=? AND a.code='shellfish_risk'
-            ) THEN 1 ELSE 0 END
-            """,
-            (menu_id, menu_id),
-        ).fetchone()[0]
-        ignored_allergies = (
-            {"shellfish"}
-            if mastered_shellfish
-            and "shellfish_allergy" in {*state.dietary_rules, *state.profile_dietary_rules}
-            else set()
-        )
-        conflicts.extend(
-            allergen_constraint_conflicts(
-                allergen_claims,
-                state,
-                ignored_allergies=ignored_allergies,
-            )
-        )
+        conflicts.extend(allergen_constraint_conflicts(allergen_claims, state))
         if allergy_severity == "severe":
             conflicts.extend(
                 severe_allergy_conflicts(
                     ingredient_claims,
                     allergen_claims,
                     state.dietary_rules,
-                    shellfish_mastered_absence=bool(mastered_shellfish),
                 )
             )
         conflicts.extend(
@@ -1836,6 +1971,8 @@ class SQLiteYobiRepository:
             passages: list[GroundedPassage] = []
             concept_ids: list[str] = []
             available_facets: list[str] = []
+            wiki_dietary_rows: list[dict[str, Any]] = []
+            wiki_preparation_rows: list[dict[str, Any]] = []
             if release_id and concept_id:
                 concept_ids = [
                     str(row[0])
@@ -1850,14 +1987,53 @@ class SQLiteYobiRepository:
                 placeholders = ",".join("?" for _ in concept_ids)
                 rows = connection.execute(
                     f"""
-                    SELECT chunk_id,document_id,concept_id,facet,content,
-                           embedding_vector_json
-                    FROM knowledge_chunk
-                    WHERE release_id=? AND concept_id IN ({placeholders})
+                    SELECT chunk.chunk_id,chunk.document_id,chunk.concept_id,chunk.facet,
+                           chunk.content,chunk.embedding_vector_json,
+                           concept.canonical_name_ko,concept.canonical_name_en,
+                           concept.aliases_json
+                    FROM knowledge_chunk chunk
+                    JOIN dish_concept concept
+                      ON concept.release_id=chunk.release_id
+                     AND concept.concept_id=chunk.concept_id
+                    WHERE chunk.release_id=? AND chunk.concept_id IN ({placeholders})
                     """,
                     (release_id, *concept_ids),
                 ).fetchall()
                 available_facets = sorted({str(row["facet"]) for row in rows})
+                wiki_dietary_rows = [
+                    dict(row)
+                    for row in connection.execute(
+                        """
+                        SELECT claim.*,da.code,da.display_name,closure.depth,
+                               claim.release_id AS source_version
+                        FROM dish_concept_closure closure
+                        JOIN concept_claim claim
+                          ON claim.release_id=closure.release_id
+                         AND claim.concept_id=closure.ancestor_concept_id
+                        JOIN dietary_attribute da ON da.attribute_id=claim.attribute_id
+                        WHERE closure.release_id=? AND closure.descendant_concept_id=?
+                          AND closure.inherit_claims=1 AND claim.claim_type='DIETARY'
+                          AND (closure.depth=0 OR claim.inheritance_mode='INHERIT')
+                        """,
+                        (release_id, concept_id),
+                    ).fetchall()
+                ]
+                wiki_preparation_rows = [
+                    dict(row)
+                    for row in connection.execute(
+                        """
+                        SELECT claim.*,closure.depth,claim.release_id AS source_version
+                        FROM dish_concept_closure closure
+                        JOIN concept_claim claim
+                          ON claim.release_id=closure.release_id
+                         AND claim.concept_id=closure.ancestor_concept_id
+                        WHERE closure.release_id=? AND closure.descendant_concept_id=?
+                          AND closure.inherit_claims=1 AND claim.claim_type='PREPARATION'
+                          AND (closure.depth=0 OR claim.inheritance_mode='INHERIT')
+                        """,
+                        (release_id, concept_id),
+                    ).fetchall()
+                ]
                 menu_name_row = connection.execute(
                     "SELECT name_en,category FROM menu WHERE menu_id=?", (menu_id,)
                 ).fetchone()
@@ -1869,16 +2045,28 @@ class SQLiteYobiRepository:
                 query_vector = deterministic_embedding(f"query: {search_text}")
                 scored = [
                     (
-                        cosine_similarity(
-                            query_vector,
-                            json.loads(str(row["embedding_vector_json"])),
+                        hybrid_knowledge_chunk_score(
+                            search_text,
+                            cosine_similarity(
+                                query_vector,
+                                json.loads(str(row["embedding_vector_json"])),
+                            ),
+                            str(row["facet"]),
+                            [
+                                str(row["canonical_name_ko"]),
+                                str(row["canonical_name_en"]),
+                                *[
+                                    str(alias)
+                                    for alias in json.loads(str(row["aliases_json"]))
+                                ],
+                            ],
                         ),
                         row,
                     )
                     for row in rows
                     if row["embedding_vector_json"]
                 ]
-                scored.sort(key=lambda item: (item[0], str(item[1]["chunk_id"])), reverse=True)
+                scored.sort(key=lambda item: (-item[0], str(item[1]["chunk_id"])))
                 for score, row in scored[:5]:
                     passages.append(
                         GroundedPassage(
@@ -1912,6 +2100,22 @@ class SQLiteYobiRepository:
                     )
                     for row in legacy_rows
                 ]
+            menu_dietary_rows = [
+                dict(row)
+                for row in connection.execute(
+                    """
+                    SELECT fact.*,da.code,da.display_name,
+                           fact.evidence_id AS source_id,'catalog' AS source_version
+                    FROM menu_dietary_attribute fact
+                    JOIN dietary_attribute da ON da.attribute_id=fact.attribute_id
+                    WHERE fact.menu_id=?
+                    ORDER BY fact.attribute_id
+                    """,
+                    (menu_id,),
+                ).fetchall()
+            ]
+            dietary_claims = resolve_dietary_claims(wiki_dietary_rows, menu_dietary_rows)
+            preparation_claims = resolve_preparation_claims(wiki_preparation_rows)
             origin_rows = connection.execute(
                 """
                 SELECT DISTINCT declaration.raw_text
@@ -1927,7 +2131,7 @@ class SQLiteYobiRepository:
             ).fetchall()
             merchant_ingredient_rows = connection.execute(
                 """
-                SELECT fact.*,ingredient.name_en,declaration.source_version
+                SELECT fact.*,ingredient.name_en,ingredient.name_ko,declaration.source_version
                 FROM menu
                 JOIN knowledge_runtime_state state ON state.state_key='ACTIVE'
                 JOIN merchant_ingredient fact
@@ -1951,6 +2155,15 @@ class SQLiteYobiRepository:
                     for row in merchant_ingredient_rows
                 ]
             )
+            cross_contact_unknowns = [
+                (
+                    f"{claim.code}: menu-specific absence is recorded, but cross-contact "
+                    "is UNKNOWN; this is not a safety certification."
+                )
+                for claim in allergen_claims
+                if claim.status is ClaimStatus.CONFIRMED_ABSENT
+                and claim.cross_contamination_status == "UNKNOWN"
+            ]
         return GroundedMenuKnowledge(
             menu_id=menu_id,
             release_id=release_id,
@@ -1959,12 +2172,15 @@ class SQLiteYobiRepository:
             available_facets=available_facets,
             ingredient_claims=ingredient_claims,
             allergen_claims=allergen_claims,
+            dietary_claims=dietary_claims,
+            preparation_claims=preparation_claims,
             merchant_ingredient_claims=merchant_claims,
             passages=passages,
             merchant_origin_notes=[str(row[0]) for row in origin_rows],
             unknowns=[
                 "Merchant-specific recipe differences are unknown unless a menu fact overrides the Wiki.",
                 "Shared-kitchen cross-contact is not confirmed by the synthetic Wiki or origin declaration.",
+                *cross_contact_unknowns,
             ],
         )
 
@@ -2534,37 +2750,6 @@ class SQLiteYobiRepository:
                 )
                 vegan_required = "vegan" in dietary_rules
                 for row in rows:
-                    conflicts = (
-                        known_allergen_conflicts(
-                            set(json.loads(row["allergen_tags_json"])), dietary_rules
-                        )
-                        if profile_row["allergy_severity"] == "severe"
-                        else set()
-                    )
-                    for conflict in sorted(conflicts - {"shellfish"}):
-                        dietary_conflicts.append(
-                            f"Remove {row['menu_name']} to continue; it is flagged for {conflict.replace('_', ' ')}."
-                        )
-                    if severe_shellfish:
-                        normalized_safe = connection.execute(
-                            """
-                            SELECT CASE WHEN EXISTS (
-                              SELECT 1 FROM menu_dietary_attribute mda
-                              JOIN dietary_attribute da ON da.attribute_id=mda.attribute_id
-                              WHERE mda.menu_id=? AND da.code='shellfish_sauce_absent'
-                                AND mda.status='VERIFIED'
-                            ) AND NOT EXISTS (
-                              SELECT 1 FROM menu_allergen ma
-                              JOIN allergen a ON a.allergen_id=ma.allergen_id
-                              WHERE ma.menu_id=? AND a.code='shellfish_risk'
-                            ) THEN 1 ELSE 0 END
-                            """,
-                            (row["menu_id"], row["menu_id"]),
-                        ).fetchone()[0]
-                        if not normalized_safe:
-                            dietary_conflicts.append(
-                                f"Remove {row['menu_name']} to continue; its shellfish safety is not verified."
-                            )
                     if vegan_required:
                         vegan_verified = connection.execute(
                             """
@@ -2788,30 +2973,6 @@ class SQLiteYobiRepository:
             if not address_service_area or menu["merchant_service_area_id"] != address_service_area:
                 raise ValueError("CART_SERVICE_AREA_MISMATCH")
             merchant_ids.add(menu["merchant_id"])
-            if cart["allergy_severity"] == "severe" and (
-                known_allergen_conflicts(set(json.loads(menu["allergen_tags_json"])), dietary_rules)
-                - {"shellfish"}
-            ):
-                raise ValueError("CART_DIETARY_CONFLICT")
-            if severe_shellfish:
-                normalized_safe = connection.execute(
-                    """
-                    SELECT CASE WHEN
-                      EXISTS (
-                        SELECT 1 FROM menu_dietary_attribute mda
-                        JOIN dietary_attribute da ON da.attribute_id=mda.attribute_id
-                        WHERE mda.menu_id=? AND da.code='shellfish_sauce_absent'
-                          AND mda.status='VERIFIED'
-                      ) AND NOT EXISTS (
-                        SELECT 1 FROM menu_allergen ma
-                        JOIN allergen a ON a.allergen_id=ma.allergen_id
-                        WHERE ma.menu_id=? AND a.code='shellfish_risk'
-                      ) THEN 1 ELSE 0 END
-                    """,
-                    (menu["menu_id"], menu["menu_id"]),
-                ).fetchone()[0]
-                if not normalized_safe:
-                    raise ValueError("CART_DIETARY_CONFLICT")
             if vegan_required:
                 vegan_verified = connection.execute(
                     """

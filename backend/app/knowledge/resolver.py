@@ -9,7 +9,9 @@ from app.domain.knowledge import (
     ClaimStatus,
     IngredientRole,
     ResolvedAllergenClaim,
+    ResolvedDietaryClaim,
     ResolvedIngredientClaim,
+    ResolvedPreparationClaim,
     SourceScope,
 )
 
@@ -27,10 +29,31 @@ INGREDIENT_ALIASES: dict[str, set[str]] = {
     "beef": {"ingredient_beef", "ingredient_beef_bone", "ingredient_beef_broth"},
     "egg": {"ingredient_egg"},
     "milk": {"ingredient_milk", "ingredient_dairy", "ingredient_dairy_cream", "ingredient_cheese"},
-    "fish": {"ingredient_fish", "ingredient_fish_cake", "ingredient_fish_stock"},
     "chicken": {"ingredient_chicken", "ingredient_chicken_broth"},
-    "wheat": {"ingredient_wheat", "ingredient_wheat_noodles", "ingredient_flour"},
-    "soy": {"ingredient_soy", "ingredient_soy_sauce", "ingredient_gochujang"},
+    "fish": {
+        "ingredient_fish",
+        "ingredient_fish_cake",
+        "ingredient_fish_paste",
+        "ingredient_fish_stock",
+        "ingredient_mackerel",
+        "ingredient_tuna",
+    },
+    "wheat": {
+        "ingredient_buckwheat_noodles",
+        "ingredient_flour",
+        "ingredient_wheat",
+        "ingredient_wheat_dough",
+        "ingredient_wheat_flour",
+        "ingredient_wheat_noodles",
+        "ingredient_wheat_wrapper",
+    },
+    "soy": {
+        "ingredient_gochujang",
+        "ingredient_soft_tofu",
+        "ingredient_soy",
+        "ingredient_soy_sauce",
+        "ingredient_tofu",
+    },
     "sesame": {"ingredient_sesame", "ingredient_sesame_oil"},
     "peanut": {"ingredient_peanut", "ingredient_peanuts"},
     "tree_nut": {"ingredient_tree_nut", "ingredient_tree_nuts", "ingredient_nuts"},
@@ -90,6 +113,7 @@ def resolve_ingredient_claims(
         resolved[ingredient_id] = ResolvedIngredientClaim(
             ingredient_id=ingredient_id,
             name_en=str(row.get("name_en") or ingredient_id.removeprefix("ingredient_")),
+            name_ko=str(row["name_ko"]) if row.get("name_ko") else None,
             role=_role(row.get("ingredient_role")),
             status=_status(row.get("assertion_status")),
             source_scope=SourceScope.DISH_CONCEPT,
@@ -109,6 +133,11 @@ def resolve_ingredient_claims(
             name_en=str(
                 row.get("name_en")
                 or (previous.name_en if previous else ingredient_id.removeprefix("ingredient_"))
+            ),
+            name_ko=(
+                str(row["name_ko"])
+                if row.get("name_ko")
+                else (previous.name_ko if previous else None)
             ),
             role=_role(row.get("ingredient_role") or (previous.role.value if previous else None)),
             status=_status(row.get("status")),
@@ -134,6 +163,11 @@ def resolve_ingredient_claims(
             name_en=str(
                 row.get("name_en")
                 or (previous.name_en if previous else ingredient_id.removeprefix("ingredient_"))
+            ),
+            name_ko=(
+                str(row["name_ko"])
+                if row.get("name_ko")
+                else (previous.name_ko if previous else None)
             ),
             role=previous.role if previous else IngredientRole.OPTIONAL,
             status=status,
@@ -169,20 +203,120 @@ def resolve_allergen_claims(
             if _status(row.get("assertion_status")) in PRESENT_STATUSES
             else "medium",
             inherited=depth > 0,
+            cross_contamination_status="UNKNOWN",
         )
     for row in menu_rows:
         allergen_id = str(row["allergen_id"])
+        evidence_id = str(row.get("source_id") or row.get("evidence_id") or "")
         resolved[allergen_id] = ResolvedAllergenClaim(
             allergen_id=allergen_id,
             code=str(row.get("code") or allergen_id.removeprefix("allergen_")),
             status=_status(row.get("status")),
             source_scope=SourceScope.MENU,
-            source_id=str(row.get("source_id") or row.get("evidence_id") or f"menu:{allergen_id}"),
+            source_id=(
+                f"{evidence_id}:{allergen_id}"
+                if evidence_id
+                else f"menu:{row.get('menu_id', 'unknown')}:{allergen_id}"
+            ),
             source_version=str(row.get("source_version") or "catalog"),
             confidence_band="high" if _status(row.get("status")) in PRESENT_STATUSES else "medium",
             inherited=False,
+            cross_contamination_status=str(
+                row.get("cross_contamination_status") or "UNKNOWN"
+            ).upper(),
         )
     return sorted(resolved.values(), key=lambda claim: claim.allergen_id)
+
+
+def resolve_dietary_claims(
+    wiki_rows: Iterable[Mapping[str, Any]],
+    menu_rows: Iterable[Mapping[str, Any]],
+) -> list[ResolvedDietaryClaim]:
+    """Resolve reusable Wiki dietary risks, then concrete menu attributes.
+
+    A Wiki ``*_possible`` or ``*_not_verified`` assertion stays uncertain. Menu
+    attributes can override the same attribute, but neither layer represents a
+    religious certification or shared-kitchen guarantee.
+    """
+
+    resolved: dict[str, ResolvedDietaryClaim] = {}
+    for row in sorted(wiki_rows, key=lambda item: int(item.get("depth") or 0)):
+        attribute_id = str(row["attribute_id"])
+        if attribute_id in resolved:
+            continue
+        depth = int(row.get("depth") or 0)
+        resolved[attribute_id] = ResolvedDietaryClaim(
+            attribute_id=attribute_id,
+            code=str(row.get("code") or attribute_id.removeprefix("diet_")),
+            display_name=str(
+                row.get("display_name") or attribute_id.removeprefix("diet_").replace("_", " ")
+            ),
+            value_text=str(row.get("value_text") or row.get("display_name") or attribute_id),
+            status=_status(row.get("assertion_status")),
+            source_scope=SourceScope.DISH_CONCEPT,
+            source_id=str(row.get("claim_id") or f"wiki:{attribute_id}"),
+            source_version=str(row.get("source_version") or row.get("release_id") or "unknown"),
+            confidence_band="medium",
+            inherited=depth > 0,
+        )
+
+    for row in menu_rows:
+        attribute_id = str(row["attribute_id"])
+        previous = resolved.get(attribute_id)
+        evidence_id = str(row.get("source_id") or row.get("evidence_id") or "")
+        resolved[attribute_id] = ResolvedDietaryClaim(
+            attribute_id=attribute_id,
+            code=str(
+                row.get("code")
+                or (previous.code if previous else attribute_id.removeprefix("diet_"))
+            ),
+            display_name=str(
+                row.get("display_name")
+                or (previous.display_name if previous else attribute_id.removeprefix("diet_"))
+            ),
+            value_text=str(
+                row.get("value_text")
+                or row.get("display_name")
+                or (previous.value_text if previous else attribute_id)
+            ),
+            status=_status(row.get("status")),
+            source_scope=SourceScope.MENU,
+            source_id=(
+                f"{evidence_id}:{attribute_id}"
+                if evidence_id
+                else f"menu:{row.get('menu_id', 'unknown')}:{attribute_id}"
+            ),
+            source_version=str(row.get("source_version") or "catalog"),
+            confidence_band="high"
+            if _status(row.get("status")) in PRESENT_STATUSES
+            else "medium",
+            inherited=False,
+        )
+    return sorted(resolved.values(), key=lambda claim: claim.attribute_id)
+
+
+def resolve_preparation_claims(
+    wiki_rows: Iterable[Mapping[str, Any]],
+) -> list[ResolvedPreparationClaim]:
+    """Resolve stable Wiki preparation methods with child-before-parent precedence."""
+
+    resolved: dict[str, ResolvedPreparationClaim] = {}
+    for row in sorted(wiki_rows, key=lambda item: int(item.get("depth") or 0)):
+        method = str(row.get("facet_key") or "unknown")
+        if method in resolved:
+            continue
+        depth = int(row.get("depth") or 0)
+        resolved[method] = ResolvedPreparationClaim(
+            method=method,
+            value_text=str(row.get("value_text") or method.replace("_", " ")),
+            status=_status(row.get("assertion_status")),
+            source_scope=SourceScope.DISH_CONCEPT,
+            source_id=str(row.get("claim_id") or f"wiki:preparation:{method}"),
+            source_version=str(row.get("source_version") or row.get("release_id") or "unknown"),
+            confidence_band="medium",
+            inherited=depth > 0,
+        )
+    return sorted(resolved.values(), key=lambda claim: claim.method)
 
 
 def resolve_merchant_ingredient_claims(
@@ -194,6 +328,7 @@ def resolve_merchant_ingredient_claims(
         ResolvedIngredientClaim(
             ingredient_id=str(row["ingredient_id"]),
             name_en=str(row.get("name_en") or str(row["ingredient_id"]).removeprefix("ingredient_")),
+            name_ko=str(row["name_ko"]) if row.get("name_ko") else None,
             role=IngredientRole.UNKNOWN,
             status=_status(row.get("status")),
             source_scope=SourceScope.MERCHANT,
@@ -244,20 +379,45 @@ def ingredient_constraint_conflicts(
 def allergen_constraint_conflicts(
     claims: Iterable[ResolvedAllergenClaim],
     state: MealNeedState,
-    *,
-    ignored_allergies: set[str] | None = None,
 ) -> list[str]:
-    ignored = ignored_allergies or set()
     allergy_codes = {
         rule.removesuffix("_allergy")
         for rule in (*state.dietary_rules, *state.profile_dietary_rules)
-        if rule.endswith("_allergy") and rule.removesuffix("_allergy") not in ignored
+        if rule.endswith("_allergy")
     }
     return sorted(
         claim.allergen_id
         for claim in claims
         if claim.status in ALLERGY_RISK_STATUSES
         and any(claim.code in ALLERGEN_ALIASES.get(code, {code}) for code in allergy_codes)
+    )
+
+
+def confirmed_allergen_absence_signals(
+    claims: Iterable[ResolvedAllergenClaim],
+    dietary_rules: Iterable[str],
+) -> tuple[list[str], bool]:
+    """Return selected allergies with scoped absence and any unknown cross-contact.
+
+    This is presentation metadata only. Eligibility remains owned by the hard-filter
+    functions above and below; the helper prevents a qualified demo alternative from
+    losing its uncertainty warning when converted into a recommendation card.
+    """
+
+    selected = selected_allergies(set(dietary_rules))
+    matched: list[tuple[str, ResolvedAllergenClaim]] = []
+    for allergy in sorted(selected):
+        aliases = ALLERGEN_ALIASES.get(allergy, {allergy})
+        matched.extend(
+            (allergy, claim)
+            for claim in claims
+            if claim.code in aliases
+            and claim.status is ClaimStatus.CONFIRMED_ABSENT
+            and claim.source_scope is SourceScope.MENU
+        )
+    return (
+        list(dict.fromkeys(allergy for allergy, _ in matched)),
+        any(claim.cross_contamination_status == "UNKNOWN" for _, claim in matched),
     )
 
 
@@ -310,15 +470,12 @@ def severe_allergy_conflicts(
     ingredient_claims: Iterable[ResolvedIngredientClaim],
     allergen_claims: Iterable[ResolvedAllergenClaim],
     dietary_rules: Iterable[str],
-    *,
-    shellfish_mastered_absence: bool = False,
 ) -> list[str]:
     """Fail closed when a severe selected allergy lacks explicit absence evidence.
 
-    Known Wiki/menu risk wins for ordinary allergy claims. The one demo exception is
-    the existing menu-specific ``shellfish_sauce_absent`` mastered path: it can override
-    a general Wiki default, but never a menu/option-specific shellfish risk. Missing
-    claims are never converted to absence.
+    Known Wiki/menu risk wins for every allergy. Only a scoped menu allergen absence
+    can qualify a severe-allergy demo alternative; dietary tags and missing rows do
+    not override Wiki or menu risk.
     """
 
     ingredients = list(ingredient_claims)
@@ -332,20 +489,6 @@ def severe_allergy_conflicts(
             for claim in ingredients
             if claim.ingredient_id in INGREDIENT_ALIASES.get(allergy, set())
         ]
-        if allergy == "shellfish" and shellfish_mastered_absence:
-            specific_allergen_risk = any(
-                claim.status in ALLERGY_RISK_STATUSES
-                and claim.source_scope in {SourceScope.MENU, SourceScope.OPTION}
-                for claim in matching_allergens
-            )
-            specific_ingredient_risk = any(
-                claim.status in ALLERGY_RISK_STATUSES
-                and claim.source_scope in {SourceScope.MENU, SourceScope.OPTION}
-                for claim in matching_ingredients
-            )
-            if specific_allergen_risk or specific_ingredient_risk:
-                conflicts.append("shellfish:known_menu_or_option_risk")
-            continue
         if any(claim.status in ALLERGY_RISK_STATUSES for claim in matching_allergens):
             conflicts.append(f"{allergy}:known_allergen_risk")
             continue

@@ -4,7 +4,7 @@
   "concept_type": "FAMILY",
   "name_ko": "만두",
   "name_en": "Mandu",
-  "aliases": ["Korean dumplings"],
+  "aliases": ["한국 만두", "Korean dumplings"],
   "version": "demo-wiki-2026.08.09-v1",
   "language": "en",
   "parents": [{"concept_id": "dish_korean_cuisine", "relation_type": "IS_A", "inherit_claims": false, "source_ref": "YOBI synthetic taxonomy: Korean cuisine hierarchy v1"}],
@@ -18,6 +18,34 @@
     {"allergen_id": "allergen_wheat", "status": "PRESUMED_PRESENT", "source_ref": "The canonical demo wrapper is wheat-based"},
     {"allergen_id": "allergen_soy", "status": "POSSIBLE", "source_ref": "Tofu and seasoning can introduce soy"},
     {"allergen_id": "allergen_egg", "status": "POSSIBLE", "source_ref": "Some wrappers or fillings use egg"}
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Meat, seafood or egg may be present in fillings",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: mandu structured claims v1"
+    },
+    {
+      "attribute_id": "diet_pork_possible",
+      "value_text": "Pork is common in some mandu fillings",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: mandu structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegetarian_possible",
+      "value_text": "A vegetable filling is possible only after seasoning and wrapper are confirmed",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: mandu structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "filled_and_cooked",
+      "value_text": "Wheat wrappers are filled and then steamed, boiled, pan-fried or deep-fried",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: mandu structured claims v1"
+    }
   ],
   "source_type": "SYNTHETIC_WIKI",
   "source_refs": ["YOBI synthetic culinary knowledge review: Mandu v1"],

@@ -74,6 +74,28 @@ class AllergenClaimAuthoring(BaseModel):
     source_ref: str = Field(min_length=1, max_length=1000)
 
 
+class DietaryClaimAuthoring(BaseModel):
+    """A reusable dietary or religious-risk assertion about a universal dish concept."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    attribute_id: str = Field(pattern=r"^diet_[a-z0-9_]+$")
+    value_text: str = Field(min_length=1, max_length=300)
+    status: WikiAssertionStatus
+    source_ref: str = Field(min_length=1, max_length=1000)
+
+
+class PreparationClaimAuthoring(BaseModel):
+    """A stable preparation method, kept separate from free-form Wiki prose."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    method: str = Field(pattern=r"^[a-z0-9_]+$", min_length=2, max_length=80)
+    value_text: str = Field(min_length=1, max_length=300)
+    status: WikiAssertionStatus = "PRESUMED_PRESENT"
+    source_ref: str = Field(min_length=1, max_length=1000)
+
+
 class DishFrontMatter(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -87,6 +109,8 @@ class DishFrontMatter(BaseModel):
     parents: list[ParentAuthoring] = Field(default_factory=list)
     ingredients: list[IngredientClaimAuthoring] = Field(default_factory=list)
     allergens: list[AllergenClaimAuthoring] = Field(default_factory=list)
+    dietary: list[DietaryClaimAuthoring] = Field(default_factory=list)
+    preparation: list[PreparationClaimAuthoring] = Field(default_factory=list)
     source_type: Literal["SYNTHETIC_WIKI"] = "SYNTHETIC_WIKI"
     source_refs: list[str] = Field(min_length=1)
     license_state: Literal["SYNTHETIC"] = "SYNTHETIC"
@@ -99,12 +123,18 @@ class DishFrontMatter(BaseModel):
         parent_ids = [item.concept_id for item in self.parents]
         ingredient_ids = [item.ingredient_id for item in self.ingredients]
         allergen_ids = [item.allergen_id for item in self.allergens]
+        dietary_ids = [item.attribute_id for item in self.dietary]
+        preparation_methods = [item.method for item in self.preparation]
         if len(parent_ids) != len(set(parent_ids)):
             raise ValueError("A concept cannot repeat the same parent")
         if len(ingredient_ids) != len(set(ingredient_ids)):
             raise ValueError("A concept cannot repeat the same ingredient claim")
         if len(allergen_ids) != len(set(allergen_ids)):
             raise ValueError("A concept cannot repeat the same allergen claim")
+        if len(dietary_ids) != len(set(dietary_ids)):
+            raise ValueError("A concept cannot repeat the same dietary claim")
+        if len(preparation_methods) != len(set(preparation_methods)):
+            raise ValueError("A concept cannot repeat the same preparation method")
         if self.concept_id in parent_ids:
             raise ValueError("A concept cannot be its own parent")
         return self
@@ -329,6 +359,48 @@ def compile_documents(
                     "assertion_status": allergen.status,
                     "inheritance_mode": "INHERIT",
                     "source_ref": allergen.source_ref,
+                    "review_status": front.review_status,
+                    "is_synthetic": 1,
+                    "updated_at": front.updated_at,
+                }
+            )
+        for dietary in front.dietary:
+            claims.append(
+                {
+                    "release_id": release_id,
+                    "claim_id": f"claim_{_sha256(f'{concept_id}:dietary:{dietary.attribute_id}')[:24]}",
+                    "concept_id": concept_id,
+                    "claim_type": "DIETARY",
+                    "ingredient_id": None,
+                    "allergen_id": None,
+                    "attribute_id": dietary.attribute_id,
+                    "facet_key": None,
+                    "value_text": dietary.value_text,
+                    "ingredient_role": None,
+                    "assertion_status": dietary.status,
+                    "inheritance_mode": "INHERIT",
+                    "source_ref": dietary.source_ref,
+                    "review_status": front.review_status,
+                    "is_synthetic": 1,
+                    "updated_at": front.updated_at,
+                }
+            )
+        for preparation in front.preparation:
+            claims.append(
+                {
+                    "release_id": release_id,
+                    "claim_id": f"claim_{_sha256(f'{concept_id}:preparation:{preparation.method}')[:24]}",
+                    "concept_id": concept_id,
+                    "claim_type": "PREPARATION",
+                    "ingredient_id": None,
+                    "allergen_id": None,
+                    "attribute_id": None,
+                    "facet_key": preparation.method,
+                    "value_text": preparation.value_text,
+                    "ingredient_role": None,
+                    "assertion_status": preparation.status,
+                    "inheritance_mode": "INHERIT",
+                    "source_ref": preparation.source_ref,
                     "review_status": front.review_status,
                     "is_synthetic": 1,
                     "updated_at": front.updated_at,

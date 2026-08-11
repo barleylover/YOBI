@@ -4,7 +4,7 @@
   "concept_type": "FAMILY",
   "name_ko": "어묵",
   "name_en": "Eomuk",
-  "aliases": ["Korean fish cake"],
+  "aliases": ["오뎅", "Korean fish cake"],
   "version": "demo-wiki-2026.08.09-v1",
   "language": "en",
   "parents": [{"concept_id": "dish_korean_cuisine", "relation_type": "IS_A", "inherit_claims": false, "source_ref": "YOBI synthetic taxonomy: Korean cuisine hierarchy v1"}],
@@ -18,6 +18,28 @@
     {"allergen_id": "allergen_fish", "status": "PRESUMED_PRESENT", "source_ref": "Fish paste defines eomuk"},
     {"allergen_id": "allergen_wheat", "status": "POSSIBLE", "source_ref": "Flour or processed starch blends vary"},
     {"allergen_id": "allergen_soy", "status": "POSSIBLE", "source_ref": "Seasoning and broth can introduce soy"}
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Fish paste defines the dish",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: eomuk structured claims v1"
+    },
+    {
+      "attribute_id": "diet_halal_not_verified",
+      "value_text": "Processed fish paste and shared preparation are not halal-verified by the Wiki",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: eomuk structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "formed_and_cooked",
+      "value_text": "Seasoned fish paste is formed and fried, steamed or boiled",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: eomuk structured claims v1"
+    }
   ],
   "source_type": "SYNTHETIC_WIKI",
   "source_refs": ["YOBI synthetic culinary knowledge review: Eomuk v1"],

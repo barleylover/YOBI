@@ -4,7 +4,7 @@
   "concept_type": "FAMILY",
   "name_ko": "떡볶이",
   "name_en": "Tteokbokki",
-  "aliases": ["spicy rice cakes", "Korean rice-cake street food"],
+  "aliases": ["떡볶이", "spicy rice cakes", "Korean rice-cake street food"],
   "version": "demo-wiki-2026.08.09-v1",
   "language": "en",
   "parents": [{"concept_id": "dish_korean_cuisine", "relation_type": "IS_A", "inherit_claims": false, "source_ref": "YOBI synthetic taxonomy: Korean cuisine hierarchy v1"}],
@@ -49,6 +49,34 @@
       "allergen_id": "allergen_wheat",
       "status": "POSSIBLE",
       "source_ref": "Gochujang and fish-cake formulations vary; wheat must be checked"
+    }
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Fish cake, egg or animal stock may be present",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: tteokbokki structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegetarian_possible",
+      "value_text": "A vegetarian version is possible only after sauce, stock and toppings are confirmed",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: tteokbokki structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegan_possible",
+      "value_text": "A vegan version requires explicit absence of fish cake, stock and egg",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: tteokbokki structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "simmered",
+      "value_text": "Rice cakes are simmered in seasoned sauce with optional toppings",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: tteokbokki structured claims v1"
     }
   ],
   "source_type": "SYNTHETIC_WIKI",

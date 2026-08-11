@@ -5,6 +5,7 @@
   "name_ko": "닭칼국수",
   "name_en": "Chicken kalguksu",
   "aliases": [
+    "닭 칼국수",
     "chicken knife-cut noodles",
     "Korean chicken noodle soup"
   ],
@@ -57,6 +58,28 @@
       "allergen_id": "allergen_wheat",
       "status": "PRESUMED_PRESENT",
       "source_ref": "YOBI synthetic culinary knowledge review: Chicken kalguksu v1"
+    }
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Chicken and chicken broth define the variant",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: chicken-kalguksu structured claims v1"
+    },
+    {
+      "attribute_id": "diet_halal_not_verified",
+      "value_text": "Chicken sourcing and broth preparation are not halal-verified by the Wiki",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: chicken-kalguksu structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "simmered",
+      "value_text": "Chicken, broth and knife-cut noodles are simmered into a noodle soup",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: chicken-kalguksu structured claims v1"
     }
   ],
   "source_type": "SYNTHETIC_WIKI",

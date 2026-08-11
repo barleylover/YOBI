@@ -4,7 +4,7 @@
   "concept_type": "FAMILY",
   "name_ko": "잡채",
   "name_en": "Japchae",
-  "aliases": ["Korean glass noodles"],
+  "aliases": ["한국식 잡채", "Korean glass noodles"],
   "version": "demo-wiki-2026.08.09-v1",
   "language": "en",
   "parents": [{"concept_id": "dish_korean_cuisine", "relation_type": "IS_A", "inherit_claims": false, "source_ref": "YOBI synthetic taxonomy: Korean cuisine hierarchy v1"}],
@@ -17,6 +17,34 @@
   "allergens": [
     {"allergen_id": "allergen_soy", "status": "PRESUMED_PRESENT", "source_ref": "The canonical demo seasoning uses soy sauce"},
     {"allergen_id": "allergen_sesame", "status": "POSSIBLE", "source_ref": "Sesame oil and seeds are common"}
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Beef or egg may be added but are not universal",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: japchae structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegetarian_possible",
+      "value_text": "A vegetarian version is possible after sauce and toppings are confirmed",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: japchae structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegan_possible",
+      "value_text": "A vegan version requires confirmation of sauce and all toppings",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: japchae structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "stir_fried_and_mixed",
+      "value_text": "Cooked glass noodles are mixed or stir-fried with seasoned vegetables and toppings",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: japchae structured claims v1"
+    }
   ],
   "source_type": "SYNTHETIC_WIKI",
   "source_refs": ["YOBI synthetic culinary knowledge review: Japchae v1"],

@@ -4,7 +4,7 @@
   "concept_type": "FAMILY",
   "name_ko": "설렁탕",
   "name_en": "Seolleongtang",
-  "aliases": ["Korean ox-bone soup"],
+  "aliases": ["설렁탕", "Korean ox-bone soup"],
   "version": "demo-wiki-2026.08.09-v1",
   "language": "en",
   "parents": [{"concept_id": "dish_korean_cuisine", "relation_type": "IS_A", "inherit_claims": false, "source_ref": "YOBI synthetic taxonomy: Korean cuisine hierarchy v1"}],
@@ -16,6 +16,28 @@
   ],
   "allergens": [
     {"allergen_id": "allergen_wheat", "status": "POSSIBLE", "source_ref": "Optional thin noodles can introduce wheat"}
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Beef bones and meat define the dish",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: seolleongtang structured claims v1"
+    },
+    {
+      "attribute_id": "diet_halal_not_verified",
+      "value_text": "Beef sourcing and broth preparation are not halal-verified by the Wiki",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: seolleongtang structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "long_simmered",
+      "value_text": "Beef bones and cuts are simmered for an extended period to make milky broth",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: seolleongtang structured claims v1"
+    }
   ],
   "source_type": "SYNTHETIC_WIKI",
   "source_refs": ["YOBI synthetic culinary knowledge review: Seolleongtang v1"],

@@ -2,6 +2,7 @@
 
 - Historical public baseline verification: 2026-08-08 KST
 - Chatbot-improvement worktree checkpoint: 2026-08-09 KST
+- Wiki-centric local worktree checkpoint: 2026-08-11 KST
 - Source of truth: `YOBI_FINAL_MVP_CODEX_MASTER_PROMPT.md`
 - Improvement goal: `YOBI_CHATBOT_IMPROVEMENT_CODEX_GOAL.md`
 - Improvement branch: `codex/master-spec-completion`
@@ -13,15 +14,67 @@
   improvement release; later long-form sections explicitly labelled historical remain
   evidence for their earlier releases only.
 
-## Chatbot-improvement final gate
+## 2026-08-11 Wiki-centric local checkpoint — not deployed
 
-The implementation matrix is in `CHATBOT_IMPROVEMENT_IMPLEMENTATION.md`. Phase 0–7 is
-connected, locally verified, deployed to the existing OCI VM/ADB, and independently
-checked through the public product surface. Local, Oracle, OCI GenAI, public browser,
-network-cleanup, and Git evidence remain separate rows rather than being inferred from
-one another.
+This section records the current local data and code contract, not a live environment
+result. The v3 catalog has not been seeded into the existing OCI Oracle database,
+activated as an OCI release, or checked through public health/readiness/browser flows.
+The public evidence in the next section still belongs only to the 2026-08-09 v2
+release and migration ledger `001`–`008`.
 
-| Gate | Required final evidence | Current status |
+| Boundary | Current local contract | Evidence status |
+|---|---|---|
+| Migration package | Exactly `001`–`009`, including `009_cart_confirmation_fingerprint.sql` | Repository files present; OCI application **NOT RUN** |
+| Catalog | 60 merchants, 600 menus/maps, 100 categories, 1,200 evidence, 1,202 option groups, 2,405 option items | Local generated-seed contract; OCI seed **NOT RUN** |
+| Incomplete menu facts | 54 ingredients/565 rows/206 menus; 10 allergen rows (9 onboarding + cross-contact marker)/595 rows/221 menus; 20 dietary attributes/1,217 rows | Deliberate demo realism contract |
+| Wiki | 102 concepts/documents (`CUISINE` 2/`FAMILY` 30/`VARIANT` 70), 100 relations, 281 closure rows, 1,997 claims, 918 chunks | Local compiler contract; no active OCI release claimed |
+| Claim types | ingredient 361, allergen 371, dietary 247, preparation 100, facet 918 | Local compiler contract |
+| Scoped facts | 13 origin declarations, 119 merchant cross-contact ingredient rows, 4 option effects | Merchant rows cannot prove menu contents |
+| Reviews/prose | 2,400 synthetic reviews; review and merchant prose weights are `0` | Display compatibility only |
+| Ranking | Safety/availability filter, then exact alias + Korean facet + vector under cap `600`; party budget/negative preferences before output; Wiki `60%`, structured preference `25%`, operational/menu `15%` | Operational signal is menu relevance, price, delivery fee, ETA; rating weight `0` |
+| LLM grounding | `OPTION > MENU > VARIANT_WIKI > FAMILY_WIKI`; passage IDs, scope, uncertainty codes required | Local prompt/parser/validator contract |
+| Local final gates | Backend, evaluation, frontend, static checks, fresh SQLite readiness | **PASS** — details below |
+| Oracle/OCI/public gates | Live Oracle seed/migration, OCI GenAI, routes, browser E2E | **NOT RUN** for v3; historical v2 evidence does not prove v3 |
+
+Base catalog is `demo-2026.08.11-knowledge-v3`; knowledge catalog contract is
+`demo-knowledge-catalog-2026.08.11-v3`. Menu-specific ingredient and allergen gaps
+remain `UNKNOWN`/`NOT_PROVIDED`; they are not filled from reviews, merchant
+descriptions, or shared-kitchen declarations. Before this revision can be called
+deployed, the exact `001`–`009` Oracle ledger, active release counts, vectors,
+`/healthz`, `/readyz`, cart confirmation/stale-payment safeguards, chatbot basics, and
+public product flow must all be verified on one release and appended here.
+
+Explicit absence alternatives in this local contract have `VERIFIED` synthetic menu
+evidence and retain `UNKNOWN` cross-contact. They are distributed across all three
+demo areas. This is qualified demo evidence, not an allergy-safe merchant or a
+real-world certification.
+
+### 2026-08-11 local final-gate evidence
+
+| Gate | Verified result |
+|---|---|
+| Backend Pytest | **PASS** — 348 passed, 1 third-party Starlette/httpx deprecation warning, 276.59s |
+| Recommendation evaluation | **PASS** — 100 queries; constraint, canonical top-3, evidence, unsafe reassurance, price, option, and recommendation-contract failures all 0 |
+| Chatbot acceptance | **PASS** — 9 transcripts, 16 message turns, 2 events, 3 knowledge cases, 369 assertions; every failure counter 0 |
+| Ruff | **PASS** — `backend`, `scripts`, and deploy Python files, 0 errors |
+| Mypy | **PASS** — 64 source files, 0 errors |
+| Frontend | **PASS** — ESLint, 6 Vitest files/16 tests, TypeScript and Vite production build; 1,796 modules built; three concurrent full Vitest runs also exited 0 after timer cleanup |
+| Fresh SQLite readiness | **PASS** — 60 merchants, 600 menus/maps, all readiness checks true, `canonical_ready=true`, `knowledge_ready=true`, FK violations 0 |
+| Existing DB upgrade | **PASS locally** — bundled 150-menu demo DB copy upgraded without `--fresh`; runtime profile/session/cart/order rows preserved and exact v3 readiness restored |
+
+These results prove the local SQLite/deterministic demo path. Oracle SQL parity,
+seed bind generation, migration safety contracts, and repository mocks are covered by
+the local suite, but an actual Oracle connection, OCI embedding/generation, v3
+migration ledger, public readiness, and browser journey were not run in this change.
+
+## 2026-08-09 chatbot-improvement final gate (historical live evidence)
+
+This table is frozen evidence for the 2026-08-09 v2 release. At that time Phase 0–7
+was connected, locally verified, deployed to the existing OCI VM/ADB, and independently
+checked through the public product surface. It must not be used as proof for the
+2026-08-11 v3 working tree.
+
+| Gate | Required final evidence | 2026-08-09 verified status |
 |---|---|---:|
 | Ruff | `.venv/bin/ruff check backend scripts deploy/*.py` | **PASS** — zero errors |
 | MyPy | `MYPYPATH=backend:scripts:. .venv/bin/mypy --explicit-package-bases --python-version 3.12 backend/app backend/evaluation scripts deploy/release_state.py deploy/run_with_runtime_env.py deploy/secure_bootstrap.py` | **PASS** — 62 source files, zero errors |

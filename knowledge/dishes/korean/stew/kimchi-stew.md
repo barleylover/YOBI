@@ -4,7 +4,7 @@
   "concept_type": "FAMILY",
   "name_ko": "김치찌개",
   "name_en": "Kimchi stew",
-  "aliases": ["kimchi jjigae"],
+  "aliases": ["김치 찌개", "kimchi jjigae"],
   "version": "demo-wiki-2026.08.09-v1",
   "language": "en",
   "parents": [{"concept_id": "dish_korean_cuisine", "relation_type": "IS_A", "inherit_claims": false, "source_ref": "YOBI synthetic taxonomy: Korean cuisine hierarchy v1"}],
@@ -18,6 +18,40 @@
     {"allergen_id": "allergen_soy", "status": "POSSIBLE", "source_ref": "Tofu and seasoning can introduce soy"},
     {"allergen_id": "allergen_fish", "status": "POSSIBLE", "source_ref": "Kimchi seasoning or broth can include fish products"},
     {"allergen_id": "allergen_shellfish_risk", "status": "POSSIBLE", "source_ref": "Some kimchi seasoning uses salted shrimp"}
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Pork, fish sauce or seafood stock may be present",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: kimchi-stew structured claims v1"
+    },
+    {
+      "attribute_id": "diet_pork_possible",
+      "value_text": "Pork is common but not universal",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: kimchi-stew structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegetarian_possible",
+      "value_text": "A vegetarian recipe requires confirmation of kimchi seasoning, broth and protein",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: kimchi-stew structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegan_possible",
+      "value_text": "A vegan recipe requires explicit absence of seafood seasoning and animal stock",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: kimchi-stew structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "simmered",
+      "value_text": "Kimchi and optional protein are simmered in broth as a stew",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: kimchi-stew structured claims v1"
+    }
   ],
   "source_type": "SYNTHETIC_WIKI",
   "source_refs": ["YOBI synthetic culinary knowledge review: Kimchi stew v1"],

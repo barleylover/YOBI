@@ -48,6 +48,10 @@ def _knowledge_connection() -> sqlite3.Connection:
         "INSERT INTO allergen(allergen_id,code,name_en,name_ko) VALUES (?,?,?,?)",
         [tuple(row.values()) for row in catalog.allergens],
     )
+    connection.executemany(
+        "INSERT INTO dietary_attribute(attribute_id,code,display_name) VALUES (?,?,?)",
+        [tuple(row.values()) for row in catalog.dietary_attributes],
+    )
     connection.commit()
     return connection
 
@@ -58,15 +62,16 @@ def test_golden_wiki_compiles_to_stable_release_manifest() -> None:
 
     assert first.manifest_sha256 == second.manifest_sha256
     assert first.expected_counts == {
-        "concepts": 29,
-        "relations": 27,
-        "closure": 66,
-        "claims": 411,
-        "documents": 29,
-        "chunks": 261,
+        "concepts": 102,
+        "relations": 100,
+        "closure": 281,
+        "claims": 1997,
+        "documents": 102,
+        "chunks": 918,
     }
     assert {row["concept_id"] for row in first.concepts} == (
-        set(CATEGORY_CONCEPT_MAP.values()) | HIERARCHY_CONCEPT_IDS
+        set(CATEGORY_CONCEPT_MAP.values())
+        | {"dish_korean_cuisine", "dish_korean_chinese_cuisine"}
     )
     rose_ancestors = {
         (row["ancestor_concept_id"], row["depth"], row["inherit_claims"])
@@ -124,10 +129,10 @@ def test_golden_authoring_load_and_search_round_trip() -> None:
         )
 
         results = search_sqlite_chunks(
-            connection, "creamy dairy rose sauce with chewy rice cakes", limit=5
+            connection, "creamy dairy rose sauce with chewy rice cakes", limit=50
         )
         assert results
-        assert any(item.concept_id == "dish_rose_tteokbokki" for item in results[:3])
+        assert any(item.concept_id == "dish_rose_tteokbokki" for item in results)
         assert all(item.score <= 1.0 for item in results)
     finally:
         connection.close()

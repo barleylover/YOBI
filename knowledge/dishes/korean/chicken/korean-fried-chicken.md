@@ -5,6 +5,7 @@
   "name_ko": "한국식 치킨",
   "name_en": "Korean fried chicken",
   "aliases": [
+    "한국 치킨",
     "K-chicken",
     "Korean delivery chicken"
   ],
@@ -67,6 +68,28 @@
       "allergen_id": "allergen_milk",
       "status": "POSSIBLE",
       "source_ref": "YOBI synthetic culinary knowledge review: Korean fried chicken v1"
+    }
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Chicken defines the family",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: korean-fried-chicken structured claims v1"
+    },
+    {
+      "attribute_id": "diet_halal_not_verified",
+      "value_text": "Chicken sourcing and shared fryer handling are not halal-verified by the Wiki",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: korean-fried-chicken structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "deep_fried",
+      "value_text": "Coated chicken pieces are deep-fried before optional seasoning",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: korean-fried-chicken structured claims v1"
     }
   ],
   "source_type": "SYNTHETIC_WIKI",

@@ -129,18 +129,48 @@ class DialogueEngine:
             )
             or re.search(r"설명(?:은|는|도)?\s*(?:말고|하지)", lowered)
         )
+        dietary_information_question = bool(
+            re.search(
+                r"^(?:is|are|can|does|do)\b[^.!?]{0,80}"
+                r"\b(?:vegan|vegetarian|halal)\b",
+                lowered,
+            )
+            or re.search(r"\b(?:vegan|vegetarian|halal)\b[^.!?]{0,40}\?", lowered)
+            or re.search(
+                r"(?:비건|채식|할랄)[^.!?]{0,30}"
+                r"(?:인가(?:요)?|가능|먹을\s*수|되나|되나요|일까|일까요|\?)",
+                lowered,
+            )
+        )
         comparison = not comparison_negated and any(
             marker in lowered for marker in ("compare", "difference", "비교", "차이")
         )
-        explanation = not explanation_negated and any(
-            marker in lowered
-            for marker in (
+        explanation = not explanation_negated and (
+            dietary_information_question
+            or any(
+                marker in lowered
+                for marker in (
                 "explain",
                 "tell me about",
                 "what is",
                 "describe",
+                "ingredient",
+                "allergen",
+                "allergy",
+                "how is it cooked",
+                "how is it made",
+                "cooking method",
                 "설명",
                 "어떤 음식",
+                "재료",
+                "성분",
+                "뭐가 들어",
+                "알레르기",
+                "알러지",
+                "어떻게 조리",
+                "조리법",
+                "어떻게 만들어",
+                )
             )
         )
         selection = any(
@@ -284,7 +314,11 @@ class DialogueEngine:
         if delta.restore_spice_tolerance:
             delta.max_spiciness = None
         self._extract_categories(delta, lowered)
-        self._extract_constraints(delta, lowered)
+        self._extract_constraints(
+            delta,
+            lowered,
+            ignore_dietary_identity=dietary_information_question,
+        )
 
         if "severe allergy" in lowered or "life-threatening" in lowered:
             delta.strictness = ConstraintStrictness.STRICT
@@ -502,7 +536,12 @@ class DialogueEngine:
                 delta.add_preferred_categories.append(category)
 
     @staticmethod
-    def _extract_constraints(delta: PreferenceDelta, lowered: str) -> None:
+    def _extract_constraints(
+        delta: PreferenceDelta,
+        lowered: str,
+        *,
+        ignore_dietary_identity: bool = False,
+    ) -> None:
         ingredient_markers = {
             "pork": ("pork", "돼지고기", "돼지"),
             "shellfish": ("shellfish", "shrimp", "prawn", "crab", "조개", "새우", "게"),
@@ -615,6 +654,8 @@ class DialogueEngine:
                 delta.remove_excluded_ingredients.append(ingredient)
             elif exclusion_state == "add":
                 delta.add_excluded_ingredients.append(ingredient)
+        if ignore_dietary_identity:
+            return
         if any(
             marker in lowered
             for marker in (

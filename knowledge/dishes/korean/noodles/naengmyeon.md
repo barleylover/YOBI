@@ -4,7 +4,7 @@
   "concept_type": "FAMILY",
   "name_ko": "냉면",
   "name_en": "Naengmyeon",
-  "aliases": ["Korean cold noodles"],
+  "aliases": ["한국식 냉면", "Korean cold noodles"],
   "version": "demo-wiki-2026.08.09-v1",
   "language": "en",
   "parents": [{"concept_id": "dish_korean_cuisine", "relation_type": "IS_A", "inherit_claims": false, "source_ref": "YOBI synthetic taxonomy: Korean cuisine hierarchy v1"}],
@@ -18,6 +18,28 @@
     {"allergen_id": "allergen_wheat", "status": "POSSIBLE", "source_ref": "Many commercial noodles blend buckwheat with wheat or starch"},
     {"allergen_id": "allergen_egg", "status": "POSSIBLE", "source_ref": "Egg garnish is common but removable only when confirmed"},
     {"allergen_id": "allergen_soy", "status": "POSSIBLE", "source_ref": "Sauce and broth seasoning vary"}
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Meat broth, meat slices or egg may be present",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: naengmyeon structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegetarian_possible",
+      "value_text": "A vegetarian version requires confirmation of broth, sauce and toppings",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: naengmyeon structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "boiled_and_chilled",
+      "value_text": "Noodles are boiled, rinsed cold and served in broth or mixed sauce",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: naengmyeon structured claims v1"
+    }
   ],
   "source_type": "SYNTHETIC_WIKI",
   "source_refs": ["YOBI synthetic culinary knowledge review: Naengmyeon v1"],

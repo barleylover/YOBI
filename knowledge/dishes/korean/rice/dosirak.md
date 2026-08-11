@@ -4,7 +4,7 @@
   "concept_type": "FAMILY",
   "name_ko": "도시락",
   "name_en": "Dosirak",
-  "aliases": ["Korean lunch box"],
+  "aliases": ["한식 도시락", "Korean lunch box"],
   "version": "demo-wiki-2026.08.09-v1",
   "language": "en",
   "parents": [{"concept_id": "dish_korean_cuisine", "relation_type": "IS_A", "inherit_claims": false, "source_ref": "YOBI synthetic taxonomy: Korean cuisine hierarchy v1"}],
@@ -17,6 +17,28 @@
     {"allergen_id": "allergen_egg", "status": "POSSIBLE", "source_ref": "Egg components are common"},
     {"allergen_id": "allergen_soy", "status": "POSSIBLE", "source_ref": "Several side dishes can use soy seasoning"},
     {"allergen_id": "allergen_wheat", "status": "POSSIBLE", "source_ref": "Breaded or sauced sides can introduce wheat"}
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "The rotating main and sides may include meat, fish, egg or dairy",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: dosirak structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegetarian_possible",
+      "value_text": "A vegetarian box is possible only when every component is confirmed",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: dosirak structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "assembled_set",
+      "value_text": "Rice, a main and side dishes are portioned into a lunch-box set",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: dosirak structured claims v1"
+    }
   ],
   "source_type": "SYNTHETIC_WIKI",
   "source_refs": ["YOBI synthetic culinary knowledge review: Dosirak v1"],

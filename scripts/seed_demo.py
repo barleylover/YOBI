@@ -5,6 +5,7 @@ import argparse
 import json
 import sys
 from array import array
+from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -82,29 +83,42 @@ KNOWLEDGE_SUPPLEMENTAL_TABLES: list[tuple[str, TableKey, str]] = [
 ]
 
 EXPECTED_COUNTS = {
-    "merchants": 30,
-    "menus": 150,
-    "knowledge": 150,
-    "evidence": 300,
-    "reviews": 600,
-    "option_groups": 302,
-    "option_items": 605,
+    "merchants": 60,
+    "menus": 600,
+    "knowledge": 600,
+    "evidence": 1200,
+    "reviews": 2400,
+    "option_groups": 1202,
+    "option_items": 2405,
     "hotels": 20,
     "service_areas": 3,
-    "menu_categories": 20,
-    "dietary_attributes": 15,
-    "menu_dietary_attributes": 317,
+    "menu_categories": 100,
+    "dietary_attributes": 20,
+    "menu_dietary_attributes": 1217,
     "allergens": 10,
-    "menu_allergens": 162,
-    "ingredients": 47,
-    "menu_ingredients": 7,
+    "menu_allergens": 595,
+    "ingredients": 54,
+    "menu_ingredients": 565,
     "option_dietary_conflicts": 1,
 }
 
+EXPECTED_KNOWLEDGE_COUNTS = {
+    "concepts": 102,
+    "relations": 100,
+    "closure": 281,
+    "claims": 1997,
+    "documents": 102,
+    "chunks": 918,
+    "menu_mappings": 600,
+    "origin_declarations": 13,
+    "merchant_ingredients": 119,
+    "option_effects": 4,
+}
+
 MENU_RELATION_TABLES = {
-    "menu_ingredient",
-    "menu_allergen",
-    "menu_dietary_attribute",
+    "menu_ingredient": ("menu_ingredients", "ingredient_id"),
+    "menu_allergen": ("menu_allergens", "allergen_id"),
+    "menu_dietary_attribute": ("menu_dietary_attributes", "attribute_id"),
 }
 
 
@@ -147,6 +161,170 @@ def _merge(
         VALUES ({", ".join(":" + c for c in columns)})
     """
     cursor.execute(sql, row)
+
+
+def _delete_stale_menu_relation_rows(
+    cursor: oracledb.Cursor,
+    *,
+    table: str,
+    value_column: str,
+    menu_ids: list[str],
+    rows: list[dict[str, Any]],
+) -> None:
+    """Delete relation keys retired from deterministic seed menus, not whole tables."""
+
+    allowed_by_menu: dict[str, list[str]] = defaultdict(list)
+    for row in rows:
+        allowed_by_menu[str(row["menu_id"])].append(str(row[value_column]))
+    grouped: dict[int, list[dict[str, str]]] = defaultdict(list)
+    for menu_id in menu_ids:
+        allowed = tuple(sorted(set(allowed_by_menu[menu_id])))
+        grouped[len(allowed)].append(
+            {
+                "menu_id": menu_id,
+                **{f"allowed_{index}": value for index, value in enumerate(allowed)},
+            }
+        )
+    for allowed_count, parameters in grouped.items():
+        absent_clause = (
+            f" AND {value_column} NOT IN "
+            f"({','.join(f':allowed_{index}' for index in range(allowed_count))})"
+            if allowed_count
+            else ""
+        )
+        cursor.executemany(
+            f"DELETE FROM {table} WHERE menu_id=:menu_id{absent_clause}",
+            parameters,
+        )
+
+
+def _delete_stale_option_conflicts(
+    cursor: oracledb.Cursor,
+    *,
+    menu_ids: list[str],
+    rows: list[dict[str, Any]],
+) -> None:
+    allowed = sorted(
+        {
+            (str(row["option_item_id"]), str(row["rule_code"]))
+            for row in rows
+        }
+    )
+    allowed_clause = (
+        " AND NOT ("
+        + " OR ".join(
+            f"(conflict.option_item_id=:allowed_item_{index} "
+            f"AND conflict.rule_code=:allowed_rule_{index})"
+            for index in range(len(allowed))
+        )
+        + ")"
+        if allowed
+        else ""
+    )
+    shared_allowed = {
+        bind: value
+        for index, pair in enumerate(allowed)
+        for bind, value in (
+            (f"allowed_item_{index}", pair[0]),
+            (f"allowed_rule_{index}", pair[1]),
+        )
+    }
+    cursor.executemany(
+        """
+        DELETE FROM option_dietary_conflict conflict
+        WHERE EXISTS (
+          SELECT 1
+          FROM menu_option_item item
+          JOIN menu_option_group option_group
+            ON option_group.option_group_id=item.option_group_id
+          WHERE item.option_item_id=conflict.option_item_id
+            AND option_group.menu_id=:menu_id
+        )
+        """
+        + allowed_clause,
+        [{"menu_id": menu_id, **shared_allowed} for menu_id in menu_ids],
+    )
+
+
+def _prune_stale_catalog_dimensions(
+    cursor: oracledb.Cursor,
+    seed: dict[str, list[dict[str, Any]]],
+) -> None:
+    """Prune retired dimensions only when no runtime or historical release still needs them."""
+
+    for table, id_column, seed_key, references in (
+        (
+            "menu_category",
+            "category_id",
+            "menu_categories",
+            ("SELECT 1 FROM menu WHERE menu.category_id=target.category_id",),
+        ),
+        (
+            "ingredient",
+            "ingredient_id",
+            "ingredients",
+            (
+                (
+                    "SELECT 1 FROM menu_ingredient fact "
+                    "WHERE fact.ingredient_id=target.ingredient_id"
+                ),
+                (
+                    "SELECT 1 FROM concept_claim claim "
+                    "WHERE claim.ingredient_id=target.ingredient_id"
+                ),
+                (
+                    "SELECT 1 FROM merchant_ingredient fact "
+                    "WHERE fact.ingredient_id=target.ingredient_id"
+                ),
+                (
+                    "SELECT 1 FROM option_ingredient_effect effect "
+                    "WHERE effect.ingredient_id=target.ingredient_id"
+                ),
+            ),
+        ),
+        (
+            "allergen",
+            "allergen_id",
+            "allergens",
+            (
+                (
+                    "SELECT 1 FROM menu_allergen fact "
+                    "WHERE fact.allergen_id=target.allergen_id"
+                ),
+                (
+                    "SELECT 1 FROM concept_claim claim "
+                    "WHERE claim.allergen_id=target.allergen_id"
+                ),
+            ),
+        ),
+        (
+            "dietary_attribute",
+            "attribute_id",
+            "dietary_attributes",
+            (
+                (
+                    "SELECT 1 FROM menu_dietary_attribute fact "
+                    "WHERE fact.attribute_id=target.attribute_id"
+                ),
+                (
+                    "SELECT 1 FROM concept_claim claim "
+                    "WHERE claim.attribute_id=target.attribute_id"
+                ),
+            ),
+        ),
+    ):
+        allowed = {
+            f"allowed_{index}": str(row[id_column])
+            for index, row in enumerate(seed[seed_key])
+        }
+        reference_guards = "".join(
+            f" AND NOT EXISTS ({reference})" for reference in references
+        )
+        cursor.execute(
+            f"DELETE FROM {table} target WHERE target.{id_column} NOT IN "
+            f"({','.join(':' + bind for bind in allowed)}){reference_guards}",
+            allowed,
+        )
 
 
 def _json_value(value: Any) -> Any:
@@ -309,18 +487,7 @@ def validate(result: dict[str, Any]) -> None:
         or len(str(result.get("knowledge_manifest_sha256") or "")) != 64
     ):
         raise RuntimeError("SEED_KNOWLEDGE_RELEASE_IDENTITY_FAILED")
-    if result.get("knowledge_counts") != {
-        "concepts": 29,
-        "relations": 27,
-        "closure": 66,
-        "claims": 411,
-        "documents": 29,
-        "chunks": 261,
-        "menu_mappings": 150,
-        "origin_declarations": 30,
-        "merchant_ingredients": 266,
-        "option_effects": 4,
-    }:
+    if result.get("knowledge_counts") != EXPECTED_KNOWLEDGE_COUNTS:
         raise RuntimeError("SEED_KNOWLEDGE_COUNT_INTEGRITY_FAILED")
     observed_release_counts = {
         key: result["knowledge_counts"][key]
@@ -447,12 +614,22 @@ def _apply_seed_transaction(
         for table, _, _ in reversed(TABLE_ORDER):
             cursor.execute(f"DELETE FROM {table}")
 
+    menu_ids = [str(row["menu_id"]) for row in seed["menus"]]
+    for table, (seed_key, value_column) in MENU_RELATION_TABLES.items():
+        _delete_stale_menu_relation_rows(
+            cursor,
+            table=table,
+            value_column=value_column,
+            menu_ids=menu_ids,
+            rows=seed[seed_key],
+        )
+    _delete_stale_option_conflicts(
+        cursor,
+        menu_ids=menu_ids,
+        rows=seed["option_dietary_conflicts"],
+    )
+
     for table, key_column, seed_key in TABLE_ORDER:
-        if table in MENU_RELATION_TABLES:
-            cursor.executemany(
-                f"DELETE FROM {table} WHERE menu_id = :menu_id",
-                [{"menu_id": row["menu_id"]} for row in seed["menus"]],
-            )
         for row in seed[seed_key]:
             _merge(cursor, table, key_column, row)
 
@@ -501,35 +678,7 @@ def _apply_seed_transaction(
     for table, key_column, seed_key in KNOWLEDGE_SUPPLEMENTAL_TABLES:
         for row in seed[seed_key]:
             _merge(cursor, table, key_column, row)
-    allowed_ingredient_binds = {
-        f"ingredient_{index}": row["ingredient_id"]
-        for index, row in enumerate(seed["ingredients"])
-    }
-    cursor.execute(
-        f"""
-        DELETE FROM ingredient ingredient
-        WHERE ingredient.ingredient_id NOT IN (
-          {",".join(":" + name for name in allowed_ingredient_binds)}
-        )
-          AND NOT EXISTS (
-            SELECT 1 FROM menu_ingredient fact
-            WHERE fact.ingredient_id=ingredient.ingredient_id
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM concept_claim claim
-            WHERE claim.ingredient_id=ingredient.ingredient_id
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM merchant_ingredient fact
-            WHERE fact.ingredient_id=ingredient.ingredient_id
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM option_ingredient_effect effect
-            WHERE effect.ingredient_id=ingredient.ingredient_id
-          )
-        """,
-        allowed_ingredient_binds,
-    )
+    _prune_stale_catalog_dimensions(cursor, seed)
     result = verify(connection)
     result["embedding_provider"] = provider.model
     validate(result)

@@ -31,34 +31,34 @@ def valid_result() -> dict[str, object]:
         "knowledge_catalog_version": KNOWLEDGE_CATALOG_VERSION,
         "knowledge_manifest_sha256": "a" * 64,
         "knowledge_expected_counts": {
-            "concepts": 29,
-            "relations": 27,
-            "closure": 66,
-            "claims": 411,
-            "documents": 29,
-            "chunks": 261,
+            "concepts": 102,
+            "relations": 100,
+            "closure": 281,
+            "claims": 1997,
+            "documents": 102,
+            "chunks": 918,
         },
         "knowledge_declared_actual_counts": {
-            "concepts": 29,
-            "relations": 27,
-            "closure": 66,
-            "claims": 411,
-            "documents": 29,
-            "chunks": 261,
+            "concepts": 102,
+            "relations": 100,
+            "closure": 281,
+            "claims": 1997,
+            "documents": 102,
+            "chunks": 918,
         },
         "knowledge_embedding_model": "yobi-semantic-hash-v1",
         "knowledge_embedding_dimension": 1536,
         "knowledge_embedding_version": "2026-08-06",
         "knowledge_counts": {
-            "concepts": 29,
-            "relations": 27,
-            "closure": 66,
-            "claims": 411,
-            "documents": 29,
-            "chunks": 261,
-            "menu_mappings": 150,
-            "origin_declarations": 30,
-            "merchant_ingredients": 266,
+            "concepts": 102,
+            "relations": 100,
+            "closure": 281,
+            "claims": 1997,
+            "documents": 102,
+            "chunks": 918,
+            "menu_mappings": 600,
+            "origin_declarations": 13,
+            "merchant_ingredients": 119,
             "option_effects": 4,
         },
         "null_knowledge_chunk_vectors": 0,
@@ -68,7 +68,7 @@ def valid_result() -> dict[str, object]:
                 "model": "yobi-semantic-hash-v1",
                 "dimension": 1536,
                 "version": "2026-08-06",
-                "count": 150,
+                "count": 600,
             }
         ],
     }
@@ -195,7 +195,7 @@ def test_knowledge_release_identity_and_declared_counts_are_exact(
         seed_demo.validate(result)
 
 
-@pytest.mark.parametrize(("key", "value"), [("merchant_ingredients", 265), ("option_effects", 3)])
+@pytest.mark.parametrize(("key", "value"), [("merchant_ingredients", 110), ("option_effects", 3)])
 def test_supplemental_release_counts_are_validated_before_commit(key: str, value: int) -> None:
     result = valid_result()
     result["knowledge_counts"][key] = value

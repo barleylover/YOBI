@@ -25,11 +25,13 @@ from app.domain.dialogue import (
     RecommendationResult,
     RecommendationSnapshot,
 )
+from app.domain.knowledge import GroundedMenuKnowledge
 from app.domain.models import AssistantTurn, Card, CartItemInput, ChatState, Profile, Session
 from app.genai.agent_loop import AgentLoop
 from app.genai.contracts import GenAIProviderError
 from app.genai.grounding import GroundedResponseValidator
 from app.genai.tool_registry import ToolRegistry
+from app.rag.embeddings import routed_knowledge_facets
 from app.services.demo_control import DemoControl
 from app.services.dialogue_engine import DialogueEngine
 
@@ -290,6 +292,80 @@ _INFORMATION_UI_COPY = {
     },
 }
 
+_CLAIM_STATUS_KO = {
+    "CONFIRMED_PRESENT": "확인됨",
+    "CONFIRMED_ABSENT": "메뉴 명세상 없음",
+    "PRESUMED_PRESENT": "일반적으로 사용",
+    "POSSIBLE": "들어갈 수 있음",
+    "UNKNOWN": "미확인",
+    "CONFLICTING": "근거가 서로 다름",
+}
+
+_ALLERGEN_KO = {
+    "shellfish_risk": "갑각류·조개류",
+    "fish": "생선",
+    "milk": "우유",
+    "egg": "달걀",
+    "peanut": "땅콩",
+    "tree_nut": "견과류",
+    "wheat": "밀",
+    "soy": "대두",
+    "sesame": "참깨",
+    "cross_contamination_unknown": "교차 접촉",
+}
+
+_DIETARY_SAFETY_KO = {
+    "contains_animal_product": "동물성 재료",
+    "halal_not_verified": "할랄 인증",
+    "pork_possible": "돼지고기",
+    "vegan_possible": "비건 가능 여부",
+    "vegetarian_possible": "채식 가능 여부",
+}
+
+_PREPARATION_KO = {
+    "assembled_and_mixed": "밥과 고명을 담아 양념에 비벼 먹는 방식",
+    "assembled_set": "밥·메인·반찬을 한 상으로 구성하는 방식",
+    "baked": "재료를 올려 오븐에 굽는 방식",
+    "boiled": "면을 삶는 방식",
+    "boiled_and_chilled": "면을 삶아 찬물에 헹구는 방식",
+    "boiled_and_mixed": "면을 삶아 양념에 비비는 방식",
+    "breaded_and_deep_fried": "빵가루를 입혀 튀기는 방식",
+    "breaded_fried_and_assembled": "튀긴 고기와 밥·곁들임을 함께 구성하는 방식",
+    "chilled_and_mixed": "삶은 면을 차갑게 식혀 양념에 비비는 방식",
+    "chilled_in_broth": "삶은 면을 차가운 육수에 담는 방식",
+    "deep_fried": "옷을 입힌 재료를 기름에 튀기는 방식",
+    "deep_fried_and_glazed": "튀긴 재료에 양념 소스를 입히는 방식",
+    "deep_fried_and_sauced": "튀긴 재료에 소스를 곁들이거나 버무리는 방식",
+    "deep_fried_and_seasoned": "튀긴 뒤 가루 양념으로 마무리하는 방식",
+    "deep_fried_and_topped": "튀긴 뒤 고명을 올려 마무리하는 방식",
+    "filled_and_cooked": "피에 속을 채워 찌거나 삶거나 굽거나 튀기는 방식",
+    "formed_and_cooked": "반죽한 재료를 모양 내어 익히는 방식",
+    "fried_rolled_and_sliced": "익힌 튀김을 밥·속재료와 말아 써는 방식",
+    "frozen_shaved_and_topped": "얼린 우유 베이스를 갈아 토핑을 올리는 방식",
+    "griddled": "속을 채운 반죽을 눌러 노릇하게 굽는 방식",
+    "grilled": "재료를 노릇하게 굽는 방식",
+    "grilled_and_assembled": "구운 재료를 밥·국·반찬과 함께 구성하는 방식",
+    "long_simmered": "육수와 재료를 오랫동안 푹 끓이는 방식",
+    "marinated_and_grilled": "양념에 재운 재료를 굽는 방식",
+    "pan_fried": "기름을 두른 팬에 볶듯 굽는 방식",
+    "pressed_and_baked": "반죽을 눌러 와플 틀에 굽는 방식",
+    "pressed_baked_and_topped": "눌러 구운 반죽에 토핑을 올리는 방식",
+    "rolled_and_sliced": "밥과 속재료를 김에 말아 한입 크기로 써는 방식",
+    "served_in_hot_broth": "삶은 면이나 재료를 뜨거운 육수에 담는 방식",
+    "shaved_and_topped": "얼음이나 우유 베이스를 곱게 갈아 토핑을 올리는 방식",
+    "simmered": "육수와 재료를 함께 끓이는 방식",
+    "simmered_and_assembled": "찌개를 끓여 밥·반찬과 함께 구성하는 방식",
+    "simmered_and_topped": "소스에 끓인 뒤 토핑을 올리는 방식",
+    "stir_fried": "재료를 양념과 함께 볶는 방식",
+    "stir_fried_and_assembled": "볶은 재료를 밥·국·반찬과 함께 구성하는 방식",
+    "stir_fried_and_mixed": "익힌 재료를 양념과 볶거나 버무리는 방식",
+    "stir_fried_then_simmered": "재료를 먼저 볶은 뒤 육수와 함께 끓이는 방식",
+    "wok_fried": "센 불의 웍에서 빠르게 볶는 방식",
+    "wok_fried_and_mixed": "웍에서 볶은 소스와 면을 섞는 방식",
+    "wok_fried_and_sauced": "웍에서 볶은 뒤 소스를 곁들이는 방식",
+    "wok_fried_separately": "소스를 따로 볶아 삶은 면과 분리해 내는 방식",
+}
+
 _GROUNDED_COPY = {
     "English": {
         "menus": (
@@ -348,7 +424,7 @@ _GROUNDED_COPY = {
             "이 방향들을 더 좁힐 수 있어요."
         ),
         "explanation": (
-            "{name}에 대한 합성 음식 Wiki의 일반 설명이에요. "
+            "{name}에 대한 합성 음식 Wiki 근거예요. {description} "
             "가게별로 확인되지 않은 내용은 아래에 따로 표시했어요."
         ),
         "comparison": "같은 메뉴 방향에 대한 가게별 근거 기반 차이를 보여드릴게요.",
@@ -751,6 +827,7 @@ class ChatService:
                         session.session_id,
                         meal_need_state=need_state,
                         mutation_idempotency_key=f"agent_{user_message_id}",
+                        user_query=user_text,
                     ),
                     dialogue_act=dialogue_update.delta.dialogue_act,
                 )
@@ -759,6 +836,7 @@ class ChatService:
                     result.text,
                     result.tool_results,
                     requested_act=dialogue_update.delta.dialogue_act,
+                    source_query=user_text,
                 )
                 if not result.tool_results or not turn.cards:
                     raise RuntimeError("GENAI_GROUNDING_REQUIRED")
@@ -768,6 +846,9 @@ class ChatService:
                         turn,
                         result.referenced_menu_ids,
                         result.referenced_claim_ids,
+                        result.referenced_passage_ids,
+                        result.grounding_scope,
+                        result.uncertainty_codes,
                     )
                 except Exception as exc:
                     mutation_names = {
@@ -1192,6 +1273,36 @@ class ChatService:
             )
         )
 
+    def _menu_still_satisfies_active_constraints(
+        self,
+        menu_id: str,
+        profile: Profile,
+        state: MealNeedState,
+    ) -> bool:
+        """Revalidate a saved menu without making the new utterance a ranking query.
+
+        A recommendation snapshot can contain a menu that ranks below the global
+        retrieval cap for follow-up text such as ``choose the first menu``.  That is
+        not a hard-constraint failure.  The merchant-scoped path evaluates every
+        menu in the saved candidate's merchant and applies the same availability,
+        budget, party, dietary, allergy, and service-area rules without unrelated
+        semantic truncation.
+        """
+
+        menu = self.repository.get_menu(menu_id, profile)
+        if menu is None:
+            return False
+        return any(
+            candidate.menu_id == menu_id
+            for candidate in self.repository.list_merchant_menus(
+                menu.merchant_id,
+                profile,
+                state.rejected_menu_ids,
+                limit=150,
+                meal_need_state=state,
+            )
+        )
+
     def _stored_comparison_turn(
         self,
         session: Session,
@@ -1202,16 +1313,12 @@ class ChatService:
     ) -> AssistantTurn | None:
         if requested_act != DialogueAct.COMPARE or len(state.compared_menu_ids) < 2:
             return None
-        eligible = {
-            menu.menu_id: menu
-            for menu in self.repository.recommend_menus(
-                user_text,
-                profile,
-                state,
-                limit=150,
-            )
-        }
-        menus = [eligible[menu_id] for menu_id in state.compared_menu_ids if menu_id in eligible]
+        menus = [
+            menu
+            for menu_id in state.compared_menu_ids
+            if self._menu_still_satisfies_active_constraints(menu_id, profile, state)
+            and (menu := self.repository.get_menu(menu_id, profile)) is not None
+        ]
         if len(menus) < 2:
             return self._make_turn(
                 "Those earlier menus no longer both satisfy the current hard constraints. "
@@ -1304,11 +1411,7 @@ class ChatService:
         if index >= len(snapshot.result.candidates):
             return None
         candidate = snapshot.result.candidates[index]
-        eligible_ids = {
-            menu.menu_id
-            for menu in self.repository.recommend_menus(user_text, profile, state, limit=150)
-        }
-        if candidate.menu_id not in eligible_ids:
+        if not self._menu_still_satisfies_active_constraints(candidate.menu_id, profile, state):
             return self._make_turn(
                 "That earlier menu no longer satisfies the active hard constraints, so I did "
                 "not select it. Would you like a new recommendation?",
@@ -1482,6 +1585,130 @@ class ChatService:
             DialogueAct.COMPARE,
         )
 
+    @staticmethod
+    def _focused_wiki_description(
+        user_text: str,
+        knowledge: GroundedMenuKnowledge,
+        fallback: str,
+    ) -> tuple[str, str, list[str]]:
+        requested_facets = list(routed_knowledge_facets(user_text))
+        passages = {passage.facet: passage.content for passage in knowledge.passages}
+        supported = {
+            "ingredients",
+            "safety",
+            "preparation",
+            "taste",
+            "texture",
+            "temperature",
+            "overview",
+        }
+        focus = next((facet for facet in requested_facets if facet in supported), "overview")
+        detail = passages.get(focus)
+        if focus == "ingredients" and not detail:
+            detail = "; ".join(
+                f"{claim.name_en}: {claim.status.value.lower().replace('_', ' ')}"
+                for claim in knowledge.ingredient_claims[:6]
+            )
+        elif focus == "safety" and not detail:
+            detail = "; ".join(
+                f"{claim.code}: {claim.status.value.lower().replace('_', ' ')}"
+                for claim in knowledge.allergen_claims[:6]
+            )
+        elif focus == "preparation" and not detail:
+            detail = "; ".join(
+                claim.value_text for claim in knowledge.preparation_claims[:4]
+            )
+        return detail or fallback, focus, requested_facets
+
+    @staticmethod
+    def _korean_wiki_description(
+        focus: str,
+        knowledge: GroundedMenuKnowledge,
+        user_text: str = "",
+    ) -> str:
+        if focus == "ingredients":
+            items = [
+                f"{getattr(claim, 'name_ko', None) or claim.name_en}"
+                f"({_CLAIM_STATUS_KO[claim.status.value]})"
+                for claim in knowledge.ingredient_claims[:6]
+            ]
+            if items:
+                return "재료 근거: " + ", ".join(items) + "."
+        if focus == "safety":
+            lowered = user_text.casefold()
+            requested_dietary_codes: set[str] = set()
+            if "vegan" in lowered or "비건" in lowered:
+                requested_dietary_codes = {"contains_animal_product", "vegan_possible"}
+            elif "vegetarian" in lowered or "채식" in lowered:
+                requested_dietary_codes = {
+                    "contains_animal_product",
+                    "pork_possible",
+                    "vegetarian_possible",
+                }
+            elif "halal" in lowered or "할랄" in lowered:
+                requested_dietary_codes = {
+                    "contains_animal_product",
+                    "halal_not_verified",
+                    "pork_possible",
+                }
+            dietary_claims = [
+                claim
+                for claim in knowledge.dietary_claims
+                if claim.code.removeprefix("diet_") in _DIETARY_SAFETY_KO
+                and (
+                    not requested_dietary_codes
+                    or claim.code.removeprefix("diet_") in requested_dietary_codes
+                )
+            ]
+            items = [
+                f"{_DIETARY_SAFETY_KO[claim.code.removeprefix('diet_')]}"
+                f"({_CLAIM_STATUS_KO[claim.status.value]})"
+                for claim in dietary_claims
+            ]
+            present_codes = {
+                claim.code.removeprefix("diet_") for claim in dietary_claims
+            }
+            for missing_code in sorted(requested_dietary_codes - present_codes):
+                items.append(f"{_DIETARY_SAFETY_KO[missing_code]}(미확인)")
+            if not requested_dietary_codes:
+                for claim in knowledge.allergen_claims:
+                    status = _CLAIM_STATUS_KO[claim.status.value]
+                    if (
+                        claim.status.value == "CONFIRMED_ABSENT"
+                        and claim.cross_contamination_status == "UNKNOWN"
+                    ):
+                        status += "·교차 접촉 미확인"
+                    items.append(f"{_ALLERGEN_KO.get(claim.code, claim.code)}({status})")
+            if items:
+                return (
+                    "알레르기·식단 위험 근거: "
+                    + ", ".join(items)
+                    + ". 별도 근거가 없으면 교차 접촉은 미확인으로 유지해요."
+                )
+        if focus == "preparation":
+            methods = list(
+                dict.fromkeys(
+                    _PREPARATION_KO.get(claim.method, "세부 조리 절차가 가게마다 다른 방식")
+                    for claim in knowledge.preparation_claims[:4]
+                )
+            )
+            if methods:
+                return (
+                    "일반적인 조리법은 "
+                    + ", ".join(methods)
+                    + "이에요. 가게별 세부 조리법은 다를 수 있어요."
+                )
+        labels = {
+            "taste": "맛",
+            "texture": "식감",
+            "temperature": "제공 온도",
+            "overview": "일반 특징",
+        }
+        return (
+            f"{labels.get(focus, '음식 특징')} 관련 합성 Wiki 근거를 조회했어요. "
+            "가게별 레시피와 확인되지 않은 내용은 카드에서 구분해 보여드려요."
+        )
+
     def _snapshot_reference_turn(
         self, session: Session, profile: Profile, user_text: str
     ) -> AssistantTurn | None:
@@ -1549,10 +1776,16 @@ class ChatService:
             option_item_ids=self._selected_option_ids(menu.menu_id, session.meal_need_state),
         )
         passages_by_facet = {passage.facet: passage.content for passage in knowledge.passages}
-        description = passages_by_facet.get("overview", menu.description)
+        description, requested_facet, requested_facets = self._focused_wiki_description(
+            user_text,
+            knowledge,
+            passages_by_facet.get("overview", menu.description),
+        )
         analogy = passages_by_facet.get("analogy", menu.cultural_description)
         unknowns = list(dict.fromkeys([*menu.risk_hints, *knowledge.unknowns]))
-        text = f"The {self._ordinal(index + 1)} menu was {menu.name_en}. {description} {analogy}"
+        text = f"The {self._ordinal(index + 1)} menu was {menu.name_en}. {description}"
+        if requested_facet == "overview":
+            text += f" {analogy}"
         if unknowns:
             text += " The restaurant-specific details still marked as unknown are shown below."
         turn = self._make_turn(
@@ -1567,6 +1800,15 @@ class ChatService:
                         "menu": menu.model_dump(mode="json"),
                         "explanation": {
                             "description": description,
+                            "requested_facet": requested_facet,
+                            "requested_facets": requested_facets,
+                            "localized_descriptions": {
+                                "한국어": self._korean_wiki_description(
+                                    requested_facet,
+                                    knowledge,
+                                    user_text,
+                                )
+                            },
                             "cultural_analogy": analogy,
                             "portion": f"Usually serves {menu.serves_min}-{menu.serves_max}",
                             "unknown_fields": unknowns,
@@ -1580,6 +1822,17 @@ class ChatService:
                             ],
                             "allergen_claims": [
                                 claim.model_dump(mode="json") for claim in knowledge.allergen_claims
+                            ],
+                            "dietary_claims": [
+                                claim.model_dump(mode="json") for claim in knowledge.dietary_claims
+                            ],
+                            "preparation_claims": [
+                                claim.model_dump(mode="json")
+                                for claim in knowledge.preparation_claims
+                            ],
+                            "merchant_ingredient_claims": [
+                                claim.model_dump(mode="json")
+                                for claim in knowledge.merchant_ingredient_claims
                             ],
                             "grounded_claim_ids": knowledge.claim_ids,
                             "grounded_passage_ids": [
@@ -1651,7 +1904,16 @@ class ChatService:
         taste = passages_by_facet.get("taste")
         texture = passages_by_facet.get("texture")
         analogy = passages_by_facet.get("analogy", menu.cultural_description)
-        narrative = " ".join(part for part in (overview, taste, texture, analogy) if part)
+        description, requested_facet, requested_facets = self._focused_wiki_description(
+            user_text,
+            knowledge,
+            overview,
+        )
+        narrative = (
+            " ".join(part for part in (overview, taste, texture, analogy) if part)
+            if requested_facet == "overview"
+            else description
+        )
         narrative += (
             " This is general synthetic Wiki knowledge, not proof of one restaurant's exact "
             "recipe, certification, or cross-contact safety."
@@ -1665,6 +1927,16 @@ class ChatService:
             )
         )
         explanation = {
+            "description": description,
+            "requested_facet": requested_facet,
+            "requested_facets": requested_facets,
+            "localized_descriptions": {
+                "한국어": self._korean_wiki_description(
+                    requested_facet,
+                    knowledge,
+                    user_text,
+                )
+            },
             "cultural_analogy": analogy,
             "portion": f"Usually serves {menu.serves_min}-{menu.serves_max}",
             "unknown_fields": knowledge.unknowns,
@@ -1675,6 +1947,16 @@ class ChatService:
             ],
             "allergen_claims": [
                 claim.model_dump(mode="json") for claim in knowledge.allergen_claims
+            ],
+            "dietary_claims": [
+                claim.model_dump(mode="json") for claim in knowledge.dietary_claims
+            ],
+            "preparation_claims": [
+                claim.model_dump(mode="json") for claim in knowledge.preparation_claims
+            ],
+            "merchant_ingredient_claims": [
+                claim.model_dump(mode="json")
+                for claim in knowledge.merchant_ingredient_claims
             ],
             "grounded_claim_ids": knowledge.claim_ids,
             "grounded_passage_ids": [passage.chunk_id for passage in knowledge.passages],
@@ -2021,9 +2303,21 @@ class ChatService:
                     name = menu.get(menu_name_key)
                     description = menu.get("description")
                     if isinstance(explanation, dict):
-                        description = explanation.get("description") or description
+                        localized_descriptions = explanation.get("localized_descriptions")
+                        explanation_description = (
+                            localized_descriptions.get(language)
+                            if language != "English" and isinstance(localized_descriptions, dict)
+                            else explanation.get("description")
+                        )
+                        if language == "한국어" and not explanation_description:
+                            explanation_description = (
+                                "조회한 합성 Wiki 근거를 카드에 표시했어요. "
+                                "가게별 미확인 정보는 안전하다고 보지 않아요."
+                            )
+                        if explanation_description:
+                            description = explanation_description
                         passages = explanation.get("wiki_passages")
-                        if isinstance(passages, list):
+                        if not explanation_description and isinstance(passages, list):
                             overview = next(
                                 (
                                     passage.get("content")
@@ -2041,22 +2335,37 @@ class ChatService:
                         )
                 if isinstance(explanation, dict):
                     name = explanation.get("category")
-                    passages = explanation.get("wiki_passages")
-                    if isinstance(passages, list):
-                        description = next(
-                            (
-                                passage.get("content")
-                                for passage in passages
-                                if isinstance(passage, dict)
-                                and passage.get("facet") == "overview"
-                            ),
-                            None,
+                    localized_descriptions = explanation.get("localized_descriptions")
+                    description = (
+                        localized_descriptions.get(language)
+                        if language != "English" and isinstance(localized_descriptions, dict)
+                        else explanation.get("description")
+                    )
+                    if language == "한국어" and not description:
+                        description = (
+                            "조회한 합성 Wiki 근거를 카드에 표시했어요. "
+                            "가게별 미확인 정보는 안전하다고 보지 않아요."
                         )
-                        if name and description:
-                            return copy["explanation"].format(
-                                name=name,
-                                description=description,
+                    if not description:
+                        passages = explanation.get("wiki_passages")
+                        description = (
+                            next(
+                                (
+                                    passage.get("content")
+                                    for passage in passages
+                                    if isinstance(passage, dict)
+                                    and passage.get("facet") == "overview"
+                                ),
+                                None,
                             )
+                            if isinstance(passages, list)
+                            else None
+                        )
+                    if name and description:
+                        return copy["explanation"].format(
+                            name=name,
+                            description=description,
+                        )
             if card.type == "merchant_comparison":
                 return copy["comparison"]
             if card.type == "dietary_evidence":
@@ -2196,18 +2505,11 @@ class ChatService:
             title = "K-POP Demon Hunters food guide"
             text = "Meet five Korean foods featured in the K-POP Demon Hunters menu. Swipe to explore a nearby delivery pick for each one."
             subtitle = "Five foods to explore"
-        eligible_ids = {
-            menu.menu_id
-            for menu in self.repository.recommend_menus(
-                f"{intent} preset collection",
-                profile,
-                meal_need_state,
-                limit=150,
-            )
-        }
         entries: list[dict[str, object]] = []
         for rank, label, description, menu_id in definitions:
-            if menu_id not in eligible_ids:
+            if not self._menu_still_satisfies_active_constraints(
+                menu_id, profile, meal_need_state
+            ):
                 continue
             menu = self.repository.get_menu(menu_id, profile)
             if menu is None:
@@ -2293,6 +2595,7 @@ class ChatService:
         text: str,
         tool_results: list[tuple[str, dict[str, object]]],
         requested_act: DialogueAct = DialogueAct.REQUEST_RECOMMENDATION,
+        source_query: str | None = None,
     ) -> AssistantTurn:
         cards: list[Card] = []
         state = session.state
@@ -2328,25 +2631,128 @@ class ChatService:
                 )
                 state = ChatState.MENU_EXPLANATION
             elif name == "explain_menu" and result.get("menu"):
+                menu_payload = result["menu"]
+                explanation_payload = result.get("explanation")
+                if not isinstance(menu_payload, dict) or not isinstance(
+                    explanation_payload, dict
+                ):
+                    continue
+                explanation = dict(explanation_payload)
+                knowledge = GroundedMenuKnowledge.model_validate(
+                    {
+                        "menu_id": str(menu_payload["menu_id"]),
+                        "ingredient_claims": explanation.get("ingredient_claims", []),
+                        "allergen_claims": explanation.get("allergen_claims", []),
+                        "dietary_claims": explanation.get("dietary_claims", []),
+                        "preparation_claims": explanation.get("preparation_claims", []),
+                        "merchant_ingredient_claims": explanation.get(
+                            "merchant_ingredient_claims", []
+                        ),
+                        "passages": explanation.get("wiki_passages", []),
+                        "unknowns": explanation.get("unknown_fields", []),
+                    }
+                )
+                description, requested_facet, requested_facets = (
+                    self._focused_wiki_description(
+                        source_query or "",
+                        knowledge,
+                        str(explanation.get("description") or menu_payload.get("description") or ""),
+                    )
+                )
+                explanation.update(
+                    {
+                        "description": description,
+                        "requested_facet": requested_facet,
+                        "requested_facets": requested_facets,
+                        "localized_descriptions": {
+                            "한국어": self._korean_wiki_description(
+                                requested_facet,
+                                knowledge,
+                                source_query or "",
+                            )
+                        },
+                    }
+                )
                 cards.append(
                     Card(
                         type="menu_explanation",
                         title="What this dish will feel like",
                         subtitle="Taste, texture, portion, and unknowns",
-                        data=result,
+                        data={"menu": menu_payload, "explanation": explanation},
                     )
                 )
                 state = ChatState.MENU_EXPLANATION
             elif name == "get_dietary_evidence":
                 evidence = self._merge_tool_items(tool_results, name, "evidence", "evidence_id")
-                if not evidence:
+                ingredient_claims = self._merge_tool_items(
+                    tool_results, name, "ingredient_claims", "source_id", limit=None
+                )
+                allergen_claims = self._merge_tool_items(
+                    tool_results, name, "allergen_claims", "source_id", limit=None
+                )
+                dietary_claims = self._merge_tool_items(
+                    tool_results, name, "dietary_claims", "source_id", limit=None
+                )
+                preparation_claims = self._merge_tool_items(
+                    tool_results, name, "preparation_claims", "source_id", limit=None
+                )
+                merchant_claims = self._merge_tool_items(
+                    tool_results, name, "merchant_ingredient_claims", "source_id", limit=None
+                )
+                wiki_passages = self._merge_tool_items(
+                    tool_results, name, "wiki_passages", "chunk_id", limit=None
+                )
+                menu_ids: list[str] = []
+                unknown_fields: list[str] = []
+                grounded_claim_ids: list[str] = []
+                grounded_passage_ids: list[str] = []
+                for tool_name, dietary_result in tool_results:
+                    if tool_name != name:
+                        continue
+                    menu_id = dietary_result.get("menu_id")
+                    if menu_id and str(menu_id) not in menu_ids:
+                        menu_ids.append(str(menu_id))
+                    for source_key, target in (
+                        ("unknown_fields", unknown_fields),
+                        ("grounded_claim_ids", grounded_claim_ids),
+                        ("grounded_passage_ids", grounded_passage_ids),
+                    ):
+                        values = dietary_result.get(source_key)
+                        if not isinstance(values, list):
+                            continue
+                        for value in values:
+                            normalized = str(value)
+                            if normalized not in target:
+                                target.append(normalized)
+                if not any(
+                    (
+                        evidence,
+                        ingredient_claims,
+                        allergen_claims,
+                        dietary_claims,
+                        preparation_claims,
+                        wiki_passages,
+                    )
+                ):
                     continue
                 cards.append(
                     Card(
                         type="dietary_evidence",
                         title="Dietary evidence",
                         subtitle="Evidence status is not a safety guarantee",
-                        data={"evidence": evidence},
+                        data={
+                            "menus": [{"menu_id": menu_id} for menu_id in menu_ids],
+                            "evidence": evidence,
+                            "ingredient_claims": ingredient_claims,
+                            "allergen_claims": allergen_claims,
+                            "dietary_claims": dietary_claims,
+                            "preparation_claims": preparation_claims,
+                            "merchant_ingredient_claims": merchant_claims,
+                            "wiki_passages": wiki_passages,
+                            "unknown_fields": unknown_fields,
+                            "grounded_claim_ids": grounded_claim_ids,
+                            "grounded_passage_ids": grounded_passage_ids,
+                        },
                     )
                 )
                 state = ChatState.SAFETY_WARNING
@@ -2487,6 +2893,8 @@ class ChatService:
         tool_name: str,
         list_key: str,
         identity_key: str,
+        *,
+        limit: int | None = 12,
     ) -> list[dict[str, object]]:
         merged: list[dict[str, object]] = []
         seen: set[str] = set()
@@ -2510,7 +2918,7 @@ class ChatService:
                     continue
                 seen.add(identity)
                 merged.append(normalized)
-                if len(merged) == 12:
+                if limit is not None and len(merged) == limit:
                     return merged
         return merged
 
@@ -2661,6 +3069,16 @@ class ChatService:
                 "allergen_claims": [
                     claim.model_dump(mode="json") for claim in knowledge.allergen_claims
                 ],
+                "dietary_claims": [
+                    claim.model_dump(mode="json") for claim in knowledge.dietary_claims
+                ],
+                "preparation_claims": [
+                    claim.model_dump(mode="json") for claim in knowledge.preparation_claims
+                ],
+                "merchant_ingredient_claims": [
+                    claim.model_dump(mode="json")
+                    for claim in knowledge.merchant_ingredient_claims
+                ],
                 "grounded_claim_ids": knowledge.claim_ids,
                 "grounded_passage_ids": [passage.chunk_id for passage in knowledge.passages],
                 "is_synthetic": True,
@@ -2700,14 +3118,12 @@ class ChatService:
                 active_needs.max_spiciness is not None
                 and classic.spice_level > active_needs.max_spiciness
             )
-            eligible_ids = {
-                menu.menu_id
-                for menu in self.repository.recommend_menus(
-                    user_text, profile, active_needs, limit=150
-                )
-            }
-            classic_eligible = classic.menu_id in eligible_ids
-            mild_eligible = mild.menu_id in eligible_ids
+            classic_eligible = self._menu_still_satisfies_active_constraints(
+                classic.menu_id, profile, active_needs
+            )
+            mild_eligible = self._menu_still_satisfies_active_constraints(
+                mild.menu_id, profile, active_needs
+            )
             text = (
                 "That sounds like tteokbokki: chewy rice cakes in a sweet-spicy gochujang sauce. "
                 "The classic demo version is level 3 on YOBI's three-level spice scale."

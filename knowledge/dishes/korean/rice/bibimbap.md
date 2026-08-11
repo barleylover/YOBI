@@ -5,6 +5,7 @@
   "name_ko": "비빔밥",
   "name_en": "Bibimbap",
   "aliases": [
+    "한국식 비빔밥",
     "Korean mixed rice bowl"
   ],
   "version": "demo-wiki-2026.08.09-v1",
@@ -74,6 +75,34 @@
       "allergen_id": "allergen_sesame",
       "status": "POSSIBLE",
       "source_ref": "YOBI synthetic culinary knowledge review: Bibimbap v1"
+    }
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Beef, egg or animal-derived seasoning may be present",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: bibimbap structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegetarian_possible",
+      "value_text": "A vegetarian version is possible when meat and seafood seasoning are absent",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: bibimbap structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegan_possible",
+      "value_text": "A vegan version requires confirmation of egg, meat and sauce",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: bibimbap structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "assembled_and_mixed",
+      "value_text": "Rice and arranged toppings are mixed with seasoning before eating",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: bibimbap structured claims v1"
     }
   ],
   "source_type": "SYNTHETIC_WIKI",

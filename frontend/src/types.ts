@@ -187,13 +187,85 @@ export interface PresetEntry {
   menu: MenuSummary;
 }
 
-export interface MenuExplanation {
+export interface StructuredMenuKnowledge {
+  wiki_passages?: WikiPassage[];
+  ingredient_claims?: IngredientClaim[];
+  allergen_claims?: AllergenClaim[];
+  dietary_claims?: DietaryClaim[];
+  preparation_claims?: PreparationClaim[];
+}
+
+export interface MenuExplanation extends StructuredMenuKnowledge {
+  description?: string;
   cultural_analogy: string;
   portion: string;
   unknown_fields: string[];
   evidence_ids: string[];
   category?: string;
   compatible_listing?: boolean;
+  is_synthetic?: boolean;
+  general_wiki_explanation?: boolean;
+}
+
+export type KnowledgeClaimStatus =
+  | "CONFIRMED_PRESENT"
+  | "CONFIRMED_ABSENT"
+  | "PRESUMED_PRESENT"
+  | "POSSIBLE"
+  | "UNKNOWN"
+  | "CONFLICTING";
+
+export type KnowledgeSourceScope =
+  | "DISH_CONCEPT"
+  | "MERCHANT"
+  | "MENU"
+  | "OPTION"
+  | "KITCHEN";
+
+export interface WikiPassage {
+  chunk_id: string;
+  document_id: string;
+  concept_id?: string | null;
+  facet: string;
+  content: string;
+  source_kind: string;
+  source_version: string;
+  is_synthetic: boolean;
+  score: number;
+}
+
+interface KnowledgeClaimBase {
+  status: KnowledgeClaimStatus;
+  source_scope: KnowledgeSourceScope;
+  source_id: string;
+  source_version: string;
+  confidence_band: string;
+  inherited: boolean;
+}
+
+export interface IngredientClaim extends KnowledgeClaimBase {
+  ingredient_id: string;
+  name_en: string;
+  name_ko?: string;
+  role: "DEFINING" | "CORE" | "COMMON" | "OPTIONAL" | "REGIONAL_VARIANT" | "UNKNOWN";
+}
+
+export interface AllergenClaim extends KnowledgeClaimBase {
+  allergen_id: string;
+  code: string;
+  cross_contamination_status: string;
+}
+
+export interface DietaryClaim extends KnowledgeClaimBase {
+  attribute_id: string;
+  code: string;
+  display_name: string;
+  value_text: string;
+}
+
+export interface PreparationClaim extends KnowledgeClaimBase {
+  method: string;
+  value_text: string;
 }
 
 interface CardBase {
@@ -205,7 +277,15 @@ export type CardPayload = CardBase & (
   | { type: "category_recommendations"; data: { categories: CategoryRecommendation[] } }
   | { type: "menu_recommendations"; data: { menus: MenuSummary[] } }
   | { type: "menu_explanation"; data: { menu?: MenuSummary; explanation: MenuExplanation } }
-  | { type: "dietary_evidence"; data: { evidence: Evidence[]; menu?: MenuSummary } }
+  | {
+      type: "dietary_evidence";
+      data: StructuredMenuKnowledge & {
+        evidence: Evidence[];
+        menu?: MenuSummary;
+        menus?: { menu_id: string }[];
+        unknown_fields?: string[];
+      };
+    }
   | { type: "merchant_comparison"; data: { merchants: MerchantComparison[] } }
   | { type: "preset_collection"; data: { kind: "weekly_ranking" | "kpop_demon_hunters"; entries: PresetEntry[] } }
   | {

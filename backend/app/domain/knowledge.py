@@ -76,6 +76,7 @@ class DishConceptAuthoring(BaseModel):
 class ResolvedIngredientClaim(BaseModel):
     ingredient_id: str
     name_en: str
+    name_ko: str | None = None
     role: IngredientRole
     status: ClaimStatus
     source_scope: SourceScope
@@ -88,6 +89,34 @@ class ResolvedIngredientClaim(BaseModel):
 class ResolvedAllergenClaim(BaseModel):
     allergen_id: str
     code: str
+    status: ClaimStatus
+    source_scope: SourceScope
+    source_id: str
+    source_version: str
+    confidence_band: str
+    inherited: bool = False
+    # An explicit menu-level absence does not establish shared-kitchen safety.
+    # Preserve the catalog's separate cross-contact state so callers cannot turn
+    # ``CONFIRMED_ABSENT`` into an allergy-safe or certification claim.
+    cross_contamination_status: str = "UNKNOWN"
+
+
+class ResolvedDietaryClaim(BaseModel):
+    attribute_id: str
+    code: str
+    display_name: str
+    value_text: str
+    status: ClaimStatus
+    source_scope: SourceScope
+    source_id: str
+    source_version: str
+    confidence_band: str
+    inherited: bool = False
+
+
+class ResolvedPreparationClaim(BaseModel):
+    method: str
+    value_text: str
     status: ClaimStatus
     source_scope: SourceScope
     source_id: str
@@ -118,6 +147,8 @@ class GroundedMenuKnowledge(BaseModel):
     available_facets: list[str] = Field(default_factory=list)
     ingredient_claims: list[ResolvedIngredientClaim] = Field(default_factory=list)
     allergen_claims: list[ResolvedAllergenClaim] = Field(default_factory=list)
+    dietary_claims: list[ResolvedDietaryClaim] = Field(default_factory=list)
+    preparation_claims: list[ResolvedPreparationClaim] = Field(default_factory=list)
     # A merchant declaration is useful evidence about shared-kitchen/cross-contact
     # risk, but it is deliberately kept out of ``ingredient_claims``. Merchant-wide
     # presence must never be presented as proof that the ingredient is in this menu.
@@ -131,5 +162,7 @@ class GroundedMenuKnowledge(BaseModel):
     def claim_ids(self) -> list[str]:
         values = [claim.source_id for claim in self.ingredient_claims]
         values.extend(claim.source_id for claim in self.allergen_claims)
+        values.extend(claim.source_id for claim in self.dietary_claims)
+        values.extend(claim.source_id for claim in self.preparation_claims)
         values.extend(claim.source_id for claim in self.merchant_ingredient_claims)
         return list(dict.fromkeys(values))

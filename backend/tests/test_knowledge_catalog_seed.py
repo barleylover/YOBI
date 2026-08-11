@@ -19,12 +19,19 @@ from app.knowledge.catalog_seed import (
 )
 
 
-def test_demo_catalog_maps_all_150_menus_to_categories_and_explicit_variants() -> None:
+def test_demo_catalog_maps_all_600_menus_to_reusable_family_or_variant_nodes() -> None:
     menus = build_seed()["menus"]
     catalog = build_knowledge_catalog_seed(menus)
 
-    assert len(CATEGORIES) == len(CATEGORY_CONCEPT_MAP) == 20
-    assert len(catalog.menu_concept_maps) == len(menus) == 150
+    assert len(CATEGORIES) == len(CATEGORY_CONCEPT_MAP) == 100
+    assert (
+        sum(
+            row["concept_type"] == "VARIANT"
+            for row in catalog.compiled_release.concepts
+        )
+        == 70
+    )
+    assert len(catalog.menu_concept_maps) == len(menus) == 600
     assert {row["mapping_status"] for row in catalog.menu_concept_maps} == {"MAPPED"}
     assert {row["concept_id"] for row in catalog.menu_concept_maps} == (
         set(CATEGORY_CONCEPT_MAP.values()) | set(CANONICAL_MENU_CONCEPT_OVERRIDES.values())
@@ -52,8 +59,8 @@ def test_taxonomy_is_claim_backed_and_replaces_category_pseudo_ingredients() -> 
     allergen_ids = {row["allergen_id"] for row in catalog.allergens}
     claims = catalog.compiled_release.claims
 
-    assert len(ingredient_ids) == len(catalog.ingredients) == 47
-    assert len(allergen_ids) == len(catalog.allergens) == 8
+    assert len(ingredient_ids) == len(catalog.ingredients) == 54
+    assert len(allergen_ids) == len(catalog.allergens) == 9
     assert ingredient_ids == {
         row["ingredient_id"] for row in claims if row["claim_type"] == "INGREDIENT"
     }
@@ -90,6 +97,7 @@ def test_catalog_seed_is_deterministic_and_exposes_loader_dependency_order() -> 
     assert list(first.table_payloads()) == [
         "ingredient",
         "allergen",
+        "dietary_attribute",
         "dish_concept",
         "dish_relation",
         "dish_concept_closure",
@@ -162,7 +170,7 @@ def test_unreviewed_category_fails_closed_or_is_explicitly_unmapped() -> None:
             "source_ref": "demo-category:Unreviewed fusion dish",
             "review_status": "DRAFT",
             "is_synthetic": 1,
-            "updated_at": "2026-08-09",
+            "updated_at": "2026-08-11",
         }
     ]
 

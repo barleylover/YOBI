@@ -5,16 +5,32 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+ResponseKind = Literal["QUESTION", "ACKNOWLEDGEMENT", "SUMMARY", "GROUNDED_RESULT"]
+GroundingScope = Literal["NONE", "WIKI_GENERAL", "MENU_SPECIFIC", "MIXED"]
+UncertaintyCode = Literal[
+    "WIKI_POSSIBLE",
+    "WIKI_UNKNOWN",
+    "MENU_DATA_NOT_PROVIDED",
+    "MENU_DATA_UNKNOWN",
+    "CONFLICTING_INFORMATION",
+    "CROSS_CONTACT_UNKNOWN",
+    "SEVERE_ALLERGY_UNVERIFIED",
+]
+
 
 class ModelNarrative(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     message: str = Field(min_length=1, max_length=2000)
-    response_kind: Literal[
-        "QUESTION", "ACKNOWLEDGEMENT", "SUMMARY", "GROUNDED_RESULT"
-    ] | None = None
+    response_kind: ResponseKind | None = None
     referenced_menu_ids: list[str] = Field(default_factory=list)
     referenced_claim_ids: list[str] = Field(default_factory=list)
+    # Defaults preserve parsing compatibility with providers that have not yet
+    # adopted the extended contract. Structured-output providers receive all
+    # fields as required properties in MODEL_NARRATIVE_JSON_SCHEMA below.
+    referenced_passage_ids: list[str] = Field(default_factory=list)
+    grounding_scope: GroundingScope | None = None
+    uncertainty_codes: list[UncertaintyCode] = Field(default_factory=list)
 
 
 class ParsedNarrative(BaseModel):
@@ -32,12 +48,35 @@ MODEL_NARRATIVE_JSON_SCHEMA: dict[str, Any] = {
         },
         "referenced_menu_ids": {"type": "array", "items": {"type": "string"}},
         "referenced_claim_ids": {"type": "array", "items": {"type": "string"}},
+        "referenced_passage_ids": {"type": "array", "items": {"type": "string"}},
+        "grounding_scope": {
+            "type": "string",
+            "enum": ["NONE", "WIKI_GENERAL", "MENU_SPECIFIC", "MIXED"],
+        },
+        "uncertainty_codes": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "enum": [
+                    "WIKI_POSSIBLE",
+                    "WIKI_UNKNOWN",
+                    "MENU_DATA_NOT_PROVIDED",
+                    "MENU_DATA_UNKNOWN",
+                    "CONFLICTING_INFORMATION",
+                    "CROSS_CONTACT_UNKNOWN",
+                    "SEVERE_ALLERGY_UNVERIFIED",
+                ],
+            },
+        },
     },
     "required": [
         "message",
         "response_kind",
         "referenced_menu_ids",
         "referenced_claim_ids",
+        "referenced_passage_ids",
+        "grounding_scope",
+        "uncertainty_codes",
     ],
     "additionalProperties": False,
 }

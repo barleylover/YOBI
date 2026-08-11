@@ -5,6 +5,7 @@
   "name_ko": "짜장면",
   "name_en": "Jjajangmyeon",
   "aliases": [
+    "자장면",
     "Korean black-bean noodles"
   ],
   "version": "demo-wiki-2026.08.09-v1",
@@ -61,6 +62,34 @@
       "allergen_id": "allergen_soy",
       "status": "POSSIBLE",
       "source_ref": "YOBI synthetic culinary knowledge review: Jjajangmyeon v1"
+    }
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Pork, seafood or egg may be present",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: jjajangmyeon structured claims v1"
+    },
+    {
+      "attribute_id": "diet_pork_possible",
+      "value_text": "Diced pork is common but not universal",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: jjajangmyeon structured claims v1"
+    },
+    {
+      "attribute_id": "diet_vegetarian_possible",
+      "value_text": "A vegetarian version is possible only after paste, oil and toppings are confirmed",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: jjajangmyeon structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "wok_fried_and_mixed",
+      "value_text": "Black bean sauce is wok-cooked and served over boiled wheat noodles",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: jjajangmyeon structured claims v1"
     }
   ],
   "source_type": "SYNTHETIC_WIKI",

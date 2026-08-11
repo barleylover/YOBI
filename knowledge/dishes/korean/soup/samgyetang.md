@@ -5,6 +5,7 @@
   "name_ko": "삼계탕",
   "name_en": "Samgyetang",
   "aliases": [
+    "삼계탕",
     "ginseng chicken soup"
   ],
   "version": "demo-wiki-2026.08.09-v1",
@@ -60,6 +61,28 @@
     }
   ],
   "allergens": [],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Chicken defines the dish",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: samgyetang structured claims v1"
+    },
+    {
+      "attribute_id": "diet_halal_not_verified",
+      "value_text": "Chicken sourcing and broth preparation are not halal-verified by the Wiki",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: samgyetang structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "long_simmered",
+      "value_text": "A whole or portioned chicken is slowly simmered with rice and aromatics",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: samgyetang structured claims v1"
+    }
+  ],
   "source_type": "SYNTHETIC_WIKI",
   "source_refs": [
     "YOBI synthetic culinary knowledge review: Samgyetang v1"

@@ -4,7 +4,7 @@
   "concept_type": "FAMILY",
   "name_ko": "불고기",
   "name_en": "Bulgogi",
-  "aliases": ["Korean marinated beef"],
+  "aliases": ["소불고기", "Korean marinated beef"],
   "version": "demo-wiki-2026.08.09-v1",
   "language": "en",
   "parents": [{"concept_id": "dish_korean_cuisine", "relation_type": "IS_A", "inherit_claims": false, "source_ref": "YOBI synthetic taxonomy: Korean cuisine hierarchy v1"}],
@@ -17,6 +17,28 @@
   "allergens": [
     {"allergen_id": "allergen_soy", "status": "PRESUMED_PRESENT", "source_ref": "The canonical demo marinade uses soy sauce"},
     {"allergen_id": "allergen_sesame", "status": "POSSIBLE", "source_ref": "Sesame oil and seeds are common finishing ingredients"}
+  ],
+  "dietary": [
+    {
+      "attribute_id": "diet_contains_animal_product",
+      "value_text": "Beef defines the dish",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: bulgogi structured claims v1"
+    },
+    {
+      "attribute_id": "diet_halal_not_verified",
+      "value_text": "Beef sourcing, marinade and kitchen handling are not halal-verified by the Wiki",
+      "status": "POSSIBLE",
+      "source_ref": "YOBI synthetic culinary knowledge review: bulgogi structured claims v1"
+    }
+  ],
+  "preparation": [
+    {
+      "method": "marinated_and_grilled",
+      "value_text": "Sliced beef is marinated and grilled or griddled",
+      "status": "PRESUMED_PRESENT",
+      "source_ref": "YOBI synthetic culinary knowledge review: bulgogi structured claims v1"
+    }
   ],
   "source_type": "SYNTHETIC_WIKI",
   "source_refs": ["YOBI synthetic culinary knowledge review: Bulgogi v1"],
