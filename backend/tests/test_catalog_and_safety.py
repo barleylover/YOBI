@@ -78,9 +78,7 @@ def test_profile_can_be_updated_without_replacing_identity(
 def test_same_merchant_followup_excludes_carted_and_dietary_conflicting_menus(
     repository: SQLiteYobiRepository, profile_data: ProfileCreate
 ) -> None:
-    profile = repository.create_profile(
-        profile_data.model_copy(update={"spice_tolerance": 3})
-    )
+    profile = repository.create_profile(profile_data)
 
     menus = repository.list_merchant_menus(
         "mer_001", profile, ["menu_001_01"], limit=12
@@ -90,6 +88,7 @@ def test_same_merchant_followup_excludes_carted_and_dietary_conflicting_menus(
     assert all(menu.merchant_id == "mer_001" for menu in menus)
     assert all(menu.menu_id != "menu_001_01" for menu in menus)
     assert all(menu.spice_level <= profile.spice_tolerance for menu in menus)
+    assert any(menu.menu_id == "menu_001_10" for menu in menus)
 
 
 def test_same_merchant_followup_respects_explicit_spice_revision(

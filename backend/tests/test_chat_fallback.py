@@ -479,6 +479,31 @@ def test_duplicate_menu_tool_results_render_one_deduplicated_carousel(
     assert turn.suggested_replies == ["Compare these", "Something else", "Show dietary evidence"]
 
 
+def test_single_menu_result_offers_explanation_instead_of_impossible_comparison(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    profile = repository.create_profile(profile_data)
+    session = repository.create_session(profile.profile_id)
+    result = ToolRegistry(repository, profile, session.session_id).execute(
+        "search_menus",
+        '{"query":"mild rice cake","budget_krw":15000,"max_spiciness":1,"excluded_ingredients":[]}',
+    )
+    result["menus"] = result["menus"][:1]
+
+    turn = ChatService(repository, Settings(), DemoControl())._turn_from_tool_results(
+        session,
+        "Grounded result",
+        [("search_menus", result)],
+    )
+
+    menu = turn.cards[0].data["menus"][0]
+    assert turn.suggested_replies == [
+        f"Explain {menu['name_en']}",
+        "Something else",
+        "Show dietary evidence",
+    ]
+
+
 def test_dietary_evidence_card_preserves_grounding_scope_and_passage_inventory(
     repository: SQLiteYobiRepository, profile_data: ProfileCreate
 ) -> None:

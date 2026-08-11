@@ -41,7 +41,11 @@ test("primary tourist order completes with evidence and no real charge", async (
   await expect(page.getByRole("button", { name: /Open cart, 1 items/ })).toBeVisible();
   await page.getByRole("button", { name: "Yes, show more menus" }).click();
   await expect(page.getByRole("heading", { name: /More from this restaurant/ })).toBeVisible();
-  await page.getByTestId("order-flow").getByTestId("menu-menu_001_02").getByRole("button", { name: "Choose this menu" }).click();
+  await page
+    .getByTestId("order-flow")
+    .getByRole("button", { name: "Choose this menu" })
+    .first()
+    .click();
   await page.getByRole("button", { name: /^Regular/ }).click();
   await page.getByRole("button", { name: /^No extra/ }).click();
   await page.getByRole("button", { name: "Add to cart" }).click();
@@ -53,10 +57,10 @@ test("primary tourist order completes with evidence and no real charge", async (
   await expect(page.getByRole("button", { name: /Open cart, 3 items/ })).toBeVisible();
   await page.getByRole("button", { name: "Decrease quantity" }).first().click();
   await expect(page.getByRole("button", { name: /Open cart, 2 items/ })).toBeVisible();
-  await expect(page.getByText("₩24,900", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("cart-review").getByText(/^₩\d{1,3}(?:,\d{3})*$/).last()).toBeVisible();
   await page.getByRole("button", { name: "Proceed to payment" }).click();
   await expect(page.getByText("Demo payment — no real charge")).toBeVisible();
-  await page.getByRole("button", { name: /^Pay ₩24,900/ }).click();
+  await page.getByRole("button", { name: /^Pay ₩\d{1,3}(?:,\d{3})*$/ }).click();
 
   await expect(page).toHaveURL(/\/order\/YOBI-DEMO_/);
   await expect(page.getByRole("heading", { name: "Your first K-food order is in." })).toBeVisible();

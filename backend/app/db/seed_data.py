@@ -540,7 +540,7 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
                     merchant_index,
                     menu_index,
                 )
-                if menu_id == "menu_001_02":
+                if menu_id == "menu_001_10":
                     item["dietary_tags"].append("shellfish_sauce_absent")
                     item["evidence_status"] = "VERIFIED"
 
@@ -582,7 +582,7 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
                     "semantic_text": semantic_text,
                     "availability": (
                         "AVAILABLE"
-                        if canonical or menu_id == "menu_001_02" or (merchant_index * 10 + menu_index) % 20 < 17
+                        if canonical or (merchant_index * 10 + menu_index) % 20 < 17
                         else (
                             "SOLD_OUT"
                             if (merchant_index * 10 + menu_index) % 20 < 19
@@ -614,7 +614,7 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
                         "Treat as not verified for a severe shellfish allergy.",
                     ),
                 ]
-            elif menu_id == "menu_001_02":
+            elif menu_id == "menu_001_10":
                 evidence_rows = [
                     (
                         "shellfish_risk_absence",
@@ -974,7 +974,7 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
                 "evidence_id": f"ev_{menu_id[5:8]}_{menu_id[9:11]}_1",
                 "cross_contamination_status": "UNKNOWN",
             }
-            for menu_id in ("menu_001_01", "menu_001_02")
+            for menu_id in ("menu_001_01", "menu_001_10")
         ]
     )
     menu_allergen_keys = {(row["menu_id"], row["allergen_id"]) for row in menu_allergens}

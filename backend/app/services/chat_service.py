@@ -4,7 +4,7 @@ import hashlib
 import json
 import logging
 from _thread import LockType
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from threading import Lock
@@ -2864,8 +2864,13 @@ class ChatService:
         }.get(requested_act, DialogueAct.RECOMMEND)
         suggested_replies: list[str] = []
         if output_act == DialogueAct.RECOMMEND:
-            if any(card.type == "menu_recommendations" for card in cards):
-                suggested_replies = ["Compare these", "Something else", "Show dietary evidence"]
+            menu_card = next(
+                (card for card in cards if card.type == "menu_recommendations"),
+                None,
+            )
+            menu_items = menu_card.data.get("menus") if menu_card else None
+            if isinstance(menu_items, list):
+                suggested_replies = self._recommendation_replies(menu_items)
             else:
                 category_card = next(
                     (card for card in cards if card.type == "category_recommendations"),
@@ -2886,6 +2891,18 @@ class ChatService:
             suggested_replies,
             dialogue_act=output_act,
         )
+
+    @staticmethod
+    def _recommendation_replies(menus: Sequence[object]) -> list[str]:
+        supporting = ["Something else", "Show dietary evidence"]
+        if len(menus) >= 2:
+            return ["Compare these", *supporting]
+        if len(menus) == 1:
+            first = menus[0]
+            name = first.get("name_en") if isinstance(first, dict) else getattr(first, "name_en", None)
+            if isinstance(name, str) and name.strip():
+                return [f"Explain {name.strip()}", *supporting]
+        return supporting
 
     @staticmethod
     def _merge_tool_items(
@@ -3264,7 +3281,7 @@ class ChatService:
                 )
             ],
             False,
-            ["Compare these", "Something else", "Show dietary evidence"],
+            self._recommendation_replies(menus),
         )
 
     @staticmethod
