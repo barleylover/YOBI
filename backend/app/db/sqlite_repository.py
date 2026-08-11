@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from app.db.message_ordering import order_conversation_messages
 from app.db.schema_sqlite import SCHEMA_SQL
 from app.db.seed_data import CATALOG_VERSION, build_seed
 from app.domain.address import normalize_address_text
@@ -710,7 +711,7 @@ class SQLiteYobiRepository:
             message = dict(row)
             message["safe_metadata"] = json.loads(message.pop("safe_metadata_json") or "{}")
             messages.append(message)
-        return messages
+        return order_conversation_messages(messages)
 
     def update_dialogue_state(
         self,

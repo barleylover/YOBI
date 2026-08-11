@@ -46,6 +46,36 @@ def test_greeting_is_a_persisted_no_card_turn(
     assert messages[0]["content"] == "hi"
 
 
+def test_conversation_order_uses_state_version_when_timestamps_are_equal(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    profile = repository.create_profile(profile_data)
+    session = repository.create_session(profile.profile_id)
+    service = _service(repository)
+    service.respond(session, profile, "hi")
+    current = repository.get_session(session.session_id)
+    assert current is not None
+    service.respond(current, profile, "I want something warm.")
+
+    with repository._connection() as connection:
+        connection.execute(
+            "UPDATE chat_message SET created_at = ? WHERE session_id = ?",
+            ("2026-08-11T05:00:00+00:00", session.session_id),
+        )
+
+    messages = repository.list_messages(session.session_id)
+    assert [message["role"] for message in messages] == ["user", "assistant", "user", "assistant"]
+    assert [message["content"] for message in messages if message["role"] == "user"] == [
+        "hi",
+        "I want something warm.",
+    ]
+    assert [
+        message["safe_metadata"]["dialogue_act"]
+        for message in messages
+        if message["role"] == "assistant"
+    ] == ["GREET", "COLLECT_NEEDS"]
+
+
 def test_stale_chat_request_does_not_leave_an_orphan_user_message(
     repository: SQLiteYobiRepository, profile_data: ProfileCreate
 ) -> None:

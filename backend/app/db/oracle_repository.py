@@ -11,6 +11,7 @@ from uuid import uuid4
 import oracledb
 
 from app.core.config import Settings
+from app.db.message_ordering import order_conversation_messages
 from app.db.oracle_pool import OraclePool
 from app.db.seed_data import CATALOG_VERSION
 from app.domain.address import normalize_address_text
@@ -399,7 +400,7 @@ class OracleYobiRepository:
                     "created_at": str(row["created_at"]),
                 }
             )
-        return messages
+        return order_conversation_messages(messages)
 
     def update_dialogue_state(
         self,
