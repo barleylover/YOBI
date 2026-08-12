@@ -52,8 +52,8 @@ def test_on_demand_provider_preserves_legacy_model_request_and_capabilities() ->
     assert provider.capabilities.function_calling is True
     assert provider.capabilities.client_managed_continuation is True
     assert provider.capabilities.server_managed_continuation is False
-    assert provider.capabilities.max_input_tokens == 32768
-    assert provider.capabilities.max_output_tokens == 1200
+    assert provider.capabilities.max_input_tokens == 131072
+    assert provider.capabilities.max_output_tokens == 4096
     assert provider.capabilities.max_tools_per_request == 4
     assert provider.capabilities.max_tool_calls_per_response == 4
 

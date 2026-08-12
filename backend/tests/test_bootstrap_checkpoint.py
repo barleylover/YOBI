@@ -94,6 +94,25 @@ def test_retry_policy_matches_settings_and_runtime_restore() -> None:
     assert bootstrap.Settings.model_fields["embedding_provider"].default == "deterministic"
     assert "quote('deterministic')" in inspect.getsource(bootstrap.write_env)
     assert 'EMBEDDING_PROVIDER="deterministic"' in restore
+    assert 'OCI_GENAI_MAX_INPUT_TOKENS="131072"' in restore
+    assert 'LLM_MAX_INPUT_TOKENS="131072"' in restore
+    assert 'OCI_GENAI_MAX_OUTPUT_TOKENS="4096"' in restore
+    assert 'LLM_MAX_OUTPUT_TOKENS="4096"' in restore
+
+
+def test_grok_43_release_envelope_is_persisted() -> None:
+    assert bootstrap.Settings.model_fields["oci_genai_max_input_tokens"].default == 131072
+    assert bootstrap.Settings.model_fields["llm_max_input_tokens"].default == 131072
+    assert bootstrap.Settings.model_fields["oci_genai_max_output_tokens"].default == 4096
+    assert bootstrap.Settings.model_fields["llm_max_output_tokens"].default == 4096
+    source = inspect.getsource(bootstrap.persist_runtime_release_policy)
+    for key in (
+        "OCI_GENAI_MAX_INPUT_TOKENS",
+        "LLM_MAX_INPUT_TOKENS",
+        "OCI_GENAI_MAX_OUTPUT_TOKENS",
+        "LLM_MAX_OUTPUT_TOKENS",
+    ):
+        assert key in source
 
 
 def test_release_policy_rejects_duplicate_embedding_provider_without_writing(

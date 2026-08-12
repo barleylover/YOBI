@@ -20,6 +20,10 @@ CHECKPOINT = Path("/opt/yobi/shared/control/bootstrap_state.json")
 LEGACY_CHECKPOINT = Path("/opt/yobi/shared/bootstrap_state.json")
 RUNTIME_RETRY_POLICY = 'LLM_MAX_RETRIES="1"'
 RUNTIME_EMBEDDING_POLICY = 'EMBEDDING_PROVIDER="deterministic"'
+RUNTIME_OCI_INPUT_POLICY = 'OCI_GENAI_MAX_INPUT_TOKENS="131072"'
+RUNTIME_LLM_INPUT_POLICY = 'LLM_MAX_INPUT_TOKENS="131072"'
+RUNTIME_OCI_OUTPUT_POLICY = 'OCI_GENAI_MAX_OUTPUT_TOKENS="4096"'
+RUNTIME_LLM_OUTPUT_POLICY = 'LLM_MAX_OUTPUT_TOKENS="4096"'
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "backend"))
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -84,6 +88,8 @@ def write_env(dsn: str, app_password: str, api_key: str, control_token: str) -> 
         f"OCI_GENAI_API_KEY={quote(api_key)}",
         f"OCI_GENAI_MODEL={quote('xai.grok-4.3')}",
         f"OCI_GENAI_FALLBACK_MODEL={quote('openai.gpt-oss-120b')}",
+        f"OCI_GENAI_MAX_INPUT_TOKENS={quote('131072')}",
+        f"OCI_GENAI_MAX_OUTPUT_TOKENS={quote('4096')}",
         f"OCI_EMBED_MODEL={quote('cohere.embed-v4.0')}",
         f"OCI_EMBED_DIMENSION={quote('1536')}",
         f"EMBEDDING_PROVIDER={quote('deterministic')}",
@@ -92,6 +98,8 @@ def write_env(dsn: str, app_password: str, api_key: str, control_token: str) -> 
         f"DB_PASSWORD={quote(app_password)}",
         f"LLM_TIMEOUT_SECONDS={quote('120')}",
         f"LLM_MAX_RETRIES={quote('1')}",
+        f"LLM_MAX_INPUT_TOKENS={quote('131072')}",
+        f"LLM_MAX_OUTPUT_TOKENS={quote('4096')}",
         f"TOOL_CALL_MAX_STEPS={quote('6')}",
         f"MAX_UPLOAD_MB={quote('8')}",
         f"ADDRESS_OCR_PROVIDER={quote('fixture')}",
@@ -165,6 +173,10 @@ def persist_runtime_release_policy(path: Path = RUNTIME_ENV) -> bool:
     for key, policy in (
         ("LLM_MAX_RETRIES", RUNTIME_RETRY_POLICY),
         ("EMBEDDING_PROVIDER", RUNTIME_EMBEDDING_POLICY),
+        ("OCI_GENAI_MAX_INPUT_TOKENS", RUNTIME_OCI_INPUT_POLICY),
+        ("LLM_MAX_INPUT_TOKENS", RUNTIME_LLM_INPUT_POLICY),
+        ("OCI_GENAI_MAX_OUTPUT_TOKENS", RUNTIME_OCI_OUTPUT_POLICY),
+        ("LLM_MAX_OUTPUT_TOKENS", RUNTIME_LLM_OUTPUT_POLICY),
     ):
         matches = list(re.finditer(rf"(?m)^[ \t]*{key}[ \t]*=.*$", updated))
         if len(matches) > 1:
