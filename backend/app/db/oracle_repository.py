@@ -179,6 +179,17 @@ def _json(value: Any) -> Any:
     return json.loads(raw) if isinstance(raw, str) else raw
 
 
+def _json_text(value: Any) -> str:
+    """Canonicalize Oracle JSON values whether returned as text or dict/list."""
+
+    return json.dumps(
+        _json(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def _datetime(value: Any) -> datetime:
     if isinstance(value, datetime):
         return value
@@ -1042,7 +1053,7 @@ class OracleYobiRepository:
             if row is None:
                 raise KeyError("RECOMMENDATION_REQUEST_NOT_FOUND")
             if str(row["status"]) != RecommendationRequestStatus.CREATED.value:
-                if str(_value(row["evidence_pool_json"])) != serialized:
+                if _json_text(row["evidence_pool_json"]) != serialized:
                     raise ValueError("RECOMMENDATION_DISPATCH_PAYLOAD_CHANGED")
                 return self._request_record_from_row(row, duplicate=True)
             now = _now()
@@ -1123,7 +1134,9 @@ class OracleYobiRepository:
                 if canonicalized_snapshot_replay:
                     return self._request_record_from_row(row, duplicate=True)
                 stored_result = (
-                    str(_value(row["result_json"])) if row.get("result_json") is not None else None
+                    _json_text(row["result_json"])
+                    if row.get("result_json") is not None
+                    else None
                 )
                 same_payload = (
                     current_status is status
@@ -1400,10 +1413,10 @@ class OracleYobiRepository:
                         json.dumps(snapshot.cards, ensure_ascii=False),
                         request_id,
                         int(row["criteria_version"]),
-                        str(_value(criteria_row["criteria_json"])),
+                        _json_text(criteria_row["criteria_json"]),
                         str(criteria_row["criteria_hash"]),
                         pinned_family.release_family_id,
-                        str(_value(row["evidence_pool_json"])),
+                        _json_text(row["evidence_pool_json"]),
                         status.value,
                         int(row["dispatch_count"]),
                         json.dumps({"validated": True}, separators=(",", ":")),
