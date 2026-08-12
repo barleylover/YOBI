@@ -192,7 +192,8 @@ BEGIN
       recommendation_release_family_id VARCHAR2(160) NOT NULL
         REFERENCES recommendation_release_family(release_family_id),
       eligibility_as_of TIMESTAMP WITH TIME ZONE NOT NULL,
-      mode VARCHAR2(16) NOT NULL CHECK (mode IN ('INITIAL','SIMILAR','RETRY')),
+      request_mode VARCHAR2(16) NOT NULL
+        CHECK (request_mode IN ('INITIAL','SIMILAR','RETRY')),
       status VARCHAR2(40) NOT NULL CHECK (status IN (
         'CREATED','DISPATCHED','COMPLETED','NO_RESULTS','NO_MATCH',
         'SEARCH_FALLBACK','FAILED','UNKNOWN_AFTER_DISPATCH'

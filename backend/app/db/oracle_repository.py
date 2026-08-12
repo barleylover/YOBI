@@ -688,7 +688,7 @@ class OracleYobiRepository:
             session_id=str(row["session_id"]),
             request_hash=str(row["request_hash"]),
             criteria_version=int(row["criteria_version"]),
-            mode=RecommendationMode(str(row["mode"])),
+            mode=RecommendationMode(str(row["request_mode"])),
             status=RecommendationRequestStatus(str(row["status"])),
             state_version=int(row["state_version"]),
             release_family_id=str(row["recommendation_release_family_id"]),
@@ -908,7 +908,7 @@ class OracleYobiRepository:
                 if (
                     str(existing["request_hash"]) != request_hash
                     or int(existing["criteria_version"]) != data.criteria_version
-                    or str(existing["mode"]) != data.mode.value
+                    or str(existing["request_mode"]) != data.mode.value
                 ):
                     raise ValueError("RECOMMENDATION_REQUEST_ID_REUSED")
                 return self._request_record_from_row(existing, duplicate=True)
@@ -933,7 +933,7 @@ class OracleYobiRepository:
                 if (
                     str(existing["request_hash"]) != request_hash
                     or int(existing["criteria_version"]) != data.criteria_version
-                    or str(existing["mode"]) != data.mode.value
+                    or str(existing["request_mode"]) != data.mode.value
                 ):
                     raise ValueError("RECOMMENDATION_REQUEST_ID_REUSED")
                 return self._request_record_from_row(existing, duplicate=True)
@@ -970,7 +970,7 @@ class OracleYobiRepository:
             cursor.execute(
                 """
                 INSERT INTO structured_recommendation_request(
-                  session_id,request_id,request_hash,criteria_version,mode,status,state_version,
+                  session_id,request_id,request_hash,criteria_version,request_mode,status,state_version,
                   recommendation_release_family_id,eligibility_as_of,
                   snapshot_id,evidence_pool_json,result_json,dispatch_count,failure_code,
                   created_at,dispatched_at,completed_at

@@ -149,6 +149,8 @@ def test_structured_hybrid_rag_migration_is_append_only_and_rerun_safe() -> None
     assert "structured_recommendation_request" in source
     assert "recommendation_release_family" in source
     assert "merchant_certification" in source
+    assert "request_mode VARCHAR2(16)" in source
+    assert "\n      mode VARCHAR2(16)" not in source
     assert "generation_call_count BETWEEN 0 AND 1" in source
     assert all(
         "SQLCODE != -955" in statement
