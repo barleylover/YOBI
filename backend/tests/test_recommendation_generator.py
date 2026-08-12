@@ -13,7 +13,10 @@ from app.genai.contracts import (
     GenAIServingMode,
     ProviderCapabilities,
 )
-from app.genai.recommendation_generator import RecommendationGenerator
+from app.genai.recommendation_generator import (
+    RECOMMENDATION_GENERATION_JSON_SCHEMA,
+    RecommendationGenerator,
+)
 
 
 class FakeProvider:
@@ -139,6 +142,34 @@ def test_generator_dispatches_once_without_tools_and_preserves_model_order() -> 
     assert len(provider.calls) == 1
     assert "tools" not in provider.calls[0]
     assert provider.calls[0]["text"]["format"]["strict"] is True
+    request_payload = json.loads(provider.calls[0]["input"][0]["content"])
+    assert request_payload["response_contract"] == provider.calls[0]["text"]["format"][
+        "schema"
+    ]
+
+
+def test_generator_supplies_json_contract_without_native_structured_output() -> None:
+    provider = FakeProvider(
+        {
+            "status": "NO_MATCH",
+            "criteria_summary": "No complete match",
+            "recommendations": [],
+            "unmatched_category_codes": ["flavors"],
+        },
+        structured_output=False,
+    )
+    generator = RecommendationGenerator(Settings(), provider=provider)
+
+    generator.generate(
+        criteria=_criteria(),
+        soft_profile_context={},
+        evidence_pool=[_pool_item("dish-a", "chunk-cuisine", "chunk-flavor")],
+        locale="English",
+    )
+
+    request_payload = json.loads(provider.calls[0]["input"][0]["content"])
+    assert request_payload["response_contract"] == RECOMMENDATION_GENERATION_JSON_SCHEMA
+    assert "text" not in provider.calls[0]
 
 
 def test_generator_rejects_menu_outside_evidence_pool_without_second_dispatch() -> None:

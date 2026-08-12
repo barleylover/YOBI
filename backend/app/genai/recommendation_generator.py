@@ -336,6 +336,10 @@ class RecommendationGenerator:
             "soft_profile_context": soft_profile_context,
             "evidence_pool": evidence_pool,
             "final_recommendation_count": self.settings.recommendation_result_limit,
+            # Native structured output is an explicit provider capability flag. The
+            # response contract must still be present when an OCI endpoint accepts
+            # JSON text but does not enforce `text.format` server-side.
+            "response_contract": RECOMMENDATION_GENERATION_JSON_SCHEMA,
         }
         request: dict[str, Any] = {
             "instructions": instructions,
