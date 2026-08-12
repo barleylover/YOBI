@@ -94,6 +94,28 @@ def test_seed_integrity_accepts_exact_catalog() -> None:
     seed_demo.validate(valid_result())
 
 
+def test_seed_integrity_accepts_only_retained_upgrade_supersets() -> None:
+    result = valid_result()
+    counts = result["counts"]
+    assert isinstance(counts, dict)
+    for key in seed_demo.UPGRADE_RETAINED_COUNT_KEYS:
+        counts[key] = seed_demo.EXPECTED_COUNTS[key] + 7
+    seed_demo.validate(result)
+
+    counts["menus"] = seed_demo.EXPECTED_COUNTS["menus"] + 1
+    with pytest.raises(RuntimeError, match="SEED_COUNT_INTEGRITY_FAILED"):
+        seed_demo.validate(result)
+
+
+def test_seed_integrity_rejects_missing_retained_current_rows() -> None:
+    result = valid_result()
+    counts = result["counts"]
+    assert isinstance(counts, dict)
+    counts["menu_allergens"] = seed_demo.EXPECTED_COUNTS["menu_allergens"] - 1
+    with pytest.raises(RuntimeError, match="SEED_COUNT_INTEGRITY_FAILED"):
+        seed_demo.validate(result)
+
+
 def test_seed_script_type_aliases_are_runtime_compatible_with_python39() -> None:
     assert seed_demo.TableKey is Any
     assert seed_demo.EmbeddingProviderChoice is Any

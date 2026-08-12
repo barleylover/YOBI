@@ -111,6 +111,14 @@ EXPECTED_COUNTS = {
     "option_dietary_conflicts": 1,
 }
 
+# Upgrade deployments retain dimensions and legacy menu-allergen rows that are
+# still referenced by historical knowledge releases or rollback-compatible data.
+# Fresh databases remain exact; only these four global compatibility tables may
+# be strict supersets of the current seed.
+UPGRADE_RETAINED_COUNT_KEYS = frozenset(
+    {"allergens", "dietary_attributes", "ingredients", "menu_allergens"}
+)
+
 EXPECTED_KNOWLEDGE_COUNTS = {
     "concepts": 102,
     "relations": 100,
@@ -788,8 +796,17 @@ def verify(connection: oracledb.Connection) -> dict[str, Any]:
 
 
 def validate(result: dict[str, Any]) -> None:
-    if result.get("counts") != EXPECTED_COUNTS:
+    counts = result.get("counts")
+    if not isinstance(counts, dict) or set(counts) != set(EXPECTED_COUNTS):
         raise RuntimeError("SEED_COUNT_INTEGRITY_FAILED")
+    for key, expected in EXPECTED_COUNTS.items():
+        actual = counts.get(key)
+        if not isinstance(actual, int) or (
+            actual < expected
+            if key in UPGRADE_RETAINED_COUNT_KEYS
+            else actual != expected
+        ):
+            raise RuntimeError("SEED_COUNT_INTEGRITY_FAILED")
     if result.get("null_menu_vectors") != 0:
         raise RuntimeError("SEED_MENU_VECTOR_INTEGRITY_FAILED")
     if result.get("null_review_vectors") != 0:
