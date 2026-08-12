@@ -45,6 +45,8 @@ def test_deploy_loads_runtime_environment_without_shell_source() -> None:
     assert "run_with_runtime_env.py" in source
     assert 'PYTHONPATH="$new_release/backend:$new_release"' in source
     assert "structured_recommendation_smoke.py" in source
+    assert "COPYFILE_DISABLE=1 tar" in source
+    assert "Release archive contains macOS metadata sidecars." in source
 
 
 def test_python39_deployable_modules_defer_pep604_annotations() -> None:

@@ -55,10 +55,15 @@ host="$(oci compute instance list-vnics --profile "$PROFILE" --region "$REGION" 
 
 archive="$(mktemp -t yobi-release.XXXXXX.tar.gz)"
 trap 'rm -f "$archive"' EXIT
-tar -C "$ROOT_DIR" -czf "$archive" \
+COPYFILE_DISABLE=1 tar -C "$ROOT_DIR" -czf "$archive" \
+  --exclude='._*' --exclude='.DS_Store' \
   --exclude='.venv' --exclude='frontend/node_modules' --exclude='frontend/test-results' \
   --exclude='frontend/playwright-report' --exclude='backend/data' --exclude='tmp' \
   backend frontend/dist database deploy scripts knowledge README.md Makefile .env.example
+if tar -tzf "$archive" | grep -Eq '(^|/)\._|(^|/)\.DS_Store$'; then
+  printf 'Release archive contains macOS metadata sidecars.\n' >&2
+  exit 1
+fi
 readonly ARCHIVE_SHA256="$(shasum -a 256 "$archive" | awk '{print $1}')"
 [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] \
   || { printf 'Release archive checksum could not be computed.\n' >&2; exit 1; }
