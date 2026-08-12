@@ -9,7 +9,6 @@
     "dwaeji gukbap",
     "Korean pork soup with rice"
   ],
-  "version": "demo-wiki-2026.08.09-v1",
   "language": "en",
   "parents": [
     {
@@ -19,8 +18,17 @@
       "source_ref": "YOBI synthetic culinary taxonomy review: Gukbap variants v1"
     }
   ],
-  "ingredients": [
+  "source_type": "SYNTHETIC_WIKI",
+  "source_refs": [
+    "YOBI synthetic culinary knowledge review: Pork gukbap v1"
+  ],
+  "license_state": "SYNTHETIC",
+  "review_status": "REVIEWED_DEMO",
+  "is_synthetic": true,
+  "version": "demo-wiki-2026.08.12-v2",
+  "essential_facts": [
     {
+      "fact_type": "INGREDIENT",
       "ingredient_id": "ingredient_pork",
       "name_ko": "돼지고기",
       "name_en": "pork",
@@ -29,89 +37,38 @@
       "source_ref": "YOBI synthetic culinary knowledge review: Pork gukbap v1"
     },
     {
-      "ingredient_id": "ingredient_garlic",
-      "name_ko": "마늘",
-      "name_en": "garlic",
-      "role": "COMMON",
-      "status": "POSSIBLE",
-      "source_ref": "Garlic is a common seasoning but not a universal presentation"
-    }
-  ],
-  "allergens": [
-    {
-      "allergen_id": "allergen_soy",
-      "status": "POSSIBLE",
-      "source_ref": "Broth and table seasoning can include soy"
-    },
-    {
-      "allergen_id": "allergen_shellfish_risk",
-      "status": "POSSIBLE",
-      "source_ref": "Fermented accompaniments or shared stock preparation can introduce seafood"
-    }
-  ],
-  "dietary": [
-    {
-      "attribute_id": "diet_contains_animal_product",
-      "value_text": "Pork defines the dish",
-      "status": "PRESUMED_PRESENT",
-      "source_ref": "YOBI synthetic culinary knowledge review: pork-gukbap structured claims v1"
-    },
-    {
-      "attribute_id": "diet_pork_possible",
-      "value_text": "Pork is presumed present",
-      "status": "PRESUMED_PRESENT",
-      "source_ref": "YOBI synthetic culinary knowledge review: pork-gukbap structured claims v1"
-    },
-    {
-      "attribute_id": "diet_halal_not_verified",
-      "value_text": "Pork makes the common concept incompatible with halal requirements",
-      "status": "PRESUMED_PRESENT",
-      "source_ref": "YOBI synthetic culinary knowledge review: pork-gukbap structured claims v1"
-    }
-  ],
-  "preparation": [
-    {
+      "fact_type": "PREPARATION",
       "method": "simmered",
       "value_text": "Pork and pork broth are simmered and served with rice",
       "status": "PRESUMED_PRESENT",
       "source_ref": "YOBI synthetic culinary knowledge review: pork-gukbap structured claims v1"
     }
   ],
-  "source_type": "SYNTHETIC_WIKI",
-  "source_refs": [
-    "YOBI synthetic culinary knowledge review: Pork gukbap v1"
-  ],
-  "license_state": "SYNTHETIC",
-  "review_status": "REVIEWED_DEMO",
-  "is_synthetic": true,
-  "updated_at": "2026-08-09"
+  "updated_at": "2026-08-12"
 }
 ---
 # Pork gukbap
 
-## Overview
+## Character and experience
+
 Pork gukbap is a gukbap variant built from pork, pork-rich broth and rice, served combined or with rice and seasonings alongside.
 
-## Taste
 The broth is savory and pork-forward, ranging from clean and lightly seasoned to rich, cloudy and garlicky.
 
-## Texture
 Soft rice absorbs the broth while sliced pork, offal in some recipes and garnishes provide tender or chewy contrasts.
 
-## Temperature
 It is served piping hot, often in a heat-retaining earthenware or metal bowl.
 
-## Satiety
 A bowl is a substantial one-person meal, especially when it includes generous pork and rice.
 
-## Culture
+## Context and comparisons
+
 Pork gukbap is strongly associated with Busan and southeastern Korea, where diners often customize it with chives, salted shrimp or spicy seasoning.
 
-## Analogy
 Think of a hearty pork-broth soup and rice meal whose table condiments let the diner adjust salt, aroma and heat.
 
-## Ingredients
+## Ingredients and variations
+
 Pork defines this variant, while rice and broth are inherited from gukbap. Garlic, chives, salted shrimp, offal and spicy seasoning vary by shop.
 
-## Safety
 Pork is presumed present, making this concept unsuitable for pork-avoiding diets unless the mapping is wrong. Soy and seafood exposure are possible through seasoning and accompaniments; merchant facts must resolve them.

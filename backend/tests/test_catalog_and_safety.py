@@ -15,11 +15,11 @@ def test_seed_meets_master_minimums() -> None:
     assert counts["hotels"] == 20
 
 
-def test_seed_uses_only_the_three_level_spice_contract() -> None:
+def test_seed_uses_the_five_level_spice_contract() -> None:
     seed = build_seed()
-    assert {menu["spice_level"] for menu in seed["menus"]}.issubset({1, 2, 3})
+    assert {menu["spice_level"] for menu in seed["menus"]} == {1, 2, 3, 4, 5}
     assert all(
-        1 <= category["typical_spice_min"] <= category["typical_spice_max"] <= 3
+        1 <= category["typical_spice_min"] <= category["typical_spice_max"] <= 5
         for category in seed["menu_categories"]
     )
 
@@ -81,13 +81,17 @@ def test_same_merchant_followup_excludes_carted_and_dietary_conflicting_menus(
     profile = repository.create_profile(profile_data)
 
     menus = repository.list_merchant_menus(
-        "mer_001", profile, ["menu_001_01"], limit=12
+        "mer_001",
+        profile,
+        ["menu_001_01"],
+        limit=12,
+        meal_need_state=MealNeedState(max_spiciness=2),
     )
 
     assert menus
     assert all(menu.merchant_id == "mer_001" for menu in menus)
     assert all(menu.menu_id != "menu_001_01" for menu in menus)
-    assert all(menu.spice_level <= profile.spice_tolerance for menu in menus)
+    assert all(menu.spice_level <= 2 for menu in menus)
     assert any(menu.menu_id == "menu_001_10" for menu in menus)
 
 
@@ -99,7 +103,7 @@ def test_same_merchant_followup_respects_explicit_spice_revision(
     )
 
     menus = repository.list_merchant_menus(
-        "mer_002",
+        "mer_001",
         profile,
         [],
         limit=12,
@@ -111,22 +115,15 @@ def test_same_merchant_followup_respects_explicit_spice_revision(
     assert all(menu.spice_level <= 3 for menu in menus)
 
 
-def test_same_merchant_followup_preserves_shellfish_risk_evidence(
+def test_catalog_lookup_preserves_legacy_shellfish_risk_evidence(
     repository: SQLiteYobiRepository,
 ) -> None:
     profile = repository.create_profile(
         ProfileCreate(consent_demo_data=True, spice_tolerance=3, dietary_rules=[])
     )
 
-    menus = repository.list_merchant_menus(
-        "mer_002",
-        profile,
-        [],
-        limit=12,
-        meal_need_state=MealNeedState(max_spiciness=3),
-    )
-
-    risky = next(menu for menu in menus if menu.menu_id == "menu_002_01")
+    risky = repository.get_menu("menu_002_01", profile)
+    assert risky is not None
     assert risky.evidence_status is EvidenceStatus.RISK_SIGNAL
 
 

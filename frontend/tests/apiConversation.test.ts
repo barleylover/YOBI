@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../src/lib/api";
-import type { ConversationEventResult, MealNeedState } from "../src/types";
+import { emptyCriteria } from "../src/stores/session";
+import type { ConversationEventResult, MealNeedState, PreferenceCatalog } from "../src/types";
 
 const state: MealNeedState = {
   schema_version: 1,
@@ -67,23 +68,76 @@ describe("versioned mutation API", () => {
     );
   });
 
-  it("sends a client-stable request id with a chat message", async () => {
-    const response = { message_id: "msg_1" };
+  it("revalidates the preference catalog with its ETag", async () => {
+    const catalog: PreferenceCatalog = {
+      schema_version: "2",
+      catalog_version: "catalog-v2",
+      knowledge_release_id: "knowledge-v2",
+      locale: "en",
+      categories: [],
+      spice_references: [],
+    };
     const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: vi.fn().mockResolvedValue(response),
+      ok: false,
+      status: 304,
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await api.sendMessage("session_1", "hello", "chat-request-0001");
+    await expect(api.getPreferenceCatalog("en", { etag: '"catalog-v2"', catalog }))
+      .resolves.toEqual({ catalog, etag: '"catalog-v2"', notModified: true });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/sessions/session_1/messages",
+      "/api/v1/recommendation/preferences/catalog?locale=en",
       expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ content: "hello", request_id: "chat-request-0001" }),
+        headers: { "If-None-Match": '"catalog-v2"' },
       }),
+    );
+  });
+
+  it("commits catalog-bound criteria and creates a versioned recommendation request", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: vi.fn().mockResolvedValue({ criteria_version: 2, state_version: 3 }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: vi.fn().mockResolvedValue({ request_id: "recommendation-1", status: "PENDING" }) });
+    vi.stubGlobal("fetch", fetchMock);
+    const criteria = { ...emptyCriteria(), cuisine_origins: ["KOREAN"] };
+
+    await api.putRecommendationCriteria("session_1", criteria, 2, "catalog-v2", "criteria-request-1");
+    await api.createRecommendation("session_1", {
+      request_id: "recommendation-1",
+      expected_state_version: 3,
+      criteria_version: 2,
+      mode: "INITIAL",
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1,
+      "/api/v1/sessions/session_1/recommendation-criteria",
+      expect.objectContaining({ body: JSON.stringify({
+        criteria,
+        expected_state_version: 2,
+        catalog_version: "catalog-v2",
+        request_id: "criteria-request-1",
+      }) }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(2,
+      "/api/v1/sessions/session_1/recommendations",
+      expect.objectContaining({ body: JSON.stringify({
+        request_id: "recommendation-1",
+        expected_state_version: 3,
+        criteria_version: 2,
+        mode: "INITIAL",
+      }) }),
+    );
+  });
+
+  it("polls a recommendation request with GET instead of redispatching it", async () => {
+    const response = { request_id: "recommendation-1", status: "PENDING" };
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: vi.fn().mockResolvedValue(response) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.getRecommendationRequest("session_1", "recommendation-1")).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/sessions/session_1/recommendation-requests/recommendation-1",
+      expect.objectContaining({ headers: expect.any(Object) }),
     );
   });
 

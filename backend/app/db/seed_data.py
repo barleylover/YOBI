@@ -14,14 +14,30 @@ UPDATED_AT = "2026-08-11"
 
 def _spice_level(name_en: str, searchable_text: str) -> int:
     lowered = f"{name_en} {searchable_text}".casefold()
-    if any(marker in lowered for marker in ("white jjamppong", "rose", "gungjung", "mild")):
+    name = name_en.casefold()
+    if any(marker in name for marker in ("white jjamppong", "gungjung")):
         return 1
+    if any(marker in name for marker in ("mala", "spicy seafood", "spicy tangsuyuk")):
+        return 5
+    if any(
+        marker in name
+        for marker in ("spicy", "tteokbokki", "jjamppong")
+    ):
+        return 4
     if any(
         marker in lowered
-        for marker in ("spicy", "tteokbokki", "jjamppong", "kimchi stew", "kimchi-jjigae", "sundubu")
+        for marker in (
+            "bibim",
+            "seasoned fried chicken",
+            "gochujang",
+            "kimchi stew",
+            "kimchi-jjigae",
+            "sundubu",
+            "kimchi gukbap",
+        )
     ):
         return 3
-    if any(marker in lowered for marker in ("bibim", "seasoned fried chicken", "gochujang")):
+    if any(marker in lowered for marker in ("rose", "pepper", "light heat", "gently spicy")):
         return 2
     return 1
 
@@ -330,7 +346,7 @@ def _canonical_menu(merchant_index: int, menu_index: int) -> dict[str, Any] | No
             "description": "Chewy rice cakes in a bold sweet-spicy sauce.",
             "cultural_description": "A famously bold delivery tteokbokki with chewy rice cakes.",
             "price": 14000,
-            "spice_level": 3,
+            "spice_level": 5,
             "dietary_tags": [
                 "preset_weekly_rank",
                 "shareable",
@@ -430,7 +446,7 @@ def _canonical_menu(merchant_index: int, menu_index: int) -> dict[str, Any] | No
                 "Korean street comfort food."
             ),
             "price": 9900,
-            "spice_level": 3,
+            "spice_level": 4,
             "dietary_tags": ["street_food", "fish_cake_default"],
             "allergen_tags": ["shellfish_risk", "fish"],
             "evidence_status": "RISK_SIGNAL",
@@ -883,7 +899,7 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
             "description": description,
             "tags_json": json.dumps([_code(name_en)]),
             "typical_spice_min": max(1, spice - 1),
-            "typical_spice_max": min(3, spice + 1),
+            "typical_spice_max": min(5, spice + 1),
         }
         for name_en, name_ko, spice, description in CATEGORIES
     ]
@@ -977,6 +993,10 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
             for menu_id in ("menu_001_01", "menu_001_10")
         ]
     )
+    available_allergen_ids = set(allergens_by_id)
+    menu_allergens = [
+        row for row in menu_allergens if str(row["allergen_id"]) in available_allergen_ids
+    ]
     menu_allergen_keys = {(row["menu_id"], row["allergen_id"]) for row in menu_allergens}
     evidence_by_id = {str(row["evidence_id"]): row for row in evidence}
     explicit_absence_menu_ids = {
@@ -987,16 +1007,20 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
         "menu_002_01",
         "menu_003_01",
     }
-    supported_allergens = (
-        "shellfish_risk",
-        "fish",
-        "milk",
-        "egg",
-        "peanut",
-        "tree_nut",
-        "wheat",
-        "soy",
-        "sesame",
+    supported_allergens = tuple(
+        code
+        for code in (
+            "shellfish_risk",
+            "fish",
+            "milk",
+            "egg",
+            "peanut",
+            "tree_nut",
+            "wheat",
+            "soy",
+            "sesame",
+        )
+        if f"allergen_{code}" in available_allergen_ids
     )
     merchant_by_id = {str(row["merchant_id"]): row for row in merchants}
     menu_by_id = {str(row["menu_id"]): row for row in menus}

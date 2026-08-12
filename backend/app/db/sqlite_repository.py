@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from collections import defaultdict
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 from app.db.message_ordering import order_conversation_messages
@@ -29,7 +30,9 @@ from app.domain.knowledge import (
     ClaimStatus,
     GroundedMenuKnowledge,
     GroundedPassage,
+    IngredientRole,
     KnowledgeSourceKind,
+    SourceScope,
 )
 from app.domain.models import (
     AddressCandidate,
@@ -54,10 +57,31 @@ from app.domain.models import (
     ProfileUpdate,
     Session,
 )
+from app.domain.preference_catalog import (
+    PREFERENCE_CATALOG_VERSION,
+    PREFERENCE_CATEGORIES,
+    localized_preference_catalog,
+    localized_spice_references,
+    preference_query_aliases,
+)
 from app.domain.recommendation import (
     operational_menu_signal,
     rerank_menu_candidates,
     wiki_operational_retrieval_score,
+)
+from app.domain.structured_recommendation import (
+    CriterionEvidence,
+    EvidencePoolItem,
+    EvidenceReference,
+    LiveRecommendationMenuState,
+    RecommendationCriteriaCommit,
+    RecommendationCriteriaRecord,
+    RecommendationCriteriaV2,
+    RecommendationMode,
+    RecommendationReleaseFamily,
+    RecommendationRequestInput,
+    RecommendationRequestRecord,
+    RecommendationRequestStatus,
 )
 from app.knowledge.catalog_seed import (
     KNOWLEDGE_CATALOG_VERSION,
@@ -65,6 +89,7 @@ from app.knowledge.catalog_seed import (
     build_knowledge_catalog_seed,
 )
 from app.knowledge.resolver import (
+    VEGAN_INGREDIENTS,
     allergen_constraint_conflicts,
     category_constraint_conflicts,
     confirmed_allergen_absence_signals,
@@ -79,9 +104,13 @@ from app.knowledge.resolver import (
 )
 from app.knowledge.sqlite_store import load_sqlite_release
 from app.rag.embeddings import (
+    FALLBACK_RECOMMENDATION_QUERY_ALIASES,
+    HybridChunkCandidate,
+    apply_soft_profile_retrieval_signal,
     cosine_similarity,
     deterministic_embedding,
     hybrid_knowledge_chunk_score,
+    rank_hybrid_chunks_rrf,
 )
 from app.rag.providers import DeterministicEmbeddingProvider
 
@@ -93,7 +122,7 @@ RECOMMENDATION_CANDIDATE_CAP = 600
 RECOMMENDATION_PASSAGE_LIMIT = 3
 EXPECTED_MAPPED_MENUS = 600
 EXPECTED_ORIGIN_DECLARATIONS = 13
-EXPECTED_MERCHANT_INGREDIENTS = 119
+EXPECTED_MERCHANT_INGREDIENTS = 120
 EXPECTED_OPTION_EFFECTS = 4
 EXPECTED_RUNTIME_COUNTS = {
     "service_area": 3,
@@ -106,14 +135,19 @@ EXPECTED_RUNTIME_COUNTS = {
     "review_snippet": 2400,
     "evidence": 1200,
     "address_place": 20,
-    "ingredient": 54,
+    "ingredient": 48,
     "menu_ingredient": 565,
-    "allergen": 10,
-    "menu_allergen": 595,
-    "dietary_attribute": 20,
+    "allergen": 8,
+    "menu_allergen": 48,
+    "dietary_attribute": 15,
     "menu_dietary_attribute": 1217,
     "option_dietary_conflict": 1,
 }
+
+SPICE_REFERENCE_VERSION = f"{PREFERENCE_CATALOG_VERSION}-spice"
+CERTIFICATION_RELEASE_ID = "synthetic-halal-certifications-v1"
+RECOMMENDATION_RELEASE_FAMILY_PREFIX = "structured-rag-v1"
+REVIEWED_CUISINE_ORIGIN_CODES = frozenset({"KOREAN", "CHINESE"})
 
 
 def _now() -> str:
@@ -131,6 +165,7 @@ def _cart_fingerprint(cart_id: str, cart_version: int, total: int) -> str:
 class SQLiteYobiRepository:
     def __init__(self, path: Path) -> None:
         self.path = path
+        self.embedding_provider = DeterministicEmbeddingProvider()
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
@@ -149,6 +184,10 @@ class SQLiteYobiRepository:
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connection() as connection:
+            connection.executescript(SCHEMA_SQL)
+            self._upgrade_spice_constraints(connection)
+            # Recreate indexes dropped by a legacy table rebuild and pick up any
+            # additive v2 tables on an existing SQLite database.
             connection.executescript(SCHEMA_SQL)
             merchant_columns = {
                 row["name"] for row in connection.execute("PRAGMA table_info(merchant)").fetchall()
@@ -213,12 +252,35 @@ class SQLiteYobiRepository:
             ):
                 if column not in session_columns:
                     connection.execute(f"ALTER TABLE chat_session ADD COLUMN {column} {definition}")
+            snapshot_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(recommendation_snapshot)"
+                ).fetchall()
+            }
+            for column, definition in (
+                ("structured_request_id", "TEXT"),
+                ("criteria_version", "INTEGER"),
+                ("criteria_json", "TEXT"),
+                ("criteria_hash", "TEXT"),
+                ("recommendation_release_family_id", "TEXT"),
+                ("evidence_pool_json", "TEXT NOT NULL DEFAULT '[]'"),
+                ("generation_status", "TEXT"),
+                ("generation_call_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("grounding_validation_json", "TEXT"),
+            ):
+                if column not in snapshot_columns:
+                    connection.execute(
+                        f"ALTER TABLE recommendation_snapshot ADD COLUMN {column} {definition}"
+                    )
             existing = connection.execute("SELECT COUNT(*) FROM merchant").fetchone()[0]
             seed = build_seed()
             if existing:
                 self._backfill_normalized_catalog(connection, seed)
                 self._prune_stale_catalog_dimensions(connection, seed)
                 self._load_knowledge_catalog(connection, seed)
+                self._ensure_structured_recommendation_data(connection)
+                self._upgrade_structured_request_pin(connection)
                 return
             self._insert_rows(connection, "service_area", seed["service_areas"])
             self._insert_rows(connection, "menu_category", seed["menu_categories"])
@@ -240,6 +302,360 @@ class SQLiteYobiRepository:
             )
             self._insert_rows(connection, "address_place", seed["hotels"])
             self._load_knowledge_catalog(connection, seed)
+            self._ensure_structured_recommendation_data(connection)
+            self._upgrade_structured_request_pin(connection)
+
+    @staticmethod
+    def _upgrade_spice_constraints(connection: sqlite3.Connection) -> None:
+        """Rebuild only legacy 1..3 tables so reviewed v2 values up to 5 can be stored."""
+
+        rebuilds = {
+            "menu": ("spice_level BETWEEN 1 AND 3", "spice_level BETWEEN 1 AND 5"),
+        }
+        schemas = {
+            table: connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ).fetchone()
+            for table in rebuilds
+        }
+        if not any(row and rebuilds[table][0] in str(row[0]) for table, row in schemas.items()):
+            return
+
+        connection.commit()
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("PRAGMA legacy_alter_table = ON")
+        try:
+            for table, (old_check, new_check) in rebuilds.items():
+                schema_row = schemas[table]
+                if schema_row is None or old_check not in str(schema_row[0]):
+                    continue
+                old_table = f"{table}_legacy_spice_3"
+                create_sql = str(schema_row[0]).replace(old_check, new_check)
+                connection.execute(f"ALTER TABLE {table} RENAME TO {old_table}")
+                connection.execute(create_sql)
+                columns = [
+                    str(row["name"])
+                    for row in connection.execute(f"PRAGMA table_info({old_table})").fetchall()
+                ]
+                column_list = ",".join(columns)
+                connection.execute(
+                    f"INSERT INTO {table} ({column_list}) SELECT {column_list} FROM {old_table}"
+                )
+                connection.execute(f"DROP TABLE {old_table}")
+            connection.commit()
+        finally:
+            connection.execute("PRAGMA legacy_alter_table = OFF")
+            connection.execute("PRAGMA foreign_keys = ON")
+        violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError("SQLITE_SPICE_UPGRADE_FOREIGN_KEY_VIOLATION")
+
+    @staticmethod
+    def _upgrade_structured_request_pin(connection: sqlite3.Connection) -> None:
+        columns = {
+            str(row["name"])
+            for row in connection.execute(
+                "PRAGMA table_info(structured_recommendation_request)"
+            ).fetchall()
+        }
+        for column, definition in (
+            ("recommendation_release_family_id", "TEXT"),
+            ("eligibility_as_of", "TEXT"),
+        ):
+            if column not in columns:
+                connection.execute(
+                    f"ALTER TABLE structured_recommendation_request "
+                    f"ADD COLUMN {column} {definition}"
+                )
+        active = connection.execute(
+            """
+            SELECT active_release_family_id FROM recommendation_runtime_state
+            WHERE state_key='ACTIVE'
+            """
+        ).fetchone()
+        if active is None:
+            return
+        connection.execute(
+            """
+            UPDATE structured_recommendation_request
+            SET recommendation_release_family_id=COALESCE(
+                  recommendation_release_family_id,?
+                ),
+                eligibility_as_of=COALESCE(eligibility_as_of,created_at)
+            WHERE recommendation_release_family_id IS NULL OR eligibility_as_of IS NULL
+            """,
+            (str(active["active_release_family_id"]),),
+        )
+
+    @classmethod
+    def _ensure_structured_recommendation_data(cls, connection: sqlite3.Connection) -> None:
+        active = connection.execute(
+            """
+            SELECT release.release_id,release.embedding_model,release.embedding_version
+            FROM knowledge_runtime_state state
+            JOIN knowledge_release release ON release.release_id=state.active_release_id
+            WHERE state.state_key='ACTIVE' AND release.status='READY'
+            """
+        ).fetchone()
+        if active is None:
+            return
+        knowledge_release_id = str(active["release_id"])
+        family_seed = (
+            f"{RECOMMENDATION_RELEASE_FAMILY_PREFIX}:"
+            f"{hashlib.sha256(knowledge_release_id.encode()).hexdigest()[:16]}"
+        )
+        now = _now()
+        connection.execute(
+            """
+            INSERT INTO recommendation_release_family(
+              release_family_id,knowledge_release_id,catalog_release_id,
+              preference_catalog_version,spice_reference_version,
+              certification_release_id,embedding_model,embedding_version,status,activated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(release_family_id) DO UPDATE SET
+              status='ACTIVE',activated_at=excluded.activated_at
+            """,
+            (
+                family_seed,
+                knowledge_release_id,
+                CATALOG_VERSION,
+                PREFERENCE_CATALOG_VERSION,
+                SPICE_REFERENCE_VERSION,
+                CERTIFICATION_RELEASE_ID,
+                str(active["embedding_model"]),
+                str(active["embedding_version"]),
+                "ACTIVE",
+                now,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO recommendation_runtime_state(state_key,active_release_family_id,updated_at)
+            VALUES ('ACTIVE',?,?)
+            ON CONFLICT(state_key) DO UPDATE SET
+              active_release_family_id=excluded.active_release_family_id,
+              updated_at=excluded.updated_at
+            """,
+            (family_seed, now),
+        )
+
+        supported_preference_codes = cls._supported_preference_codes(connection)
+        preference_rows: list[tuple[Any, ...]] = []
+        for category in PREFERENCE_CATEGORIES:
+            for display_order, option in enumerate(category.options):
+                preference_rows.append(
+                    (
+                        PREFERENCE_CATALOG_VERSION,
+                        category.code,
+                        option.code,
+                        option.labels["ko"],
+                        option.labels["en"],
+                        json.dumps(option.query_aliases, ensure_ascii=False),
+                        display_order,
+                        int(option.code in supported_preference_codes),
+                    )
+                )
+        connection.executemany(
+            """
+            INSERT INTO recommendation_preference_option(
+              catalog_version,category_code,option_code,label_ko,label_en,
+              query_aliases_json,display_order,active
+            ) VALUES (?,?,?,?,?,?,?,?)
+            ON CONFLICT(catalog_version,category_code,option_code) DO UPDATE SET
+              label_ko=excluded.label_ko,label_en=excluded.label_en,
+              query_aliases_json=excluded.query_aliases_json,
+              display_order=excluded.display_order,active=excluded.active
+            """,
+            preference_rows,
+        )
+        ko_spice = {str(item["country"]): item for item in localized_spice_references("ko")}
+        en_spice = {str(item["country"]): item for item in localized_spice_references("en")}
+        spice_rows: list[tuple[Any, ...]] = []
+        for country in ("KR", "US"):
+            ko_levels = {
+                int(str(item["level"])): item
+                for item in cast(list[dict[str, object]], ko_spice[country]["levels"])
+            }
+            en_levels = {
+                int(str(item["level"])): item
+                for item in cast(list[dict[str, object]], en_spice[country]["levels"])
+            }
+            for level in range(1, 6):
+                spice_rows.append(
+                    (
+                        SPICE_REFERENCE_VERSION,
+                        country,
+                        level,
+                        str(ko_levels[level]["label"]),
+                        str(en_levels[level]["label"]),
+                        str(ko_levels[level]["example"]),
+                        str(en_levels[level]["example"]),
+                    )
+                )
+        connection.executemany(
+            """
+            INSERT INTO spice_reference(
+              reference_version,country_code,spice_level,label_ko,label_en,example_ko,example_en
+            ) VALUES (?,?,?,?,?,?,?)
+            ON CONFLICT(reference_version,country_code,spice_level) DO UPDATE SET
+              label_ko=excluded.label_ko,label_en=excluded.label_en,
+              example_ko=excluded.example_ko,example_en=excluded.example_en
+            """,
+            spice_rows,
+        )
+
+        merchant_ids = [
+            str(row["merchant_id"])
+            for row in connection.execute(
+                "SELECT merchant_id FROM merchant ORDER BY merchant_id LIMIT 18"
+            ).fetchall()
+        ]
+        connection.executemany(
+            """
+            INSERT INTO merchant_certification(
+              certification_id,certification_release_id,merchant_id,certification_type,status,
+              issuer,certificate_number,valid_from,valid_to,scope_type,scope_ref,
+              source_type,source_ref,last_verified_at,is_synthetic
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(certification_id) DO UPDATE SET
+              status=excluded.status,valid_from=excluded.valid_from,valid_to=excluded.valid_to,
+              last_verified_at=excluded.last_verified_at
+            """,
+            [
+                (
+                    f"cert_demo_halal_{merchant_id}",
+                    CERTIFICATION_RELEASE_ID,
+                    merchant_id,
+                    "HALAL",
+                    "ACTIVE",
+                    "YOBI demo certification fixture",
+                    f"DEMO-{merchant_id.upper()}",
+                    "2026-01-01T00:00:00+00:00",
+                    "2099-12-31T23:59:59+00:00",
+                    "MERCHANT",
+                    None,
+                    "DEMO_SEED",
+                    f"synthetic-assumption:{merchant_id}",
+                    now,
+                    1,
+                )
+                for merchant_id in merchant_ids
+            ],
+        )
+
+    @staticmethod
+    def _preference_alias_matches(text: str, aliases: tuple[str, ...]) -> bool:
+        ignored = {
+            "and",
+            "cuisine",
+            "dish",
+            "flavor",
+            "food",
+            "method",
+            "or",
+            "served",
+            "temperature",
+            "the",
+            "to",
+            "with",
+            "won",
+        }
+        for alias in aliases:
+            words = [
+                word
+                for word in re.sub(r"[^a-z0-9가-힣]+", " ", alias.lower()).split()
+                if word not in ignored
+                and (len(word) >= 3 or any("가" <= character <= "힣" for character in word))
+            ]
+            if not words:
+                continue
+            required_matches = 1 if len(words) == 1 else 2
+            if sum(word in text for word in words) >= required_matches:
+                return True
+        return False
+
+    @classmethod
+    def _preference_support_metrics(
+        cls,
+        connection: sqlite3.Connection,
+    ) -> dict[str, tuple[int, int, int]]:
+        rows = connection.execute(
+            """
+            SELECT menu.menu_id,menu.merchant_id,menu.price,
+                   lower(
+                     menu.semantic_text || ' ' || menu.category || ' ' || menu.name_en || ' ' ||
+                     group_concat(chunk.content,' ')
+                   ) AS support_text,
+                   group_concat(DISTINCT document.document_id) AS document_ids
+            FROM menu
+            JOIN menu_concept_map mapping ON mapping.menu_id=menu.menu_id
+            JOIN dish_concept_closure closure
+              ON closure.release_id=mapping.release_id
+             AND closure.descendant_concept_id=mapping.concept_id
+             AND closure.inherit_claims=1
+            JOIN knowledge_chunk chunk
+              ON chunk.release_id=closure.release_id
+             AND chunk.concept_id=closure.ancestor_concept_id
+            JOIN knowledge_document document
+              ON document.release_id=chunk.release_id
+             AND document.document_id=chunk.document_id
+            JOIN knowledge_runtime_state state
+              ON state.state_key='ACTIVE' AND state.active_release_id=mapping.release_id
+            WHERE menu.availability='AVAILABLE' AND mapping.mapping_status='MAPPED'
+              AND document.review_status IN ('REVIEWED_DEMO','VERIFIED')
+              AND (
+                json_extract(chunk.metadata_json,'$.recommendation_visibility')='PUBLIC_RAG'
+                OR (
+                  json_extract(chunk.metadata_json,'$.recommendation_visibility') IS NULL
+                  AND lower(chunk.facet)<>'safety'
+                )
+              )
+            GROUP BY menu.menu_id,menu.merchant_id,menu.price
+            """
+        ).fetchall()
+        metrics: dict[str, tuple[int, int, int]] = {}
+        for category in PREFERENCE_CATEGORIES:
+            for option in category.options:
+                matched = []
+                for row in rows:
+                    if category.code == "price_bands":
+                        is_match = cls._price_matches_v2(
+                            int(row["price"]),
+                            [option.code],
+                        )
+                    else:
+                        is_match = cls._preference_alias_matches(
+                            str(row["support_text"] or ""),
+                            preference_query_aliases(option.code, "en"),
+                        )
+                    if is_match:
+                        matched.append(row)
+                document_ids = {
+                    document_id
+                    for row in matched
+                    for document_id in str(row["document_ids"] or "").split(",")
+                    if document_id
+                }
+                metrics[option.code] = (
+                    len({str(row["menu_id"]) for row in matched}),
+                    len({str(row["merchant_id"]) for row in matched}),
+                    len(document_ids),
+                )
+        return metrics
+
+    @classmethod
+    def _supported_preference_codes(cls, connection: sqlite3.Connection) -> frozenset[str]:
+        metrics = cls._preference_support_metrics(connection)
+        supported = {
+            option.code
+            for category in PREFERENCE_CATEGORIES
+            for option in category.options
+            if metrics.get(option.code, (0, 0, 0))[0] >= 3
+            and metrics.get(option.code, (0, 0, 0))[1] >= 2
+            and metrics.get(option.code, (0, 0, 0))[2] >= 1
+            and (category.code != "cuisine_origins" or option.code in REVIEWED_CUISINE_ORIGIN_CODES)
+        }
+        return frozenset(supported)
 
     @classmethod
     def _load_knowledge_catalog(
@@ -364,17 +780,11 @@ class SQLiteYobiRepository:
         menu_ids: list[str],
         rows: list[dict[str, Any]],
     ) -> None:
-        allowed = sorted(
-            {
-                (str(row["option_item_id"]), str(row["rule_code"]))
-                for row in rows
-            }
-        )
+        allowed = sorted({(str(row["option_item_id"]), str(row["rule_code"])) for row in rows})
         allowed_clause = (
             " AND NOT ("
             + " OR ".join(
-                "(option_dietary_conflict.option_item_id=? "
-                "AND option_dietary_conflict.rule_code=?)"
+                "(option_dietary_conflict.option_item_id=? AND option_dietary_conflict.rule_code=?)"
                 for _ in allowed
             )
             + ")"
@@ -382,8 +792,7 @@ class SQLiteYobiRepository:
             else ""
         )
         parameters = [
-            (menu_id, *(value for pair in allowed for value in pair))
-            for menu_id in menu_ids
+            (menu_id, *(value for pair in allowed for value in pair)) for menu_id in menu_ids
         ]
         connection.executemany(
             """
@@ -436,8 +845,7 @@ class SQLiteYobiRepository:
                 "allergen_id",
                 "allergens",
                 (
-                    "SELECT 1 FROM menu_allergen fact "
-                    "WHERE fact.allergen_id=allergen.allergen_id",
+                    "SELECT 1 FROM menu_allergen fact WHERE fact.allergen_id=allergen.allergen_id",
                     "SELECT 1 FROM concept_claim claim "
                     "WHERE claim.allergen_id=allergen.allergen_id",
                 ),
@@ -456,12 +864,9 @@ class SQLiteYobiRepository:
         ):
             allowed_ids = [str(row[id_column]) for row in seed[seed_key]]
             placeholders = ",".join("?" for _ in allowed_ids)
-            reference_guards = "".join(
-                f" AND NOT EXISTS ({reference})" for reference in references
-            )
+            reference_guards = "".join(f" AND NOT EXISTS ({reference})" for reference in references)
             connection.execute(
-                f"DELETE FROM {table} "
-                f"WHERE {id_column} NOT IN ({placeholders}){reference_guards}",
+                f"DELETE FROM {table} WHERE {id_column} NOT IN ({placeholders}){reference_guards}",
                 allowed_ids,
             )
 
@@ -702,7 +1107,10 @@ class SQLiteYobiRepository:
             rows = connection.execute(
                 """
                 SELECT message_id, role, content, message_type, safe_metadata_json, created_at
-                FROM chat_message WHERE session_id = ? ORDER BY created_at, message_id
+                FROM chat_message
+                WHERE session_id = ?
+                  AND message_type <> 'structured_recommendation_audit'
+                ORDER BY created_at, message_id
                 """,
                 (session_id,),
             ).fetchall()
@@ -787,10 +1195,14 @@ class SQLiteYobiRepository:
             )
             if cursor.rowcount != 1:
                 raise RuntimeError("CHAT_STATE_VERSION_CONFLICT")
-            user_metadata = {
-                "client_request_id": request_id,
-                "intent": intent,
-            } if request_id else {}
+            user_metadata = (
+                {
+                    "client_request_id": request_id,
+                    "intent": intent,
+                }
+                if request_id
+                else {}
+            )
             connection.execute(
                 """
                 INSERT INTO chat_message(
@@ -909,6 +1321,1486 @@ class SQLiteYobiRepository:
         )
 
     @staticmethod
+    def _criteria_record_from_row(row: sqlite3.Row) -> RecommendationCriteriaRecord:
+        return RecommendationCriteriaRecord(
+            session_id=str(row["session_id"]),
+            criteria=RecommendationCriteriaV2.model_validate_json(str(row["criteria_json"])),
+            criteria_version=int(row["criteria_version"]),
+            state_version=int(row["state_version"]),
+            criteria_hash=str(row["criteria_hash"]),
+            request_id=str(row["request_id"]),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+        )
+
+    @staticmethod
+    def _request_record_from_row(
+        row: sqlite3.Row,
+        *,
+        duplicate: bool = False,
+    ) -> RecommendationRequestRecord:
+        return RecommendationRequestRecord(
+            request_id=str(row["request_id"]),
+            session_id=str(row["session_id"]),
+            request_hash=str(row["request_hash"]),
+            criteria_version=int(row["criteria_version"]),
+            mode=RecommendationMode(str(row["mode"])),
+            status=RecommendationRequestStatus(str(row["status"])),
+            state_version=int(row["state_version"]),
+            release_family_id=str(row["recommendation_release_family_id"]),
+            eligibility_as_of=datetime.fromisoformat(str(row["eligibility_as_of"])),
+            snapshot_id=str(row["snapshot_id"]) if row["snapshot_id"] else None,
+            evidence_pool_json=json.loads(str(row["evidence_pool_json"] or "[]")),
+            result_json=(
+                json.loads(str(row["result_json"])) if row["result_json"] is not None else None
+            ),
+            dispatch_count=int(row["dispatch_count"]),
+            failure_code=str(row["failure_code"]) if row["failure_code"] else None,
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+            dispatched_at=(
+                datetime.fromisoformat(str(row["dispatched_at"])) if row["dispatched_at"] else None
+            ),
+            completed_at=(
+                datetime.fromisoformat(str(row["completed_at"])) if row["completed_at"] else None
+            ),
+            duplicate=duplicate,
+        )
+
+    def save_recommendation_criteria(
+        self,
+        session_id: str,
+        commit: RecommendationCriteriaCommit,
+    ) -> RecommendationCriteriaRecord:
+        canonical = json.dumps(
+            {
+                "catalog_version": commit.catalog_version,
+                "criteria": commit.criteria.model_dump(mode="json"),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        criteria_hash = hashlib.sha256(canonical.encode()).hexdigest()
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT * FROM session_recommendation_criteria
+                WHERE session_id=? AND request_id=?
+                """,
+                (session_id, commit.request_id),
+            ).fetchone()
+            if existing is not None:
+                if str(existing["criteria_hash"]) != criteria_hash:
+                    raise ValueError("CRITERIA_REQUEST_ID_REUSED")
+                return self._criteria_record_from_row(existing)
+
+            active = connection.execute(
+                """
+                SELECT family.preference_catalog_version
+                FROM recommendation_runtime_state state
+                JOIN recommendation_release_family family
+                  ON family.release_family_id=state.active_release_family_id
+                WHERE state.state_key='ACTIVE' AND family.status='ACTIVE'
+                """
+            ).fetchone()
+            if active is None:
+                raise RuntimeError("RECOMMENDATION_RELEASE_NOT_READY")
+            if str(active["preference_catalog_version"]) != commit.catalog_version:
+                raise ValueError("PREFERENCE_CATALOG_CHANGED")
+            selected_codes = {
+                value
+                for category in (
+                    "cuisine_origins",
+                    "flavors",
+                    "main_ingredients",
+                    "food_forms",
+                    "temperatures",
+                    "price_bands",
+                    "textures",
+                    "cooking_methods",
+                )
+                for value in getattr(commit.criteria, category)
+            }
+            available_codes = {
+                str(row["option_code"])
+                for row in connection.execute(
+                    """
+                    SELECT option_code FROM recommendation_preference_option
+                    WHERE catalog_version=? AND active=1
+                    """,
+                    (commit.catalog_version,),
+                ).fetchall()
+            }
+            unknown_codes = sorted(selected_codes - available_codes)
+            if unknown_codes:
+                raise ValueError(f"UNSUPPORTED_PREFERENCE_CODE:{unknown_codes[0]}")
+
+            session = connection.execute(
+                "SELECT state_version FROM chat_session WHERE session_id=?",
+                (session_id,),
+            ).fetchone()
+            if session is None:
+                raise KeyError("SESSION_NOT_FOUND")
+            current_state_version = int(session["state_version"])
+            if current_state_version != commit.expected_state_version:
+                raise RuntimeError("CHAT_STATE_VERSION_CONFLICT")
+            version_row = connection.execute(
+                """
+                SELECT COALESCE(MAX(criteria_version),0)+1 AS next_version
+                FROM session_recommendation_criteria WHERE session_id=?
+                """,
+                (session_id,),
+            ).fetchone()
+            criteria_version = int(version_row["next_version"])
+            next_state_version = current_state_version + 1
+            updated = connection.execute(
+                """
+                UPDATE chat_session SET state_version=?,updated_at=?
+                WHERE session_id=? AND state_version=?
+                """,
+                (next_state_version, _now(), session_id, current_state_version),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("CHAT_STATE_VERSION_CONFLICT")
+            created_at = _now()
+            connection.execute(
+                """
+                INSERT INTO session_recommendation_criteria(
+                  session_id,criteria_version,criteria_json,criteria_hash,
+                  request_id,state_version,created_at
+                ) VALUES (?,?,?,?,?,?,?)
+                """,
+                (
+                    session_id,
+                    criteria_version,
+                    commit.criteria.model_dump_json(),
+                    criteria_hash,
+                    commit.request_id,
+                    next_state_version,
+                    created_at,
+                ),
+            )
+            row = connection.execute(
+                """
+                SELECT * FROM session_recommendation_criteria
+                WHERE session_id=? AND criteria_version=?
+                """,
+                (session_id, criteria_version),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("RECOMMENDATION_CRITERIA_WRITE_FAILED")
+            return self._criteria_record_from_row(row)
+
+    def get_recommendation_criteria(
+        self,
+        session_id: str,
+        version: int | None = None,
+    ) -> RecommendationCriteriaRecord | None:
+        with self._connection() as connection:
+            if version is None:
+                row = connection.execute(
+                    """
+                    SELECT * FROM session_recommendation_criteria
+                    WHERE session_id=? ORDER BY criteria_version DESC LIMIT 1
+                    """,
+                    (session_id,),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    """
+                    SELECT * FROM session_recommendation_criteria
+                    WHERE session_id=? AND criteria_version=?
+                    """,
+                    (session_id, version),
+                ).fetchone()
+        return self._criteria_record_from_row(row) if row else None
+
+    def reserve_recommendation_request(
+        self,
+        session_id: str,
+        data: RecommendationRequestInput,
+        request_hash: str,
+    ) -> RecommendationRequestRecord:
+        if not request_hash or len(request_hash) > 160:
+            raise ValueError("INVALID_RECOMMENDATION_REQUEST_HASH")
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT * FROM structured_recommendation_request
+                WHERE session_id=? AND request_id=?
+                """,
+                (session_id, data.request_id),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    str(existing["request_hash"]) != request_hash
+                    or int(existing["criteria_version"]) != data.criteria_version
+                    or str(existing["mode"]) != data.mode.value
+                ):
+                    raise ValueError("RECOMMENDATION_REQUEST_ID_REUSED")
+                return self._request_record_from_row(existing, duplicate=True)
+
+            session = connection.execute(
+                "SELECT state_version FROM chat_session WHERE session_id=?",
+                (session_id,),
+            ).fetchone()
+            if session is None:
+                raise KeyError("SESSION_NOT_FOUND")
+            current_state_version = int(session["state_version"])
+            if current_state_version != data.expected_state_version:
+                raise RuntimeError("CHAT_STATE_VERSION_CONFLICT")
+            criteria = connection.execute(
+                """
+                SELECT 1 FROM session_recommendation_criteria
+                WHERE session_id=? AND criteria_version=?
+                """,
+                (session_id, data.criteria_version),
+            ).fetchone()
+            if criteria is None:
+                raise ValueError("RECOMMENDATION_CRITERIA_VERSION_NOT_FOUND")
+            created_at = _now()
+            pinned_family = connection.execute(
+                """
+                SELECT family.release_family_id
+                FROM recommendation_runtime_state state
+                JOIN recommendation_release_family family
+                  ON family.release_family_id=state.active_release_family_id
+                JOIN knowledge_release release
+                  ON release.release_id=family.knowledge_release_id
+                WHERE state.state_key='ACTIVE' AND family.status='ACTIVE'
+                  AND release.status='READY'
+                """
+            ).fetchone()
+            if pinned_family is None:
+                raise RuntimeError("RECOMMENDATION_RELEASE_NOT_READY")
+            eligibility_as_of = created_at
+            connection.execute(
+                """
+                INSERT INTO structured_recommendation_request(
+                  session_id,request_id,request_hash,criteria_version,mode,status,state_version,
+                  recommendation_release_family_id,eligibility_as_of,snapshot_id,
+                  evidence_pool_json,result_json,dispatch_count,failure_code,
+                  created_at,dispatched_at,completed_at
+                ) VALUES (?,?,?,?,?,'CREATED',?,?,?,NULL,'[]',NULL,0,NULL,?,NULL,NULL)
+                """,
+                (
+                    session_id,
+                    data.request_id,
+                    request_hash,
+                    data.criteria_version,
+                    data.mode.value,
+                    current_state_version,
+                    str(pinned_family["release_family_id"]),
+                    eligibility_as_of,
+                    created_at,
+                ),
+            )
+            row = connection.execute(
+                """
+                SELECT * FROM structured_recommendation_request
+                WHERE session_id=? AND request_id=?
+                """,
+                (session_id, data.request_id),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("RECOMMENDATION_REQUEST_RESERVATION_FAILED")
+            return self._request_record_from_row(row)
+
+    def mark_recommendation_dispatched(
+        self,
+        session_id: str,
+        request_id: str,
+        evidence_pool: list[EvidencePoolItem],
+    ) -> RecommendationRequestRecord:
+        if not evidence_pool:
+            raise ValueError("EVIDENCE_POOL_EMPTY")
+        serialized = json.dumps(
+            [item.model_dump(mode="json") for item in evidence_pool],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT * FROM structured_recommendation_request
+                WHERE session_id=? AND request_id=?
+                """,
+                (session_id, request_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError("RECOMMENDATION_REQUEST_NOT_FOUND")
+            if str(row["status"]) != RecommendationRequestStatus.CREATED.value:
+                if str(row["evidence_pool_json"]) != serialized:
+                    raise ValueError("RECOMMENDATION_DISPATCH_PAYLOAD_CHANGED")
+                return self._request_record_from_row(row, duplicate=True)
+            dispatched_at = _now()
+            updated = connection.execute(
+                """
+                UPDATE structured_recommendation_request
+                SET status='DISPATCHED',evidence_pool_json=?,dispatch_count=1,dispatched_at=?
+                WHERE session_id=? AND request_id=? AND status='CREATED' AND dispatch_count=0
+                """,
+                (serialized, dispatched_at, session_id, request_id),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("RECOMMENDATION_DISPATCH_CONFLICT")
+            current = connection.execute(
+                """
+                SELECT * FROM structured_recommendation_request
+                WHERE session_id=? AND request_id=?
+                """,
+                (session_id, request_id),
+            ).fetchone()
+            if current is None:
+                raise RuntimeError("RECOMMENDATION_DISPATCH_WRITE_FAILED")
+            return self._request_record_from_row(current)
+
+    def complete_recommendation_request(
+        self,
+        session_id: str,
+        request_id: str,
+        status: RecommendationRequestStatus,
+        *,
+        result_json: dict[str, Any] | None = None,
+        snapshot: RecommendationSnapshot | None = None,
+        failure_code: str | None = None,
+    ) -> RecommendationRequestRecord:
+        terminal_statuses = {
+            RecommendationRequestStatus.COMPLETED,
+            RecommendationRequestStatus.NO_RESULTS,
+            RecommendationRequestStatus.NO_MATCH,
+            RecommendationRequestStatus.SEARCH_FALLBACK,
+            RecommendationRequestStatus.FAILED,
+            RecommendationRequestStatus.UNKNOWN_AFTER_DISPATCH,
+        }
+        if status not in terminal_statuses:
+            raise ValueError("RECOMMENDATION_STATUS_NOT_TERMINAL")
+        if snapshot is not None and snapshot.session_id != session_id:
+            raise ValueError("RECOMMENDATION_SNAPSHOT_SESSION_MISMATCH")
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT * FROM structured_recommendation_request
+                WHERE session_id=? AND request_id=?
+                """,
+                (session_id, request_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError("RECOMMENDATION_REQUEST_NOT_FOUND")
+            current_status = RecommendationRequestStatus(str(row["status"]))
+            if current_status in terminal_statuses:
+                canonicalized_snapshot_replay = snapshot is not None and (
+                    str(row["snapshot_id"] or "") == snapshot.snapshot_id
+                    or str(row["failure_code"] or "") == "LIVE_ELIGIBILITY_EMPTY"
+                )
+                if canonicalized_snapshot_replay:
+                    return self._request_record_from_row(row, duplicate=True)
+                serialized_result = (
+                    json.dumps(
+                        result_json,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    if result_json is not None
+                    else None
+                )
+                same_payload = (
+                    current_status is status
+                    and (row["result_json"] or None) == serialized_result
+                    and (row["failure_code"] or None) == failure_code
+                    and (row["snapshot_id"] or None) == (snapshot.snapshot_id if snapshot else None)
+                )
+                if not same_payload:
+                    raise ValueError("RECOMMENDATION_COMPLETION_PAYLOAD_CHANGED")
+                return self._request_record_from_row(row, duplicate=True)
+            requires_dispatch = {
+                RecommendationRequestStatus.COMPLETED,
+                RecommendationRequestStatus.NO_MATCH,
+                RecommendationRequestStatus.SEARCH_FALLBACK,
+                RecommendationRequestStatus.UNKNOWN_AFTER_DISPATCH,
+            }
+            if (
+                status in requires_dispatch
+                and current_status is not RecommendationRequestStatus.DISPATCHED
+            ):
+                raise RuntimeError("RECOMMENDATION_NOT_DISPATCHED")
+            persisted_state_version = int(row["state_version"])
+            if snapshot is not None:
+                criteria_row = connection.execute(
+                    """
+                    SELECT * FROM session_recommendation_criteria
+                    WHERE session_id=? AND criteria_version=?
+                    """,
+                    (session_id, int(row["criteria_version"])),
+                ).fetchone()
+                family_row = connection.execute(
+                    """
+                    SELECT family.release_family_id
+                    FROM recommendation_release_family family
+                    WHERE family.release_family_id=?
+                    """,
+                    (str(row["recommendation_release_family_id"]),),
+                ).fetchone()
+                if criteria_row is None or family_row is None:
+                    raise RuntimeError("RECOMMENDATION_SNAPSHOT_CONTEXT_MISSING")
+                criteria = RecommendationCriteriaV2.model_validate_json(
+                    str(criteria_row["criteria_json"])
+                )
+                requested_menu_ids = [candidate.menu_id for candidate in snapshot.result.candidates]
+                evidence_pool_menu_ids = {
+                    str(item.get("menu", {}).get("menu_id") or item.get("menu_id") or "")
+                    for item in json.loads(str(row["evidence_pool_json"] or "[]"))
+                    if isinstance(item, dict)
+                }
+                if not set(requested_menu_ids) <= evidence_pool_menu_ids:
+                    raise ValueError("SNAPSHOT_MENU_OUTSIDE_EVIDENCE_POOL")
+                eligible_rows, live_certifications, live_vegan = (
+                    self._structured_objective_candidates(
+                        connection,
+                        session_id,
+                        criteria,
+                        release_family_id=str(row["recommendation_release_family_id"]),
+                        eligibility_as_of=datetime.now(timezone.utc),
+                        menu_ids=requested_menu_ids,
+                        enforce_price_bands=False,
+                    )
+                )
+                eligible_by_id = {str(menu["menu_id"]): menu for menu in eligible_rows}
+                retained_candidates = [
+                    candidate.model_copy(update={"rank": rank})
+                    for rank, candidate in enumerate(
+                        (
+                            candidate
+                            for candidate in snapshot.result.candidates
+                            if candidate.menu_id in eligible_by_id
+                            and str(eligible_by_id[candidate.menu_id]["merchant_id"])
+                            == candidate.merchant_id
+                        ),
+                        start=1,
+                    )
+                ]
+                if not retained_candidates:
+                    snapshot = None
+                    status = RecommendationRequestStatus.NO_RESULTS
+                    failure_code = failure_code or "LIVE_ELIGIBILITY_EMPTY"
+                    if result_json is not None:
+                        result_json = {**result_json, "status": "NO_MATCH", "recommendations": []}
+                else:
+                    retained_ids = {candidate.menu_id for candidate in retained_candidates}
+                    retained_claim_ids = list(
+                        dict.fromkeys(
+                            claim_id
+                            for candidate in retained_candidates
+                            for claim_id in candidate.claim_ids
+                        )
+                    )
+                    retained_passage_ids = list(
+                        dict.fromkeys(
+                            passage_id
+                            for candidate in retained_candidates
+                            for passage_id in candidate.passage_ids
+                        )
+                    )
+                    retained_result = snapshot.result.model_copy(
+                        update={
+                            "candidates": retained_candidates,
+                            "grounded_claim_ids": retained_claim_ids,
+                            "grounded_passage_ids": retained_passage_ids,
+                        }
+                    )
+                    retained_state = snapshot.meal_need_state.model_copy(deep=True)
+                    retained_state.shown_menu_ids = [
+                        menu_id
+                        for menu_id in retained_state.shown_menu_ids
+                        if menu_id not in requested_menu_ids or menu_id in retained_ids
+                    ]
+                    refreshed_menus: dict[str, dict[str, Any]] = {}
+                    retained_recommendations: list[dict[str, Any]] = []
+                    if result_json is not None:
+                        for item in list(result_json.get("recommendations", [])):
+                            if not isinstance(item, dict):
+                                continue
+                            menu_id = str(
+                                item.get("menu_id")
+                                or cast(dict[str, Any], item.get("menu") or {}).get("menu_id")
+                                or ""
+                            )
+                            if menu_id not in retained_ids:
+                                continue
+                            menu_payload = self._live_structured_menu_payload(
+                                eligible_by_id[menu_id],
+                                cast(dict[str, Any], item.get("menu") or {}),
+                            )
+                            refreshed_menus[menu_id] = menu_payload
+                            certification = live_certifications.get(menu_id)
+                            vegan_status, vegan_warning, _ = live_vegan.get(
+                                menu_id, ("UNKNOWN", None, [])
+                            )
+                            retained_recommendations.append(
+                                {
+                                    **item,
+                                    "menu_id": menu_id,
+                                    "menu": menu_payload,
+                                    "halal_certified": bool(certification),
+                                    "halal_scope_label": (
+                                        certification[1] if certification else None
+                                    ),
+                                    "vegan_status": vegan_status,
+                                    "vegan_warning": vegan_warning,
+                                }
+                            )
+                        retained_recommendations = [
+                            {**item, "rank": rank}
+                            for rank, item in enumerate(retained_recommendations, start=1)
+                        ]
+                        result_json = {
+                            **result_json,
+                            "recommendations": retained_recommendations,
+                        }
+                    retained_cards = [
+                        {
+                            "type": "structured_recommendation",
+                            "data": {
+                                "menu": refreshed_menus.get(candidate.menu_id)
+                                or self._live_structured_menu_payload(
+                                    eligible_by_id[candidate.menu_id],
+                                    self._menu_from_cards(snapshot.cards, candidate.menu_id),
+                                )
+                            },
+                        }
+                        for candidate in retained_candidates
+                    ]
+                    snapshot = snapshot.model_copy(
+                        update={
+                            "result": retained_result,
+                            "cards": retained_cards,
+                            "meal_need_state": retained_state,
+                        }
+                    )
+
+                    session = connection.execute(
+                        "SELECT state_version FROM chat_session WHERE session_id=?",
+                        (session_id,),
+                    ).fetchone()
+                    if session is None or int(session["state_version"]) != int(
+                        row["state_version"]
+                    ):
+                        raise RuntimeError("CHAT_STATE_VERSION_CONFLICT")
+                    persisted_state_version = int(row["state_version"]) + 1
+                    updated_session = connection.execute(
+                        """
+                        UPDATE chat_session
+                        SET meal_need_state_json=?,state_version=?,updated_at=?
+                        WHERE session_id=? AND state_version=?
+                        """,
+                        (
+                            snapshot.meal_need_state.model_dump_json(),
+                            persisted_state_version,
+                            _now(),
+                            session_id,
+                            int(row["state_version"]),
+                        ),
+                    )
+                    if updated_session.rowcount != 1:
+                        raise RuntimeError("CHAT_STATE_VERSION_CONFLICT")
+                    snapshot = snapshot.model_copy(
+                        update={
+                            "assistant_message_id": (
+                                "msg_a_v2_"
+                                + hashlib.sha256(f"{session_id}:{request_id}".encode()).hexdigest()[
+                                    :40
+                                ]
+                            ),
+                            "state_version": persisted_state_version,
+                        }
+                    )
+
+            serialized_result = (
+                json.dumps(result_json, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                if result_json is not None
+                else None
+            )
+            if snapshot is not None:
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO chat_message(
+                      message_id,session_id,role,content,message_type,safe_metadata_json,created_at
+                    ) VALUES (?,?,'assistant','Structured recommendation snapshot.',
+                              'structured_recommendation_audit',?,?)
+                    """,
+                    (
+                        snapshot.assistant_message_id,
+                        session_id,
+                        json.dumps(
+                            {
+                                "request_id": request_id,
+                                "state_version": persisted_state_version,
+                                "non_user_visible": True,
+                            },
+                            separators=(",", ":"),
+                        ),
+                        snapshot.created_at.isoformat(),
+                    ),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO recommendation_snapshot(
+                      snapshot_id,session_id,assistant_message_id,state_version,
+                      meal_need_state_json,result_json,cards_json,structured_request_id,
+                      criteria_version,criteria_json,criteria_hash,
+                      recommendation_release_family_id,evidence_pool_json,
+                      generation_status,generation_call_count,grounding_validation_json,created_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        snapshot.snapshot_id,
+                        snapshot.session_id,
+                        snapshot.assistant_message_id,
+                        persisted_state_version,
+                        snapshot.meal_need_state.model_dump_json(),
+                        snapshot.result.model_dump_json(),
+                        json.dumps(snapshot.cards, ensure_ascii=False),
+                        request_id,
+                        int(row["criteria_version"]),
+                        str(criteria_row["criteria_json"]),
+                        str(criteria_row["criteria_hash"]),
+                        str(family_row["release_family_id"]),
+                        str(row["evidence_pool_json"]),
+                        status.value,
+                        int(row["dispatch_count"]),
+                        json.dumps({"validated": True}, separators=(",", ":")),
+                        snapshot.created_at.isoformat(),
+                    ),
+                )
+            completed_at = _now()
+            updated = connection.execute(
+                """
+                UPDATE structured_recommendation_request
+                SET status=?,result_json=?,snapshot_id=?,failure_code=?,completed_at=?,state_version=?
+                WHERE session_id=? AND request_id=? AND status=?
+                """,
+                (
+                    status.value,
+                    serialized_result,
+                    snapshot.snapshot_id if snapshot else None,
+                    failure_code,
+                    completed_at,
+                    persisted_state_version,
+                    session_id,
+                    request_id,
+                    current_status.value,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("RECOMMENDATION_COMPLETION_CONFLICT")
+            current = connection.execute(
+                """
+                SELECT * FROM structured_recommendation_request
+                WHERE session_id=? AND request_id=?
+                """,
+                (session_id, request_id),
+            ).fetchone()
+            if current is None:
+                raise RuntimeError("RECOMMENDATION_COMPLETION_WRITE_FAILED")
+            return self._request_record_from_row(current)
+
+    def get_recommendation_request(
+        self,
+        session_id: str,
+        request_id: str,
+    ) -> RecommendationRequestRecord | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM structured_recommendation_request
+                WHERE session_id=? AND request_id=?
+                """,
+                (session_id, request_id),
+            ).fetchone()
+        return self._request_record_from_row(row) if row else None
+
+    def get_latest_recommendation_request(
+        self,
+        session_id: str,
+        *,
+        active_only: bool = False,
+    ) -> RecommendationRequestRecord | None:
+        active_clause = "AND status IN ('CREATED','DISPATCHED')" if active_only else ""
+        with self._connection() as connection:
+            row = connection.execute(
+                f"""
+                SELECT * FROM structured_recommendation_request
+                WHERE session_id=? {active_clause}
+                ORDER BY created_at DESC,request_id DESC LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+        return self._request_record_from_row(row) if row else None
+
+    @staticmethod
+    def _price_matches_v2(price: int, selected_bands: list[str]) -> bool:
+        if not selected_bands:
+            return True
+        return any(
+            (
+                code == "UNDER_10000"
+                and price < 10_000
+                or code == "FROM_10000_TO_19999"
+                and 10_000 <= price < 20_000
+                or code == "FROM_20000_TO_29999"
+                and 20_000 <= price < 30_000
+                or code == "OVER_30000"
+                and price >= 30_000
+            )
+            for code in selected_bands
+        )
+
+    @staticmethod
+    def _valid_halal_certifications_in_connection(
+        connection: sqlite3.Connection,
+        *,
+        release_family_id: str,
+        instant: str,
+    ) -> dict[str, tuple[str, str]]:
+        rows = connection.execute(
+            """
+            SELECT certification.certification_id,certification.scope_type,
+                   certification.scope_ref,certification.merchant_id
+            FROM recommendation_release_family family
+            JOIN merchant_certification certification
+              ON certification.certification_release_id=family.certification_release_id
+            WHERE family.release_family_id=?
+              AND certification.certification_type='HALAL'
+              AND certification.status='ACTIVE'
+              AND certification.valid_from<=?
+              AND (certification.valid_to IS NULL OR certification.valid_to>?)
+            ORDER BY certification.certification_id
+            """,
+            (release_family_id, instant, instant),
+        ).fetchall()
+        result: dict[str, tuple[str, str]] = {}
+        merchant_certifications: dict[str, tuple[str, str]] = {}
+        for row in rows:
+            certification_id = str(row["certification_id"])
+            if str(row["scope_type"]) == "MERCHANT":
+                merchant_certifications[str(row["merchant_id"])] = (
+                    certification_id,
+                    "Merchant-level halal certification scope",
+                )
+                continue
+            menu_id = str(row["scope_ref"] or "")
+            if not menu_id:
+                continue
+            owner = connection.execute(
+                "SELECT merchant_id FROM menu WHERE menu_id=?",
+                (menu_id,),
+            ).fetchone()
+            if owner is not None and str(owner["merchant_id"]) == str(row["merchant_id"]):
+                result[menu_id] = (
+                    certification_id,
+                    "Menu-level halal certification scope",
+                )
+        if merchant_certifications:
+            placeholders = ",".join("?" for _ in merchant_certifications)
+            for row in connection.execute(
+                f"""
+                SELECT menu_id,merchant_id FROM menu
+                WHERE merchant_id IN ({placeholders})
+                """,
+                tuple(merchant_certifications),
+            ).fetchall():
+                menu_id = str(row["menu_id"])
+                result.setdefault(menu_id, merchant_certifications[str(row["merchant_id"])])
+        return result
+
+    @staticmethod
+    def _v2_vegan_classifications(
+        connection: sqlite3.Connection,
+        menu_ids: list[str],
+        *,
+        knowledge_release_id: str,
+    ) -> dict[str, tuple[str, str | None, list[EvidenceReference]]]:
+        unique_ids = list(dict.fromkeys(menu_ids))
+        resolved = SQLiteYobiRepository._bulk_resolved_knowledge_claims(
+            connection,
+            unique_ids,
+            release_id=knowledge_release_id,
+        )
+        dietary_signals: dict[str, list[tuple[str, str, str | None]]] = defaultdict(list)
+        if unique_ids:
+            placeholders = ",".join("?" for _ in unique_ids)
+            for row in connection.execute(
+                f"""
+                SELECT relation.menu_id,attribute.code,relation.status,relation.evidence_id
+                FROM menu_dietary_attribute relation
+                JOIN dietary_attribute attribute
+                  ON attribute.attribute_id=relation.attribute_id
+                WHERE relation.menu_id IN ({placeholders})
+                  AND lower(attribute.code) IN ('vegan_option','vegan_possible')
+                """,
+                unique_ids,
+            ).fetchall():
+                dietary_signals[str(row["menu_id"])].append(
+                    (
+                        str(row["code"]).lower(),
+                        str(row["status"]).upper(),
+                        str(row["evidence_id"]) if row["evidence_id"] else None,
+                    )
+                )
+
+        classifications: dict[str, tuple[str, str | None, list[EvidenceReference]]] = {}
+        present = {ClaimStatus.CONFIRMED_PRESENT, ClaimStatus.PRESUMED_PRESENT}
+        uncertain = {ClaimStatus.POSSIBLE, ClaimStatus.CONFLICTING}
+        for menu_id in unique_ids:
+            ingredient_claims = resolved.get(menu_id, ([], [], []))[0]
+            vegan_claims = [
+                claim for claim in ingredient_claims if claim.ingredient_id in VEGAN_INGREDIENTS
+            ]
+            confirmed_conflicts = [
+                claim
+                for claim in vegan_claims
+                if claim.status in present
+                and (
+                    claim.source_scope is SourceScope.MENU
+                    or claim.role in {IngredientRole.DEFINING, IngredientRole.CORE}
+                )
+            ]
+            possible_conflicts = [
+                claim
+                for claim in vegan_claims
+                if claim.status in uncertain
+                or (claim.status in present and claim not in confirmed_conflicts)
+            ]
+            claim_references = [
+                EvidenceReference(
+                    evidence_id=str(claim.source_id),
+                    evidence_type="ESSENTIAL_FACT",
+                    content=(
+                        f"{claim.name_en} is recorded as {claim.status.value.lower()} "
+                        f"({claim.role.value.lower()})."
+                    ),
+                )
+                for claim in [*confirmed_conflicts, *possible_conflicts]
+            ]
+            positive_signals = [
+                signal
+                for signal in dietary_signals.get(menu_id, [])
+                if signal[1] in {"PRESENT", "VERIFIED", "CONFIRMED_PRESENT"}
+            ]
+            claim_references.extend(
+                EvidenceReference(
+                    evidence_id=evidence_id or f"fact_{menu_id}_{code}",
+                    evidence_type="MENU_FACT",
+                    content=f"Catalog signal: {code.replace('_', ' ')} ({status.lower()}).",
+                )
+                for code, status, evidence_id in positive_signals
+            )
+            if confirmed_conflicts:
+                classifications[menu_id] = (
+                    "CONFLICT",
+                    "Confirmed animal-derived defining, core, or menu-level ingredients conflict with vegan selection.",
+                    claim_references,
+                )
+            elif possible_conflicts:
+                classifications[menu_id] = (
+                    "POSSIBLE_WITH_CHECKS",
+                    "Vegan suitability needs confirmation because optional or uncertain animal-derived ingredients may be used.",
+                    claim_references,
+                )
+            elif positive_signals:
+                classifications[menu_id] = (
+                    "LIKELY_FIT",
+                    "A vegan-compatible catalog signal exists; confirm the selected options before ordering.",
+                    claim_references,
+                )
+            else:
+                classifications[menu_id] = (
+                    "UNKNOWN",
+                    "Vegan suitability is not confirmed; check the ingredients and selected options before ordering.",
+                    claim_references,
+                )
+        return classifications
+
+    @classmethod
+    def _structured_objective_candidates(
+        cls,
+        connection: sqlite3.Connection,
+        session_id: str,
+        criteria: RecommendationCriteriaV2,
+        *,
+        release_family_id: str,
+        eligibility_as_of: datetime,
+        menu_ids: list[str] | None = None,
+        exclude_history: bool = False,
+        enforce_price_bands: bool = True,
+    ) -> tuple[
+        list[sqlite3.Row],
+        dict[str, tuple[str, str]],
+        dict[str, tuple[str, str | None, list[EvidenceReference]]],
+    ]:
+        family = connection.execute(
+            """
+            SELECT knowledge_release_id FROM recommendation_release_family
+            WHERE release_family_id=?
+            """,
+            (release_family_id,),
+        ).fetchone()
+        if family is None:
+            raise RuntimeError("RECOMMENDATION_RELEASE_NOT_FOUND")
+        parameters: list[Any] = [criteria.max_spice_level]
+        menu_clause = ""
+        if menu_ids is not None:
+            unique_ids = list(dict.fromkeys(menu_ids))
+            if not unique_ids:
+                return [], {}, {}
+            menu_clause = f"AND menu.menu_id IN ({','.join('?' for _ in unique_ids)})"
+            parameters.extend(unique_ids)
+        rows = connection.execute(
+            f"""
+            SELECT menu.*,merchant.name_en AS merchant_name,merchant.delivery_fee,
+                   merchant.eta_min,merchant.eta_max,merchant.service_area_id
+            FROM menu
+            JOIN merchant ON merchant.merchant_id=menu.merchant_id
+            WHERE menu.availability='AVAILABLE' AND menu.spice_level<=?
+              {menu_clause}
+            """,
+            parameters,
+        ).fetchall()
+
+        session_row = connection.execute(
+            "SELECT meal_need_state_json FROM chat_session WHERE session_id=?",
+            (session_id,),
+        ).fetchone()
+        if session_row is None:
+            raise KeyError("SESSION_NOT_FOUND")
+        need_state = MealNeedState.model_validate_json(
+            str(session_row["meal_need_state_json"] or "{}")
+        )
+        confirmed_area = connection.execute(
+            """
+            SELECT address.service_area_id
+            FROM cart
+            JOIN address_ref address ON address.address_ref_id=cart.address_ref_id
+            JOIN service_area area ON area.service_area_id=address.service_area_id
+            WHERE cart.session_id=? AND address.confirmed=1 AND area.active=1
+            """,
+            (session_id,),
+        ).fetchone()
+        service_area_id = (
+            str(confirmed_area["service_area_id"])
+            if confirmed_area is not None and confirmed_area["service_area_id"]
+            else need_state.service_area_id
+        )
+        excluded_menu_ids = (
+            {
+                *need_state.shown_menu_ids,
+                *need_state.rejected_menu_ids,
+                *([need_state.selected_menu_id] if need_state.selected_menu_id else []),
+            }
+            if exclude_history
+            else set()
+        )
+        rows = [
+            row
+            for row in rows
+            if str(row["menu_id"]) not in excluded_menu_ids
+            and (not service_area_id or str(row["service_area_id"] or "") == service_area_id)
+            and (
+                not enforce_price_bands
+                or cls._price_matches_v2(int(row["price"]), criteria.price_bands)
+            )
+        ]
+        halal_certifications = cls._valid_halal_certifications_in_connection(
+            connection,
+            release_family_id=release_family_id,
+            instant=eligibility_as_of.isoformat(),
+        )
+        if criteria.dietary_filters.halal_certified_only:
+            rows = [row for row in rows if str(row["menu_id"]) in halal_certifications]
+
+        vegan = cls._v2_vegan_classifications(
+            connection,
+            [str(row["menu_id"]) for row in rows],
+            knowledge_release_id=str(family["knowledge_release_id"]),
+        )
+        if criteria.dietary_filters.vegan:
+            rows = [
+                row
+                for row in rows
+                if vegan.get(str(row["menu_id"]), ("UNKNOWN", None, []))[0]
+                in {"LIKELY_FIT", "POSSIBLE_WITH_CHECKS"}
+            ]
+        return rows, halal_certifications, vegan
+
+    def get_live_recommendation_menu_states(
+        self,
+        session_id: str,
+        criteria: RecommendationCriteriaV2,
+        release_family_id: str,
+        menu_ids: list[str],
+        *,
+        at: datetime,
+    ) -> dict[str, LiveRecommendationMenuState]:
+        with self._connection() as connection:
+            rows, certifications, vegan = self._structured_objective_candidates(
+                connection,
+                session_id,
+                criteria,
+                release_family_id=release_family_id,
+                eligibility_as_of=at,
+                menu_ids=menu_ids,
+                enforce_price_bands=False,
+            )
+        result: dict[str, LiveRecommendationMenuState] = {}
+        for row in rows:
+            menu_id = str(row["menu_id"])
+            certification = certifications.get(menu_id)
+            vegan_status, vegan_warning, _ = vegan.get(menu_id, ("UNKNOWN", None, []))
+            result[menu_id] = LiveRecommendationMenuState(
+                menu=self._menu_summary(
+                    row,
+                    [],
+                    [],
+                    EvidenceStatus.UNKNOWN,
+                    0.0,
+                ),
+                halal_certified=bool(certification),
+                halal_scope_label=certification[1] if certification else None,
+                vegan_status=cast(Any, vegan_status),
+                vegan_warning=vegan_warning,
+            )
+        return result
+
+    @staticmethod
+    def _public_rag_chunks(
+        connection: sqlite3.Connection,
+        release_id: str,
+        menu_ids: list[str],
+    ) -> dict[str, list[dict[str, Any]]]:
+        unique_ids = list(dict.fromkeys(menu_ids))
+        if not unique_ids:
+            return {}
+        placeholders = ",".join("?" for _ in unique_ids)
+        rows = connection.execute(
+            f"""
+            SELECT mapping.menu_id,mapping.concept_id AS mapped_concept_id,
+                   chunk.chunk_id,chunk.document_id,chunk.concept_id,chunk.facet,
+                   chunk.content,chunk.embedding_vector_json,
+                   concept.canonical_name_ko,concept.canonical_name_en,concept.aliases_json
+            FROM menu_concept_map mapping
+            JOIN dish_concept_closure closure
+              ON closure.release_id=mapping.release_id
+             AND closure.descendant_concept_id=mapping.concept_id
+             AND closure.inherit_claims=1
+            JOIN knowledge_chunk chunk
+              ON chunk.release_id=closure.release_id
+             AND chunk.concept_id=closure.ancestor_concept_id
+            JOIN knowledge_document document
+              ON document.release_id=chunk.release_id
+             AND document.document_id=chunk.document_id
+            JOIN dish_concept concept
+              ON concept.release_id=chunk.release_id
+             AND concept.concept_id=chunk.concept_id
+            WHERE mapping.release_id=? AND mapping.mapping_status='MAPPED'
+              AND mapping.menu_id IN ({placeholders})
+              AND chunk.embedding_vector_json IS NOT NULL
+              AND document.review_status IN ('REVIEWED_DEMO','VERIFIED')
+              AND (
+                json_extract(chunk.metadata_json,'$.recommendation_visibility')='PUBLIC_RAG'
+                OR (
+                  json_extract(chunk.metadata_json,'$.recommendation_visibility') IS NULL
+                  AND lower(chunk.facet)<>'safety'
+                )
+              )
+            ORDER BY mapping.menu_id,closure.depth,chunk.chunk_id
+            """,
+            (release_id, *unique_ids),
+        ).fetchall()
+        grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        seen: set[tuple[str, str]] = set()
+        for row in rows:
+            key = (str(row["menu_id"]), str(row["chunk_id"]))
+            if key in seen:
+                continue
+            seen.add(key)
+            grouped[key[0]].append(dict(row))
+        return grouped
+
+    def build_recommendation_evidence_pool(
+        self,
+        session_id: str,
+        profile: Profile,
+        criteria: RecommendationCriteriaV2,
+        mode: RecommendationMode,
+        limit: int,
+        *,
+        release_family_id: str,
+        eligibility_as_of: datetime,
+        raw_hits_per_value: int,
+        passages_per_menu: int,
+    ) -> list[EvidencePoolItem]:
+        if limit < 1 or raw_hits_per_value < 1 or passages_per_menu < 1:
+            return []
+        with self._connection() as connection:
+            family = connection.execute(
+                """
+                SELECT family.*,release.embedding_dimension
+                FROM recommendation_release_family family
+                JOIN knowledge_release release
+                  ON release.release_id=family.knowledge_release_id
+                WHERE family.release_family_id=? AND release.status='READY'
+                """,
+                (release_family_id,),
+            ).fetchone()
+            if family is None:
+                raise RuntimeError("RECOMMENDATION_RELEASE_NOT_READY")
+            candidate_rows, certifications, vegan = self._structured_objective_candidates(
+                connection,
+                session_id,
+                criteria,
+                release_family_id=release_family_id,
+                eligibility_as_of=eligibility_as_of,
+                exclude_history=mode is RecommendationMode.SIMILAR,
+            )
+            candidate_rows = candidate_rows[:RECOMMENDATION_CANDIDATE_CAP]
+            chunks_by_menu = self._public_rag_chunks(
+                connection,
+                str(family["knowledge_release_id"]),
+                [str(row["menu_id"]) for row in candidate_rows],
+            )
+            subjective_groups = criteria.subjective_groups()
+            query_aliases_by_code: dict[str, tuple[str, ...]] = {}
+            for selected in subjective_groups.values():
+                for value_code in selected:
+                    query_aliases_by_code[value_code] = preference_query_aliases(
+                        value_code,
+                        profile.preferred_language,
+                    )
+            if not subjective_groups:
+                query_aliases_by_code["__fallback__"] = FALLBACK_RECOMMENDATION_QUERY_ALIASES
+            soft_profile_aliases = tuple(
+                value
+                for value in (
+                    profile.nationality.strip(),
+                    profile.age_band.strip(),
+                    *(favorite.strip() for favorite in profile.favorite_foods),
+                )
+                if value
+            )
+            if soft_profile_aliases:
+                query_aliases_by_code["__profile_soft__"] = soft_profile_aliases
+            query_values = [
+                (code, " ".join(aliases)) for code, aliases in query_aliases_by_code.items()
+            ]
+            query_vectors = self.embedding_provider.embed(
+                [query for _, query in query_values],
+                "SEARCH_QUERY",
+            )
+            if len(query_vectors) != len(query_values):
+                raise RuntimeError("PREFERENCE_QUERY_EMBEDDING_COUNT_MISMATCH")
+            query_vector_by_code = {
+                value_code: vector for (value_code, _), vector in zip(query_values, query_vectors)
+            }
+
+            chunk_rows_by_id: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for chunks in chunks_by_menu.values():
+                for chunk in chunks:
+                    chunk_rows_by_id[str(chunk["chunk_id"])].append(chunk)
+            ranked_by_code_menu: dict[
+                str,
+                dict[str, list[tuple[float, dict[str, Any]]]],
+            ] = {}
+            for value_code, query_aliases in query_aliases_by_code.items():
+                query_vector = query_vector_by_code[value_code]
+                unique_candidates: list[HybridChunkCandidate] = []
+                for chunk_id, associated_rows in chunk_rows_by_id.items():
+                    chunk = associated_rows[0]
+                    vector = json.loads(str(chunk["embedding_vector_json"]))
+                    aliases = (
+                        str(chunk["canonical_name_ko"] or ""),
+                        str(chunk["canonical_name_en"] or ""),
+                        *tuple(
+                            str(alias) for alias in json.loads(str(chunk["aliases_json"] or "[]"))
+                        ),
+                    )
+                    unique_candidates.append(
+                        HybridChunkCandidate(
+                            chunk_id=chunk_id,
+                            content=str(chunk["content"]),
+                            facet=str(chunk["facet"]),
+                            aliases=aliases,
+                            vector_similarity=cosine_similarity(query_vector, vector),
+                        )
+                    )
+                ranked_chunks = rank_hybrid_chunks_rrf(
+                    query_aliases,
+                    unique_candidates,
+                    limit=raw_hits_per_value,
+                )
+                by_menu: dict[str, list[tuple[float, dict[str, Any]]]] = defaultdict(list)
+                for candidate, score in ranked_chunks:
+                    for chunk in chunk_rows_by_id[candidate.chunk_id]:
+                        by_menu[str(chunk["menu_id"])].append((score, chunk))
+                for values in by_menu.values():
+                    values.sort(key=lambda item: (-item[0], str(item[1]["chunk_id"])))
+                ranked_by_code_menu[value_code] = by_menu
+
+            pool: list[EvidencePoolItem] = []
+            for row in candidate_rows:
+                menu_id = str(row["menu_id"])
+                chunks = chunks_by_menu.get(menu_id, [])
+                if not chunks:
+                    continue
+                criterion_evidence: list[CriterionEvidence] = []
+                passage_scores: dict[str, tuple[float, EvidenceReference]] = {}
+                category_scores: list[float] = []
+                mapped_concept_id: str | None = None
+                for category_code, selected_codes in subjective_groups.items():
+                    selected_scores: list[float] = []
+                    for value_code in selected_codes:
+                        ranked = ranked_by_code_menu.get(value_code, {}).get(menu_id, [])
+                        if not ranked:
+                            continue
+                        best_score, best_chunk = ranked[0]
+                        mapped_concept_id = str(best_chunk["mapped_concept_id"])
+                        reference = EvidenceReference(
+                            evidence_id=str(best_chunk["chunk_id"]),
+                            evidence_type=(
+                                "ESSENTIAL_FACT"
+                                if str(best_chunk["facet"]).casefold() == "essential_fact"
+                                else "WIKI_PASSAGE"
+                            ),
+                            content=str(best_chunk["content"]),
+                            score=round(max(0.0, min(1.0, best_score)), 6),
+                        )
+                        criterion_evidence.append(
+                            CriterionEvidence(
+                                category_code=cast(Any, category_code),
+                                selected_value_code=value_code,
+                                evidence=[reference],
+                            )
+                        )
+                        selected_scores.append(best_score)
+                        current = passage_scores.get(reference.evidence_id)
+                        if current is None or best_score > current[0]:
+                            passage_scores[reference.evidence_id] = (best_score, reference)
+                    if selected_scores:
+                        category_scores.append(max(selected_scores))
+
+                if subjective_groups and len(category_scores) != len(subjective_groups):
+                    continue
+                fallback_score: float | None = None
+                if not subjective_groups:
+                    for score, chunk in ranked_by_code_menu.get("__fallback__", {}).get(
+                        menu_id,
+                        [],
+                    ):
+                        fallback_score = max(fallback_score or 0.0, score)
+                        mapped_concept_id = str(chunk["mapped_concept_id"])
+                        reference = EvidenceReference(
+                            evidence_id=str(chunk["chunk_id"]),
+                            evidence_type=(
+                                "ESSENTIAL_FACT"
+                                if str(chunk["facet"]).casefold() == "essential_fact"
+                                else "WIKI_PASSAGE"
+                            ),
+                            content=str(chunk["content"]),
+                            score=round(max(0.0, min(1.0, score)), 6),
+                        )
+                        passage_scores[reference.evidence_id] = (score, reference)
+                if not passage_scores:
+                    continue
+                wiki_passages = [
+                    item[1]
+                    for item in sorted(
+                        passage_scores.values(),
+                        key=lambda item: (-item[0], item[1].evidence_id),
+                    )[:passages_per_menu]
+                ]
+                certification = certifications.get(menu_id)
+                vegan_status, vegan_warning, vegan_facts = vegan.get(
+                    menu_id,
+                    ("UNKNOWN", None, []),
+                )
+                menu_facts = [
+                    EvidenceReference(
+                        evidence_id=f"fact_{menu_id}_price",
+                        evidence_type="MENU_FACT",
+                        content=f"Current base price: KRW {int(row['price']):,}.",
+                    ),
+                    EvidenceReference(
+                        evidence_id=f"fact_{menu_id}_spice",
+                        evidence_type="MENU_FACT",
+                        content=f"Reviewed spice level: {int(row['spice_level'])} of 5.",
+                    ),
+                    *vegan_facts,
+                ]
+                if certification:
+                    menu_facts.append(
+                        EvidenceReference(
+                            evidence_id=certification[0],
+                            evidence_type="CERTIFICATION",
+                            content=certification[1],
+                        )
+                    )
+                primary_score = (
+                    sum(category_scores) / len(category_scores)
+                    if category_scores
+                    else fallback_score or 0.5
+                )
+                soft_ranked = ranked_by_code_menu.get("__profile_soft__", {}).get(
+                    menu_id,
+                    [],
+                )
+                retrieval_score = apply_soft_profile_retrieval_signal(
+                    primary_score,
+                    soft_ranked[0][0] if soft_ranked else None,
+                )
+                risks = [vegan_warning] if criteria.dietary_filters.vegan and vegan_warning else []
+                reasons = [
+                    f"Matches selected {category.replace('_', ' ')}"
+                    for category in subjective_groups
+                ] or ["Matches the selected objective filters"]
+                menu = self._menu_summary(
+                    row,
+                    reasons,
+                    risks,
+                    EvidenceStatus.VERIFIED if certification else EvidenceStatus.UNKNOWN,
+                    retrieval_score,
+                ).model_copy(
+                    update={
+                        "dietary_summary": (
+                            "A valid halal certification scope is recorded for this menu."
+                            if certification
+                            else "No halal certification is recorded for this menu."
+                        ),
+                        "risk_hints": risks,
+                        "evidence_ids": [fact.evidence_id for fact in menu_facts],
+                        "grounded_claim_ids": [fact.evidence_id for fact in menu_facts],
+                        "grounded_passage_ids": [item.evidence_id for item in wiki_passages],
+                    }
+                )
+                pool.append(
+                    EvidencePoolItem(
+                        menu=menu,
+                        knowledge_concept_id=mapped_concept_id,
+                        criterion_evidence=criterion_evidence,
+                        wiki_passages=wiki_passages,
+                        menu_facts=menu_facts,
+                        halal_certified=bool(certification),
+                        halal_scope_label=certification[1] if certification else None,
+                        vegan_status=cast(Any, vegan_status),
+                        vegan_warning=vegan_warning,
+                        retrieval_score=round(max(0.0, min(1.0, retrieval_score)), 6),
+                        knowledge_release_id=str(family["knowledge_release_id"]),
+                        catalog_release_id=str(family["catalog_release_id"]),
+                        recommendation_release_family_id=str(family["release_family_id"]),
+                    )
+                )
+        return sorted(
+            pool,
+            key=lambda item: (-item.retrieval_score, item.menu.price, item.menu.menu_id),
+        )[:limit]
+
+    def get_active_recommendation_release_family(
+        self,
+    ) -> RecommendationReleaseFamily | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT family.* FROM recommendation_runtime_state state
+                JOIN recommendation_release_family family
+                  ON family.release_family_id=state.active_release_family_id
+                WHERE state.state_key='ACTIVE' AND family.status='ACTIVE'
+                """
+            ).fetchone()
+        if row is None:
+            return None
+        return RecommendationReleaseFamily(
+            release_family_id=str(row["release_family_id"]),
+            knowledge_release_id=str(row["knowledge_release_id"]),
+            catalog_release_id=str(row["catalog_release_id"]),
+            preference_catalog_version=str(row["preference_catalog_version"]),
+            spice_reference_version=str(row["spice_reference_version"]),
+            certification_release_id=str(row["certification_release_id"]),
+            embedding_model=str(row["embedding_model"]),
+            embedding_version=str(row["embedding_version"]),
+            status=cast(Any, str(row["status"])),
+            activated_at=(
+                datetime.fromisoformat(str(row["activated_at"])) if row["activated_at"] else None
+            ),
+        )
+
+    def list_valid_halal_certified_menu_ids(
+        self,
+        *,
+        at: datetime | None = None,
+    ) -> set[str]:
+        instant = (at or datetime.now(timezone.utc)).isoformat()
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT certification.scope_type,certification.scope_ref,certification.merchant_id
+                FROM recommendation_runtime_state state
+                JOIN recommendation_release_family family
+                  ON family.release_family_id=state.active_release_family_id
+                JOIN merchant_certification certification
+                  ON certification.certification_release_id=family.certification_release_id
+                WHERE state.state_key='ACTIVE'
+                  AND certification.certification_type='HALAL'
+                  AND certification.status='ACTIVE'
+                  AND certification.valid_from<=?
+                  AND (certification.valid_to IS NULL OR certification.valid_to>?)
+                """,
+                (instant, instant),
+            ).fetchall()
+            merchant_ids = [
+                str(row["merchant_id"]) for row in rows if row["scope_type"] == "MERCHANT"
+            ]
+            menu_ids = {
+                str(row["scope_ref"])
+                for row in rows
+                if row["scope_type"] == "MENU" and row["scope_ref"]
+            }
+            if merchant_ids:
+                placeholders = ",".join("?" for _ in merchant_ids)
+                menu_ids.update(
+                    str(row["menu_id"])
+                    for row in connection.execute(
+                        f"""
+                        SELECT menu_id FROM menu
+                        WHERE merchant_id IN ({placeholders}) AND availability='AVAILABLE'
+                        """,
+                        merchant_ids,
+                    ).fetchall()
+                )
+        return menu_ids
+
+    def get_preference_catalog(self, locale: str) -> dict[str, Any]:
+        family = self.get_active_recommendation_release_family()
+        if family is None:
+            raise RuntimeError("RECOMMENDATION_RELEASE_NOT_READY")
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT option_code FROM recommendation_preference_option
+                WHERE catalog_version=? AND active=1
+                ORDER BY category_code,display_order,option_code
+                """,
+                (family.preference_catalog_version,),
+            ).fetchall()
+        exposed_codes = frozenset(str(row["option_code"]) for row in rows)
+        payload = localized_preference_catalog(locale, exposed_codes=exposed_codes)
+        payload["spice_reference_version"] = family.spice_reference_version
+        payload["knowledge_release_id"] = family.knowledge_release_id
+        return dict(payload)
+
+    @staticmethod
     def _menu_from_cards(cards: list[dict[str, Any]], menu_id: str) -> dict[str, Any] | None:
         def visit(value: Any) -> dict[str, Any] | None:
             if isinstance(value, dict):
@@ -926,6 +2818,31 @@ class SQLiteYobiRepository:
             return None
 
         return visit(cards)
+
+    @staticmethod
+    def _live_structured_menu_payload(
+        row: sqlite3.Row,
+        existing: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Overlay server-owned catalog fields without changing model prose."""
+        return {
+            **(existing or {}),
+            "menu_id": str(row["menu_id"]),
+            "merchant_id": str(row["merchant_id"]),
+            "merchant_name": str(row["merchant_name"]),
+            "name_en": str(row["name_en"]),
+            "name_ko": str(row["name_ko"]),
+            "category": str(row["category"]),
+            "description": str(row["description"]),
+            "cultural_description": str(row["cultural_description"]),
+            "price": int(row["price"]),
+            "delivery_fee": int(row["delivery_fee"]),
+            "eta_min": int(row["eta_min"]),
+            "eta_max": int(row["eta_max"]),
+            "spice_level": int(row["spice_level"]),
+            "serves_min": int(row["serves_min"]),
+            "serves_max": int(row["serves_max"]),
+        }
 
     def apply_conversation_event(
         self, session_id: str, event: ConversationEventInput
@@ -968,11 +2885,6 @@ class SQLiteYobiRepository:
             ).fetchone()
             if profile_row is None:
                 raise KeyError("PROFILE_NOT_FOUND")
-            need_state = apply_profile_constraints(
-                need_state,
-                list(json.loads(profile_row["dietary_rules_json"])),
-                str(profile_row["religion_selection"]),
-            )
             current_area = connection.execute(
                 """
                 SELECT ref.service_area_id
@@ -985,6 +2897,8 @@ class SQLiteYobiRepository:
             if current_area and current_area["service_area_id"]:
                 need_state.service_area_id = str(current_area["service_area_id"])
             snapshot: RecommendationSnapshot | None = None
+            structured_criteria: RecommendationCriteriaV2 | None = None
+            structured_request_pin: tuple[str, datetime] | None = None
             if event.snapshot_id:
                 snapshot_row = connection.execute(
                     "SELECT * FROM recommendation_snapshot WHERE session_id=? AND snapshot_id=?",
@@ -992,6 +2906,24 @@ class SQLiteYobiRepository:
                 ).fetchone()
                 if snapshot_row is None:
                     raise ValueError("RECOMMENDATION_SNAPSHOT_NOT_FOUND")
+                if snapshot_row["structured_request_id"] and snapshot_row["criteria_json"]:
+                    structured_criteria = RecommendationCriteriaV2.model_validate_json(
+                        str(snapshot_row["criteria_json"])
+                    )
+                    request_pin = connection.execute(
+                        """
+                        SELECT recommendation_release_family_id,eligibility_as_of
+                        FROM structured_recommendation_request
+                        WHERE session_id=? AND request_id=?
+                        """,
+                        (session_id, str(snapshot_row["structured_request_id"])),
+                    ).fetchone()
+                    if request_pin is None:
+                        raise ValueError("STRUCTURED_RECOMMENDATION_REQUEST_NOT_FOUND")
+                    structured_request_pin = (
+                        str(request_pin["recommendation_release_family_id"]),
+                        datetime.fromisoformat(str(request_pin["eligibility_as_of"])),
+                    )
                 snapshot = RecommendationSnapshot.model_validate(
                     {
                         "snapshot_id": snapshot_row["snapshot_id"],
@@ -1003,6 +2935,12 @@ class SQLiteYobiRepository:
                         "cards": json.loads(snapshot_row["cards_json"]),
                         "created_at": snapshot_row["created_at"],
                     }
+                )
+            if structured_criteria is None:
+                need_state = apply_profile_constraints(
+                    need_state,
+                    list(json.loads(profile_row["dietary_rules_json"])),
+                    str(profile_row["religion_selection"]),
                 )
 
             candidate_by_id = {
@@ -1019,16 +2957,29 @@ class SQLiteYobiRepository:
                 if event.menu_id not in candidate_by_id:
                     raise ValueError("MENU_NOT_IN_RECOMMENDATION_SNAPSHOT")
                 candidate = candidate_by_id[event.menu_id]
-                conflicts, _ = self._menu_hard_constraint_conflicts(
-                    connection,
-                    candidate.menu_id,
-                    need_state,
-                    str(profile_row["allergy_severity"]),
-                )
-                live_menu = connection.execute(
-                    "SELECT merchant_id FROM menu WHERE menu_id=?",
-                    (candidate.menu_id,),
-                ).fetchone()
+                if structured_criteria is not None and structured_request_pin is not None:
+                    eligible_rows, _, _ = self._structured_objective_candidates(
+                        connection,
+                        session_id,
+                        structured_criteria,
+                        release_family_id=structured_request_pin[0],
+                        eligibility_as_of=datetime.now(timezone.utc),
+                        menu_ids=[candidate.menu_id],
+                        enforce_price_bands=False,
+                    )
+                    live_menu = eligible_rows[0] if eligible_rows else None
+                    conflicts: list[str] = [] if live_menu is not None else ["v2:ineligible"]
+                else:
+                    conflicts, _ = self._menu_hard_constraint_conflicts(
+                        connection,
+                        candidate.menu_id,
+                        need_state,
+                        str(profile_row["allergy_severity"]),
+                    )
+                    live_menu = connection.execute(
+                        "SELECT merchant_id FROM menu WHERE menu_id=?",
+                        (candidate.menu_id,),
+                    ).fetchone()
                 if (
                     conflicts
                     or live_menu is None
@@ -1073,8 +3024,10 @@ class SQLiteYobiRepository:
                 if group is None:
                     raise ValueError("OPTION_GROUP_NOT_FOUND")
                 selected_option_ids = list(dict.fromkeys(event.option_item_ids))
-                if not int(group["min_select"]) <= len(selected_option_ids) <= int(
-                    group["max_select"]
+                if (
+                    not int(group["min_select"])
+                    <= len(selected_option_ids)
+                    <= int(group["max_select"])
                 ):
                     raise ValueError("OPTION_SELECTION_CARDINALITY_INVALID")
                 if selected_option_ids:
@@ -1291,9 +3244,7 @@ class SQLiteYobiRepository:
                 menu_id, ([], [], [])
             )
             conflicts = ingredient_constraint_conflicts(ingredient_claims, safety_state)
-            conflicts.extend(
-                allergen_constraint_conflicts(allergen_claims, safety_state)
-            )
+            conflicts.extend(allergen_constraint_conflicts(allergen_claims, safety_state))
             if profile.allergy_severity == "severe":
                 conflicts.extend(
                     severe_allergy_conflicts(
@@ -1317,8 +3268,7 @@ class SQLiteYobiRepository:
             )
             for allergy in absent_allergies:
                 reasons.append(
-                    "Synthetic menu specification marks "
-                    f"{allergy.replace('_', ' ')} absent"
+                    f"Synthetic menu specification marks {allergy.replace('_', ' ')} absent"
                 )
             if absent_allergies:
                 status = EvidenceStatus.VERIFIED
@@ -1677,23 +3627,36 @@ class SQLiteYobiRepository:
     def _bulk_resolved_knowledge_claims(
         connection: sqlite3.Connection,
         menu_ids: list[str],
+        *,
+        release_id: str | None = None,
     ) -> dict[str, tuple[list[Any], list[Any], list[Any]]]:
         """Resolve active Wiki/menu/merchant claims in a fixed number of queries."""
 
         unique_ids = list(dict.fromkeys(menu_ids))
         if not unique_ids:
             return {}
-        active = connection.execute(
-            """
-            SELECT release.release_id
-            FROM knowledge_runtime_state state
-            JOIN knowledge_release release ON release.release_id=state.active_release_id
-            WHERE state.state_key='ACTIVE' AND release.status='READY'
-            """
-        ).fetchone()
-        if active is None:
-            return {menu_id: ([], [], []) for menu_id in unique_ids}
-        release_id = str(active["release_id"])
+        if release_id is None:
+            active = connection.execute(
+                """
+                SELECT release.release_id
+                FROM knowledge_runtime_state state
+                JOIN knowledge_release release ON release.release_id=state.active_release_id
+                WHERE state.state_key='ACTIVE' AND release.status='READY'
+                """
+            ).fetchone()
+            if active is None:
+                return {menu_id: ([], [], []) for menu_id in unique_ids}
+            release_id = str(active["release_id"])
+        else:
+            ready = connection.execute(
+                """
+                SELECT 1 FROM knowledge_release
+                WHERE release_id=? AND status='READY'
+                """,
+                (release_id,),
+            ).fetchone()
+            if ready is None:
+                raise RuntimeError("PINNED_KNOWLEDGE_RELEASE_NOT_READY")
         placeholders = ",".join("?" for _ in unique_ids)
         params = (release_id, *unique_ids)
 
@@ -1818,7 +3781,8 @@ class SQLiteYobiRepository:
         placeholders = ",".join("?" for _ in unique_ids)
         rows = connection.execute(
             f"""
-            SELECT mapping.menu_id,chunk.chunk_id,chunk.facet,chunk.embedding_vector_json,
+            SELECT mapping.menu_id,chunk.chunk_id,chunk.facet,chunk.content,
+                   chunk.embedding_vector_json,
                    concept.canonical_name_ko,concept.canonical_name_en,concept.aliases_json
             FROM knowledge_runtime_state state
             JOIN knowledge_release release ON release.release_id=state.active_release_id
@@ -1861,6 +3825,7 @@ class SQLiteYobiRepository:
                         vector_similarity,
                         str(row["facet"]),
                         aliases,
+                        str(row["content"]),
                     ),
                     str(row["chunk_id"]),
                 )
@@ -2056,11 +4021,9 @@ class SQLiteYobiRepository:
                             [
                                 str(row["canonical_name_ko"]),
                                 str(row["canonical_name_en"]),
-                                *[
-                                    str(alias)
-                                    for alias in json.loads(str(row["aliases_json"]))
-                                ],
+                                *[str(alias) for alias in json.loads(str(row["aliases_json"]))],
                             ],
+                            str(row["content"]),
                         ),
                         row,
                     )
@@ -2262,9 +4225,7 @@ class SQLiteYobiRepository:
                     price=menu.price,
                     delivery_fee=menu.delivery_fee,
                     eta=f"{row['eta_min']}-{row['eta_max']} min",
-                    portion=(
-                        "One-person portion" if menu.serves_max == 1 else "Shareable portion"
-                    ),
+                    portion=("One-person portion" if menu.serves_max == 1 else "Shareable portion"),
                     flavor=row["flavor_profile"],
                     packaging_signal=row["packaging_signal"],
                     dietary_status=menu.evidence_status,
@@ -2279,6 +4240,84 @@ class SQLiteYobiRepository:
 
     def get_options(self, menu_id: str) -> list[OptionGroup]:
         with self._connection() as connection:
+            family = connection.execute(
+                """
+                SELECT family.release_family_id,family.knowledge_release_id,
+                       family.certification_release_id
+                FROM recommendation_runtime_state state
+                JOIN recommendation_release_family family
+                  ON family.release_family_id=state.active_release_family_id
+                JOIN knowledge_release release
+                  ON release.release_id=family.knowledge_release_id
+                WHERE state.state_key='ACTIVE' AND family.status='ACTIVE'
+                  AND release.status='READY'
+                """
+            ).fetchone()
+            base_vegan_status: str | None = None
+            base_vegan_warning: str | None = None
+            halal_certification_preserved: bool | None = None
+            option_effects: dict[str, list[sqlite3.Row]] = defaultdict(list)
+            if family is not None:
+                base_vegan_status, base_vegan_warning, _ = self._v2_vegan_classifications(
+                    connection,
+                    [menu_id],
+                    knowledge_release_id=str(family["knowledge_release_id"]),
+                ).get(menu_id, ("UNKNOWN", None, []))
+                valid_certifications = self._valid_halal_certifications_in_connection(
+                    connection,
+                    release_family_id=str(family["release_family_id"]),
+                    instant=_now(),
+                )
+                if menu_id in valid_certifications:
+                    # Options do not change the certification scope in the current
+                    # catalog, so either a restaurant- or menu-scoped certificate
+                    # remains applicable to the selected menu.
+                    halal_certification_preserved = True
+                effect_rows = connection.execute(
+                    """
+                    SELECT effect.option_item_id,effect.ingredient_id,
+                           effect.effect,effect.assertion_status
+                    FROM option_ingredient_effect effect
+                    JOIN menu_option_item item
+                      ON item.option_item_id=effect.option_item_id
+                    JOIN menu_option_group option_group
+                      ON option_group.option_group_id=item.option_group_id
+                    WHERE option_group.menu_id=? AND effect.release_id=?
+                    """,
+                    (menu_id, str(family["knowledge_release_id"])),
+                ).fetchall()
+                for effect in effect_rows:
+                    option_effects[str(effect["option_item_id"])].append(effect)
+
+            def v2_option_state(item_id: str) -> tuple[str | None, str | None]:
+                effects = option_effects.get(item_id, [])
+                animal_adds = [
+                    effect
+                    for effect in effects
+                    if str(effect["effect"]).upper() == "ADD"
+                    and str(effect["ingredient_id"]) in VEGAN_INGREDIENTS
+                ]
+                if any(
+                    str(effect["assertion_status"]).upper()
+                    in {"CONFIRMED_PRESENT", "PRESENT", "VERIFIED"}
+                    for effect in animal_adds
+                ):
+                    return (
+                        "CONFLICT",
+                        "This option adds a confirmed animal-derived ingredient and does not fit a vegan selection.",
+                    )
+                if any(
+                    str(effect["assertion_status"]).upper() not in {"CONFIRMED_ABSENT", "ABSENT"}
+                    for effect in animal_adds
+                ):
+                    return (
+                        "POSSIBLE_WITH_CHECKS",
+                        "This option may add an animal-derived ingredient; check before ordering vegan.",
+                    )
+                # Removing one ingredient never upgrades the whole menu to vegan.
+                # Preserve the base-menu classification and its existing caution.
+                return base_vegan_status, base_vegan_warning
+
             groups = connection.execute(
                 "SELECT * FROM menu_option_group WHERE menu_id = ? ORDER BY sort_order",
                 (menu_id,),
@@ -2297,6 +4336,10 @@ class SQLiteYobiRepository:
                     """,
                     (group["option_group_id"],),
                 ).fetchall()
+                v2_states = {
+                    str(item["option_item_id"]): v2_option_state(str(item["option_item_id"]))
+                    for item in items
+                }
                 result.append(
                     OptionGroup(
                         option_group_id=group["option_group_id"],
@@ -2320,6 +4363,12 @@ class SQLiteYobiRepository:
                                     if item["conflicting_rules_csv"]
                                     else []
                                 ),
+                                halal_certification_preserved=(halal_certification_preserved),
+                                vegan_status=cast(
+                                    Any,
+                                    v2_states[str(item["option_item_id"])][0],
+                                ),
+                                vegan_warning=v2_states[str(item["option_item_id"])][1],
                             )
                             for item in items
                         ],
@@ -2713,6 +4762,28 @@ class SQLiteYobiRepository:
                 """,
                 (session_id,),
             ).fetchone()
+            structured_criteria_row = connection.execute(
+                """
+                SELECT criteria.criteria_json,family.release_family_id,
+                       family.knowledge_release_id,family.certification_release_id
+                FROM recommendation_snapshot snapshot
+                JOIN session_recommendation_criteria criteria
+                  ON criteria.session_id=snapshot.session_id
+                 AND criteria.criteria_version=snapshot.criteria_version
+                JOIN recommendation_release_family family
+                  ON family.release_family_id=snapshot.recommendation_release_family_id
+                WHERE snapshot.session_id=? AND snapshot.structured_request_id IS NOT NULL
+                ORDER BY snapshot.created_at DESC,snapshot.snapshot_id DESC LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+            structured_criteria = (
+                RecommendationCriteriaV2.model_validate_json(
+                    str(structured_criteria_row["criteria_json"])
+                )
+                if structured_criteria_row is not None
+                else None
+            )
             minimum_order_amount = 0
             if len(merchant_ids) == 1:
                 minimum_row = connection.execute(
@@ -2721,6 +4792,7 @@ class SQLiteYobiRepository:
                 ).fetchone()
                 minimum_order_amount = int(minimum_row["min_order_amount"]) if minimum_row else 0
             dietary_conflicts: list[str] = []
+            blocking_dietary_conflicts: list[str] = []
             service_area_conflict = False
             address_area_row = (
                 connection.execute(
@@ -2738,7 +4810,7 @@ class SQLiteYobiRepository:
             address_service_area = (
                 str(address_area_row["service_area_id"] or "") if address_area_row else ""
             )
-            if profile_row and rows:
+            if profile_row and rows and structured_criteria is None:
                 dietary_rules = set(json.loads(profile_row["dietary_rules_json"]))
                 need_state = apply_profile_constraints(
                     MealNeedState.model_validate_json(profile_row["meal_need_state_json"] or "{}"),
@@ -2791,16 +4863,95 @@ class SQLiteYobiRepository:
                             f"Remove {row['menu_name']} to continue; it conflicts with current "
                             "meal constraints or grounded safety facts."
                         )
-                    merchant_area = connection.execute(
-                        "SELECT service_area_id FROM merchant WHERE merchant_id=?",
-                        (row["merchant_id"],),
-                    ).fetchone()
+            elif structured_criteria is not None and structured_criteria_row is not None:
+                menu_ids = [str(row["menu_id"]) for row in rows]
+                valid_certifications = self._valid_halal_certifications_in_connection(
+                    connection,
+                    release_family_id=str(structured_criteria_row["release_family_id"]),
+                    instant=_now(),
+                )
+                vegan = self._v2_vegan_classifications(
+                    connection,
+                    menu_ids,
+                    knowledge_release_id=str(structured_criteria_row["knowledge_release_id"]),
+                )
+                for row in rows:
+                    menu_id = str(row["menu_id"])
+                    menu_name = str(row["menu_name"])
                     if (
-                        not address_service_area
-                        or merchant_area is None
-                        or merchant_area["service_area_id"] != address_service_area
+                        structured_criteria.dietary_filters.halal_certified_only
+                        and menu_id not in valid_certifications
                     ):
-                        service_area_conflict = True
+                        warning = f"Remove {menu_name} to continue; its halal certification is no longer valid."
+                        dietary_conflicts.append(warning)
+                        blocking_dietary_conflicts.append(warning)
+                    current_menu = connection.execute(
+                        "SELECT price,spice_level FROM menu WHERE menu_id=?",
+                        (menu_id,),
+                    ).fetchone()
+                    if not self._price_matches_v2(
+                        int(current_menu["price"]) if current_menu else -1,
+                        structured_criteria.price_bands,
+                    ):
+                        warning = (
+                            f"{menu_name}'s current price is outside your selected range; "
+                            "review the updated total before checkout."
+                        )
+                        dietary_conflicts.append(warning)
+                    if current_menu is None or int(current_menu["spice_level"]) > (
+                        structured_criteria.max_spice_level
+                    ):
+                        warning = f"Remove {menu_name} to continue; its spice level no longer matches your selection."
+                        dietary_conflicts.append(warning)
+                        blocking_dietary_conflicts.append(warning)
+                    if structured_criteria.dietary_filters.vegan:
+                        vegan_status, vegan_warning, _ = vegan.get(menu_id, ("UNKNOWN", None, []))
+                        if vegan_status != "LIKELY_FIT":
+                            dietary_conflicts.append(
+                                vegan_warning
+                                or f"Check {menu_name}'s ingredients before ordering it as vegan."
+                            )
+                        selected_ids = [
+                            str(option["option_item_id"])
+                            for option in json.loads(row["option_snapshot_json"])
+                        ]
+                        if selected_ids:
+                            placeholders = ",".join("?" for _ in selected_ids)
+                            option_effects = connection.execute(
+                                f"""
+                                SELECT ingredient_id,effect,assertion_status
+                                FROM option_ingredient_effect
+                                WHERE release_id=?
+                                  AND option_item_id IN ({placeholders})
+                                """,
+                                (
+                                    str(structured_criteria_row["knowledge_release_id"]),
+                                    *selected_ids,
+                                ),
+                            ).fetchall()
+                            if any(
+                                str(effect["effect"]).upper() == "ADD"
+                                and str(effect["ingredient_id"]) in VEGAN_INGREDIENTS
+                                and str(effect["assertion_status"]).upper()
+                                not in {"CONFIRMED_ABSENT", "ABSENT"}
+                                for effect in option_effects
+                            ):
+                                dietary_conflicts.append(
+                                    f"A selected option for {menu_name} may add an animal-derived ingredient."
+                                )
+            for row in rows:
+                merchant_area = connection.execute(
+                    "SELECT service_area_id FROM merchant WHERE merchant_id=?",
+                    (row["merchant_id"],),
+                ).fetchone()
+                if (
+                    not address_service_area
+                    or merchant_area is None
+                    or merchant_area["service_area_id"] != address_service_area
+                ):
+                    service_area_conflict = True
+            if structured_criteria is None:
+                blocking_dietary_conflicts = list(dietary_conflicts)
         items = [
             CartLine(
                 cart_item_id=row["cart_item_id"],
@@ -2826,14 +4977,14 @@ class SQLiteYobiRepository:
         minimum_order_shortfall = max(0, minimum_order_amount - subtotal)
         if minimum_order_shortfall:
             missing.append("minimum_order_amount")
-        if dietary_conflicts:
+        if blocking_dietary_conflicts:
             missing.append("dietary_conflict")
         if service_area_conflict:
             missing.append("service_area")
         warnings = list(dict.fromkeys(dietary_conflicts))
         if service_area_conflict:
             warnings.append("The confirmed address is outside this merchant's service area.")
-        if items:
+        if items and structured_criteria is None:
             warnings.append("Synthetic evidence only; cross-contamination may be unverified.")
         current_fingerprint = _cart_fingerprint(
             str(cart["cart_id"]), int(cart["version"]), subtotal + delivery_fee
@@ -2852,8 +5003,7 @@ class SQLiteYobiRepository:
             minimum_order_shortfall=minimum_order_shortfall,
             ready_to_checkout=not missing,
             confirmed=(
-                bool(cart["confirmed"])
-                and cart["confirmed_fingerprint"] == current_fingerprint
+                bool(cart["confirmed"]) and cart["confirmed_fingerprint"] == current_fingerprint
             ),
         )
 
@@ -2942,18 +5092,51 @@ class SQLiteYobiRepository:
             raise ValueError("CART_INCOMPLETE")
 
         dietary_rules = set(json.loads(cart["dietary_rules_json"]))
-        need_state = apply_profile_constraints(
-            MealNeedState.model_validate_json(cart["meal_need_state_json"] or "{}"),
-            list(dietary_rules),
-            str(cart["religion_selection"]),
+        structured_criteria_row = connection.execute(
+            """
+            SELECT criteria.criteria_json,family.release_family_id,
+                   family.knowledge_release_id,family.certification_release_id
+            FROM recommendation_snapshot snapshot
+            JOIN session_recommendation_criteria criteria
+              ON criteria.session_id=snapshot.session_id
+             AND criteria.criteria_version=snapshot.criteria_version
+            JOIN recommendation_release_family family
+              ON family.release_family_id=snapshot.recommendation_release_family_id
+            WHERE snapshot.session_id=? AND snapshot.structured_request_id IS NOT NULL
+            ORDER BY snapshot.created_at DESC,snapshot.snapshot_id DESC LIMIT 1
+            """,
+            (session_id,),
+        ).fetchone()
+        structured_criteria = (
+            RecommendationCriteriaV2.model_validate_json(
+                str(structured_criteria_row["criteria_json"])
+            )
+            if structured_criteria_row is not None
+            else None
         )
+        need_state = MealNeedState.model_validate_json(cart["meal_need_state_json"] or "{}")
+        if structured_criteria is None:
+            need_state = apply_profile_constraints(
+                need_state,
+                list(dietary_rules),
+                str(cart["religion_selection"]),
+            )
         address_service_area = str(address["service_area_id"] or "")
         if need_state.service_area_id and need_state.service_area_id != address_service_area:
             raise ValueError("CART_SERVICE_AREA_MISMATCH")
-        severe_shellfish = (
+        severe_shellfish = structured_criteria is None and (
             "shellfish_allergy" in dietary_rules and cart["allergy_severity"] == "severe"
         )
-        vegan_required = "vegan" in dietary_rules
+        vegan_required = structured_criteria is None and "vegan" in dietary_rules
+        valid_structured_halal = (
+            SQLiteYobiRepository._valid_halal_certifications_in_connection(
+                connection,
+                release_family_id=str(structured_criteria_row["release_family_id"]),
+                instant=_now(),
+            )
+            if structured_criteria is not None and structured_criteria_row is not None
+            else {}
+        )
         merchant_ids: set[str] = set()
         subtotal = 0
         changed = False
@@ -2974,6 +5157,14 @@ class SQLiteYobiRepository:
             if not address_service_area or menu["merchant_service_area_id"] != address_service_area:
                 raise ValueError("CART_SERVICE_AREA_MISMATCH")
             merchant_ids.add(menu["merchant_id"])
+            if structured_criteria is not None:
+                if int(menu["spice_level"]) > structured_criteria.max_spice_level:
+                    raise ValueError("CART_MENU_NO_LONGER_ELIGIBLE")
+                if (
+                    structured_criteria.dietary_filters.halal_certified_only
+                    and str(menu["menu_id"]) not in valid_structured_halal
+                ):
+                    raise ValueError("CART_DIETARY_CONFLICT")
             if vegan_required:
                 vegan_verified = connection.execute(
                     """
@@ -3038,15 +5229,16 @@ class SQLiteYobiRepository:
             ):
                 raise ValueError("CART_OPTION_SELECTION_INVALID")
 
-            hard_conflicts, _ = SQLiteYobiRepository._menu_hard_constraint_conflicts(
-                connection,
-                str(menu["menu_id"]),
-                need_state,
-                str(cart["allergy_severity"]),
-                selected_ids,
-            )
-            if hard_conflicts:
-                raise ValueError("CART_DIETARY_CONFLICT")
+            if structured_criteria is None:
+                hard_conflicts, _ = SQLiteYobiRepository._menu_hard_constraint_conflicts(
+                    connection,
+                    str(menu["menu_id"]),
+                    need_state,
+                    str(cart["allergy_severity"]),
+                    selected_ids,
+                )
+                if hard_conflicts:
+                    raise ValueError("CART_DIETARY_CONFLICT")
 
             unit_price = int(menu["price"])
             line_total = (unit_price + option_total) * int(line["quantity"])
@@ -3083,9 +5275,7 @@ class SQLiteYobiRepository:
         current_fingerprint = _cart_fingerprint(
             str(cart["cart_id"]), int(cart["version"]), current_total
         )
-        confirmation_stale = (
-            was_confirmed and cart["confirmed_fingerprint"] != current_fingerprint
-        )
+        confirmation_stale = was_confirmed and cart["confirmed_fingerprint"] != current_fingerprint
         changed = changed or confirmation_stale
         version_changed = False
         if confirm and (not was_confirmed or changed):
@@ -3097,9 +5287,7 @@ class SQLiteYobiRepository:
                 WHERE cart_id = ?
                 """,
                 (
-                    _cart_fingerprint(
-                        str(cart["cart_id"]), confirmed_version, current_total
-                    ),
+                    _cart_fingerprint(str(cart["cart_id"]), confirmed_version, current_total),
                     _now(),
                     cart["cart_id"],
                 ),
@@ -3150,10 +5338,7 @@ class SQLiteYobiRepository:
                     (data.idempotency_key,),
                 ).fetchone()
                 if existing:
-                    if (
-                        existing["cart_id"] != cart_id
-                        or existing["cart_version"] != cart_version
-                    ):
+                    if existing["cart_id"] != cart_id or existing["cart_version"] != cart_version:
                         raise ValueError("IDEMPOTENCY_KEY_REUSED")
                     if existing["cart_fingerprint"] != fingerprint:
                         connection.execute(
@@ -3626,8 +5811,7 @@ class SQLiteYobiRepository:
                     and expected_counts
                     and expected_counts == declared_actual_counts == observed_counts
                 ),
-                "menu_mappings_exact": supplemental_counts["mapped_menus"]
-                == EXPECTED_MAPPED_MENUS,
+                "menu_mappings_exact": supplemental_counts["mapped_menus"] == EXPECTED_MAPPED_MENUS,
                 "origin_declarations_exact": supplemental_counts["origin_declarations"]
                 == EXPECTED_ORIGIN_DECLARATIONS,
                 "merchant_ingredients_exact": supplemental_counts["merchant_ingredients"]

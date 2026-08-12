@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 import sys
 from array import array
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import oracledb
 
@@ -16,6 +19,12 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from app.core.config import Settings
 from app.db.seed_data import CATALOG_VERSION, build_seed
+from app.domain.preference_catalog import (
+    PREFERENCE_CATALOG_VERSION,
+    PREFERENCE_CATEGORIES,
+    localized_spice_references,
+    preference_query_aliases,
+)
 from app.knowledge.authoring import (
     CompiledKnowledgeRelease,
     reembed_release,
@@ -93,11 +102,11 @@ EXPECTED_COUNTS = {
     "hotels": 20,
     "service_areas": 3,
     "menu_categories": 100,
-    "dietary_attributes": 20,
+    "dietary_attributes": 15,
     "menu_dietary_attributes": 1217,
-    "allergens": 10,
-    "menu_allergens": 595,
-    "ingredients": 54,
+    "allergens": 8,
+    "menu_allergens": 48,
+    "ingredients": 48,
     "menu_ingredients": 565,
     "option_dietary_conflicts": 1,
 }
@@ -106,14 +115,23 @@ EXPECTED_KNOWLEDGE_COUNTS = {
     "concepts": 102,
     "relations": 100,
     "closure": 281,
-    "claims": 1997,
+    "claims": 345,
     "documents": 102,
-    "chunks": 918,
+    "chunks": 1263,
     "menu_mappings": 600,
     "origin_declarations": 13,
-    "merchant_ingredients": 119,
+    "merchant_ingredients": 120,
     "option_effects": 4,
 }
+
+SPICE_REFERENCE_VERSION = f"{PREFERENCE_CATALOG_VERSION}-spice"
+CERTIFICATION_RELEASE_ID = "synthetic-halal-certifications-v1"
+RECOMMENDATION_RELEASE_FAMILY_PREFIX = "structured-rag-v1"
+REVIEWED_CUISINE_ORIGIN_CODES = frozenset({"KOREAN", "CHINESE"})
+EXPECTED_PREFERENCE_OPTIONS = 44
+EXPECTED_ACTIVE_PREFERENCE_OPTIONS = 40
+EXPECTED_SPICE_REFERENCES = 10
+EXPECTED_HALAL_CERTIFICATIONS = 18
 
 MENU_RELATION_TABLES = {
     "menu_ingredient": ("menu_ingredients", "ingredient_id"),
@@ -327,6 +345,256 @@ def _prune_stale_catalog_dimensions(
         )
 
 
+def _oracle_text(value: Any) -> str:
+    raw = value.read() if hasattr(value, "read") else value
+    return str(raw or "")
+
+
+def _preference_alias_matches(text: str, aliases: tuple[str, ...]) -> bool:
+    ignored = {
+        "and",
+        "cuisine",
+        "dish",
+        "flavor",
+        "food",
+        "method",
+        "or",
+        "served",
+        "temperature",
+        "the",
+        "to",
+        "with",
+        "won",
+    }
+    for alias in aliases:
+        words = [
+            word
+            for word in re.sub(r"[^a-z0-9가-힣]+", " ", alias.lower()).split()
+            if word not in ignored
+            and (len(word) >= 3 or any("가" <= character <= "힣" for character in word))
+        ]
+        if not words:
+            continue
+        required_matches = 1 if len(words) == 1 else 2
+        if sum(word in text for word in words) >= required_matches:
+            return True
+    return False
+
+
+def _price_matches_v2(price: int, code: str) -> bool:
+    return {
+        "UNDER_10000": price < 10_000,
+        "FROM_10000_TO_19999": 10_000 <= price < 20_000,
+        "FROM_20000_TO_29999": 20_000 <= price < 30_000,
+        "OVER_30000": price >= 30_000,
+    }.get(code, False)
+
+
+def _supported_preference_codes(
+    cursor: oracledb.Cursor,
+    knowledge_release_id: str,
+) -> frozenset[str]:
+    """Mirror SQLite chip gating from reviewed PUBLIC_RAG material."""
+
+    cursor.execute(
+        """
+        SELECT menu.menu_id,menu.merchant_id,menu.price,menu.semantic_text,
+               menu.category,menu.name_en,chunk.content,document.document_id
+        FROM menu
+        JOIN menu_concept_map mapping
+          ON mapping.menu_id=menu.menu_id AND mapping.release_id=:release_id
+        JOIN dish_concept_closure closure
+          ON closure.release_id=mapping.release_id
+         AND closure.descendant_concept_id=mapping.concept_id
+         AND closure.inherit_claims=1
+        JOIN knowledge_chunk chunk
+          ON chunk.release_id=closure.release_id
+         AND chunk.concept_id=closure.ancestor_concept_id
+        JOIN knowledge_document document
+          ON document.release_id=chunk.release_id
+         AND document.document_id=chunk.document_id
+        WHERE menu.availability='AVAILABLE' AND mapping.mapping_status='MAPPED'
+          AND document.review_status IN ('REVIEWED_DEMO','VERIFIED')
+          AND (
+            JSON_VALUE(chunk.metadata_json,'$.recommendation_visibility')='PUBLIC_RAG'
+            OR (
+              JSON_VALUE(chunk.metadata_json,'$.recommendation_visibility') IS NULL
+              AND LOWER(chunk.facet)<>'safety'
+            )
+          )
+        """,
+        release_id=knowledge_release_id,
+    )
+    by_menu: dict[str, dict[str, Any]] = {}
+    for row in cursor.fetchall():
+        menu_id = str(row[0])
+        item = by_menu.setdefault(
+            menu_id,
+            {
+                "merchant_id": str(row[1]),
+                "price": int(row[2]),
+                "parts": [str(row[3] or ""), str(row[4] or ""), str(row[5] or "")],
+                "document_ids": set(),
+            },
+        )
+        item["parts"].append(_oracle_text(row[6]))
+        item["document_ids"].add(str(row[7]))
+
+    supported: set[str] = set()
+    for category in PREFERENCE_CATEGORIES:
+        for option in category.options:
+            matched = []
+            for menu in by_menu.values():
+                if category.code == "price_bands":
+                    is_match = _price_matches_v2(int(menu["price"]), option.code)
+                else:
+                    support_text = " ".join(menu["parts"]).lower()
+                    is_match = _preference_alias_matches(
+                        support_text,
+                        preference_query_aliases(option.code, "en"),
+                    )
+                if is_match:
+                    matched.append(menu)
+            document_ids = {
+                document_id
+                for menu in matched
+                for document_id in menu["document_ids"]
+            }
+            if (
+                len(matched) >= 3
+                and len({str(menu["merchant_id"]) for menu in matched}) >= 2
+                and document_ids
+                and (
+                    category.code != "cuisine_origins"
+                    or option.code in REVIEWED_CUISINE_ORIGIN_CODES
+                )
+            ):
+                supported.add(option.code)
+    return frozenset(supported)
+
+
+def _seed_structured_recommendation(
+    cursor: oracledb.Cursor,
+    prepared: PreparedSeed,
+) -> None:
+    knowledge_release_id = prepared.compiled_knowledge.release_id
+    release_family_id = (
+        f"{RECOMMENDATION_RELEASE_FAMILY_PREFIX}:"
+        f"{hashlib.sha256(knowledge_release_id.encode()).hexdigest()[:16]}"
+    )
+    now = datetime.now(timezone.utc)
+    cursor.execute(
+        """
+        UPDATE recommendation_release_family SET status='READY'
+        WHERE status='ACTIVE' AND release_family_id<>:release_family_id
+        """,
+        release_family_id=release_family_id,
+    )
+    _merge(
+        cursor,
+        "recommendation_release_family",
+        "release_family_id",
+        {
+            "release_family_id": release_family_id,
+            "knowledge_release_id": knowledge_release_id,
+            "catalog_release_id": CATALOG_VERSION,
+            "preference_catalog_version": PREFERENCE_CATALOG_VERSION,
+            "spice_reference_version": SPICE_REFERENCE_VERSION,
+            "certification_release_id": CERTIFICATION_RELEASE_ID,
+            "embedding_model": prepared.provider.model,
+            "embedding_version": prepared.provider.version,
+            "status": "ACTIVE",
+            "activated_at": now,
+        },
+    )
+    _merge(
+        cursor,
+        "recommendation_runtime_state",
+        "state_key",
+        {
+            "state_key": "ACTIVE",
+            "active_release_family_id": release_family_id,
+            "updated_at": now,
+        },
+    )
+
+    supported_codes = _supported_preference_codes(cursor, knowledge_release_id)
+    for category in PREFERENCE_CATEGORIES:
+        for display_order, option in enumerate(category.options):
+            _merge(
+                cursor,
+                "recommendation_preference_option",
+                ("catalog_version", "category_code", "option_code"),
+                {
+                    "catalog_version": PREFERENCE_CATALOG_VERSION,
+                    "category_code": category.code,
+                    "option_code": option.code,
+                    "label_ko": option.labels["ko"],
+                    "label_en": option.labels["en"],
+                    "query_aliases_json": json.dumps(option.query_aliases, ensure_ascii=False),
+                    "display_order": display_order,
+                    "active": int(option.code in supported_codes),
+                },
+            )
+
+    spice_by_locale = {
+        locale: {str(item["country"]): item for item in localized_spice_references(locale)}
+        for locale in ("ko", "en")
+    }
+    for country in ("KR", "US"):
+        levels_by_locale = {
+            locale: {
+                int(str(item["level"])): item
+                for item in cast(
+                    list[dict[str, object]],
+                    spice_by_locale[locale][country]["levels"],
+                )
+            }
+            for locale in ("ko", "en")
+        }
+        for level in range(1, 6):
+            _merge(
+                cursor,
+                "spice_reference",
+                ("reference_version", "country_code", "spice_level"),
+                {
+                    "reference_version": SPICE_REFERENCE_VERSION,
+                    "country_code": country,
+                    "spice_level": level,
+                    "label_ko": str(levels_by_locale["ko"][level]["label"]),
+                    "label_en": str(levels_by_locale["en"][level]["label"]),
+                    "example_ko": str(levels_by_locale["ko"][level]["example"]),
+                    "example_en": str(levels_by_locale["en"][level]["example"]),
+                },
+            )
+
+    cursor.execute("SELECT merchant_id FROM merchant ORDER BY merchant_id FETCH FIRST 18 ROWS ONLY")
+    merchant_ids = [str(row[0]) for row in cursor.fetchall()]
+    for merchant_id in merchant_ids:
+        _merge(
+            cursor,
+            "merchant_certification",
+            "certification_id",
+            {
+                "certification_id": f"cert_demo_halal_{merchant_id}",
+                "certification_release_id": CERTIFICATION_RELEASE_ID,
+                "merchant_id": merchant_id,
+                "certification_type": "HALAL",
+                "status": "ACTIVE",
+                "issuer": "Synthetic halal certification registry",
+                "certificate_number": f"DEMO-{merchant_id.upper()}",
+                "valid_from": datetime(2026, 1, 1, tzinfo=timezone.utc),
+                "valid_to": datetime(2099, 12, 31, 23, 59, 59, tzinfo=timezone.utc),
+                "scope_type": "MERCHANT",
+                "scope_ref": None,
+                "source_type": "DEMO_SEED",
+                "source_ref": f"synthetic-assumption:{merchant_id}",
+                "last_verified_at": now,
+                "is_synthetic": 1,
+            },
+        )
+
+
 def _json_value(value: Any) -> Any:
     raw = value.read() if hasattr(value, "read") else value
     return json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else raw
@@ -442,6 +710,41 @@ def verify(connection: oracledb.Connection) -> dict[str, Any]:
         }
         for row in cursor.fetchall()
     ]
+    cursor.execute(
+        """
+        SELECT family.release_family_id,family.knowledge_release_id,
+               family.preference_catalog_version,family.spice_reference_version,
+               family.certification_release_id,family.embedding_model,
+               family.embedding_version,family.status
+        FROM recommendation_runtime_state state
+        JOIN recommendation_release_family family
+          ON family.release_family_id=state.active_release_family_id
+        WHERE state.state_key='ACTIVE'
+        """
+    )
+    active_recommendation = cursor.fetchone()
+    cursor.execute(
+        """
+        SELECT COUNT(*),COALESCE(SUM(active),0)
+        FROM recommendation_preference_option
+        WHERE catalog_version=:catalog_version
+        """,
+        catalog_version=PREFERENCE_CATALOG_VERSION,
+    )
+    preference_option_count, active_preference_option_count = cursor.fetchone()
+    cursor.execute(
+        "SELECT COUNT(*) FROM spice_reference WHERE reference_version=:reference_version",
+        reference_version=SPICE_REFERENCE_VERSION,
+    )
+    spice_reference_count = int(cursor.fetchone()[0])
+    cursor.execute(
+        """
+        SELECT COUNT(*) FROM merchant_certification
+        WHERE certification_release_id=:release_id AND status='ACTIVE'
+        """,
+        release_id=CERTIFICATION_RELEASE_ID,
+    )
+    halal_certification_count = int(cursor.fetchone()[0])
     return {
         "catalog_version": CATALOG_VERSION,
         "counts": counts,
@@ -463,6 +766,24 @@ def verify(connection: oracledb.Connection) -> dict[str, Any]:
         "null_knowledge_chunk_vectors": null_knowledge_chunk_vectors,
         "incompatible_knowledge_chunk_metadata": incompatible_knowledge_chunk_metadata,
         "menu_embedding_metadata": menu_embedding_metadata,
+        "recommendation_release_family": (
+            {
+                "release_family_id": str(active_recommendation[0]),
+                "knowledge_release_id": str(active_recommendation[1]),
+                "preference_catalog_version": str(active_recommendation[2]),
+                "spice_reference_version": str(active_recommendation[3]),
+                "certification_release_id": str(active_recommendation[4]),
+                "embedding_model": str(active_recommendation[5]),
+                "embedding_version": str(active_recommendation[6]),
+                "status": str(active_recommendation[7]),
+            }
+            if active_recommendation
+            else None
+        ),
+        "preference_option_count": int(preference_option_count),
+        "active_preference_option_count": int(active_preference_option_count),
+        "spice_reference_count": spice_reference_count,
+        "halal_certification_count": halal_certification_count,
     }
 
 
@@ -505,6 +826,25 @@ def validate(result: dict[str, Any]) -> None:
         raise RuntimeError("SEED_KNOWLEDGE_EMBEDDING_COMPATIBILITY_FAILED")
     if result.get("knowledge_embedding_dimension") != 1536:
         raise RuntimeError("SEED_KNOWLEDGE_EMBEDDING_COMPATIBILITY_FAILED")
+    recommendation_release = result.get("recommendation_release_family") or {}
+    if not (
+        recommendation_release.get("knowledge_release_id") == KNOWLEDGE_RELEASE_ID
+        and recommendation_release.get("preference_catalog_version")
+        == PREFERENCE_CATALOG_VERSION
+        and recommendation_release.get("spice_reference_version") == SPICE_REFERENCE_VERSION
+        and recommendation_release.get("certification_release_id")
+        == CERTIFICATION_RELEASE_ID
+        and recommendation_release.get("status") == "ACTIVE"
+    ):
+        raise RuntimeError("SEED_RECOMMENDATION_RELEASE_NOT_ACTIVE")
+    if result.get("preference_option_count") != EXPECTED_PREFERENCE_OPTIONS:
+        raise RuntimeError("SEED_PREFERENCE_CATALOG_INTEGRITY_FAILED")
+    if result.get("active_preference_option_count") != EXPECTED_ACTIVE_PREFERENCE_OPTIONS:
+        raise RuntimeError("SEED_PREFERENCE_SUPPORT_GATING_FAILED")
+    if result.get("spice_reference_count") != EXPECTED_SPICE_REFERENCES:
+        raise RuntimeError("SEED_SPICE_REFERENCE_INTEGRITY_FAILED")
+    if result.get("halal_certification_count") != EXPECTED_HALAL_CERTIFICATIONS:
+        raise RuntimeError("SEED_HALAL_CERTIFICATION_INTEGRITY_FAILED")
 
 
 def validate_runtime_embedding(result: dict[str, Any], provider: Any) -> None:
@@ -597,6 +937,16 @@ def _apply_seed_transaction(
     provider = prepared.provider
     if fresh:
         for table in (
+            "structured_recommendation_request",
+            "session_recommendation_criteria",
+            "recommendation_runtime_state",
+            "merchant_certification",
+            "spice_reference",
+            "recommendation_preference_option",
+            "recommendation_release_family",
+        ):
+            cursor.execute(f"DELETE FROM {table}")
+        for table in (
             "knowledge_runtime_state",
             "merchant_ingredient",
             "merchant_origin_declaration",
@@ -679,6 +1029,7 @@ def _apply_seed_transaction(
         for row in seed[seed_key]:
             _merge(cursor, table, key_column, row)
     _prune_stale_catalog_dimensions(cursor, seed)
+    _seed_structured_recommendation(cursor, prepared)
     result = verify(connection)
     result["embedding_provider"] = provider.model
     validate(result)

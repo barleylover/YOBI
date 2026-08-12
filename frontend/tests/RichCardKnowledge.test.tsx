@@ -116,46 +116,6 @@ const dietaryKnowledgeCard: CardPayload = {
   },
 };
 
-const completeSafetyCard: CardPayload = {
-  ...knowledgeCard,
-  data: {
-    explanation: {
-      ...knowledgeCard.data.explanation,
-      allergen_claims: ["egg", "fish", "milk", "sesame", "shellfish_risk", "soy", "wheat"].map(
-        (code) => ({
-          allergen_id: `allergen_${code}`,
-          code,
-          status: "POSSIBLE" as const,
-          source_scope: "DISH_CONCEPT" as const,
-          source_id: `claim_${code}`,
-          source_version: "demo-wiki-v1",
-          confidence_band: "medium",
-          inherited: false,
-          cross_contamination_status: "UNKNOWN",
-        }),
-      ),
-      dietary_claims: [
-        "contains_animal_product",
-        "halal_not_verified",
-        "pork_possible",
-        "vegan_possible",
-        "vegetarian_possible",
-      ].map((code) => ({
-        attribute_id: `diet_${code}`,
-        code,
-        display_name: code.replaceAll("_", " "),
-        value_text: code.replaceAll("_", " "),
-        status: "POSSIBLE" as const,
-        source_scope: "DISH_CONCEPT" as const,
-        source_id: `claim_${code}`,
-        source_version: "demo-wiki-v1",
-        confidence_band: "medium",
-        inherited: false,
-      })),
-    },
-  },
-};
-
 function renderCard(card: CardPayload = knowledgeCard) {
   return render(
     <RichCard
@@ -183,15 +143,12 @@ describe("RichCard menu Wiki explanation", () => {
     expect(screen.getByLabelText("Typical ingredients and menu changes")).toHaveTextContent(
       "Menu record says absent; kitchen cross-contact is not verified",
     );
-    expect(screen.getByLabelText("Allergy and dietary signals")).toHaveTextContent("Fish");
-    expect(screen.getByLabelText("Allergy and dietary signals")).toHaveTextContent(
-      "General Wiki says absent; this restaurant recipe is not verified",
-    );
-    expect(screen.getByLabelText("Allergy and dietary signals")).toHaveTextContent("Not halal-verified by the Wiki");
+    expect(screen.getByLabelText("Dietary information")).toHaveTextContent("Not halal-verified by the Wiki");
+    expect(container).not.toHaveTextContent("Shellfish");
     expect(screen.getByLabelText("Typical preparation")).toHaveTextContent(
       "Fillings are rolled with rice in seaweed and sliced.",
     );
-    expect(screen.getByText(/not an allergy-safe guarantee/i)).toBeInTheDocument();
+    expect(screen.getByText(/Restaurant recipes and available options can vary/i)).toBeInTheDocument();
     expect(container).not.toHaveTextContent("claim_hidden_ingredient");
     expect(container).not.toHaveTextContent("chunk_hidden_safety");
   });
@@ -207,14 +164,10 @@ describe("RichCard menu Wiki explanation", () => {
     expect(screen.getByLabelText("대표 재료·변경 정보")).toHaveTextContent(
       "메뉴 기록상 미포함 · 주방 교차접촉 미확인",
     );
-    expect(screen.getByLabelText("알레르기·식단 신호")).toHaveTextContent("생선");
-    expect(screen.getByLabelText("알레르기·식단 신호")).toHaveTextContent(
-      "일반 Wiki상 미포함 · 이 매장 레시피 미확인",
-    );
+    expect(screen.getByLabelText("식이 정보")).toHaveTextContent("할랄 인증 상태");
+    expect(container).not.toHaveTextContent("갑각류");
     expect(screen.getByLabelText("대표 조리법")).toHaveTextContent("말아 썰기");
-    expect(screen.getByText(/알레르기 안전을 보장하지 않습니다/)).toHaveTextContent(
-      "주방 교차접촉 여부는 확인되지 않았습니다",
-    );
+    expect(screen.getByText(/매장별 레시피와 선택 가능한 옵션은 달라질 수 있습니다/)).toBeInTheDocument();
     expect(container).not.toHaveTextContent("claim_hidden_shellfish");
   });
 
@@ -222,18 +175,11 @@ describe("RichCard menu Wiki explanation", () => {
     const { container } = renderCard(dietaryKnowledgeCard);
 
     expect(screen.getByLabelText("Typical ingredients and menu changes")).toHaveTextContent("tuna");
-    expect(screen.getByLabelText("Allergy and dietary signals")).toHaveTextContent("Shellfish");
+    expect(screen.getByLabelText("Dietary information")).toHaveTextContent("Halal status");
+    expect(container).not.toHaveTextContent("Shellfish");
     expect(screen.getByLabelText("Typical preparation")).toHaveTextContent("Rolled And Sliced");
-    expect(screen.getByText(/not an allergy-safe guarantee/i)).toBeInTheDocument();
+    expect(screen.getByText(/Restaurant recipes and available options can vary/i)).toBeInTheDocument();
     expect(container).not.toHaveTextContent("claim_hidden_fish");
   });
 
-  it("does not truncate supported allergen or dietary safety signals", () => {
-    useSessionStore.getState().setLocaleDraft("한국어", "South Korea");
-    renderCard(completeSafetyCard);
-
-    const risks = screen.getByLabelText("알레르기·식단 신호");
-    expect(risks).toHaveTextContent("밀");
-    expect(risks).toHaveTextContent("채식 가능성");
-  });
 });

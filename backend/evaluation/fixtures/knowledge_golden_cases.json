@@ -39,7 +39,7 @@
         "enforced_by_this_runner": true,
         "concept_id": "dish_rose_tteokbokki",
         "expected_retrieval_concepts": ["dish_rose_tteokbokki", "dish_tteokbokki"],
-        "required_facets": ["overview", "taste", "texture", "culture", "analogy", "ingredients", "safety"],
+        "required_facets": ["paragraph", "essential_fact"],
         "required_claims": [
           {
             "claim_type": "INGREDIENT",
@@ -67,7 +67,7 @@
           "name_en": "Myeongdong classic tteokbokki",
           "category": "Tteokbokki",
           "price": 9900,
-          "spice_level": 3,
+          "spice_level": 4,
           "evidence_status": "RISK_SIGNAL",
           "is_synthetic": true
         },
@@ -90,7 +90,7 @@
         "enforced_by_this_runner": true,
         "concept_id": "dish_tteokbokki",
         "expected_retrieval_concepts": ["dish_tteokbokki"],
-        "required_facets": ["overview", "taste", "texture", "culture", "analogy", "ingredients", "safety"],
+        "required_facets": ["paragraph", "essential_fact"],
         "required_claims": [
           {
             "claim_type": "INGREDIENT",
@@ -140,7 +140,7 @@
         "enforced_by_this_runner": true,
         "concept_id": "dish_chicken_kalguksu",
         "expected_retrieval_concepts": ["dish_chicken_kalguksu", "dish_kalguksu"],
-        "required_facets": ["overview", "taste", "texture", "temperature", "culture", "analogy", "ingredients", "safety"],
+        "required_facets": ["paragraph", "essential_fact"],
         "required_claims": [
           {
             "claim_type": "INGREDIENT",

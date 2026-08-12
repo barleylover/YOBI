@@ -9,7 +9,6 @@
     "fish-cake udon",
     "odeng udon"
   ],
-  "version": "demo-wiki-2026.08.11-v1",
   "language": "en",
   "parents": [
     {
@@ -19,8 +18,17 @@
       "source_ref": "YOBI synthetic taxonomy: Eomuk udon hierarchy v1"
     }
   ],
-  "ingredients": [
+  "source_type": "SYNTHETIC_WIKI",
+  "source_refs": [
+    "YOBI synthetic culinary knowledge review: Eomuk udon v1"
+  ],
+  "license_state": "SYNTHETIC",
+  "review_status": "REVIEWED_DEMO",
+  "is_synthetic": true,
+  "version": "demo-wiki-2026.08.12-v2",
+  "essential_facts": [
     {
+      "fact_type": "INGREDIENT",
       "ingredient_id": "ingredient_wheat_noodles",
       "name_ko": "우동면",
       "name_en": "thick wheat noodles",
@@ -29,6 +37,7 @@
       "source_ref": "YOBI synthetic culinary knowledge review: Eomuk udon v1"
     },
     {
+      "fact_type": "INGREDIENT",
       "ingredient_id": "ingredient_fish_cake",
       "name_ko": "어묵",
       "name_en": "fish cake",
@@ -37,98 +46,47 @@
       "source_ref": "YOBI synthetic culinary knowledge review: Eomuk udon v1"
     },
     {
+      "fact_type": "INGREDIENT",
       "ingredient_id": "ingredient_broth",
       "name_ko": "육수",
       "name_en": "savory broth",
       "role": "CORE",
       "status": "PRESUMED_PRESENT",
       "source_ref": "YOBI synthetic culinary knowledge review: Eomuk udon v1"
-    }
-  ],
-  "allergens": [
-    {
-      "allergen_id": "allergen_wheat",
-      "status": "PRESUMED_PRESENT",
-      "source_ref": "YOBI synthetic culinary knowledge review: Eomuk udon v1"
     },
     {
-      "allergen_id": "allergen_fish",
-      "status": "PRESUMED_PRESENT",
-      "source_ref": "YOBI synthetic culinary knowledge review: Eomuk udon v1"
-    },
-    {
-      "allergen_id": "allergen_soy",
-      "status": "POSSIBLE",
-      "source_ref": "YOBI synthetic culinary knowledge review: Eomuk udon v1"
-    },
-    {
-      "allergen_id": "allergen_egg",
-      "status": "POSSIBLE",
-      "source_ref": "YOBI synthetic culinary knowledge review: Eomuk udon v1"
-    },
-    {
-      "allergen_id": "allergen_shellfish_risk",
-      "status": "POSSIBLE",
-      "source_ref": "YOBI synthetic culinary knowledge review: Eomuk udon v1"
-    }
-  ],
-  "dietary": [
-    {
-      "attribute_id": "diet_contains_animal_product",
-      "value_text": "Fish cake and often seafood stock provide animal products.",
-      "status": "PRESUMED_PRESENT",
-      "source_ref": "YOBI synthetic culinary knowledge review: Eomuk udon v1"
-    },
-    {
-      "attribute_id": "diet_halal_not_verified",
-      "value_text": "Processed fish cake and broth are not halal-verified by the Wiki.",
-      "status": "POSSIBLE",
-      "source_ref": "YOBI synthetic culinary knowledge review: Eomuk udon v1"
-    }
-  ],
-  "preparation": [
-    {
+      "fact_type": "PREPARATION",
       "method": "served_in_hot_broth",
       "value_text": "Udon noodles and sliced fish cake are heated in savory broth.",
       "status": "PRESUMED_PRESENT",
       "source_ref": "YOBI synthetic culinary knowledge review: Eomuk udon v1"
     }
   ],
-  "source_type": "SYNTHETIC_WIKI",
-  "source_refs": [
-    "YOBI synthetic culinary knowledge review: Eomuk udon v1"
-  ],
-  "license_state": "SYNTHETIC",
-  "review_status": "REVIEWED_DEMO",
-  "is_synthetic": true,
-  "updated_at": "2026-08-11"
+  "updated_at": "2026-08-12"
 }
 ---
 # Eomuk udon
 
-## Overview
+## Character and experience
+
 Eomuk udon is a Korean udon variant identified by sliced or folded fish cake served with thick noodles in broth.
 
-## Taste
 It is mild, savory and slightly sweet, with fish-cake and stock flavors.
 
-## Texture
 Springy thick noodles combine with soft, bouncy fish cake in clear broth.
 
-## Temperature
 It is served steaming hot.
 
-## Satiety
 Noodles and fish cake make it a filling snack-shop meal.
 
-## Culture
+## Context and comparisons
+
 It combines two staple Korean bunsik items: warm udon and eomuk broth.
 
-## Analogy
 It is a thick noodle soup with fish cake functioning as the defining topping.
 
-## Ingredients
+## Ingredients and variations
+
 Wheat noodles, fish cake and broth define the variant. Soy seasoning, scallion and egg may appear.
 
-## Safety
 Wheat and fish are presumed present. Soy, egg and shellfish risk are possible through processed fish cake and broth.

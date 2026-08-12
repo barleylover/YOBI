@@ -225,6 +225,14 @@ class ConversationView(BaseModel):
     meal_need_state: MealNeedState
     messages: list[dict[str, Any]] = Field(default_factory=list)
     latest_snapshot: RecommendationSnapshot | None = None
+    # V2 recommendation state is serialized here as public API payloads instead
+    # of importing the structured-recommendation models into this legacy module.
+    # Keeping the dependency one-way avoids models -> dialogue -> models cycles
+    # while reload recovery can still validate at the owning service boundary.
+    recommendation_criteria: dict[str, Any] | None = None
+    criteria_version: int | None = None
+    latest_recommendation: dict[str, Any] | None = None
+    active_recommendation: dict[str, Any] | None = None
 
 
 DialogueSource = Literal["rule", "llm_validated", "ui_event", "preset"]

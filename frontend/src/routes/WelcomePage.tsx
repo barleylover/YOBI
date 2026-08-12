@@ -19,16 +19,16 @@ export function WelcomePage() {
           </div>
           <section className="welcome-pitch">
             <h2>Order K-food with context, not guesswork.</h2>
-            <p>Tell YOBI what you crave, what you avoid, and where the food should arrive. Your first recommendation starts with the full delivery context.</p>
+            <p>Choose the cuisines, flavours, ingredients and food styles you want, then confirm where the food should arrive. YOBI uses those choices to prepare your recommendations.</p>
           </section>
           <div className="welcome-benefits">
             <span><Sparkles size={16} /> Understand flavour &amp; texture</span>
-            <span><ShieldCheck size={16} /> See risk &amp; unknown evidence</span>
+            <span><ShieldCheck size={16} /> Use halal &amp; vegan guidance</span>
             <span><MapPin size={16} /> Check delivery before choosing</span>
           </div>
         </div>
         <footer>
-          <p>Demo service · synthetic restaurants · no real charge</p>
+          <p>Restaurant and order information is prepared for this experience. No real order or charge is made.</p>
           <button className="primary-button welcome-cta" onClick={() => navigate("/start")}>Get started! <ArrowRight size={20} /></button>
         </footer>
       </section>

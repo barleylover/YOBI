@@ -1,5 +1,12 @@
 # YOBI Codex 인수 감사 보고서
 
+> **역사적 2026-08-06 인수 감사 기록.** 이 문서의 “현재 구현” 표현은 감사
+> 당시 상태만 뜻한다. 현재 추천 흐름의 권위는
+> [`STRUCTURED_RECOMMENDATION_IMPLEMENTATION_PLAN.md`](STRUCTURED_RECOMMENDATION_IMPLEMENTATION_PLAN.md),
+> 현재 검증 경계는 [`TEST_REPORT.md`](TEST_REPORT.md)를 따른다. 이후 구조화
+> 선택, 할랄·비건, 5단계 맵기, prose-first Wiki, one-call 추천 구현을 이 문서의
+> 초기 결함 목록으로 재평가하지 않는다.
+
 - 감사 기준일: 2026-08-06 (Asia/Seoul)
 - 최종 기준 문서: `YOBI_FINAL_MVP_CODEX_MASTER_PROMPT.md`
 - 감사 방식: 로컬 Repository 정적 검사, 기존 테스트 실행, 배포 VM/Oracle/OCI 상태의 읽기 전용 확인, 배포 화면 확인

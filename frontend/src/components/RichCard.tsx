@@ -24,10 +24,10 @@ const knowledgeCopy = {
     wiki: "Retrieved menu Wiki",
     originalWiki: "Retrieved Wiki passages",
     ingredients: "Typical ingredients and menu changes",
-    allergens: "Allergy and dietary signals",
+    dietary: "Dietary information",
     preparation: "Typical preparation",
-    synthetic: "Synthetic menu Wiki",
-    boundary: "General synthetic Wiki and menu records are not an allergy-safe guarantee. Restaurant recipe changes and kitchen cross-contact are not verified.",
+    synthetic: "Menu Wiki",
+    boundary: "Wiki passages describe the typical dish. Restaurant recipes and available options can vary.",
     menuPresent: "Listed for this menu",
     wikiPresent: "Defined by the general Wiki",
     presumed: "Commonly present",
@@ -41,10 +41,10 @@ const knowledgeCopy = {
     wiki: "검색된 메뉴 Wiki",
     originalWiki: "Wiki 원문 근거(영문)",
     ingredients: "대표 재료·변경 정보",
-    allergens: "알레르기·식단 신호",
+    dietary: "식이 정보",
     preparation: "대표 조리법",
-    synthetic: "합성 메뉴 Wiki",
-    boundary: "일반 합성 Wiki와 메뉴 기록은 알레르기 안전을 보장하지 않습니다. 매장별 레시피 변경과 주방 교차접촉 여부는 확인되지 않았습니다.",
+    synthetic: "메뉴 Wiki",
+    boundary: "Wiki는 일반적인 음식 특징을 설명합니다. 매장별 레시피와 선택 가능한 옵션은 달라질 수 있습니다.",
     menuPresent: "메뉴 데이터상 포함",
     wikiPresent: "일반 Wiki상 대표 구성",
     presumed: "일반적으로 포함",
@@ -55,20 +55,6 @@ const knowledgeCopy = {
     wikiAbsent: "일반 Wiki상 미포함 · 이 매장 레시피 미확인",
   },
 } as const;
-
-const koreanAllergenLabels: Record<string, string> = {
-  egg: "달걀",
-  fish: "생선",
-  milk: "우유",
-  dairy: "유제품",
-  peanut: "땅콩",
-  sesame: "참깨",
-  shellfish: "갑각류·조개류",
-  soy: "대두",
-  tree_nut: "견과류",
-  tree_nuts: "견과류",
-  wheat: "밀",
-};
 
 const koreanIngredientLabels: Record<string, string> = {
   ingredient_assorted_side_dishes: "여러 반찬",
@@ -203,7 +189,7 @@ const koreanFacetLabels: Record<string, string> = {
 
 function humanizeToken(value: string) {
   return value
-    .replace(/^(allergen|ingredient|diet)_/, "")
+    .replace(/^(ingredient|diet)_/, "")
     .replaceAll("_", " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
@@ -224,12 +210,6 @@ function statusText(
     return scope === "MENU" || scope === "OPTION" ? copy.menuAbsent : copy.wikiAbsent;
   }
   return copy.unknown;
-}
-
-function allergenLabel(code: string, language: string) {
-  const normalized = code.toLowerCase().replace(/^allergen_/, "").replace(/_risk$/, "");
-  if (language === "한국어") return koreanAllergenLabels[normalized] ?? humanizeToken(code);
-  return humanizeToken(normalized);
 }
 
 function ingredientLabel(
@@ -279,7 +259,6 @@ function KnowledgeSummary({
     ))
     .slice(0, 3);
   const ingredientClaims = (knowledge.ingredient_claims ?? []).slice(0, 6);
-  const allergenClaims = (knowledge.allergen_claims ?? []).slice(0, 10);
   const dietaryClaims = (knowledge.dietary_claims ?? [])
     .filter((claim) => dietarySafetyCodes.has(claim.code.toLowerCase().replace(/^diet_/, "")))
     .slice(0, 5);
@@ -287,7 +266,6 @@ function KnowledgeSummary({
   const hasKnowledge = Boolean(
     wikiPassages.length
     || ingredientClaims.length
-    || allergenClaims.length
     || dietaryClaims.length
     || preparationClaims.length,
   );
@@ -330,16 +308,10 @@ function KnowledgeSummary({
         </section>
       )}
 
-      {(allergenClaims.length > 0 || dietaryClaims.length > 0) && (
-        <section className="knowledge-section knowledge-risks" aria-label={ui.allergens}>
-          <h5><TriangleAlert size={15} aria-hidden="true" /> {ui.allergens}</h5>
+      {dietaryClaims.length > 0 && (
+        <section className="knowledge-section knowledge-risks" aria-label={ui.dietary}>
+          <h5><TriangleAlert size={15} aria-hidden="true" /> {ui.dietary}</h5>
           <ul className="knowledge-list">
-            {allergenClaims.map((claim) => (
-              <li key={`${claim.source_id}:${claim.allergen_id}`}>
-                <strong>{allergenLabel(claim.code, language)}</strong>
-                <small>{statusText(claim.status, claim.source_scope, language)}</small>
-              </li>
-            ))}
             {dietaryClaims.map((claim) => (
               <li key={`${claim.source_id}:${claim.attribute_id}`}>
                 <strong>{dietaryLabel(claim.code, claim.display_name, language)}</strong>
@@ -406,11 +378,6 @@ export function RichCard({ card, onChooseMenu, onQuickReply, disabled = false }:
               <h4>{category.category}</h4>
               {category.description && <p>{localizedCatalog ? dynamicCopy.catalogDescription : category.description}</p>}
               <ul>{(localizedCatalog ? [dynamicCopy.matchReason] : category.match_reasons).map((reason) => <li key={reason}>{reason}</li>)}</ul>
-              {(localizedCatalog && category.risk_hints.length ? [dynamicCopy.riskUnknown] : category.risk_hints).map((risk) => <p className="risk-copy" key={risk}><TriangleAlert size={14} /> {risk}</p>)}
-              <details className="source-drawer">
-                <summary>{journeyCopy.catalogSources}</summary>
-                <span>{journeyCopy.syntheticMenu} · {category.source_ids.length} catalog references</span>
-              </details>
               <button className="secondary-button full" disabled={disabled} onClick={() => onQuickReply(`Show me ${category.category}`, `${copy.chooseMenu}: ${category.category}`)}>
                 {copy.chooseMenu} <ArrowRight size={15} />
               </button>
@@ -456,16 +423,13 @@ export function RichCard({ card, onChooseMenu, onQuickReply, disabled = false }:
               <p>{localizedCatalog ? dynamicCopy.catalogDescription : menu.description}</p>
               <div className="fact-row">
                 <span><Clock3 size={15} /> {new Intl.NumberFormat(locale, { style: "unit", unit: "minute", unitDisplay: "short" }).format(menu.eta_min)}–{new Intl.NumberFormat(locale, { style: "unit", unit: "minute", unitDisplay: "short" }).format(menu.eta_max)}</span>
-                <span>{copy.spice} {menu.spice_level} / 3</span>
+                <span>{copy.spice} {menu.spice_level} / 5</span>
               </div>
               <EvidenceBadge status={menu.evidence_status} />
-              {(localizedCatalog && menu.risk_hints.length ? [dynamicCopy.riskUnknown] : menu.risk_hints).map((risk) => <p className="risk-copy" key={risk}>{risk}</p>)}
               <details className="source-drawer">
                 <summary>{copy.whyMatch}</summary>
                 <ul>{(localizedCatalog ? [dynamicCopy.matchReason] : menu.match_reasons).map((reason) => <li key={reason}>{reason}</li>)}</ul>
-                <span>{journeyCopy.syntheticMenu} · {menu.evidence_ids.length} evidence references</span>
               </details>
-              <p className="demo-label">{journeyCopy.syntheticMenu} · 2026-08-06</p>
               <button className="primary-button full" disabled={disabled} onClick={() => onChooseMenu(menu)}>
                 {copy.chooseMenu}
               </button>
@@ -488,10 +452,9 @@ export function RichCard({ card, onChooseMenu, onQuickReply, disabled = false }:
         <article>
           <h4>{menu ? menuName(menu, language) : explanation.category}</h4>
           <p>{localizedCatalog ? dynamicCopy.catalogDescription : explanation.cultural_analogy}</p>
-          {menu && <p><strong>{journeyCopy.portion}:</strong> {localizedCatalog ? dynamicCopy.catalogDescription : explanation.portion} · <strong>{copy.spice}:</strong> {menu.spice_level} / 3</p>}
+          {menu && <p><strong>{journeyCopy.portion}:</strong> {localizedCatalog ? dynamicCopy.catalogDescription : explanation.portion} · <strong>{copy.spice}:</strong> {menu.spice_level} / 5</p>}
 
           <KnowledgeSummary knowledge={explanation} language={language} />
-          {(localizedCatalog && explanation.unknown_fields.length ? [dynamicCopy.riskUnknown] : explanation.unknown_fields).map((item) => <p className="risk-copy" key={item}>{item}</p>)}
           <details className="source-drawer"><summary>{copy.evidence}</summary><span>{ui.synthetic} · {explanation.evidence_ids.length} grounded references</span></details>
         </article>
       </section>
@@ -499,7 +462,7 @@ export function RichCard({ card, onChooseMenu, onQuickReply, disabled = false }:
   }
 
   if (card.type === "dietary_evidence") {
-    const evidence = card.data.evidence ?? [];
+    const evidence = (card.data.evidence ?? []).filter((item) => !item.claim_type.toLowerCase().includes("allerg"));
     return (
       <section className="evidence-card" aria-label={card.title}>
         <div className="card-heading">

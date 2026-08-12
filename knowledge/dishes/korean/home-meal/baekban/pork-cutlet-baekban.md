@@ -9,7 +9,6 @@
     "pork-cutlet set meal",
     "donkkaseu rice set"
   ],
-  "version": "demo-wiki-2026.08.11-v1",
   "language": "en",
   "parents": [
     {
@@ -19,8 +18,17 @@
       "source_ref": "YOBI synthetic taxonomy: Pork cutlet baekban hierarchy v1"
     }
   ],
-  "ingredients": [
+  "source_type": "SYNTHETIC_WIKI",
+  "source_refs": [
+    "YOBI synthetic culinary knowledge review: Pork cutlet baekban v1"
+  ],
+  "license_state": "SYNTHETIC",
+  "review_status": "REVIEWED_DEMO",
+  "is_synthetic": true,
+  "version": "demo-wiki-2026.08.12-v2",
+  "essential_facts": [
     {
+      "fact_type": "INGREDIENT",
       "ingredient_id": "ingredient_pork",
       "name_ko": "돼지고기",
       "name_en": "pork cutlet",
@@ -29,6 +37,7 @@
       "source_ref": "YOBI synthetic culinary knowledge review: Pork cutlet baekban v1"
     },
     {
+      "fact_type": "INGREDIENT",
       "ingredient_id": "ingredient_wheat_flour",
       "name_ko": "튀김옷",
       "name_en": "wheat breading",
@@ -37,6 +46,7 @@
       "source_ref": "YOBI synthetic culinary knowledge review: Pork cutlet baekban v1"
     },
     {
+      "fact_type": "INGREDIENT",
       "ingredient_id": "ingredient_rice",
       "name_ko": "쌀",
       "name_en": "steamed rice",
@@ -45,104 +55,47 @@
       "source_ref": "YOBI synthetic culinary knowledge review: Pork cutlet baekban v1"
     },
     {
+      "fact_type": "INGREDIENT",
       "ingredient_id": "ingredient_assorted_side_dishes",
       "name_ko": "반찬",
       "name_en": "assorted side dishes",
       "role": "CORE",
       "status": "PRESUMED_PRESENT",
       "source_ref": "YOBI synthetic culinary knowledge review: Pork cutlet baekban v1"
-    }
-  ],
-  "allergens": [
-    {
-      "allergen_id": "allergen_wheat",
-      "status": "PRESUMED_PRESENT",
-      "source_ref": "YOBI synthetic culinary knowledge review: Pork cutlet baekban v1"
     },
     {
-      "allergen_id": "allergen_egg",
-      "status": "POSSIBLE",
-      "source_ref": "YOBI synthetic culinary knowledge review: Pork cutlet baekban v1"
-    },
-    {
-      "allergen_id": "allergen_milk",
-      "status": "POSSIBLE",
-      "source_ref": "YOBI synthetic culinary knowledge review: Pork cutlet baekban v1"
-    },
-    {
-      "allergen_id": "allergen_soy",
-      "status": "POSSIBLE",
-      "source_ref": "YOBI synthetic culinary knowledge review: Pork cutlet baekban v1"
-    },
-    {
-      "allergen_id": "allergen_sesame",
-      "status": "POSSIBLE",
-      "source_ref": "YOBI synthetic culinary knowledge review: Pork cutlet baekban v1"
-    }
-  ],
-  "dietary": [
-    {
-      "attribute_id": "diet_contains_animal_product",
-      "value_text": "Pork defines the set.",
-      "status": "PRESUMED_PRESENT",
-      "source_ref": "YOBI synthetic culinary knowledge review: Pork cutlet baekban v1"
-    },
-    {
-      "attribute_id": "diet_pork_possible",
-      "value_text": "Pork is presumed present.",
-      "status": "PRESUMED_PRESENT",
-      "source_ref": "YOBI synthetic culinary knowledge review: Pork cutlet baekban v1"
-    },
-    {
-      "attribute_id": "diet_halal_not_verified",
-      "value_text": "Pork makes the common concept incompatible with halal requirements.",
-      "status": "PRESUMED_PRESENT",
-      "source_ref": "YOBI synthetic culinary knowledge review: Pork cutlet baekban v1"
-    }
-  ],
-  "preparation": [
-    {
+      "fact_type": "PREPARATION",
       "method": "breaded_fried_and_assembled",
       "value_text": "Breaded pork is fried and assembled with rice, sauce and side dishes.",
       "status": "PRESUMED_PRESENT",
       "source_ref": "YOBI synthetic culinary knowledge review: Pork cutlet baekban v1"
     }
   ],
-  "source_type": "SYNTHETIC_WIKI",
-  "source_refs": [
-    "YOBI synthetic culinary knowledge review: Pork cutlet baekban v1"
-  ],
-  "license_state": "SYNTHETIC",
-  "review_status": "REVIEWED_DEMO",
-  "is_synthetic": true,
-  "updated_at": "2026-08-11"
+  "updated_at": "2026-08-12"
 }
 ---
 # Pork cutlet baekban
 
-## Overview
+## Character and experience
+
 Pork cutlet baekban is a set-meal variant centered on a breaded fried pork cutlet with rice and Korean-style sides.
 
-## Taste
 It is savory and fried with sweet-tangy sauce, balanced by rice, salad and banchan.
 
-## Texture
 Crisp breading and tender pork contrast with soft rice and varied side dishes.
 
-## Temperature
 The cutlet and rice are served hot; salad and banchan may be cool.
 
-## Satiety
 It is a rich, complete meal.
 
-## Culture
+## Context and comparisons
+
 This set format places Korean donkkaseu within the familiar baekban composition.
 
-## Analogy
 It is a breaded pork cutlet plate expanded with Korean rice-set accompaniments.
 
-## Ingredients
+## Ingredients and variations
+
 Pork, wheat breading, rice and side dishes define the variant. Egg wash, milk, soy sauce and sesame may appear.
 
-## Safety
 Wheat is presumed present. Egg, milk, soy and sesame are possible in breading, sauce and sides.

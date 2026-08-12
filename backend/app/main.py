@@ -10,7 +10,17 @@ from time import monotonic
 from typing import Any, Literal
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile, status
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from PIL import Image, UnidentifiedImageError
@@ -19,7 +29,12 @@ from pydantic import BaseModel, Field, model_validator
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging, log_event, safe_session_hash
 from app.db.repository import YobiRepository
-from app.dependencies import get_chat_service, get_demo_control, get_repository
+from app.dependencies import (
+    get_chat_service,
+    get_demo_control,
+    get_repository,
+    get_structured_recommendation_service,
+)
 from app.domain.address import normalize_address_text
 from app.domain.dialogue import ConversationEventInput, ConversationEventResult, ConversationView
 from app.domain.models import (
@@ -37,10 +52,17 @@ from app.domain.models import (
     Session,
     UserMessage,
 )
+from app.domain.structured_recommendation import (
+    RecommendationBatchV2,
+    RecommendationCriteriaCommit,
+    RecommendationCriteriaCommitResult,
+    RecommendationRequestInput,
+)
 from app.genai.providers import genai_configuration_errors
 from app.services.address_ocr import AddressCandidateTokenCodec, choose_address_ocr
 from app.services.chat_service import ChatService
 from app.services.demo_control import DemoControl, FailureMode
+from app.services.structured_recommendation import StructuredRecommendationService
 
 
 @asynccontextmanager
@@ -67,7 +89,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Content-Type", "X-Demo-Control-Token", "Idempotency-Key"],
 )
 
@@ -306,6 +328,136 @@ def _resolve_session_profile(
     return session, profile
 
 
+def _structured_recommendation_http_error(exc: Exception) -> HTTPException:
+    code = str(exc).strip("'") or type(exc).__name__.upper()
+    if code in {
+        "CHAT_STATE_VERSION_CONFLICT",
+        "CRITERIA_REQUEST_ID_REUSED",
+        "RECOMMENDATION_REQUEST_ID_REUSED",
+        "RECOMMENDATION_COMPLETION_PAYLOAD_CHANGED",
+        "RECOMMENDATION_DISPATCH_PAYLOAD_CHANGED",
+    }:
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": code})
+    if code in {"PREFERENCE_CATALOG_CHANGED", "PREFERENCE_CATALOG_VERSION_CONFLICT"}:
+        return HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "PREFERENCE_CATALOG_CHANGED"},
+        )
+    if code in {
+        "SESSION_NOT_FOUND",
+        "PROFILE_NOT_FOUND",
+        "RECOMMENDATION_CRITERIA_NOT_FOUND",
+        "RECOMMENDATION_CRITERIA_VERSION_NOT_FOUND",
+        "RECOMMENDATION_REQUEST_NOT_FOUND",
+    }:
+        return _not_found(code)
+    if code in {
+        "RECOMMENDATION_CRITERIA_EMPTY",
+        "HALAL_PORK_CRITERIA_CONFLICT",
+        "VEGAN_ANIMAL_INGREDIENT_CRITERIA_CONFLICT",
+        "INVALID_RECOMMENDATION_REQUEST_HASH",
+    }:
+        return HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": code},
+        )
+    if code in {"RECOMMENDATION_RELEASE_NOT_READY"}:
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": code},
+        )
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail={"code": "RECOMMENDATION_FAILED"},
+    )
+
+
+@app.get("/api/v1/recommendation/preferences/catalog")
+def get_recommendation_preference_catalog(
+    response: Response,
+    locale: str = "en",
+    if_none_match: str | None = Header(default=None, alias="If-None-Match"),
+    repository: YobiRepository = Depends(get_repository),
+) -> Any:
+    try:
+        payload = repository.get_preference_catalog(locale)
+    except Exception as exc:
+        raise _structured_recommendation_http_error(exc) from exc
+    version = str(payload.get("catalog_version", ""))
+    etag = f'"{version}"'
+    response.headers["ETag"] = etag
+    response.headers["Cache-Control"] = "private, max-age=300"
+    if if_none_match == etag:
+        response.status_code = status.HTTP_304_NOT_MODIFIED
+        return None
+    return payload
+
+
+@app.put(
+    "/api/v1/sessions/{session_id}/recommendation-criteria",
+    response_model=RecommendationCriteriaCommitResult,
+)
+def put_recommendation_criteria(
+    session_id: str,
+    commit: RecommendationCriteriaCommit,
+    repository: YobiRepository = Depends(get_repository),
+    recommendation_service: StructuredRecommendationService = Depends(
+        get_structured_recommendation_service
+    ),
+) -> RecommendationCriteriaCommitResult:
+    session = _require_session(repository, session_id)
+    try:
+        record = recommendation_service.commit_criteria(session, commit)
+    except Exception as exc:
+        raise _structured_recommendation_http_error(exc) from exc
+    return RecommendationCriteriaCommitResult(
+        session_id=record.session_id,
+        criteria=record.criteria,
+        criteria_version=record.criteria_version,
+        state_version=record.state_version,
+        criteria_hash=record.criteria_hash,
+        created_at=record.created_at,
+    )
+
+
+@app.post(
+    "/api/v1/sessions/{session_id}/recommendations",
+    response_model=RecommendationBatchV2,
+)
+def post_structured_recommendation(
+    session_id: str,
+    data: RecommendationRequestInput,
+    repository: YobiRepository = Depends(get_repository),
+    recommendation_service: StructuredRecommendationService = Depends(
+        get_structured_recommendation_service
+    ),
+) -> RecommendationBatchV2:
+    session, profile = _resolve_session_profile(repository, session_id)
+    try:
+        return recommendation_service.request_recommendation(session, profile, data)
+    except Exception as exc:
+        raise _structured_recommendation_http_error(exc) from exc
+
+
+@app.get(
+    "/api/v1/sessions/{session_id}/recommendation-requests/{request_id}",
+    response_model=RecommendationBatchV2,
+)
+def get_structured_recommendation_request(
+    session_id: str,
+    request_id: str,
+    repository: YobiRepository = Depends(get_repository),
+    recommendation_service: StructuredRecommendationService = Depends(
+        get_structured_recommendation_service
+    ),
+) -> RecommendationBatchV2:
+    _require_session(repository, session_id)
+    result = recommendation_service.get_request(session_id, request_id)
+    if result is None:
+        raise _not_found("RECOMMENDATION_REQUEST_NOT_FOUND")
+    return result
+
+
 @app.post("/api/v1/sessions/{session_id}/messages")
 def post_message(
     session_id: str,
@@ -398,17 +550,44 @@ def list_messages(
 
 @app.get("/api/v1/sessions/{session_id}/conversation", response_model=ConversationView)
 def get_conversation(
-    session_id: str, repository: YobiRepository = Depends(get_repository)
+    session_id: str,
+    repository: YobiRepository = Depends(get_repository),
+    recommendation_service: StructuredRecommendationService = Depends(
+        get_structured_recommendation_service
+    ),
 ) -> ConversationView:
     session = repository.get_session(session_id)
     if session is None:
         raise _not_found("SESSION_NOT_FOUND")
+    criteria = repository.get_recommendation_criteria(session_id)
+    latest_request = repository.get_latest_recommendation_request(session_id)
+    active_request = repository.get_latest_recommendation_request(session_id, active_only=True)
+    latest_batch = (
+        recommendation_service.get_request(session_id, latest_request.request_id)
+        if latest_request is not None
+        else None
+    )
+    active_batch = (
+        recommendation_service.get_request(session_id, active_request.request_id)
+        if active_request is not None
+        else None
+    )
     return ConversationView(
         session_id=session.session_id,
         state_version=session.state_version,
         meal_need_state=session.meal_need_state,
         messages=repository.list_messages(session_id),
         latest_snapshot=repository.get_recommendation_snapshot(session_id),
+        recommendation_criteria=(
+            criteria.criteria.model_dump(mode="json") if criteria is not None else None
+        ),
+        criteria_version=criteria.criteria_version if criteria is not None else None,
+        latest_recommendation=(
+            latest_batch.model_dump(mode="json") if latest_batch is not None else None
+        ),
+        active_recommendation=(
+            active_batch.model_dump(mode="json") if active_batch is not None else None
+        ),
     )
 
 

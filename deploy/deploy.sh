@@ -27,6 +27,7 @@ readonly EXPECTED_MIGRATIONS=(
   007_service_area_and_mutation_idempotency.sql
   008_checkout_cart_version.sql
   009_cart_confirmation_fingerprint.sql
+  010_structured_hybrid_rag_recommendation.sql
 )
 for migration in "${EXPECTED_MIGRATIONS[@]}"; do
   [[ -f "$ROOT_DIR/database/migrations/$migration" ]] \
@@ -39,7 +40,7 @@ actual_migration_list="$(
   done | LC_ALL=C sort
 )"
 [[ "$actual_migration_list" == "$expected_migration_list" ]] \
-  || { printf 'Migration directory must contain exactly 001-009.\n' >&2; exit 1; }
+  || { printf 'Migration directory must contain exactly 001-010.\n' >&2; exit 1; }
 
 compartment_id="$(oci iam compartment list --profile "$PROFILE" --region "$REGION" --all \
   --compartment-id-in-subtree true --query "data[?name=='${COMPARTMENT_NAME}' && \"lifecycle-state\"=='ACTIVE'].id | [0]" --raw-output)"
@@ -158,6 +159,9 @@ old_release_verified=false
 old_knowledge_release_id=""
 new_knowledge_release_id=""
 knowledge_restore_required=false
+old_recommendation_release_family_id=""
+new_recommendation_release_family_id=""
+recommendation_restore_required=false
 
 check_local_services() {
   curl --fail --silent --retry 8 --retry-delay 2 --retry-connrefused \
@@ -169,6 +173,12 @@ check_local_services() {
 run_knowledge_manager() {
   sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \
     "$new_release/venv/bin/python" "$new_release/scripts/manage_knowledge_release.py" "$@"
+}
+
+run_recommendation_manager() {
+  sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \
+    "$new_release/venv/bin/python" \
+    "$new_release/scripts/manage_recommendation_release.py" "$@"
 }
 
 restore_knowledge_release() {
@@ -194,6 +204,31 @@ restore_knowledge_release() {
   knowledge_restore_required=false
 }
 
+restore_recommendation_release() {
+  local active_now
+  [[ "$recommendation_restore_required" == true ]] || return 0
+  active_now="$(run_recommendation_manager get-active)" || return 1
+  if [[ -n "$old_recommendation_release_family_id" ]]; then
+    if [[ "$active_now" == "$old_recommendation_release_family_id" ]]; then
+      recommendation_restore_required=false
+      return 0
+    fi
+    if [[ -n "$active_now" ]]; then
+      run_recommendation_manager activate-ready \
+        "$old_recommendation_release_family_id" \
+        --expected-current "$active_now" >/dev/null || return 1
+    else
+      run_recommendation_manager activate-ready \
+        "$old_recommendation_release_family_id" \
+        --expect-no-active >/dev/null || return 1
+    fi
+  elif [[ -n "$active_now" ]]; then
+    run_recommendation_manager clear-active --expected-current "$active_now" \
+      >/dev/null || return 1
+  fi
+  recommendation_restore_required=false
+}
+
 restore_old_release() {
   local restored
   case "$old_release" in
@@ -202,6 +237,7 @@ restore_old_release() {
   esac
   [[ -n "$old_release" && -d "$old_release" ]] || return 1
   restore_knowledge_release || return 1
+  restore_recommendation_release || return 1
   sudo ln -sfn "$old_release" /opt/yobi/current || return 1
   sudo systemctl daemon-reload || return 1
   sudo systemctl restart yobi-api nginx || return 1
@@ -221,15 +257,18 @@ verify_old_release_on_failure() {
     && -n "$old_release" && -d "$old_release" ]]; then
     current_after_failure="$(readlink -f /opt/yobi/current 2>/dev/null || true)"
     if [[ "$knowledge_restore_required" != true \
+      && "$recommendation_restore_required" != true \
       && "$current_after_failure" == "$old_release" ]] && check_local_services; then
       printf 'Failed deployment retained release_id=%s; health/ready reverified.\n' \
         "${old_release##*/}" >&2
     elif ! restore_old_release; then
       printf 'CRITICAL: failed deployment left no health/ready verified release.\n' >&2
     fi
-  elif [[ "$deployment_complete" != true && "$knowledge_restore_required" == true ]]; then
-    if ! restore_knowledge_release; then
-      printf 'CRITICAL: failed deployment could not restore prior knowledge state.\n' >&2
+  elif [[ "$deployment_complete" != true \
+    && ( "$knowledge_restore_required" == true \
+      || "$recommendation_restore_required" == true ) ]]; then
+    if ! restore_knowledge_release || ! restore_recommendation_release; then
+      printf 'CRITICAL: failed deployment could not restore prior release pointers.\n' >&2
     fi
   fi
   exit "$status"
@@ -292,30 +331,46 @@ sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \
   'from deploy.secure_bootstrap import Settings, verify_database
 status = verify_database(Settings())
 if not (
-    status["expected_migration_count"] == status["applied_migration_count"] == 9
+    status["expected_migration_count"] == status["applied_migration_count"] == 10
     and status["latest_expected_migration"]
     == status["latest_applied_migration"]
-    == "009"
+    == "010"
 ):
     raise SystemExit("MIGRATION_LEDGER_NOT_EXACT")
-print("Verified exact migrations=001-009 runtime_user=YOBI_APP")'
+print("Verified exact migrations=001-010 runtime_user=YOBI_APP")'
 old_knowledge_release_id="$(run_knowledge_manager get-active)"
+old_recommendation_release_family_id="$(run_recommendation_manager get-active)"
 knowledge_restore_required=true
+recommendation_restore_required=true
 sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \
   "$new_release/venv/bin/python" "$new_release/scripts/seed_demo.py" --upsert
+sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \
+  "$new_release/venv/bin/python" "$new_release/scripts/seed_demo.py" --verify-only
 new_knowledge_release_id="$(run_knowledge_manager get-active)"
 [[ -n "$new_knowledge_release_id" ]] \
   || { printf 'Seed completed without an active knowledge release.\n' >&2; exit 1; }
+new_recommendation_release_family_id="$(run_recommendation_manager get-active)"
+[[ -n "$new_recommendation_release_family_id" ]] \
+  || { printf 'Seed completed without an active recommendation release family.\n' >&2; exit 1; }
 release_state_command=(
   sudo "$new_release/venv/bin/python" "$new_release/deploy/release_state.py"
   write-state "$release_id" "$archive_sha256" "$new_knowledge_release_id"
+  --recommendation-release-family-id "$new_recommendation_release_family_id"
 )
 if [[ -n "$old_knowledge_release_id" ]]; then
   release_state_command+=(--previous-knowledge-release-id "$old_knowledge_release_id")
 fi
+if [[ -n "$old_recommendation_release_family_id" ]]; then
+  release_state_command+=(
+    --previous-recommendation-release-family-id
+    "$old_recommendation_release_family_id"
+  )
+fi
 "${release_state_command[@]}"
-printf 'knowledge_release_id=%s\nprevious_knowledge_release_id=%s\n' \
+printf 'knowledge_release_id=%s\nprevious_knowledge_release_id=%s\nrecommendation_release_family_id=%s\nprevious_recommendation_release_family_id=%s\n' \
   "$new_knowledge_release_id" "${old_knowledge_release_id:-none}" \
+  "$new_recommendation_release_family_id" \
+  "${old_recommendation_release_family_id:-none}" \
   | sudo tee -a "$new_release/.yobi-release-manifest" >/dev/null
 
 harden_release_tree "$new_release" \
@@ -325,6 +380,10 @@ if ! sudo systemctl daemon-reload \
   || ! sudo systemctl restart yobi-api nginx \
   || ! check_local_services \
   || [[ "$(readlink -f /opt/yobi/current 2>/dev/null || true)" != "$new_release" ]] \
+  || ! sudo env PYTHONPATH="$new_release/backend:$new_release" \
+    "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
+    "$new_release/scripts/structured_recommendation_smoke.py" \
+    --base-url http://127.0.0.1 \
   || ! write_ready_marker "$new_release"; then
   if [[ -n "$old_release" ]]; then
     if ! restore_old_release; then
@@ -349,6 +408,7 @@ if [[ -n "$old_release" ]]; then
 fi
 deployment_complete=true
 knowledge_restore_required=false
+recommendation_restore_required=false
 cleanup_remote_archive
 printf 'Activated release_id=%s archive_sha256=%s and verified health/ready.\n' \
   "$release_id" "$archive_sha256"

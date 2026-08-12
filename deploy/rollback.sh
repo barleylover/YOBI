@@ -73,13 +73,15 @@ harden_release_tree "$current" \
   || { printf 'Current release permissions could not be hardened.\n' >&2; exit 1; }
 state_manager="$current/deploy/release_state.py"
 knowledge_manager="$current/scripts/manage_knowledge_release.py"
+recommendation_manager="$current/scripts/manage_recommendation_release.py"
 runtime_env_runner=(
   "$current/venv/bin/python"
   "$current/deploy/run_with_runtime_env.py"
   /etc/yobi/yobi.env
 )
 [[ -x "$current/venv/bin/python" && -f "$state_manager" \
-  && -f "$knowledge_manager" && -f "$current/deploy/run_with_runtime_env.py" ]] \
+  && -f "$knowledge_manager" && -f "$recommendation_manager" \
+  && -f "$current/deploy/run_with_runtime_env.py" ]] \
   || { printf 'Current release lacks trusted rollback helpers.\n' >&2; exit 1; }
 
 run_knowledge_manager() {
@@ -87,8 +89,15 @@ run_knowledge_manager() {
     "$current/venv/bin/python" "$knowledge_manager" "$@"
 }
 
+run_recommendation_manager() {
+  env PYTHONPATH="$current" "${runtime_env_runner[@]}" \
+    "$current/venv/bin/python" "$recommendation_manager" "$@"
+}
+
 original_knowledge_release_id=""
 knowledge_restore_required=false
+original_recommendation_release_family_id=""
+recommendation_restore_required=false
 rollback_activation_started=false
 
 restore_original_knowledge() {
@@ -114,6 +123,31 @@ restore_original_knowledge() {
   knowledge_restore_required=false
 }
 
+restore_original_recommendation() {
+  local active_now
+  [[ "$recommendation_restore_required" == true ]] || return 0
+  active_now="$(run_recommendation_manager get-active)" || return 1
+  if [[ -n "$original_recommendation_release_family_id" ]]; then
+    if [[ "$active_now" == "$original_recommendation_release_family_id" ]]; then
+      recommendation_restore_required=false
+      return 0
+    fi
+    if [[ -n "$active_now" ]]; then
+      run_recommendation_manager activate-ready \
+        "$original_recommendation_release_family_id" \
+        --expected-current "$active_now" >/dev/null || return 1
+    else
+      run_recommendation_manager activate-ready \
+        "$original_recommendation_release_family_id" \
+        --expect-no-active >/dev/null || return 1
+    fi
+  elif [[ -n "$active_now" ]]; then
+    run_recommendation_manager clear-active --expected-current "$active_now" \
+      >/dev/null || return 1
+  fi
+  recommendation_restore_required=false
+}
+
 check_local_services() {
   curl --fail --silent --retry 8 --retry-delay 2 --retry-connrefused \
     --max-time 10 http://127.0.0.1/healthz >/dev/null \
@@ -124,6 +158,7 @@ check_local_services() {
 restore_original_release() {
   local restored
   restore_original_knowledge || return 1
+  restore_original_recommendation || return 1
   ln -sfn "$current" "$CURRENT_LINK" || return 1
   systemctl daemon-reload || return 1
   systemctl restart yobi-api nginx || return 1
@@ -140,7 +175,7 @@ restore_on_failure() {
   trap - EXIT
   if [[ "$rollback_complete" != true && "$rollback_activation_started" == true ]]; then
     if ! restore_original_release; then
-      printf 'CRITICAL: failed rollback could not restore original app and knowledge state.\n' >&2
+      printf 'CRITICAL: failed rollback could not restore original app and release pointers.\n' >&2
     fi
   fi
   exit "$status"
@@ -177,6 +212,9 @@ if [[ -z "$target_knowledge_release_id" \
   printf 'Rollback target uses the knowledge-release contract but lacks trusted state.\n' >&2
   exit 1
 fi
+target_recommendation_release_family_id="$("$current/venv/bin/python" "$state_manager" \
+  read-field "$target_id" recommendation_release_family_id --allow-missing)" \
+  || { printf 'Rollback target recommendation release state is invalid.\n' >&2; exit 1; }
 if [[ -n "$target_knowledge_release_id" ]]; then
   original_knowledge_release_id="$(run_knowledge_manager get-active)"
   rollback_activation_started=true
@@ -190,6 +228,24 @@ if [[ -n "$target_knowledge_release_id" ]]; then
   fi
 else
   rollback_activation_started=true
+fi
+
+original_recommendation_release_family_id="$(run_recommendation_manager get-active)"
+if [[ -n "$target_recommendation_release_family_id" ]]; then
+  recommendation_restore_required=true
+  if [[ -n "$original_recommendation_release_family_id" ]]; then
+    run_recommendation_manager activate-ready \
+      "$target_recommendation_release_family_id" \
+      --expected-current "$original_recommendation_release_family_id" >/dev/null
+  else
+    run_recommendation_manager activate-ready \
+      "$target_recommendation_release_family_id" \
+      --expect-no-active >/dev/null
+  fi
+elif [[ -n "$original_recommendation_release_family_id" ]]; then
+  recommendation_restore_required=true
+  run_recommendation_manager clear-active \
+    --expected-current "$original_recommendation_release_family_id" >/dev/null
 fi
 
 ln -sfn "$target" "$CURRENT_LINK"
@@ -216,5 +272,6 @@ if ! "$current/venv/bin/python" "$state_manager" write-previous "$current_id"; t
 fi
 rollback_complete=true
 knowledge_restore_required=false
+recommendation_restore_required=false
 rollback_activation_started=false
 printf 'Activated rollback release_id=%s and passed local health/ready checks.\n' "$target_id"

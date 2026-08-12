@@ -6,16 +6,18 @@ from collections import Counter, defaultdict
 from app.db.seed_data import build_seed
 from app.knowledge.catalog_seed import build_knowledge_catalog_seed
 
-SUPPORTED_ONBOARDING_ALLERGENS = {
+LEGACY_CATALOG_ALLERGENS = {
+    "allergen_cross_contamination_unknown",
     "allergen_shellfish_risk",
     "allergen_fish",
     "allergen_milk",
     "allergen_egg",
-    "allergen_peanut",
     "allergen_tree_nut",
     "allergen_wheat",
     "allergen_soy",
-    "allergen_sesame",
+}
+LEGACY_EXPLICIT_ABSENCE_ALLERGENS = LEGACY_CATALOG_ALLERGENS - {
+    "allergen_cross_contamination_unknown"
 }
 
 
@@ -75,7 +77,7 @@ def test_demo_catalog_has_realistic_scale_specialization_and_operational_variety
     assert len({str(menu["description"]) for menu in seed["menus"]}) >= 70
 
 
-def test_menu_level_facts_are_intentionally_incomplete_but_cover_demo_allergies() -> None:
+def test_menu_level_facts_keep_sparse_legacy_allergen_compatibility_data() -> None:
     seed = build_seed()
     menu_count = len(seed["menus"])
     ingredient_counts = Counter(row["menu_id"] for row in seed["menu_ingredients"])
@@ -83,8 +85,8 @@ def test_menu_level_facts_are_intentionally_incomplete_but_cover_demo_allergies(
 
     assert 0.25 <= len(ingredient_counts) / menu_count <= 0.35
     assert all(2 <= count <= 5 for count in ingredient_counts.values())
-    assert 0.30 <= len(allergen_menu_ids) / menu_count <= 0.40
-    assert SUPPORTED_ONBOARDING_ALLERGENS <= {
+    assert 0 < len(allergen_menu_ids) / menu_count <= 0.10
+    assert LEGACY_CATALOG_ALLERGENS == {
         str(row["allergen_id"]) for row in seed["allergens"]
     }
 
@@ -101,7 +103,7 @@ def test_menu_level_facts_are_intentionally_incomplete_but_cover_demo_allergies(
     assert explicit_absences == {
         (service_area["service_area_id"], allergen_id)
         for service_area in seed["service_areas"]
-        for allergen_id in SUPPORTED_ONBOARDING_ALLERGENS
+        for allergen_id in LEGACY_EXPLICIT_ABSENCE_ALLERGENS
     }
     evidence_by_id = {str(row["evidence_id"]): row for row in seed["evidence"]}
     for row in seed["menu_allergens"]:
@@ -126,7 +128,7 @@ def test_menu_level_facts_are_intentionally_incomplete_but_cover_demo_allergies(
     assert any(
         (str(menu["menu_id"]), allergen_id) not in declared_allergen_pairs
         for menu in seed["menus"]
-        for allergen_id in SUPPORTED_ONBOARDING_ALLERGENS
+        for allergen_id in LEGACY_CATALOG_ALLERGENS
     )
 
 
@@ -162,16 +164,13 @@ def test_every_menu_maps_to_a_reusable_wiki_node_without_merchant_specific_conce
     )
 
 
-def test_wiki_compiles_structured_preparation_dietary_and_nine_allergen_claims() -> None:
+def test_wiki_compiles_only_prose_backed_essential_claims() -> None:
     catalog = build_knowledge_catalog_seed(build_seed()["menus"])
     claims = catalog.compiled_release.claims
     claim_types = Counter(str(row["claim_type"]) for row in claims)
 
     assert 70 <= len(catalog.compiled_release.concepts) <= 120
+    assert claim_types["INGREDIENT"] >= 200
     assert claim_types["PREPARATION"] >= 20
-    assert claim_types["DIETARY"] >= 20
-    assert SUPPORTED_ONBOARDING_ALLERGENS <= {
-        str(row["allergen_id"])
-        for row in claims
-        if row["claim_type"] == "ALLERGEN"
-    }
+    assert set(claim_types) == {"INGREDIENT", "PREPARATION"}
+    assert not any(row.get("allergen_id") for row in claims)

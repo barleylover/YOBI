@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     llm_max_tools_per_request: int = Field(default=4, ge=1, le=14)
     llm_max_tool_calls_per_response: int = Field(default=4, ge=1, le=14)
     tool_call_max_steps: int = Field(default=6, ge=1, le=12)
+    recommendation_prompt_version: str = "yobi-structured-rag-v2"
+    recommendation_raw_hits_per_value: int = Field(default=20, ge=4, le=100)
+    recommendation_evidence_pool_limit: int = Field(default=24, ge=6, le=60)
+    recommendation_passages_per_menu: int = Field(default=4, ge=1, le=8)
+    recommendation_result_limit: int = Field(default=3, ge=1, le=5)
+    recommendation_request_orphan_seconds: int = Field(default=180, ge=30, le=3600)
     max_upload_mb: int = 8
     address_ocr_provider: Literal["fixture", "tesseract", "rapidocr"] = "tesseract"
     log_level: str = "INFO"

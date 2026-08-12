@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sqlite3
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -8,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.core.config import Settings
+from app.db.sqlite_repository import SQLiteYobiRepository
 from app.knowledge.catalog_seed import KNOWLEDGE_CATALOG_VERSION, KNOWLEDGE_RELEASE_ID
 from app.rag.providers import DeterministicEmbeddingProvider, choose_embedding_provider
 
@@ -34,17 +36,17 @@ def valid_result() -> dict[str, object]:
             "concepts": 102,
             "relations": 100,
             "closure": 281,
-            "claims": 1997,
+            "claims": 345,
             "documents": 102,
-            "chunks": 918,
+            "chunks": 1263,
         },
         "knowledge_declared_actual_counts": {
             "concepts": 102,
             "relations": 100,
             "closure": 281,
-            "claims": 1997,
+            "claims": 345,
             "documents": 102,
-            "chunks": 918,
+            "chunks": 1263,
         },
         "knowledge_embedding_model": "yobi-semantic-hash-v1",
         "knowledge_embedding_dimension": 1536,
@@ -53,12 +55,12 @@ def valid_result() -> dict[str, object]:
             "concepts": 102,
             "relations": 100,
             "closure": 281,
-            "claims": 1997,
+            "claims": 345,
             "documents": 102,
-            "chunks": 918,
+            "chunks": 1263,
             "menu_mappings": 600,
             "origin_declarations": 13,
-            "merchant_ingredients": 119,
+            "merchant_ingredients": 120,
             "option_effects": 4,
         },
         "null_knowledge_chunk_vectors": 0,
@@ -71,6 +73,20 @@ def valid_result() -> dict[str, object]:
                 "count": 600,
             }
         ],
+        "recommendation_release_family": {
+            "release_family_id": "structured-rag-v1:test",
+            "knowledge_release_id": KNOWLEDGE_RELEASE_ID,
+            "preference_catalog_version": seed_demo.PREFERENCE_CATALOG_VERSION,
+            "spice_reference_version": seed_demo.SPICE_REFERENCE_VERSION,
+            "certification_release_id": seed_demo.CERTIFICATION_RELEASE_ID,
+            "embedding_model": "yobi-semantic-hash-v1",
+            "embedding_version": "2026-08-06",
+            "status": "ACTIVE",
+        },
+        "preference_option_count": seed_demo.EXPECTED_PREFERENCE_OPTIONS,
+        "active_preference_option_count": seed_demo.EXPECTED_ACTIVE_PREFERENCE_OPTIONS,
+        "spice_reference_count": seed_demo.EXPECTED_SPICE_REFERENCES,
+        "halal_certification_count": seed_demo.EXPECTED_HALAL_CERTIFICATIONS,
     }
 
 
@@ -106,6 +122,23 @@ def test_expected_counts_match_the_generated_seed() -> None:
     seed = seed_demo.build_seed()
     actual = {seed_key: len(seed[seed_key]) for _, _, seed_key in seed_demo.TABLE_ORDER}
     assert actual == seed_demo.EXPECTED_COUNTS
+
+
+def test_menu_allergens_reference_only_the_current_allergen_catalog() -> None:
+    seed = seed_demo.build_seed()
+
+    assert {
+        str(row["allergen_id"]) for row in seed["menu_allergens"]
+    } <= {str(row["allergen_id"]) for row in seed["allergens"]}
+
+
+def test_fresh_sqlite_seed_preserves_all_foreign_keys(tmp_path: Path) -> None:
+    repository = SQLiteYobiRepository(tmp_path / "fresh-yobi.db")
+
+    repository.initialize()
+
+    with sqlite3.connect(repository.path) as connection:
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
 def test_seed_transaction_commits_once_only_after_success(monkeypatch: pytest.MonkeyPatch) -> None:

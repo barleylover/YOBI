@@ -170,6 +170,7 @@ def test_bootstrap_requires_every_migration_shipped_in_the_release() -> None:
     assert records["007"][0] == "007_service_area_and_mutation_idempotency.sql"
     assert records["008"][0] == "008_checkout_cart_version.sql"
     assert records["009"][0] == "009_cart_confirmation_fingerprint.sql"
+    assert records["010"][0] == "010_structured_hybrid_rag_recommendation.sql"
     assert all(len(checksum) == 64 for _, checksum in records.values())
 
 

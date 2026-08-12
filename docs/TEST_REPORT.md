@@ -1,24 +1,121 @@
 # YOBI test and deployment evidence ledger
 
+- Structured-recommendation local checkpoint: 2026-08-12 KST
 - Historical public baseline verification: 2026-08-08 KST
 - Chatbot-improvement worktree checkpoint: 2026-08-09 KST
 - Wiki-centric local worktree checkpoint: 2026-08-11 KST
-- Source of truth: `YOBI_FINAL_MVP_CODEX_MASTER_PROMPT.md`
-- Improvement goal: `YOBI_CHATBOT_IMPROVEMENT_CODEX_GOAL.md`
+- Current flow authority: `docs/STRUCTURED_RECOMMENDATION_IMPLEMENTATION_PLAN.md`
+- Historical master spec: `YOBI_FINAL_MVP_CODEX_MASTER_PROMPT.md`
+- Historical chatbot goal: `YOBI_CHATBOT_IMPROVEMENT_CODEX_GOAL.md`
 - Improvement branch: `codex/master-spec-completion`
 - Historical deployed baseline release: `20260807T194921Z`
 - Chatbot-improvement deployed release: `20260809T084353Z-704f74712d9d`
 - Verified rollback target: `20260809T083629Z-bfb59275b93f`
 - Public address: resolved from OCI at runtime; not stored in Git
-- Evidence boundary: the final-gate section below records the 2026-08-09 chatbot
-  improvement release; later long-form sections explicitly labelled historical remain
-  evidence for their earlier releases only.
+- Evidence boundary: only the first section below applies to the 2026-08-12 structured
+  flow. Every Oracle/OCI/public result later in the file is historical evidence for
+  its named 2026-08-09-or-earlier release and does not prove the current revision.
 
-## 2026-08-11 Wiki-centric local checkpoint — not deployed
+## 2026-08-12 structured recommendation checkpoint — local only
 
-This section records the current local data and code contract, not a live environment
-result. The v3 catalog has not been seeded into the existing OCI Oracle database,
-activated as an OCI release, or checked through public health/readiness/browser flows.
+This section records the current working-tree contract and completed local checks. It
+does **not** record a deployment. Migration `010` has not been applied to Oracle, the
+new recommendation release family has not been activated on OCI, and the structured
+flow has not been verified through the public site.
+
+### Implemented source contract
+
+| Boundary | Current source contract | Evidence status |
+|---|---|---|
+| User flow | Confirmed profile/address → structured multi-select → result buttons → existing order flow; no recommendation composer | Local React/API implementation and focused tests |
+| Selection | Same category `OR`; non-empty subjective categories express cross-category `AND`; stable catalog codes and localized labels | Local structural/domain/frontend contract; semantic passage fit needs provider/golden-set evaluation |
+| Dietary scope | Explicit halal-certification and vegan choices only; no public v2 allergy filter or safety guarantee | Local domain/UI/API contract |
+| Spice | Reviewed menu maximum and KR/US reference examples use `1..5` | Local seed/domain/frontend contract |
+| Eligibility | Merchant service area, menu availability, base price, maximum spice, valid halal scope, confirmed vegan conflict, and similar-history exclusion are server owned | SQLite implementation exercised; Oracle implementation statically checked only |
+| Retrieval | Per-value exact/essential, lexical, and vector ranks are fused; bounded raw hits require real category coverage, while a lower-weight profile query cannot count as evidence | SQLite deterministic-vector contract exercised; live Oracle vector query **NOT RUN** |
+| Generation | One no-tool/no-continuation dispatch chooses final pool menus and explanations; valid model order is preserved | Fake-provider/service/generator contract exercised; live OCI provider **NOT RUN** |
+| Replay | Request ledger prevents duplicate dispatch; post-dispatch uncertainty does not auto-redispatch | Local repository/service contract |
+| Data | 60 synthetic merchants, 600 menus, 100 categories, 102 Wiki documents, 345 essential claims, 918 prose paragraphs, and 1,263 total chunks | Local compiler/seed contract only |
+| Migration package | Additive/checksum migration set `001`–`010` | Parser/deploy-source checks pass; live Oracle application **NOT RUN** |
+
+The local release family foreign-keys its knowledge release and stores versioned
+catalog/preference/spice/certification/embedding identities. Independent immutable
+catalog/certification manifest FKs and live atomic family activation/rollback have not
+been implemented and verified as an Oracle deployment gate. A current local
+`/readyz` success would cover its existing catalog/knowledge/provider configuration
+checks, not those missing family-manifest gates.
+
+The prose-first Wiki keeps 245 ingredient and 100 preparation essential claims.
+Subjective material is represented by 918 natural paragraphs; the total 1,263 chunks
+combine those paragraphs with 345 readable essential-fact chunks. Legacy allergy
+tables/identifiers remain for storage compatibility but are excluded from the public
+v2 recommendation context and acceptance contract. Reviews and merchant promotional
+prose remain synthetic display data with recommendation and grounding weight `0`.
+
+### Completed local checks at this checkpoint
+
+These scopes overlap and must not be summed into one test total.
+
+| Local check | Result | What it proves |
+|---|---:|---|
+| Wiki, preference-catalog, prose compiler, and recommendation-generator targeted Pytest | **PASS — 26 tests** | Prose/essential chunk contract, catalog vocabulary/labels, and bounded generator validation |
+| Deploy, migration, bootstrap, seed, and documentation-contract targeted Pytest | **PASS — 75 tests** | Migration package/parser and local seed/release expectations; not live Oracle DDL |
+| Structured service, generator, and migration targeted Pytest | **PASS — 21 tests** | Empty-pool zero call, one-dispatch result, replay/fallback, order preservation, and request-ledger behavior |
+| Hybrid retrieval targeted Pytest | **PASS — 30 tests** | SQLite/Oracle source parity for per-value vector/lexical/exact-essential RRF, raw-hit and passage limits, category OR/coverage, and non-authoritative soft-profile scoring; no live Oracle query |
+| Post-review structured persistence/service targeted Pytest | **PASS — 21 tests** | Current-UTC snapshot/live projection, stale removal, v2 selection/order boundary, open-end certification validity, and SQLite/Oracle contract hardening |
+| Updated legacy fallback/golden acceptance scope | **PASS — 29 tests; 369 acceptance assertions** | Five-level spice, prose-first public facets, catalog gating, and no public allergy-list copy in retained regression paths |
+| Updated catalog/safety/readiness regression scope | **PASS — 23 tests** | Current sparse legacy-allergy expectations, essential Wiki claim types, menu distribution, and shared Oracle hybrid-weighting contract |
+| Frontend ESLint | **PASS** | Current structured UI lint contract |
+| Full backend Pytest | **PASS — 386 tests; 1 StarletteDeprecationWarning; 266.62s** | Whole local SQLite/backend regression for the current working tree; no live Oracle execution |
+| Whole-tree Ruff | **PASS** | Backend, tests, scripts, and deployment-source lint contract |
+| Whole-source MyPy | **PASS — 72 source files** | Static type contract only; no live Oracle/provider execution |
+| Frontend Vitest | **PASS — 19/19 tests** | Structured selector/result/API/order component contracts |
+| Frontend production build | **PASS** | TypeScript and Vite compilation of the current structured UI; the existing chunk-size warning is non-fatal |
+| Local Playwright on dedicated ports `15173/18000` | **PASS — 20 tests; 24 intentional duplicate-viewport skips; 34.8s** | iPhone core structured flow 11/11 plus Pixel 7, 1366×768, and 1920×1080 core paths; local browser evidence only |
+| Structured backend MyPy | **PASS — 7 source files** | SQLite/Oracle/service type consistency after the post-review hardening; no Oracle connection, SQL execution, or vector result |
+
+The first default-port browser launch could not start because port `5173` was already
+held by a CashFlow application SSH forward. The same YOBI checkout passed on isolated
+ports `15173/18000`; the default-port attempt is therefore an environment collision,
+not a YOBI test failure. The production build retained its existing non-fatal
+546.57 kB chunk warning.
+
+Local Playwright does not prove the public site or live OCI provider. Fake-provider
+dispatch-count tests prove application
+behavior and structural ID grounding, not the semantic faithfulness, output quality,
+or latency of the configured live model. The current validator is not a general
+natural-language entailment detector.
+
+For subjective categories, current tests prove selected-code validation and per-
+category evidence-reference coverage. They do not prove that every best-scoring
+passage semantically entails its category. Normal-result cross-category `AND` quality
+and `NO_MATCH` judgment therefore remain live-provider/golden-set evaluation work;
+`SEARCH_FALLBACK` is intentionally only a labelled proximity result.
+
+### Explicitly unverified for this revision
+
+- applying and checksum-recording `010` on Oracle, including resume behavior;
+- seeding/activating the v2 recommendation release family and exact Oracle readiness;
+- executing the v2 query through live Oracle `VECTOR_DISTANCE`;
+- a real OCI generation request that selects and explains pool menus in one dispatch;
+- Nginx/systemd activation, protected-route checks, and public mobile/desktop flow;
+- live rollback of the application plus compatible active release-family pointer.
+
+Until those gates are run and appended with an exact release ID and commands, the
+verified public boundary remains the historical 2026-08-09 free-chat release below.
+
+---
+
+The remaining sections are historical records. Their free-form chat, allergy, three-
+level spice, server-final-candidate, model/tool-loop, and public deployment statements
+must not be used as the current structured-flow contract.
+
+## Historical: 2026-08-11 Wiki-centric local checkpoint — not deployed
+
+This historical section records that checkpoint's local data and code contract, not a
+live environment result. The v3 catalog had not been seeded into the existing OCI
+Oracle database, activated as an OCI release, or checked through public health,
+readiness, or browser flows.
 The public evidence in the next section still belongs only to the 2026-08-09 v2
 release and migration ledger `001`–`008`.
 
@@ -67,7 +164,7 @@ seed bind generation, migration safety contracts, and repository mocks are cover
 the local suite, but an actual Oracle connection, OCI embedding/generation, v3
 migration ledger, public readiness, and browser journey were not run in this change.
 
-## 2026-08-09 chatbot-improvement final gate (historical live evidence)
+## Historical: 2026-08-09 chatbot-improvement final gate (live evidence for that release)
 
 This table is frozen evidence for the 2026-08-09 v2 release. At that time Phase 0–7
 was connected, locally verified, deployed to the existing OCI VM/ADB, and independently
@@ -166,7 +263,7 @@ menu mapping gaps, and required-option gaps. Public route and product regression
 also zero in the recorded suite. Review snippets are synthetic display data with
 recommendation and safety weight `0`.
 
-## Historical release baseline (before chatbot improvement)
+## Historical: release baseline before chatbot improvement
 
 | Gate | Result | Verified evidence |
 |---|---:|---|
@@ -193,7 +290,7 @@ recommendation and safety weight `0`.
 | Systemd/Nginx | PASS | Both active; local health and ready checks passed after activation |
 | Runtime env protection | PASS | `/etc/yobi/yobi.env` is `root:root`, mode `0600`; values were not printed |
 
-## Oracle data integrity snapshot
+## Historical: Oracle data integrity snapshot for the recorded baseline
 
 Exact verified row counts after non-destructive upsert:
 
@@ -208,7 +305,7 @@ Exact verified row counts after non-destructive upsert:
 Required option groups without available items: zero. Canonical menus: present. Menu,
 review and knowledge vectors: no NULL values.
 
-## GenAI and RAG truth boundary
+## Historical: 2026-08-09 GenAI and RAG truth boundary
 
 The deployed Grok path is a real bounded Function Calling loop. It uses a small
 intent-routed subset of the complete 14-tool allowlist, validates arguments with
@@ -227,7 +324,7 @@ SQL hard filters. The stored 1,536-dimensional vectors are currently generated b
 on-demand Cohere Embed 4 in Seoul, so no cross-region resource or IAM expansion was
 invented. This is a transparent quality limitation, not a missing Vector Search path.
 
-## Remaining non-blocking boundaries
+## Historical: remaining boundaries recorded for the 2026-08-09 release
 
 - The public demo is HTTP on the already-approved TCP 80 boundary. It has no custom
   domain or TLS certificate and must not be described as production-ready.
@@ -238,7 +335,7 @@ invented. This is a transparent quality limitation, not a missing Vector Search 
 - The one warning in Pytest is a third-party Starlette TestClient deprecation warning;
   it does not affect the application contract.
 
-## 2026-08-08 chat-room menu — deployed verification
+## Historical: 2026-08-08 chat-room menu — deployed verification
 
 - Release `20260807T190544Z` serves the localized three-action chat-room menu and
   deterministic Weekly ranking and K-POP Demon Hunters collections. These two
@@ -263,7 +360,7 @@ invented. This is a transparent quality limitation, not a missing Vector Search 
   secret values. The temporary source-specific SSH rule was removed; the final NSG
   contains only the approved public TCP 80 rule and no TCP 22 rule.
 
-## 2026-08-08 initial-chat polish — deployed verification
+## Historical: 2026-08-08 initial-chat polish — deployed verification
 
 - Release `20260807T194921Z` changes **Add to mock cart** to **Add to cart** and
   removes the equivalent demo-cart wording from all 16 supported language packs.
@@ -282,7 +379,7 @@ invented. This is a transparent quality limitation, not a missing Vector Search 
   and release-window `ERROR`, `Traceback` and `CRITICAL` log lines were zero. The final
   NSG contains one public TCP 80 rule and no TCP 22 rule.
 
-## 2026-08-07 UI/UX verification addendum
+## Historical: 2026-08-07 UI/UX verification addendum
 
 - ESLint, Vitest 2 tests, TypeScript and Vite build all passed; 1,788 modules built.
 - Playwright passed the revised address-first primary order on iPhone 13, Pixel 7,
@@ -306,7 +403,7 @@ invented. This is a transparent quality limitation, not a missing Vector Search 
 - Deployment used one temporary current-source `/32` TCP 22 rule. The exact rule was
   removed after verification, and the final current-source SSH rule count is zero.
 
-## 2026-08-07 second UI iteration — deployed verification
+## Historical: 2026-08-07 second UI iteration — deployed verification
 
 This section covers the current working tree after the separate welcome screen,
 locale/profile split, multilingual ordering controls, expanded allergies, three-level

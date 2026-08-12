@@ -77,9 +77,150 @@ export interface Profile {
   dietary_rules: string[];
   favorite_foods: string[];
   age_band: string;
-  allergy_severity: "mild" | "moderate" | "severe";
+  /** Legacy read compatibility only. The v2 UI never collects or applies this value. */
+  allergy_severity?: "mild" | "moderate" | "severe";
   consent_demo_data: boolean;
   remember_profile: boolean;
+}
+
+export type SpiceReferenceCountry = "KR" | "US";
+
+export interface DietaryFiltersV2 {
+  halal_certified_only: boolean;
+  vegan: boolean;
+}
+
+export interface RecommendationCriteriaV2 {
+  schema_version: "2";
+  cuisine_origins: string[];
+  flavors: string[];
+  main_ingredients: string[];
+  food_forms: string[];
+  temperatures: string[];
+  price_bands: string[];
+  textures: string[];
+  cooking_methods: string[];
+  dietary_filters: DietaryFiltersV2;
+  max_spice_level: 1 | 2 | 3 | 4 | 5;
+  spice_reference_country: SpiceReferenceCountry;
+}
+
+export type PreferenceCategoryCode =
+  | "cuisine_origins"
+  | "flavors"
+  | "main_ingredients"
+  | "food_forms"
+  | "temperatures"
+  | "price_bands"
+  | "textures"
+  | "cooking_methods";
+
+export interface PreferenceCatalogOption {
+  code: string;
+  label: string;
+  description?: string | null;
+}
+
+export interface PreferenceCatalogCategory {
+  code: PreferenceCategoryCode;
+  label: string;
+  description?: string | null;
+  options: PreferenceCatalogOption[];
+}
+
+export interface SpiceReferenceLevel {
+  level: 1 | 2 | 3 | 4 | 5;
+  label: string;
+  example: string;
+  description?: string | null;
+}
+
+export interface SpiceReferenceGroup {
+  country: SpiceReferenceCountry;
+  label: string;
+  levels: SpiceReferenceLevel[];
+}
+
+export interface PreferenceCatalog {
+  schema_version: "2";
+  catalog_version: string;
+  knowledge_release_id: string;
+  locale: string;
+  categories: PreferenceCatalogCategory[];
+  spice_references: SpiceReferenceGroup[];
+}
+
+export type RecommendationMode = "INITIAL" | "SIMILAR" | "RETRY";
+export type RecommendationPhase =
+  | "SELECTING"
+  | "RETRIEVING"
+  | "GENERATING"
+  | "RESULTS"
+  | "SEARCH_FALLBACK"
+  | "NO_RESULTS"
+  | "ERROR"
+  | "ORDERING";
+
+export type VeganEvidenceStatus = "LIKELY_FIT" | "POSSIBLE_WITH_CHECKS" | "CONFLICT" | "UNKNOWN";
+
+export interface CriterionMatch {
+  category_code: string;
+  selected_value_codes: string[];
+  labels?: string[];
+  evidence_ids?: string[];
+}
+
+export interface RecommendationWikiEvidence {
+  evidence_id: string;
+  evidence_type: "WIKI_PASSAGE" | "ESSENTIAL_FACT" | "MENU_FACT" | "CERTIFICATION";
+  chunk_id?: string;
+  content: string;
+  score: number | null;
+}
+
+export interface StructuredRecommendation {
+  rank: number;
+  menu: MenuSummary;
+  title: string;
+  selection_reason: string;
+  description: string;
+  matched_criteria: CriterionMatch[];
+  wiki_passages: RecommendationWikiEvidence[];
+  caution_codes: string[];
+  halal_certified?: boolean | null;
+  halal_scope_label?: string | null;
+  vegan_status?: VeganEvidenceStatus | null;
+  vegan_warning?: string | null;
+}
+
+export interface RecommendationBatchV2 {
+  session_id: string;
+  request_id: string;
+  snapshot_id?: string | null;
+  state_version: number;
+  criteria_version: number;
+  status: "PENDING" | "RECOMMENDED" | "NO_MATCH" | "SEARCH_FALLBACK" | "FAILED";
+  phase?: "RETRIEVING" | "GENERATING" | "COMPLETE" | null;
+  criteria_summary?: string | null;
+  recommendations: StructuredRecommendation[];
+  unmatched_category_codes: string[];
+  failure_code?: string | null;
+}
+
+export interface CriteriaCommitResult {
+  session_id: string;
+  criteria?: RecommendationCriteriaV2;
+  criteria_version: number;
+  state_version: number;
+  criteria_hash?: string;
+  created_at?: string;
+}
+
+export interface RecommendationRequestV2 {
+  request_id: string;
+  expected_state_version: number;
+  criteria_version: number;
+  mode: RecommendationMode;
 }
 
 export interface Session {
@@ -167,6 +308,9 @@ export interface OptionItem {
   available: boolean;
   dietary_conflict?: string;
   conflicting_rules: string[];
+  halal_certification_preserved?: boolean | null;
+  vegan_status?: VeganEvidenceStatus | null;
+  vegan_warning?: string | null;
 }
 
 export interface OptionGroup {
@@ -374,6 +518,10 @@ export interface ConversationView {
   meal_need_state: MealNeedState;
   messages: ConversationMessage[];
   latest_snapshot?: RecommendationSnapshot | null;
+  recommendation_criteria?: RecommendationCriteriaV2 | null;
+  criteria_version?: number;
+  latest_recommendation?: RecommendationBatchV2 | null;
+  active_recommendation?: RecommendationBatchV2 | null;
 }
 
 export interface AssistantTurn {

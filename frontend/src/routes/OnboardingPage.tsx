@@ -6,8 +6,6 @@ import { useI18n } from "../lib/i18n";
 import { useSessionStore } from "../stores/session";
 import type { AddressCandidate, Profile, Session } from "../types";
 
-const ALLERGY_CODES = ["shellfish", "fish", "milk", "egg", "peanut", "tree_nut", "wheat", "soy", "sesame"] as const;
-
 type AddressMode = "existing" | "hotel" | "upload" | "manual";
 type CreatedContext = { profile: Profile; session: Session };
 
@@ -27,14 +25,8 @@ export function OnboardingPage() {
   const editMode = query.get("edit") === "1" && Boolean(profile && session);
   const returnTo = query.get("returnTo") || (session ? `/chat/${session.session_id}` : "/");
   const candidateRef = useRef<HTMLDivElement>(null);
-  const [spice, setSpice] = useState(profile?.spice_tolerance ?? 2);
   const [ageBand, setAgeBand] = useState(profile?.age_band ?? "25-34");
   const [religion, setReligion] = useState(profile?.religion_selection ?? "Prefer not to say");
-  const [vegan, setVegan] = useState(profile?.dietary_rules.includes("vegan") ?? false);
-  const [allergies, setAllergies] = useState<Set<string>>(() => profile
-    ? new Set(profile.dietary_rules.filter((rule) => rule.endsWith("_allergy")).map((rule) => rule.replace(/_allergy$/, "")))
-    : new Set(["shellfish"]));
-  const [severity, setSeverity] = useState<"mild" | "moderate" | "severe">(profile?.allergy_severity ?? "severe");
   const [favorites, setFavorites] = useState(profile?.favorite_foods.join(", ") ?? "");
   const [consent, setConsent] = useState(profile?.consent_demo_data ?? false);
   const [addressMode, setAddressMode] = useState<AddressMode>(editMode && addressRefId ? "existing" : "hotel");
@@ -50,28 +42,15 @@ export function OnboardingPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  function toggleAllergy(code: string) {
-    setAllergies((current) => {
-      const next = new Set(current);
-      if (next.has(code)) next.delete(code); else next.add(code);
-      return next;
-    });
-  }
-
   async function ensureContext(): Promise<CreatedContext> {
     if (createdContext) return createdContext;
-    const dietaryRules = [
-      ...[...allergies].map((code) => `${code}_allergy`),
-      ...(vegan ? ["vegan"] : []),
-    ];
     const body = {
       preferred_language: language,
       nationality: country,
       age_band: ageBand,
       religion_selection: religion,
-      dietary_rules: dietaryRules,
-      allergy_severity: severity,
-      spice_tolerance: spice,
+      dietary_rules: [],
+      spice_tolerance: 1,
       favorite_foods: favorites.split(",").map((value) => value.trim()).filter(Boolean),
       consent_demo_data: consent,
       remember_profile: false,
@@ -185,30 +164,6 @@ export function OnboardingPage() {
           <label>{profileCopy.religion}<select value={religion} onChange={(event) => setReligion(event.target.value)}><option value="Prefer not to say">{selectionCopy.preferNot}</option>{selectionCopy.religions.map((label, index) => <option value={selectionCopy.religionValues[index]} key={selectionCopy.religionValues[index]}>{label}</option>)}</select></label>
         </div>
 
-        <fieldset>
-          <legend>{profileCopy.dietary}</legend>
-          <div className="choice-grid">
-            <label className={`choice ${vegan ? "selected" : ""}`}><input type="checkbox" checked={vegan} onChange={(event) => setVegan(event.target.checked)} /> {profileCopy.vegan}</label>
-            {ALLERGY_CODES.map((code, index) => <label className={`choice ${allergies.has(code) ? "selected" : ""}`} key={code}><input type="checkbox" checked={allergies.has(code)} onChange={() => toggleAllergy(code)} /> {selectionCopy.allergies[index]}</label>)}
-          </div>
-          {allergies.size > 0 && <label className="severity-select">{profileCopy.severity}<select value={severity} onChange={(event) => setSeverity(event.target.value as "mild" | "moderate" | "severe")}><option value="mild">{selectionCopy.severity[0]}</option><option value="moderate">{selectionCopy.severity[1]}</option><option value="severe">{selectionCopy.severity[2]}</option></select></label>}
-        </fieldset>
-
-        <fieldset className="spice-fieldset">
-          <legend>{profileCopy.spice}</legend>
-          <div className="spice-options">
-            {selectionCopy.spice.map((title, index) => {
-              const value = index + 1;
-              return (
-              <label className={spice === value ? "spice-choice selected" : "spice-choice"} key={value}>
-                <input type="radio" name="spice" value={value} checked={spice === value} onChange={() => setSpice(Number(value))} />
-                <span><strong>{title}</strong></span>
-              </label>
-              );
-            })}
-          </div>
-        </fieldset>
-
         <label>{profileCopy.favourites}<input value={favorites} onChange={(event) => setFavorites(event.target.value)} placeholder={selectionCopy.favouritesPlaceholder} /></label>
 
         <section className="onboarding-address" aria-labelledby="delivery-address-title">
@@ -223,7 +178,7 @@ export function OnboardingPage() {
           {addressMode === "hotel" && <label>{selectionCopy.hotelOrStay}<input value={hotelQuery} onChange={(event) => setHotelQuery(event.target.value)} placeholder="YOBI Myeongdong Hotel" /></label>}
           {addressMode === "upload" && <>
             <label className="upload-zone"><ImageUp size={25} /><strong>{addressImage ? addressImage.name : selectionCopy.chooseImage}</strong><span>PNG · JPEG · WebP · 8MB</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={fileChanged} /></label>
-            <button type="button" className="secondary-button full" onClick={() => void loadDemoBooking()} disabled={!consent || loading}>{selectionCopy.useDemoImage}</button>
+            <button type="button" className="secondary-button full" onClick={() => void loadDemoBooking()} disabled={!consent || loading}>{selectionCopy.chooseImage}</button>
           </>}
           {addressMode === "manual" && <div className="address-form compact">
             <label>{selectionCopy.hotelOrStay}<input value={manualAddress.hotel_name} onChange={(event) => setManualAddress((value) => ({ ...value, hotel_name: event.target.value }))} /></label>
@@ -232,7 +187,7 @@ export function OnboardingPage() {
           </div>}
           {addressNotice && <p className="notice-copy">{addressNotice}</p>}
           <div ref={candidateRef}>
-            {candidates.map((candidate) => <article className="address-candidate" key={candidate.place_id}><Hotel size={20} /><div><strong>{candidate.hotel_name}</strong><p>{candidate.road_address}</p><small>{Math.round(candidate.confidence * 100)}% · {selectionCopy.syntheticPlace}</small></div><button type="button" className="primary-button" onClick={() => void confirmCandidate(candidate)} disabled={loading}>{selectionCopy.confirmStart}</button></article>)}
+            {candidates.map((candidate) => <article className="address-candidate" key={candidate.place_id}><Hotel size={20} /><div><strong>{candidate.hotel_name}</strong><p>{candidate.road_address}</p><small>{Math.round(candidate.confidence * 100)}%</small></div><button type="button" className="primary-button" onClick={() => void confirmCandidate(candidate)} disabled={loading}>{selectionCopy.confirmStart}</button></article>)}
           </div>
         </section>
 

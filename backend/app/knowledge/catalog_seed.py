@@ -15,9 +15,10 @@ from app.knowledge.authoring import (
     parse_document,
 )
 
-KNOWLEDGE_CATALOG_VERSION = "demo-knowledge-catalog-2026.08.11-v3"
-KNOWLEDGE_UPDATED_AT = "2026-08-11"
-KNOWLEDGE_COMPILER_CONTRACT = "yobi-knowledge-compiler-v2"
+KNOWLEDGE_CATALOG_VERSION = "demo-knowledge-catalog-2026.08.12-v4"
+KNOWLEDGE_UPDATED_AT = "2026-08-12"
+KNOWLEDGE_COMPILER_CONTRACT = "yobi-prose-first-knowledge-compiler-v3"
+
 
 def _authored_category_concept_map() -> dict[str, str]:
     """Map every reusable FAMILY/VARIANT Wiki node to a menu-category label.
@@ -315,8 +316,7 @@ def _menu_concept_rows(
     if missing_concepts:
         raise ValueError(f"CATEGORY_MAP_DANGLING_CONCEPTS:{','.join(missing_concepts)}")
     closure_pairs = {
-        (row["descendant_concept_id"], row["ancestor_concept_id"])
-        for row in compiled.closure
+        (row["descendant_concept_id"], row["ancestor_concept_id"]) for row in compiled.closure
     }
 
     normalized: list[tuple[str, str, str]] = []
@@ -398,9 +398,7 @@ def _menu_concept_rows(
                     else "SYNTHETIC_CATEGORY_MAPPING"
                 ),
                 "source_ref": (
-                    f"demo-menu:{menu_id}"
-                    if override_concept_id
-                    else f"demo-category:{category}"
+                    f"demo-menu:{menu_id}" if override_concept_id else f"demo-category:{category}"
                 ),
                 "review_status": "REVIEWED_DEMO",
                 "is_synthetic": 1,

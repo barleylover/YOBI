@@ -8,7 +8,11 @@ from app.domain.knowledge import ClaimStatus, SourceScope
 from app.domain.models import ProfileCreate
 from app.domain.recommendation import rerank_menu_candidates
 from app.rag.embeddings import (
+    HybridChunkCandidate,
+    apply_soft_profile_retrieval_signal,
+    exact_essential_similarity,
     hybrid_knowledge_chunk_score,
+    rank_hybrid_chunks_rrf,
     routed_knowledge_facets,
 )
 
@@ -48,24 +52,69 @@ def test_exact_korean_alias_and_requested_facet_beat_vector_only_noise() -> None
     assert routed > unrelated
 
 
+def test_rrf_combines_vector_lexical_and_exact_essential_rankings() -> None:
+    ranked = rank_hybrid_chunks_rrf(
+        ("spicy chili", "매운맛"),
+        [
+            HybridChunkCandidate(
+                chunk_id="chunk-vector-only",
+                content="A gentle and creamy dish.",
+                facet="paragraph",
+                aliases=("cream noodles",),
+                vector_similarity=1.0,
+            ),
+            HybridChunkCandidate(
+                chunk_id="chunk-multi-signal",
+                content="A spicy chili flavor defines this dish.",
+                facet="paragraph",
+                aliases=("spicy noodles",),
+                vector_similarity=0.7,
+            ),
+            HybridChunkCandidate(
+                chunk_id="chunk-essential",
+                content="Main ingredient: chili pepper.",
+                facet="essential_fact",
+                aliases=("pepper rice",),
+                vector_similarity=0.6,
+            ),
+        ],
+        limit=2,
+    )
+
+    assert [candidate.chunk_id for candidate, _ in ranked] == [
+        "chunk-multi-signal",
+        "chunk-essential",
+    ]
+    assert ranked[0][1] > ranked[1][1] > 0.0
+    assert exact_essential_similarity(
+        ("chili",),
+        "Main ingredient: chili pepper.",
+        "essential_fact",
+    ) == 1.0
+    assert abs(apply_soft_profile_retrieval_signal(0.8, 1.0) - 0.82) < 1e-9
+    assert apply_soft_profile_retrieval_signal(0.95, 0.0) > (
+        apply_soft_profile_retrieval_signal(0.8, 1.0)
+    )
+
+
 def test_korean_questions_retrieve_the_requested_active_wiki_facet_first(
     repository: SQLiteYobiRepository,
 ) -> None:
-    queries = {
-        "어떤 재료가 들어가?": "ingredients",
-        "알레르기 위험이 있어?": "safety",
-        "무슨 맛이야?": "taste",
-        "식감이 쫄깃해?": "texture",
-        "따뜻하게 먹어?": "temperature",
-        "할랄 식단에 맞아?": "safety",
-        "비건으로 먹을 수 있어?": "safety",
-        "Is this suitable for a vegetarian religious diet?": "safety",
-    }
+    # Prose-v2 chunks deliberately use a compatibility `paragraph` facet. The
+    # natural paragraph content, not one of the old fixed nine facet labels,
+    # must remain the retrieval authority.
+    queries = (
+        "어떤 재료가 들어가?",
+        "무슨 맛이야?",
+        "식감이 쫄깃해?",
+        "따뜻하게 먹어?",
+    )
 
-    for query, expected_facet in queries.items():
+    for query in queries:
         knowledge = repository.get_grounded_menu_knowledge("menu_001_01", query=query)
         assert knowledge.release_id
-        assert knowledge.passages[0].facet == expected_facet
+        assert knowledge.passages[0].facet in {"paragraph", "essential_fact"}
+        assert knowledge.passages[0].content.strip()
 
 
 def test_wiki_core_and_menu_fact_constraints_filter_candidates(
@@ -127,19 +176,19 @@ def test_missing_wiki_claim_never_becomes_confirmed_absent_and_option_can_overri
     assert fish_cake.model_dump(mode="json")["name_ko"] == "어묵"
 
 
-def test_grounded_knowledge_exposes_structured_dietary_and_preparation_claims(
+def test_grounded_knowledge_exposes_essential_preparation_without_public_dietary_wiki_claims(
     repository: SQLiteYobiRepository,
 ) -> None:
     knowledge = repository.get_grounded_menu_knowledge(
         "menu_001_01", query="할랄 비건 채식 식단과 조리법"
     )
 
-    assert knowledge.dietary_claims
     assert knowledge.preparation_claims
-    assert any(
-        claim.source_scope is SourceScope.DISH_CONCEPT
-        and claim.status in {ClaimStatus.POSSIBLE, ClaimStatus.PRESUMED_PRESENT}
-        for claim in knowledge.dietary_claims
+    # Prose-v2 no longer elevates subjective or safety-oriented Wiki text into
+    # dietary claims. Any retained dietary facts are menu-catalog compatibility
+    # signals, while preparation can remain an essential concept fact.
+    assert all(
+        claim.source_scope is SourceScope.MENU for claim in knowledge.dietary_claims
     )
     assert any(
         claim.source_scope is SourceScope.MENU for claim in knowledge.dietary_claims
@@ -354,96 +403,6 @@ def test_party_budget_filter_runs_before_any_retrieval_truncation(
 
     assert results
     assert all(menu.price * ceil(party_size / menu.serves_max) <= budget for menu in results)
-
-
-def test_each_service_area_has_a_qualified_alternative_for_all_onboarding_allergies(
-    repository: SQLiteYobiRepository,
-) -> None:
-    with repository._connection() as connection:
-        expected_areas = {
-            str(row[0])
-            for row in connection.execute(
-                "SELECT service_area_id FROM service_area WHERE active=1"
-            ).fetchall()
-        }
-        merchant_areas = {
-            str(row[0]): str(row[1])
-            for row in connection.execute(
-                "SELECT merchant_id,service_area_id FROM merchant"
-            ).fetchall()
-        }
-    for allergy, allergen_code in (
-        ("shellfish_allergy", "shellfish_risk"),
-        ("fish_allergy", "fish"),
-        ("milk_allergy", "milk"),
-        ("egg_allergy", "egg"),
-        ("peanut_allergy", "peanut"),
-        ("tree_nut_allergy", "tree_nut"),
-        ("wheat_allergy", "wheat"),
-        ("soy_allergy", "soy"),
-        ("sesame_allergy", "sesame"),
-    ):
-        profile = repository.create_profile(
-            ProfileCreate(
-                consent_demo_data=True,
-                dietary_rules=[allergy],
-                allergy_severity="severe",
-                spice_tolerance=3,
-            )
-        )
-
-        results = repository.recommend_menus(
-            "a mild meal",
-            profile,
-            MealNeedState(budget_krw=30_000, max_spiciness=3),
-            limit=600,
-        )
-        assert results
-        assert {merchant_areas[menu.merchant_id] for menu in results} == expected_areas
-        for menu in results:
-            knowledge = repository.get_grounded_menu_knowledge(menu.menu_id, query="allergy")
-            matching = [
-                claim for claim in knowledge.allergen_claims if claim.code == allergen_code
-            ]
-            assert matching
-            assert all(claim.status is ClaimStatus.CONFIRMED_ABSENT for claim in matching)
-            assert all(claim.source_scope is SourceScope.MENU for claim in matching)
-            assert all(claim.cross_contamination_status == "UNKNOWN" for claim in matching)
-            assert "Cross-contamination is not verified" in menu.risk_hints
-            assert any(
-                allergen_code.removesuffix("_risk").replace("_", " ") in reason.lower()
-                for reason in menu.match_reasons
-            )
-
-
-def test_canonical_shellfish_alternative_requires_scoped_absence_and_unknown_cross_contact(
-    repository: SQLiteYobiRepository,
-) -> None:
-    profile = repository.create_profile(
-        ProfileCreate(
-            consent_demo_data=True,
-            dietary_rules=["shellfish_allergy"],
-            allergy_severity="severe",
-            spice_tolerance=3,
-        )
-    )
-
-    results = repository.recommend_menus(
-        "creamy mild rice cakes",
-        profile,
-        MealNeedState(max_spiciness=3),
-        limit=150,
-    )
-
-    matched = next(menu for menu in results if menu.menu_id == "menu_001_01")
-    assert "Cross-contamination is not verified" in matched.risk_hints
-    knowledge = repository.get_grounded_menu_knowledge("menu_001_01", query="shellfish")
-    absence = next(
-        claim for claim in knowledge.allergen_claims if claim.code == "shellfish_risk"
-    )
-    assert absence.status is ClaimStatus.CONFIRMED_ABSENT
-    assert absence.source_scope is SourceScope.MENU
-    assert absence.cross_contamination_status == "UNKNOWN"
 
 
 def test_explicit_islam_profile_excludes_grounded_pork_without_nationality_inference(

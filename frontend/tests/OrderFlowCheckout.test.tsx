@@ -116,7 +116,6 @@ describe("OrderFlowPanel checkout contract", () => {
               sessionId={session.session_id}
               menu={menu}
               addressRefId="address_checkout_test"
-              dietaryRules={[]}
               onClose={() => undefined}
             />
           )} />

@@ -8,16 +8,30 @@ All catalog, review, hotel, payment, and order data in this repository is synthe
 
 ## Current status
 
-The repository contains the original mobile ordering MVP plus the chatbot-improvement
-runtime: server-owned multi-turn meal needs, a recommendation readiness gate,
-persisted recommendation snapshots and UI events, a versioned synthetic menu Wiki,
-and grounded hybrid recommendation/explanation paths. Reviews remain display-only
-synthetic data with recommendation and safety weight `0`.
+The repository contains the original mobile ordering MVP plus a structured
+recommendation runtime. Users choose meal preferences before recommendation; the
+server applies objective eligibility and builds a broad hybrid Wiki evidence pool,
+then one bounded generation request is instructed to select and explain menus from
+that pool. The server enforces final menu/evidence-reference membership; semantic
+faithfulness of generated prose remains a model-quality evaluation boundary.
+The Wiki keeps objective facts structured while using prose passages for subjective
+food descriptions. Reviews remain display-only synthetic data with recommendation
+and safety weight `0`.
+
+The structured flow has no free-text recommendation composer. Its only dietary
+controls are halal certification and vegan guidance: halal is an active,
+scope-verified certification filter; vegan recommendations may carry a check-before-
+ordering warning. Allergy input is not part of the new public recommendation path.
+All catalog, certification, and merchant data remains synthetic demo data.
 
 Implementation in Git is not, by itself, evidence that the same revision is live.
-`docs/CHATBOT_IMPROVEMENT_IMPLEMENTATION.md` records the Phase 0-7 implementation
-matrix and `docs/TEST_REPORT.md` separates current-worktree verification from the
-historical public-release baseline. The public URL and OCI identifiers are resolved
+The [structured-recommendation plan](docs/STRUCTURED_RECOMMENDATION_IMPLEMENTATION_PLAN.md)
+is the current product and implementation authority,
+[implementation status](docs/IMPLEMENTATION_STATUS.md) summarizes what is connected,
+and the [test report](docs/TEST_REPORT.md) separates local verification from the
+historical public-release baseline. The
+[chatbot-improvement record](docs/CHATBOT_IMPROVEMENT_IMPLEMENTATION.md) is retained
+only as superseded free-chat history. The public URL and OCI identifiers are resolved
 at runtime and are intentionally not committed.
 
 ## Local development
@@ -40,9 +54,11 @@ If either default port is already in use, the launcher selects the next free loc
 port without stopping the existing process and prints the actual URLs.
 
 The local launcher explicitly uses a deterministic SQLite demo database, fixture
-address extraction, and the deterministic agent fallback. OCI credentials are not
-needed or used for this UI verification. See `docs/DEMO_RUNBOOK.md` for the exact
-new-UI walkthrough and focused regression checklist.
+address extraction, deterministic embeddings, and no OCI credentials. The structured
+flow therefore exercises its labelled saved-search fallback locally; its normal
+model-selected result path is covered by fake-provider tests until a live OCI gate is
+run. See the [demo runbook](docs/DEMO_RUNBOOK.md) for the exact new-UI walkthrough and
+focused regression checklist.
 
 ## Verification
 
@@ -55,7 +71,11 @@ make smoke
 make e2e
 ```
 
-The chatbot acceptance suite can also be run directly from `backend/`:
+`make test`, `make build`, and the current Playwright suite cover the working-tree
+source contracts. `make evaluate`, `make prewarm`, and `make smoke` still exercise
+retained v1 ranking/chat/cache paths; they are useful regression checks but do not, by
+themselves, approve the structured v2 recommendation path. The historical v1 chatbot
+acceptance suite can also be run directly from `backend/`:
 
 ```bash
 ../.venv/bin/python -m evaluation.run_chatbot_acceptance
@@ -70,4 +90,4 @@ and never enters the browser bundle.
 Do not put API keys, passwords, full DSNs, private keys, public IPs, or OCIDs in this
 repository. Production secrets belong only in `/etc/yobi/yobi.env`, owned by
 `root:root` with mode `0600`. Use the terminal-only secure
-bootstrap flow in `docs/OCI_DEPLOYMENT.md`.
+bootstrap flow in the [OCI deployment guide](docs/OCI_DEPLOYMENT.md).

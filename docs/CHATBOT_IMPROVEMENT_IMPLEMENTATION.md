@@ -1,6 +1,21 @@
-# YOBI chatbot improvement implementation matrix
+# YOBI chatbot improvement implementation matrix (historical)
 
-- 기준 명세: `YOBI_CHATBOT_IMPROVEMENT_CODEX_GOAL.md`
+> **Historical implementation record, superseded for the current recommendation
+> flow.** This matrix documents the 2026-08-09/11 free-chat implementation and its
+> release evidence. It is not the current product contract. See
+> [`STRUCTURED_RECOMMENDATION_IMPLEMENTATION_PLAN.md`](STRUCTURED_RECOMMENDATION_IMPLEMENTATION_PLAN.md)
+> and [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md). The current UI uses
+> structured selection, objective eligibility, a broad lexical+embedding evidence
+> pool, one generation dispatch that both selects and explains final menus, and
+> button-only follow-up. Public allergy filtering and the three-level spice scale are
+> removed from that path. Historical Oracle/OCI/Public results below do not prove the
+> 2026-08-12 revision.
+>
+> **Reading rule:** every occurrence of “current”, “현재”, “연결됨”, or “PASS” below
+> refers to the dated 2026-08-09/11 checkpoint named in that section, not to the
+> structured-recommendation working tree.
+
+- 당시 기준 명세: `YOBI_CHATBOT_IMPROVEMENT_CODEX_GOAL.md`
 - 작업 브랜치: `codex/master-spec-completion`
 - 점검일: 2026-08-11 KST
 - 상태 의미: **연결됨**은 현재 작업 트리의 실제 런타임 경로가 존재한다는 뜻이며,

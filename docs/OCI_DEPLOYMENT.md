@@ -11,10 +11,10 @@ and three consecutive Primary runs passed. The approved temporary current-source
 state is TCP 22 `0`, existing TCP 80 `1`. See `TEST_REPORT.md` for exact data and
 GenAI smoke evidence.
 
-The 2026-08-11 Wiki-centric working tree is newer than that verified deployment. Its
-release package contains migrations `001`–`009`, base catalog
+The 2026-08-12 structured-recommendation working tree is newer than that verified
+deployment. Its release package contains migrations `001`–`010`, base catalog
 `demo-2026.08.11-knowledge-v3`, and knowledge catalog contract
-`demo-knowledge-catalog-2026.08.11-v3`, but it has **not** been applied to Oracle or
+`demo-knowledge-catalog-2026.08.12-v4`, but it has **not** been applied to Oracle or
 deployed/verified on the OCI public demo at this checkpoint. The commands and gates
 below describe what a future deployment must prove; they are not live evidence.
 
@@ -29,7 +29,7 @@ The first run is interactive. Enter the ADB TLS DSN, ADB ADMIN password,
 `YOBI_APP` password, OCI Generative AI API-key secret, and a demo-control token. The
 script creates the least-privilege app user if absent, applies checksum migrations,
 verifies `YOBI_APP` plus every migration packaged in that release (currently
-`001`–`009`), and writes the protected runtime environment before any GenAI smoke
+`001`–`010`), and writes the protected runtime environment before any GenAI smoke
 request. Verification includes the conversation snapshot/event and knowledge release,
 chunk, and runtime-state tables introduced by `005` and `006`. No secret is echoed.
 
@@ -50,11 +50,14 @@ unpredictable exclusive temporary file, `fsync`, and atomic replacement. A legac
 root-owned `/opt/yobi/shared/bootstrap_state.json` can be read for resume, but an
 untrusted owner, writable file, symlink, or malformed checkpoint fails closed.
 
-The primary smoke performs only the required function-call and continuation requests.
-It honors `Retry-After`, otherwise waits 65–70 seconds plus jitter, and retries at most
-twice. A separate checkpoint verifies `openai.gpt-oss-120b`. Errors expose only a safe
-HTTP category, never the key, full response, or chained provider body. Prewarm checks
-the database, retrieval, and explanation cache without making another GenAI request.
+The existing primary smoke performs the retained v1 function-call and continuation
+requests. It honors `Retry-After`, otherwise waits 65–70 seconds plus jitter, and
+retries at most twice. A separate checkpoint verifies `openai.gpt-oss-120b`. Errors
+expose only a safe HTTP category, never the key, full response, or chained provider
+body. This transport/capability smoke is historical regression coverage; it is not the
+structured-v2 one-dispatch recommendation smoke required by the Phase 8 gate below.
+Prewarm checks the database, retrieval, and explanation cache without making another
+GenAI request.
 
 If the primary smoke remains rate-limited or returns a safe provider error category,
 the checkpoint is recorded as `degraded` and bootstrap continues through the GPT-OSS
@@ -89,7 +92,7 @@ state; secret values are never returned to the local shell.
 `deploy/deploy.sh` now builds a release-specific virtual environment before changing
 `/opt/yobi/current`. The release archive includes `knowledge/`, the complete
 `database/migrations/` directory, and the application/evaluation code. Packaging
-fails early unless every immutable/additive migration `001`–`009` and the knowledge
+fails early unless every immutable/additive migration `001`–`010` and the knowledge
 authoring directory are present. The archive SHA-256 becomes part of the release ID;
 the VM verifies the uploaded checksum and records it in a release manifest before
 installation. Each transfer uses a release-and-nonce-specific file under the SSH
@@ -98,7 +101,7 @@ exact path, owner, non-writable mode, and checksum, and removes that exact uploa
 success or failure.
 Deployment applies only checksum-safe
 pending migrations, performs an idempotent seed upsert, switches the symlink, and
-requires the exact nine-row migration ledger, current symlink, health, and readiness.
+requires the exact ten-row migration ledger, current symlink, health, and readiness.
 If any preparation, activation, or metadata step fails after a prior release was
 verified, it restores that exact release and rechecks both endpoints. It does not
 recreate the VM/ADB, broaden IAM, or repeat secure bootstrap.
@@ -135,7 +138,7 @@ bound SQL, an expected-current guard, commit, and readback, then restores and ve
 the prior application release.
 
 Before pending DDL runs, the migration runner validates the filename and checksum of
-every migration known to the release. Oracle DDL commits implicitly, so `005`–`009`
+every migration known to the release. Oracle DDL commits implicitly, so `005`–`010`
 are additive and every statement treats its already-created column, table, or
 index as a successful resume condition. If a process stops partway through any
 migration, no `SCHEMA_MIGRATION` record is written; rerun the same unmodified release
@@ -161,7 +164,7 @@ switching application code. A target that contains the knowledge manager but lac
 trusted state is rejected. If activation, health/readiness, or rollback metadata fails,
 the script restores the original knowledge pointer first, then the original current
 symlink, and verifies both endpoints. It does not delete migration rows, remove the
-additive `005`–`009` schema, or delete either knowledge release.
+additive `005`–`010` schema, or delete either knowledge release.
 
 A genuinely historical v1 target with no knowledge manager/state takes the explicit
 legacy compatibility path and leaves the current knowledge pointer untouched. This
@@ -172,58 +175,112 @@ requires a separately designed and verified snapshot/restore contract before rol
 A legacy root-owned `/opt/yobi/shared/previous_release` may be read only as a validated
 fallback; all new writes go to the protected control path.
 
-## Wiki-centric deployment gate
+## Structured recommendation Phase 8 deployment gate
 
-Do not deploy the 2026-08-11 Wiki-centric revision until the local full backend suite,
-chatbot acceptance runner, frontend lint/test/build, and local product E2E all pass. The
-required commands and evidence fields are listed in
-`CHATBOT_IMPROVEMENT_IMPLEMENTATION.md` and `TEST_REPORT.md`.
+The current authorities for this gate are
+[`STRUCTURED_RECOMMENDATION_IMPLEMENTATION_PLAN.md`](STRUCTURED_RECOMMENDATION_IMPLEMENTATION_PLAN.md),
+[`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md), and
+[`TEST_REPORT.md`](TEST_REPORT.md). The historical chatbot acceptance runner and
+`CHATBOT_IMPROVEMENT_IMPLEMENTATION.md` remain regression records only; neither can
+approve the structured selector and one-dispatch RAG flow.
 
-Migration/seed activation for this revision must establish all of the following in
-one release window:
+Do not describe the v2 revision as deployed merely because `make deploy`, the legacy
+provider smoke, `/healthz`, or the current `/readyz` succeeds. Before activation, the
+full local backend suite, frontend lint/test/build, structured product E2E, migration
+and seed checks must pass and be recorded without summing overlapping targeted test
+scopes.
 
-- `SCHEMA_MIGRATION` is exactly checksum-verified `001`–`009`;
-- base catalog `demo-2026.08.11-knowledge-v3` is active, the knowledge release uses
-  catalog contract `demo-knowledge-catalog-2026.08.11-v3`, and all 600 menus have a
-  `MAPPED` family/variant concept row;
-- the active `KNOWLEDGE_RELEASE` is `READY`, its expected and actual graph counts
-  exactly match the six observed release-scoped tables, its manifest/corpus ID match
-  the running code, and no active knowledge chunk vector is null;
-- release-scoped graph counts are exactly 102 concepts/documents (`2` cuisine, `30`
-  family, `70` variant), 100 relations, 281 closure rows, 1,997 claims, and 918 chunks;
-  claim types are exactly 361 ingredient, 371 allergen, 247 dietary, 100 preparation,
-  and 918 facet;
-- supplemental release counts are exactly 600 menu mappings, 13 origin declarations,
-  119 shared-kitchen cross-contact merchant ingredients, and 4 option effects;
-- base catalog counts include 60 merchants, 600 menus, 1,200 evidence rows, 2,400
-  zero-weight reviews, 100 menu categories, 1,202 option groups, and 2,405 option items;
-- normalized menu facts are exactly 54 ingredients/565 menu rows covering 206 menus,
-  10 allergen rows (9 onboarding allergens plus the cross-contact marker)/595 menu
-  rows covering 221 menus, and 20 dietary attributes/1,217 menu rows; missing menu
-  facts remain unknown rather than being filled from merchant prose;
-- every explicit absence alternative is menu-scoped, backed by `VERIFIED` synthetic
-  menu evidence, and retains `UNKNOWN` cross-contact status;
-- retrieval hard-filters safety and availability before bulk Wiki scoring, retains all
-  surviving demo candidates under cap `600`, and enforces party-sized budget and
-  negative preferences before final output; its operational signal uses menu semantic
-  relevance, price, delivery fee, and ETA, never rating;
-- the active knowledge embedding model, dimension, and version match the runtime
-  embedding provider; every menu vector has the same runtime metadata; chunk metadata
-  matches the release; and required option min/max/availability cardinality is valid;
-- catalog, profiles, carts, checkouts, mock orders, and prior migration records were
-  not deleted to make the seed pass.
+### Migration, seed, and release-family evidence
 
-`/readyz` is the public safe summary of these checks. A 200 `/healthz` with a 503
-`/readyz` is a failed activation, not a degraded success. Record the release ID,
-catalog version, active knowledge release/embedding metadata, and safe count summary
-in `TEST_REPORT.md`; never paste a DSN, OCID, public IP, credential, or endpoint ID.
+One controlled Oracle release window must establish all of the following:
 
-After activation, verify ordinary free-form conversation separately from the fixed
-demo shortcuts: `hi` produces no recommendation card, accumulated needs trigger the
-readiness gate, snapshot selection survives reload, a grounded explanation separates
-Wiki/menu/unknown facts, and the existing option/cart/Mock payment/order flow still
-completes. Then run the Primary Demo on the same public release three consecutive
-times and check the unauthenticated demo-control boundary remains HTTP 403.
+- `SCHEMA_MIGRATION` is exactly checksum-verified `001`–`010`; migration `010` can
+  resume safely after Oracle's implicit DDL commits, without editing its checksum or
+  inserting a ledger row manually.
+- Base catalog `demo-2026.08.11-knowledge-v3` and knowledge catalog contract
+  `demo-knowledge-catalog-2026.08.12-v4` are present. The active `KNOWLEDGE_RELEASE`
+  is `READY`, its source-derived ID and 64-character manifest match the running code,
+  expected/declared/observed counts agree, and no active chunk vector or embedding
+  metadata is missing.
+- Release-scoped counts are exactly 102 concepts/documents (`2` cuisine, `30` family,
+  `70` variant), 100 relations, 281 closure rows, 345 essential claims, 1,263 chunks,
+  600 menu mappings, 13 origin declarations, 120 merchant ingredient rows, and 4
+  option effects. Claims are 245 ingredient plus 100 preparation; chunks are 918 prose
+  paragraphs plus 345 essential-fact passages.
+- Base rows include 60 merchants, 600 menus, 100 categories, 1,202 option groups,
+  2,405 option items, 1,200 evidence rows, and 2,400 zero-weight reviews. Required
+  option cardinality remains valid. Catalogs, profiles, carts, checkouts, mock orders,
+  and earlier migration rows are not deleted to make validation pass.
+- The active recommendation family pins that knowledge release, base catalog,
+  preference catalog, KR/US spice reference, synthetic certification release, and
+  embedding identity. Seed verification observes 44 preference rows of which 40 are
+  coverage-enabled, 10 spice references (`KR`/`US` × `1..5`), and 18 active synthetic
+  halal certification rows.
+- A request reserved before an active-pointer change keeps its original
+  `release_family_id` and initial `eligibility_as_of` through pool construction,
+  generation, and snapshot provenance. Snapshot commit and later selection still use
+  that exact family, but re-check mutable availability, price/service area, and
+  certification validity at the current operation time. The proof must exercise
+  Oracle, not only the SQLite fixture.
+
+The source currently gives `RECOMMENDATION_RELEASE_FAMILY` a foreign key to
+`KNOWLEDGE_RELEASE`, but catalog and certification are version strings rather than
+independent immutable manifest foreign keys. The seed transaction validates their
+expected row counts, while `/readyz` still reports the older canonical
+catalog/knowledge/provider checks. Before calling Phase 8 complete, add and verify the
+operational manifest compatibility gate and make activation/rollback restore the
+recommendation-family pointer together with the application and knowledge pointer.
+The present release-state file records only the knowledge pointer, so a successful
+local seed or current deploy-script dry run is not that proof.
+
+### Live Oracle retrieval and generation evidence
+
+- Run representative structured criteria through live Oracle and prove that objective
+  merchant service area, menu availability, base price, five-level spice, valid halal scope,
+  confirmed vegan conflict, and `SIMILAR` history exclusions execute before retrieval.
+- Confirm the real query path uses `VECTOR_DISTANCE(..., COSINE)` plus lexical/alias
+  signals against public prose/essential chunks. Record pool membership/provenance and
+  golden-set recall; deterministic SQLite vectors are not Oracle semantic-quality
+  evidence.
+- Run a live structured-v2 recommendation with the configured primary model. One
+  application dispatch must choose final pool menu IDs and write explanations in the
+  same response, without tools, continuation, automatic retry, or automatic model
+  fallback. Preserve valid model order and reject any outside-pool/evidence reference.
+- A legacy function-call smoke, a configured-provider `/readyz`, or a degraded primary
+  bootstrap checkpoint does not satisfy this gate. The current v2 generator calls only
+  its configured primary model; Phase 8 requires an actual normal `RECOMMENDED` result,
+  not a public experience that can only return `SEARCH_FALLBACK`.
+- Separately rehearse an empty pool, model `NO_MATCH`, invalid/provider failure search
+  fallback with no second call, idempotent replay with no extra dispatch, and stale
+  `DISPATCHED` recovery to `UNKNOWN_AFTER_DISPATCH` without automatic redispatch.
+
+### Public product and rollback evidence
+
+On the same exact release, run the public mobile and desktop path from profile/address
+confirmation through structured selection, recommendation, options, cart, delivery,
+mock payment, and mock order:
+
+- no recommendation composer and no `/messages` or `/messages/stream` request from the
+  new UI;
+- same-category `OR`, cross-category `AND`, only explicit halal/vegan dietary choices,
+  no allergy controls or safety claim, and no country/language/religion inference;
+- five-level spice with switchable KR/US examples, no current `/3` display;
+- model-selected normal results and their Wiki evidence, then button-only choose,
+  similar, edit, compare, and evidence actions;
+- reload/request recovery, catalog-version conflict, option dietary state, server
+  pricing, cart confirmation fingerprint, payment failure/retry, and duplicate-order
+  protections; and
+- ordinary service copy with one quiet synthetic/order truth statement, never a claim
+  that a demo merchant is a real certified restaurant or that a real charge occurred.
+
+Verify `/healthz`, `/readyz`, unauthenticated production demo controls (`403`), Nginx
+and systemd, sanitized release-window logs, and the exact active application,
+knowledge, recommendation-family, catalog, certification, generation-model, and
+embedding identities. Then rehearse rollback. A successful rollback must restore a
+compatible application plus both active data pointers, retain additive migrations,
+and pass the old release's public regression. Append exact commands, release IDs, and
+results to `TEST_REPORT.md`; never paste a DSN, OCID, public IP, credential, API key,
+or endpoint ID.
 
 Generation and embedding are independent deployment settings. The default approved
 path remains OCI on-demand generation. `GENAI_PROVIDER`, logical generation model,

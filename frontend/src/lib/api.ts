@@ -1,14 +1,17 @@
 import type {
   AddressCandidate,
-  AssistantTurn,
-  CardPayload,
   CartPreview,
   Checkout,
   ConversationEventInput,
   ConversationEventResult,
   ConversationView,
+  CriteriaCommitResult,
   OptionGroup,
   Profile,
+  PreferenceCatalog,
+  RecommendationCriteriaV2,
+  RecommendationBatchV2,
+  RecommendationRequestV2,
   Session,
 } from "../types";
 
@@ -50,6 +53,8 @@ const ACTIONABLE_ERRORS: Record<string, string> = {
   CART_INCOMPLETE: "Add a menu and confirm the delivery details to continue.",
   CART_OPTION_UNAVAILABLE: "That option is no longer available. Choose another option.",
   CART_MENU_UNAVAILABLE: "That menu is no longer available. Choose another menu.",
+  CART_MENU_NO_LONGER_ELIGIBLE:
+    "That menu no longer matches your saved preferences. Choose another menu or update your preferences.",
   CART_CHANGED_RECONFIRM_REQUIRED: "The menu or price changed. Review the cart and confirm it again.",
   CHECKOUT_STALE: "The cart changed after checkout started. Review and confirm it again before retrying payment.",
   CART_NOT_CONFIRMED: "Review and confirm the latest cart before payment.",
@@ -63,13 +68,16 @@ const ACTIONABLE_ERRORS: Record<string, string> = {
   IMAGE_EXTENSION_MISMATCH: "The file extension does not match the image type. Choose another image.",
   IMAGE_MAGIC_BYTE_INVALID: "That file is not a readable image. Choose another PNG, JPEG, or WebP file.",
   IMAGE_DECODE_FAILED: "That image could not be read. Try a clearer image or enter the address manually.",
-  CHAT_STREAM_FAILED: "I couldn’t reconnect to this chat. Please try sending your message again.",
-  CHAT_STREAM_INCOMPLETE: "The chat response was interrupted. Please try again.",
-  CHAT_STATE_VERSION_CONFLICT: "The conversation changed in another action. Review the latest response and try again.",
-  CHAT_REQUEST_ID_REUSED: "This retry key belongs to a different message. Refresh the conversation and send again.",
-  RECOMMENDATION_SNAPSHOT_NOT_FOUND: "That recommendation is no longer available. Ask YOBI for a fresh set of menus.",
+  CHAT_STATE_VERSION_CONFLICT: "Your choices changed in another action. Review the latest result and try again.",
+  RECOMMENDATION_SNAPSHOT_NOT_FOUND: "That recommendation is no longer available. Request a fresh set of menus.",
   MENU_NOT_IN_RECOMMENDATION_SNAPSHOT: "That menu is not part of the latest recommendation. Choose from the current cards.",
   OPTIONS_REQUIRE_SELECTED_MENU: "Choose the menu again before changing its options.",
+  PREFERENCE_CATALOG_NOT_AVAILABLE: "The current food choices could not be loaded. Try again.",
+  PREFERENCE_CATALOG_CHANGED: "The available food choices changed. Review the refreshed choices and try again.",
+  PREFERENCE_CATALOG_VERSION_CONFLICT: "The available food choices changed. Review the refreshed choices and try again.",
+  RECOMMENDATION_CRITERIA_INVALID: "Review the selected food preferences and try again.",
+  RECOMMENDATION_IN_PROGRESS: "YOBI is still preparing this recommendation.",
+  RECOMMENDATION_FAILED: "YOBI could not finish this recommendation. Your selections are still saved.",
 };
 
 export function actionableError(cause: unknown, fallback: string) {
@@ -87,67 +95,54 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ profile_id: profileId }),
     }),
-  sendMessage: (sessionId: string, content: string, requestId = clientRequestId("chat")) =>
-    request<AssistantTurn>(`/api/v1/sessions/${sessionId}/messages`, {
-      method: "POST",
-      body: JSON.stringify({ content, request_id: requestId }),
-    }),
-  streamMessage: async (
-    sessionId: string,
-    content: string,
-    handlers: {
-      onText: (text: string) => void;
-      onStatus: (text: string) => void;
-      onCard?: (card: CardPayload) => void;
-      onWarning?: (text: string) => void;
-    },
-    intent?: "weekly_ranking" | "kpop_demon_hunters",
-    requestId = clientRequestId("chat"),
+  getPreferenceCatalog: async (
+    locale: string,
+    cached?: { etag: string; catalog: PreferenceCatalog } | null,
   ) => {
-    const response = await fetch(`/api/v1/sessions/${sessionId}/messages/stream`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content, intent, request_id: requestId }),
-    });
-    if (!response.ok || !response.body) throw new Error("CHAT_STREAM_FAILED");
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let finalTurn: AssistantTurn | null = null;
-    let providerErrorCode = "";
-
-    function consumeFrame(frame: string) {
-      const lines = frame.split(/\r?\n/);
-      const event = lines.find((line) => line.startsWith("event:"))?.slice(6).trim();
-      const dataText = lines
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trimStart())
-        .join("\n");
-      if (!event || !dataText) return;
-      const data = JSON.parse(dataText) as Record<string, unknown>;
-      if (event === "text_delta") handlers.onText(String(data.text ?? ""));
-      if (event === "status" || event === "tool_started" || event === "tool_completed") {
-        handlers.onStatus(String(data.text ?? data.label ?? ""));
-      }
-      if (event === "card") handlers.onCard?.(data as unknown as CardPayload);
-      if (event === "warning") handlers.onWarning?.(String(data.text ?? ""));
-      if (event === "message_end") finalTurn = data as unknown as AssistantTurn;
-      if (event === "error") providerErrorCode = String(data.code ?? "CHAT_STREAM_INCOMPLETE");
+    const headers: Record<string, string> = {};
+    if (cached?.etag) headers["If-None-Match"] = cached.etag;
+    const response = await fetch(
+      `/api/v1/recommendation/preferences/catalog?locale=${encodeURIComponent(locale)}`,
+      { headers },
+    );
+    if (response.status === 304 && cached) {
+      return { catalog: cached.catalog, etag: cached.etag, notModified: true };
     }
-
-    while (true) {
-      const { done, value } = await reader.read();
-      buffer += decoder.decode(value, { stream: !done });
-      const frames = buffer.split(/\r?\n\r?\n/);
-      buffer = frames.pop() ?? "";
-      frames.forEach(consumeFrame);
-      if (done) break;
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({ detail: { code: "PREFERENCE_CATALOG_NOT_AVAILABLE" } }));
+      throw new Error(payload.detail?.code ?? `HTTP_${response.status}`);
     }
-    if (buffer.trim()) consumeFrame(buffer);
-    if (providerErrorCode) throw new Error(providerErrorCode);
-    if (!finalTurn) throw new Error("CHAT_STREAM_INCOMPLETE");
-    return finalTurn as AssistantTurn;
+    const catalog = await response.json() as PreferenceCatalog;
+    return {
+      catalog,
+      etag: response.headers.get("ETag") ?? `"${catalog.catalog_version}"`,
+      notModified: false,
+    };
   },
+  putRecommendationCriteria: (
+    sessionId: string,
+    criteria: RecommendationCriteriaV2,
+    expectedStateVersion: number,
+    catalogVersion: string,
+    requestId = clientRequestId("criteria"),
+  ) => request<CriteriaCommitResult>(`/api/v1/sessions/${sessionId}/recommendation-criteria`, {
+    method: "PUT",
+    body: JSON.stringify({
+      criteria,
+      expected_state_version: expectedStateVersion,
+      catalog_version: catalogVersion,
+      request_id: requestId,
+    }),
+  }),
+  createRecommendation: (sessionId: string, input: RecommendationRequestV2) =>
+    request<RecommendationBatchV2>(`/api/v1/sessions/${sessionId}/recommendations`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  getRecommendationRequest: (sessionId: string, requestId: string) =>
+    request<RecommendationBatchV2>(
+      `/api/v1/sessions/${sessionId}/recommendation-requests/${encodeURIComponent(requestId)}`,
+    ),
   getConversation: (sessionId: string) =>
     request<ConversationView>(`/api/v1/sessions/${sessionId}/conversation`),
   postConversationEvent: (sessionId: string, event: ConversationEventInput) =>
@@ -155,10 +150,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify(event),
     }),
-  getMessages: (sessionId: string) =>
-    request<Array<{ message_id: string; role: "user" | "assistant"; content: string }>>(
-      `/api/v1/sessions/${sessionId}/messages`,
-    ),
   getOptions: (menuId: string) => request<OptionGroup[]>(`/api/v1/menus/${menuId}/options`),
   getMerchantMenus: (sessionId: string, merchantId: string, excludedMenuIds: string[]) =>
     request<import("../types").MenuSummary[]>(

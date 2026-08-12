@@ -15,7 +15,7 @@ from app.domain.recommendation import (
     final_hybrid_recommendation_score,
     wiki_operational_retrieval_score,
 )
-from app.rag.embeddings import deterministic_embedding
+from app.rag.embeddings import deterministic_embedding, hybrid_knowledge_chunk_score
 
 
 def test_sqlite_recommendation_uses_active_chunks_and_tracks_grounding(
@@ -74,7 +74,8 @@ def test_oracle_chunk_query_contract_matches_sqlite_active_release_contract() ->
     assert "knowledge_chunk" in sql
     assert "menu_concept_map" in sql
     assert "menu_knowledge" not in sql
-    assert result == {"menu_001_01": (0.8, ["chunk_one"])}
+    expected_score = hybrid_knowledge_chunk_score("", 0.8, "", (), "")
+    assert result == {"menu_001_01": (expected_score, ["chunk_one"])}
 
 
 def test_both_recommendation_paths_exclude_legacy_menu_knowledge_from_ranking() -> None:

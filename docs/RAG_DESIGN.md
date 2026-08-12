@@ -1,195 +1,200 @@
-# RAG and hybrid recommendation design
+# Structured recommendation RAG design
 
-> This document describes the 2026-08-11 local v3 design. The existing OCI public
-> demo still runs the historical 2026-08-09 v2 release; no v3 Oracle/public result is
-> implied here.
+> Current product authority: [`STRUCTURED_RECOMMENDATION_IMPLEMENTATION_PLAN.md`](STRUCTURED_RECOMMENDATION_IMPLEMENTATION_PLAN.md).
+> This document describes the local 2026-08-12 v2 source contract. The older
+> free-chat design, allergy filtering, three-level spice scale, and server-final-
+> shortlist contract are historical and do not govern this path.
 
-YOBI does not let an LLM invent or select the final menu set. The server first builds
-and validates cumulative meal needs, then produces a grounded candidate result. The
-model may explain that result in natural language, but the body, cards, prices,
-options, claims, and passages remain tied to server-owned identifiers.
+## Core contract
 
-## Turn orchestration
+YOBI separates objective eligibility, broad evidence retrieval, and final subjective
+choice:
 
-`DialogueEngine` converts each user turn into a `PreferenceDelta`, merges it into the
-session's `MealNeedState`, assigns a `DialogueAct`, and evaluates readiness. Greetings,
-uncertain answers, recommendation holds, and ordinary need collection can be answered
-without tools or cards. Recommendation runs only when accumulated information passes
-the readiness policy or the user explicitly requests a recommendation.
+1. The user commits structured preferences. Values inside a category use `OR`; every
+   non-empty category expresses an `AND` intent for a normal recommendation.
+2. The server removes objectively ineligible menus.
+3. The server combines lexical and embedding evidence to build a broad, auditable
+   Wiki evidence pool.
+4. One bounded generation request chooses the final menu IDs from that pool and
+   writes grounded explanations in the same response.
+5. The server validates the response and preserves the valid model order. It never
+   substitutes a menu from outside the pool or silently weakens a condition.
 
-When tools are allowed, `DialogueAct` routes the turn to a small subset of the
-14-function allowlist. The provider is never asked to choose from an unrelated full
-surface. Tool arguments are Pydantic-validated; tool results are wrapped as bounded
-`untrusted_data`. A persisted `RecommendationSnapshot` is the authority for later
-selection, rejection, comparison, and “the second menu” references.
+The model therefore owns final preference judgment only inside a server-owned pool.
+It does not own serviceability, availability, price truth, spice truth, certification
+validity, or confirmed vegan conflicts.
 
-## Candidate and safety pipeline
+## Criteria and objective eligibility
 
-The final recommendation path makes the internal food Wiki the primary retrieval
-authority while keeping deterministic safety and ordering rules outside the LLM:
+`RecommendationCriteriaV2` contains cuisine origin, flavor, main ingredient, food
+form, temperature, price band, texture, cooking method, a maximum spice level from
+`1` to `5`, a `KR` or `US` spice-reference display, and the two explicit dietary
+toggles `halal_certified_only` and `vegan`.
 
-1. Merge profile rules with the cumulative conversation state.
-2. Apply service area, merchant/menu availability, spice, and normalized hard
-   dietary/allergen constraints before any Wiki score is calculated.
-3. Map each candidate to the active knowledge release and resolve inherited Wiki
-   claims through `DISH_CONCEPT_CLOSURE`.
-4. Treat Wiki `DEFINING`/`CORE` ingredients as `PRESUMED_PRESENT`; eliminate a menu
-   when those claims conflict with a hard exclusion.
-5. Apply menu-specific claims and selected option `ADD`/`REMOVE` effects. Merchant
-   origin/ingredient declarations remain separate `MERCHANT`-scope evidence: they do
-   not prove menu presence, but they conservatively exclude a candidate when they
-   conflict with a strict request, an explicit religious rule, or a severe allergy
-   because shared-kitchen cross-contact is unresolved.
-6. Search the active Wiki with exact Korean/English aliases, Korean facet terms, and
-   vector similarity. The cap is `600`, so every demo menu that survives the safety
-   and availability filters remains available through bulk Wiki scoring and the
-   structured rerank.
-7. Apply rejected-menu and explicit negative preferences, party-sized total cost, and
-   budget before final output. Compose the surviving candidates' final score as
-   exactly `60%` Wiki retrieval, `25%` structured temperature/texture/flavour/category
-   preference, and `15%` operational menu signal. The operational signal uses menu
-   semantic relevance, price, delivery fee, and ETA—not rating or merchant prose.
-8. Reduce repeated categories/merchants in the ordered shortlist. Return only the
-   server-built `RecommendationResult` and its claim/passage references.
+Before retrieval, the repository checks:
 
-Explanation requests preserve the original user query through deterministic and
-model-tool paths. Ingredient, safety/dietary/religious, preparation, taste, texture,
-temperature, and overview terms route to the corresponding Wiki facet. Korean text is
-rendered from Korean taxonomy labels and server-owned uncertainty phrases; the UI
-shows structured ingredient/allergen/dietary/preparation claims and keeps English
-source passages as collapsed supporting evidence rather than the primary answer.
+- confirmed address service area matching the merchant service area;
+- menu availability (`AVAILABLE`); the current merchant row has no separate active flag;
+- server-owned base price against any selected price bands;
+- reviewed menu spice level against the user's maximum;
+- an active, in-scope merchant or menu halal certification when requested;
+- confirmed animal-derived conflicts for vegan requests;
+- menu history exclusions for a `SIMILAR` request.
 
-Oracle performs `VECTOR_DISTANCE(..., COSINE)` over the active immutable
-`KNOWLEDGE_CHUNK` vectors and combines it with exact-alias and facet matches. The
-knowledge signal therefore remains `60%` of the final score; structured preferences
-are `25%`, and operational/menu metadata is `15%`. Legacy `MENU_KNOWLEDGE` vectors,
-merchant free-text descriptions, and reviews have no recommendation weight. Hard
-filters run before bulk Wiki scoring so an unsafe menu cannot re-enter through
-semantic similarity. Claim, passage, and evidence rows are loaded set-wise, and the
-final result retains the top three chunk IDs and resolved claim IDs per menu. SQLite
-implements the same contract with deterministic embeddings and application-side
-cosine similarity; it is local contract evidence, not Oracle Vector Search evidence.
+Vegan candidates with a supported but changeable option path may remain with a
+check-before-ordering warning. Candidates with no usable vegan evidence are excluded
+when the vegan filter is active. Halal and vegan are never inferred from nationality,
+locale, religion, or legacy profile rules. Allergy inputs and claims are not part of
+the public v2 retrieval, generation context, result, or checkout contract.
 
-The 2,400 review snippets are retained only as visibly synthetic display/backward-
-compatible data. Their recommendation weight is `0`, their safety weight is `0`, and
-review text is not supplied as grounded LLM context. Merchant description prose is
-also excluded from ranking and grounding. Changing either free-text source must not
-change candidate order or an allergy decision.
+## Prose-first Wiki
 
-## Wiki inheritance and override rules
+The food Wiki describes reusable cuisine, family, and variant concepts rather than a
+merchant's branded menu. Only essential facts that remain true for the food identity
+are structured: stable IDs and aliases, concept relationships, defining ingredients
+or preparation, mappings, sources, and review status. Subjective taste, texture,
+temperature impressions, cultural context, and serving situations remain natural
+Markdown paragraphs.
 
-The food Wiki is an explicitly versioned source of general food knowledge, not a
-claim about a real restaurant recipe.
+Compilation produces two public chunk kinds:
 
-- `DEFINING` and `CORE` + `PRESUMED_PRESENT` claims may inherit across an edge whose
-  `inherit_claims` flag is true.
-- `COMMON`, `OPTIONAL`, `POSSIBLE`, `UNKNOWN`, and `CONFLICTING` remain qualified;
-  they are not silently strengthened for filtering or prose.
-- A missing ingredient/allergen claim is unknown, never `CONFIRMED_ABSENT`.
-- A menu or option fact can override the same target only at its explicit scope.
-- Merchant-wide origin text can be displayed as merchant context, but it cannot prove
-  that every menu contains the ingredient.
-- Unknown cross-contact remains a warning even when a sauce-level ingredient is
-  marked absent.
-- Demo alternatives may use a menu-scoped absence only when it has `VERIFIED`
-  synthetic menu evidence. Its cross-contact status still remains
-  `UNKNOWN`, so the claim is explainable evidence rather than a safety guarantee.
+- `PARAGRAPH` for prose passages;
+- `ESSENTIAL_FACT` for allowlisted objective facts rendered as readable evidence.
 
-This resolution contract is used by recommendation filtering, `explain_menu`,
-`get_dietary_evidence`, snapshot references, and the grounded response validator.
+The compiler also retains `LEGACY_FACET` compatibility. Each chunk carries the
+document/concept/release identity, heading path, paragraph index, source/review
+metadata, content hash, and embedding identity. Legacy safety paragraphs are marked
+`INTERNAL_ONLY`; v2 retrieval admits only `PUBLIC_RAG` content, with a compatibility
+fallback that excludes an old `safety` facet when visibility metadata is absent.
 
-## Authoring, chunks, and release activation
+Reviews and merchant descriptions are not used for ranking, eligibility, or model
+grounding. Changing that synthetic display prose must not change the v2 evidence pool.
 
-Markdown files under `knowledge/dishes/` are the editable Wiki source. Strict front
-matter declares concept identity, parent edges, ingredient roles/status, allergen
-status, dietary attributes, preparation, sources, synthetic status, and review status.
-Each document supplies nine named explanation facets. The compiler validates and
-normalizes the graph, creates a closure table, emits stable claim/document/chunk IDs
-and hashes, and embeds each facet. The current demo corpus intentionally stops at
-reusable food families and variants; it never creates a concept for a particular
-merchant's branded menu name.
+## Hybrid evidence-pool construction
 
-Loaders stage a `KNOWLEDGE_RELEASE` as `LOADING`, insert only that immutable release's owned
-rows, verify exact counts and non-null vectors, then mark it `READY` and switch
-`KNOWLEDGE_RUNTIME_STATE`. `/readyz` fails when the active release is absent, not
-ready, has a missing/invalid manifest, declared counts that differ from observed
-counts, anything other than exactly 600 mappings/13 origin declarations/119 merchant
-cross-contact ingredient rows/4 option effects, null or metadata-incompatible chunks,
-incompatible menu vectors, or invalid required-option cardinality. The base catalog is
-`demo-2026.08.11-knowledge-v3` and the knowledge catalog contract is
-`demo-knowledge-catalog-2026.08.11-v3`; the compiled corpus contains 102 concepts/
-documents (`2` cuisine, `30` family, `70` variant), 100 relations, 281 closure rows,
-1,997 claims, and 918 facet chunks. Claims are exactly 361 ingredient, 371 allergen,
-247 dietary, 100 preparation, and 918 facet rows. All 600 menus across 100 menu
-categories are mapped.
+The preference catalog owns stable selection codes, locale labels, and query aliases.
+For each selected value, the repository creates a localized search string and embeds
+it with the embedding contract pinned by the active release family. Nationality,
+age band, and stored favorite foods may form one lower-weight soft-profile query. That
+query can adjust pool recall but never counts toward category coverage and cannot
+override explicit criteria or objective eligibility.
 
-The authoring default is `yobi-semantic-hash-v1`, 1536 dimensions, version
-`2026-08-06`. The release path explicitly pins seed and query embedding to the
-deterministic provider; `auto` is only an explicit one-off operator override. Oracle
-can re-embed the authored chunks only when an operator deliberately changes that
-provider contract. Source/document hashes and embedding metadata
-make a changed document or embedding model a new verifiable release artifact rather
-than an invisible cache mutation.
+For every selected value, retrieval scores unique public passages inherited through
+objectively eligible menus' mapped Wiki concepts. Vector, lexical, and exact/essential
+signals produce independent stable ranks that are fused with reciprocal-rank fusion;
+only the configured `raw_hits_per_selected_value` enter menu evidence. Values in the
+same category compete with max/`OR` semantics, while a menu must retain hit evidence
+for every active category before entering a normal-generation pool. Stable chunk and
+menu IDs break ties. This avoids manufacturing category coverage from a zero-score
+“best” passage, but it is still structural coverage rather than proof of semantic
+entailment. The one-call model is instructed to choose only when those passages
+genuinely support the cross-category `AND`, and live quality evaluation must measure
+that judgment. A bounded set of the strongest passages, current menu facts, and any
+applicable certification evidence forms one `EvidencePoolItem`.
 
-Prewarmed explanations are also release-aware. Their provenance combines the catalog
-version with the active knowledge release, their cache key includes a provenance hash,
-and stale prewarm rows for the same menu/language are invalidated before regeneration.
+Each pool item includes:
 
-## Generation provider is separate from embedding
+- an eligibility-checked, orderable `MenuSummary` with server-owned price, ETA, fee,
+  and five-level spice value; raw address/service-area identifiers and an availability
+  flag are not part of the generation payload;
+- mapped Wiki concept and active knowledge/catalog/recommendation release IDs;
+- selected category/value to evidence-ID mappings;
+- public Wiki passages and objective menu facts;
+- halal certification status/scope and vegan status/warning;
+- a retrieval score used only to bound the broad pool.
 
-`GenAIProvider` owns generation capabilities and request normalization. Current
-configuration expresses OCI provider, logical generation model, on-demand or
-dedicated serving mode, optional endpoint references, function calling, structured
-output, streaming capability, timeout, bounded retry/backoff, maximum input/output,
-maximum tool schemas per request, and maximum tool calls per response. AgentLoop uses
-the lower server/provider limit and rejects excess input or calls before executing a
-tool. Production/dedicated readiness fails closed with sanitized configuration codes
-when required model, endpoint, HTTPS region, credentials, or capabilities are absent.
-Dedicated tests use contract fixtures; the existence of that adapter is not evidence
-that a paid dedicated endpoint has been provisioned.
+The configured default pool limit is `24`, with at most four public passages retained
+per menu. Category/value evidence references sent to generation retain IDs and scores,
+not duplicate passage bodies; prose content is available only through that bounded
+Wiki-passage list. This retrieval order is an input-bounding mechanism, not the final
+result order. SQLite computes deterministic embeddings and cosine similarity in the
+application for local parity. The Oracle implementation calls
+`VECTOR_DISTANCE(..., COSINE)` with the configured search-query embedding provider.
+Static Oracle code checks do not prove that live Oracle Vector Search has run.
 
-Generation model changes do not alter `KNOWLEDGE_CHUNK` embeddings. Embedding model,
-dimension, and version are configured and verified independently. Only an embedding
-provider/version change triggers re-embedding, index evaluation, and an active-release
-transition.
+## Single generation dispatch
 
-Provider errors are classified as `RATE_LIMIT`, `TIMEOUT`, `NETWORK_ERROR`,
-`INVALID_TOOL_ARGUMENT`, `NO_TOOL_RESPONSE`, `EMPTY_RESPONSE`,
-`GROUNDING_REJECTED`, `CAPABILITY_LIMIT_EXCEEDED`, or `PROVIDER_UNAVAILABLE` (with a final unknown-provider
-fallback category at the service boundary). Timeout/network/5xx retries are bounded
-with exponential backoff and jitter. Rate limits cause model cooldown/fallback rather
-than sleeping through an interactive request. The fallback preserves the current
-`DialogueAct`, state, and server facts.
+`RecommendationGenerator` receives only:
 
-## Grounded response contract
+- committed criteria;
+- minimal soft profile context (language, nationality, age band, favorite foods);
+- the bounded evidence-pool payload;
+- the requested locale and prompt version.
 
-Model output is normalized into a short narrative plus referenced menu, claim, and
-passage IDs, a `grounding_scope`, and explicit `uncertainty_codes`. Evidence precedence
-is `OPTION > MENU > VARIANT_WIKI > FAMILY_WIKI`. `GroundedResponseValidator` rejects
-references not present in the server-owned cards/result, internal tool names, internal
-IDs in user-visible prose, scope mismatches, unsupported uncertainty codes, or
-stronger claims than the grounded payload supports. In particular, `POSSIBLE`,
-`UNKNOWN`, and `NOT_PROVIDED` cannot be strengthened into presence, absence, or safety.
-General Wiki passages are labelled as synthetic food knowledge; menu-specific
-specifications and unknowns are shown separately. Merchant-scope structured facts may
-only contribute the `CROSS_CONTACT_UNKNOWN` uncertainty, never a menu recipe claim.
+It performs one provider `generate` call with strict JSON schema output. There are no
+tool schemas, agent loop, continuation request, automatic retry, or automatic model
+fallback. The normal output returns `RECOMMENDED` with a criteria summary and up to
+three ordered recommendations, or `NO_MATCH` with no menu. Each recommendation must
+include its pool menu ID, contiguous rank, reason, description, active-category
+matches, evidence IDs, Wiki passage IDs, and caution codes.
 
-Cart/delivery/check-out tools accept only an explicit matching user act. The server
-revalidates options, price, cart readiness, and state transitions. Agent cart inserts
-use a unique request key, so a provider continuation failure or retry cannot duplicate
-the line. The LLM cannot mark payment successful; mock-payment success remains an
-explicit server endpoint, and order completion can only read the one order already
-linked to a successful mock checkout.
+`RecommendationGenerationValidator` rejects:
+
+- more than the configured result limit;
+- a menu ID outside the stored pool;
+- missing evidence for an active preference category;
+- a matched value that the user did not select;
+- category or Wiki evidence IDs outside that menu's pool item;
+- non-contiguous/duplicate result ranks; and
+- internal IDs leaked into user-visible prose.
+
+The service maps the validated IDs back to server-owned menu data and keeps the
+model's order. It does not rerank a valid result using retrieval score. Objective
+conditions are revalidated at current UTC against the pinned family before the
+snapshot is committed. Newly ineligible menus are removed, while current price,
+delivery fee/ETA, halal, and vegan fields replace their request-time projections; the
+model prose and valid relative order are retained. A later terminal-result GET applies
+the same live projection without modifying the persisted model result or issuing a
+generation call.
+
+This validator proves structural grounding, not arbitrary natural-language
+entailment. The prompt prohibits claims beyond supplied evidence, and halal/vegan
+states shown by the product are mapped from server-owned pool fields rather than model
+prose. A fluent but unsupported sentence that uses otherwise valid evidence IDs is a
+model-quality/evaluation failure; the current code does not claim to detect every such
+sentence deterministically.
+
+## Empty, no-match, and failure behavior
+
+- Empty objective/retrieval pool: complete as no result and make zero generation
+  calls.
+- Model `NO_MATCH`: show no recommendation; do not relax criteria and do not issue a
+  second call.
+- Timeout, provider error, or invalid grounding: return the nearest saved search
+  results as `SEARCH_FALLBACK`, with distinct UI copy, no claim that every subjective
+  category is satisfied, and no second generation call.
+- Stale `CREATED` before dispatch: mark failed with `RETRIEVAL_OWNER_LOST`; do not leave
+  a permanent pending request. An explicit retry uses a new request ID.
+- Crash after `DISPATCHED`: expose `UNKNOWN_AFTER_DISPATCH`; never guess that the
+  provider did not process the request and never redispatch automatically.
+- Explicit retry: the user creates a new request ID, which is a new permitted
+  generation attempt.
+
+## Snapshots, replay, and follow-up actions
+
+The request ledger stores request hash, criteria version, evidence-pool payload,
+dispatch count, status, result/failure, and timestamps. An identical replay returns
+the saved result with no additional generation. Reusing an ID for a different
+semantic request is rejected.
+
+A selectable result is persisted with its `RecommendationSnapshot`. `SELECT_MENU` is a
+snapshot-backed server event that revalidates current UTC availability, service area,
+price, spice, certification, and vegan eligibility. Evidence and comparison open the
+already received snapshot/menu payload in the browser, while editing commits a new
+criteria version and `SIMILAR` creates a new recommendation request. `SIMILAR` retains
+the same objective and subjective criteria, excludes server-recorded
+shown/rejected/selected menu IDs, builds a new pool, and may perform one generation
+dispatch for that new request. The recommendation surface has no free-text input.
 
 ## Evaluation boundary
 
-`backend/evaluation/run_chatbot_acceptance.py` executes real `ChatService` turns over
-the repository and checks multi-turn greetings, holds, correction, hard constraints,
-readiness, snapshot references, and knowledge golden cases. Focused tests cover graph
-authoring/load/search, all-menu mapping, Wiki/menu/option precedence, missing-is-not-
-absent semantics, merchant scope, review weight `0`, provider capabilities/retries,
-and UI conversation hydration/events.
+Local source evidence currently covers the prose-first compiler/catalog, request
+ledger and one-dispatch service behavior, grounding validator, API/frontend contracts,
+and SQLite integration. Fake-provider tests can prove exact dispatch counts and model
+order preservation; they cannot prove live model quality. Deterministic SQLite vectors
+prove data/contract continuity, not semantic quality or Oracle query behavior.
 
-Local SQLite and fake-provider results do not prove Oracle, OCI GenAI, Nginx, or the
-public product. Those are separate Phase 7 deployment gates and must be recorded with
-the exact release and commands in `TEST_REPORT.md`.
+Live Oracle migration and vector execution, OCI provider one-call behavior, Nginx and
+systemd activation, and the public browser flow remain separate deployment gates.
+Only dated, release-specific results in [`TEST_REPORT.md`](TEST_REPORT.md) may be used
+as evidence for those boundaries.

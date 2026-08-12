@@ -24,13 +24,7 @@ def test_demo_catalog_maps_all_600_menus_to_reusable_family_or_variant_nodes() -
     catalog = build_knowledge_catalog_seed(menus)
 
     assert len(CATEGORIES) == len(CATEGORY_CONCEPT_MAP) == 100
-    assert (
-        sum(
-            row["concept_type"] == "VARIANT"
-            for row in catalog.compiled_release.concepts
-        )
-        == 70
-    )
+    assert sum(row["concept_type"] == "VARIANT" for row in catalog.compiled_release.concepts) == 70
     assert len(catalog.menu_concept_maps) == len(menus) == 600
     assert {row["mapping_status"] for row in catalog.menu_concept_maps} == {"MAPPED"}
     assert {row["concept_id"] for row in catalog.menu_concept_maps} == (
@@ -59,12 +53,13 @@ def test_taxonomy_is_claim_backed_and_replaces_category_pseudo_ingredients() -> 
     allergen_ids = {row["allergen_id"] for row in catalog.allergens}
     claims = catalog.compiled_release.claims
 
-    assert len(ingredient_ids) == len(catalog.ingredients) == 54
-    assert len(allergen_ids) == len(catalog.allergens) == 9
+    assert len(ingredient_ids) == len(catalog.ingredients) == 48
+    assert allergen_ids == set()
+    assert catalog.dietary_attributes == []
     assert ingredient_ids == {
         row["ingredient_id"] for row in claims if row["claim_type"] == "INGREDIENT"
     }
-    assert allergen_ids == {row["allergen_id"] for row in claims if row["claim_type"] == "ALLERGEN"}
+    assert not {row["allergen_id"] for row in claims if row["claim_type"] == "ALLERGEN"}
     assert (
         not {
             "ingredient_tteokbokki",
@@ -170,7 +165,7 @@ def test_unreviewed_category_fails_closed_or_is_explicitly_unmapped() -> None:
             "source_ref": "demo-category:Unreviewed fusion dish",
             "review_status": "DRAFT",
             "is_synthetic": 1,
-            "updated_at": "2026-08-11",
+            "updated_at": "2026-08-12",
         }
     ]
 

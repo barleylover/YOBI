@@ -19,12 +19,14 @@ def test_release_archive_contains_knowledge_and_all_migrations() -> None:
     assert "007_service_area_and_mutation_idempotency.sql" in source
     assert "008_checkout_cart_version.sql" in source
     assert "009_cart_confirmation_fingerprint.sql" in source
+    assert "010_structured_hybrid_rag_recommendation.sql" in source
     assert "persist_runtime_release_policy" in source
     assert "actual_migration_list" in source
-    assert "Migration directory must contain exactly 001-009" in source
-    assert 'status["expected_migration_count"] == status["applied_migration_count"] == 9' in source
+    assert "Migration directory must contain exactly 001-010" in source
+    assert 'status["expected_migration_count"] == status["applied_migration_count"] == 10' in source
     assert 'status["latest_expected_migration"]' in source
     assert 'status["latest_applied_migration"]' in source
+    assert '== "010"' in source
     assert 'raise SystemExit("MIGRATION_LEDGER_NOT_EXACT")' in source
     assert "assert status[" not in source
     runtime_import = source.index('import app.main; print("Verified Python 3.9 application imports.")')
@@ -39,9 +41,10 @@ def test_deploy_loads_runtime_environment_without_shell_source() -> None:
     source = (ROOT / "deploy" / "deploy.sh").read_text(encoding="utf-8")
 
     assert "source /etc/yobi/yobi.env" not in source
-    assert source.count('"${runtime_env_runner[@]}"') == 5
+    assert source.count('"${runtime_env_runner[@]}"') >= 7
     assert "run_with_runtime_env.py" in source
     assert 'PYTHONPATH="$new_release/backend:$new_release"' in source
+    assert "structured_recommendation_smoke.py" in source
 
 
 def test_python39_deployable_modules_defer_pep604_annotations() -> None:
@@ -165,7 +168,7 @@ def test_rollback_exit_restores_legacy_targets_after_activation_starts() -> None
     restore_trap = source.split("restore_on_failure() {", 1)[1].split("}\n", 1)[0]
     assert '"$rollback_activation_started" == true' in restore_trap
     assert "restore_original_release" in restore_trap
-    legacy_activation = "else\n  rollback_activation_started=true\nfi\n\nln -sfn"
+    legacy_activation = "else\n  rollback_activation_started=true\nfi"
     assert legacy_activation in source
     assert source.index(legacy_activation) < source.index('ln -sfn "$target" "$CURRENT_LINK"')
 
@@ -177,8 +180,14 @@ def test_success_commit_markers_precede_restore_flag_cleanup() -> None:
     assert deploy_source.rindex("deployment_complete=true") < deploy_source.rindex(
         "knowledge_restore_required=false"
     )
+    assert deploy_source.rindex("deployment_complete=true") < deploy_source.rindex(
+        "recommendation_restore_required=false"
+    )
     assert rollback_source.rindex("rollback_complete=true") < rollback_source.rindex(
         "knowledge_restore_required=false"
+    )
+    assert rollback_source.rindex("rollback_complete=true") < rollback_source.rindex(
+        "recommendation_restore_required=false"
     )
     assert rollback_source.rindex("rollback_complete=true") < rollback_source.rindex(
         "rollback_activation_started=false"
@@ -231,3 +240,24 @@ def test_knowledge_release_pointer_is_restored_with_trusted_state() -> None:
     assert "lacks trusted state" in rollback_source
     assert "/opt/yobi/shared/control/release-state" in install_source
     assert "ReadWritePaths=/opt/yobi/shared" not in unit_source
+
+
+def test_recommendation_release_pointer_and_live_v2_smoke_are_release_gates() -> None:
+    deploy_source = (ROOT / "deploy" / "deploy.sh").read_text(encoding="utf-8")
+    rollback_source = (ROOT / "deploy" / "rollback.sh").read_text(encoding="utf-8")
+
+    assert "manage_recommendation_release.py" in deploy_source
+    assert "old_recommendation_release_family_id" in deploy_source
+    assert "new_recommendation_release_family_id" in deploy_source
+    assert "restore_recommendation_release" in deploy_source
+    assert "--recommendation-release-family-id" in deploy_source
+    assert "seed_demo.py\" --verify-only" in deploy_source
+    assert "structured_recommendation_smoke.py" in deploy_source
+    assert deploy_source.index("structured_recommendation_smoke.py") < deploy_source.index(
+        'write_ready_marker "$new_release"'
+    )
+
+    assert "manage_recommendation_release.py" in rollback_source
+    assert "recommendation_release_family_id --allow-missing" in rollback_source
+    assert "restore_original_recommendation" in rollback_source
+    assert "clear-active" in rollback_source

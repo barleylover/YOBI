@@ -1,18 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronRight, Languages, LockKeyhole, Minus, Plus, ShieldAlert, ShoppingBag, Trash2, Unlock } from "lucide-react";
+import { Check, ChevronRight, Languages, Leaf, Minus, Plus, ShoppingBag, Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { actionableError, api } from "../lib/api";
 import { useSessionStore } from "../stores/session";
-import type { CartPreview, MenuSummary, OptionGroup } from "../types";
+import type { CartPreview, DietaryFiltersV2, MenuSummary, OptionGroup } from "../types";
 import { RichCard } from "./RichCard";
 import { useI18n } from "../lib/i18n";
 import { menuName } from "../lib/locale";
+import { getRecommendationCopy } from "../lib/recommendationI18n";
 
 interface Props {
   sessionId: string;
   menu: MenuSummary;
   addressRefId: string;
-  dietaryRules: string[];
+  dietaryFilters?: DietaryFiltersV2;
   onClose: () => void;
   onOptionChange?: (
     menuId: string,
@@ -24,17 +25,17 @@ interface Props {
 
 type Phase = "options" | "note" | "more" | "browse" | "delivery" | "review";
 
-export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryRules, onClose, onOptionChange }: Props) {
+export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, onClose, onOptionChange }: Props) {
   const navigate = useNavigate();
   const setCartQuantity = useSessionStore((state) => state.setCartQuantity);
   const cartQuantity = useSessionStore((state) => state.cartQuantity);
   const { copy, dynamicCopy, journeyCopy, language } = useI18n();
+  const recommendationCopy = getRecommendationCopy(language);
   const [activeMenu, setActiveMenu] = useState(menu);
   const [phase, setPhase] = useState<Phase>("options");
   const [groups, setGroups] = useState<OptionGroup[]>([]);
   const [groupIndex, setGroupIndex] = useState(0);
   const [selections, setSelections] = useState<Record<string, string>>({});
-  const [unlockedOptions, setUnlockedOptions] = useState<Set<string>>(() => new Set());
   const [note, setNote] = useState(journeyCopy.mildNote);
   const [cart, setCart] = useState<CartPreview | null>(null);
   const [merchantMenus, setMerchantMenus] = useState<MenuSummary[]>([]);
@@ -48,7 +49,6 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryRules, on
     setGroups([]);
     setGroupIndex(0);
     setSelections({});
-    setUnlockedOptions(new Set());
     setPhase("options");
     setCart(null);
     setError("");
@@ -94,7 +94,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryRules, on
         activeMenu.menu_id,
         group.option_group_id,
         [optionId],
-        unlockedOptions.has(optionId),
+        false,
       );
       setSelections((current) => ({ ...current, [group.option_group_id]: optionId }));
       if (transitionTimer.current !== null) clearTimeout(transitionTimer.current);
@@ -108,10 +108,6 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryRules, on
     } finally {
       setBusy(false);
     }
-  }
-
-  function unlockOption(optionId: string) {
-    setUnlockedOptions((current) => new Set(current).add(optionId));
   }
 
   async function addToCart() {
@@ -232,21 +228,31 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryRules, on
           <p>{language === "English" ? currentGroup.description : dynamicCopy.catalogDescription}</p>
           <div className="option-list">
             {currentGroup.items.map((option) => {
-              const riskApplies = Boolean(option.dietary_conflict)
-                && option.conflicting_rules.some((rule) => dietaryRules.includes(rule));
-              const isLocked = riskApplies && !unlockedOptions.has(option.option_item_id);
-              return <div className={isLocked ? "option-item-shell risk-locked" : "option-item-shell"} key={option.option_item_id}>
+              const breaksHalal = Boolean(
+                dietaryFilters?.halal_certified_only && option.halal_certification_preserved === false,
+              );
+              const breaksVegan = Boolean(
+                dietaryFilters?.vegan && option.vegan_status === "CONFLICT",
+              );
+              const needsVeganCheck = Boolean(
+                dietaryFilters?.vegan && option.vegan_status === "POSSIBLE_WITH_CHECKS",
+              );
+              return <div className="option-item-shell" key={option.option_item_id}>
                 <button
                   className={selections[currentGroup.option_group_id] === option.option_item_id ? "option-button selected" : "option-button"}
                   onClick={() => void selectOption(currentGroup, option.option_item_id)}
-                  disabled={busy || !option.available || isLocked}
-                  aria-describedby={riskApplies ? `risk-${option.option_item_id}` : undefined}
+                  disabled={busy || !option.available || breaksHalal || breaksVegan}
                 >
                   <span><strong>{language === "한국어" ? option.name_ko : option.name_en}</strong>{language !== "한국어" && <small>{option.name_ko}</small>}</span>
-                  <span>{option.price_delta ? `+₩${option.price_delta.toLocaleString()}` : journeyCopy.included}{isLocked ? <LockKeyhole size={17} /> : <ChevronRight size={17} />}</span>
+                  <span>{option.price_delta ? `+₩${option.price_delta.toLocaleString()}` : journeyCopy.included}<ChevronRight size={17} /></span>
                 </button>
-                {riskApplies && <div className="option-risk" id={`risk-${option.option_item_id}`}><ShieldAlert size={16} /><span><strong>{isLocked ? journeyCopy.blocked : journeyCopy.unlocked}</strong><small>{language === "English" ? option.dietary_conflict : dynamicCopy.riskUnknown}</small></span>{isLocked && <button type="button" onClick={() => unlockOption(option.option_item_id)}><Unlock size={14} /> {journeyCopy.unlock}</button>}</div>}
-              </div>;
+                {(breaksHalal || breaksVegan || needsVeganCheck) && (
+                  <p className={breaksHalal || breaksVegan ? "option-guidance conflict" : "option-guidance"}>
+                    <Leaf size={14} />
+                    {breaksHalal ? recommendationCopy.halalHelp : option.vegan_warning || recommendationCopy.veganChecks}
+                  </p>
+                )}
+              </div>
             })}
           </div>
         </div>
@@ -328,13 +334,10 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryRules, on
           <div className="price-row total"><span>{journeyCopy.total}</span><strong>₩{cart.total_price.toLocaleString()}</strong></div>
           <section className="checkout-readiness" aria-label={copy.readyCheckout}>
             <h5>{copy.readyCheckout}</h5>
-            <div className={!cart.missing_slots.includes("dietary_conflict") ? "readiness-pass" : "readiness-fail"}><Check size={16} /><span><strong>{journeyCopy.dietaryCheck}</strong><small>{cart.missing_slots.includes("dietary_conflict") ? journeyCopy.removeConflict : journeyCopy.noConflict}</small></span></div>
             <div className={!cart.missing_slots.includes("minimum_order_amount") ? "readiness-pass" : "readiness-fail"}><Check size={16} /><span><strong>{journeyCopy.restaurantMinimum}</strong><small>{cart.minimum_order_amount ? `₩${cart.subtotal.toLocaleString()} / ₩${cart.minimum_order_amount.toLocaleString()}${cart.minimum_order_shortfall ? ` · ${journeyCopy.add} ₩${cart.minimum_order_shortfall.toLocaleString()}` : ` · ${journeyCopy.met}`}` : journeyCopy.noMinimum}</small></span></div>
           </section>
-          {(language === "English" ? cart.dietary_warnings : cart.dietary_warnings.length ? [dynamicCopy.riskUnknown] : []).map((warning) => <p className="risk-copy" key={warning}>{warning}</p>)}
           <button className="primary-button full large" onClick={proceedToPayment} disabled={busy || !cart.ready_to_checkout}>{copy.proceedPayment} <ChevronRight size={18} /></button>
           {!cart.ready_to_checkout && <p className="checkout-action">{journeyCopy.completeRequirements}</p>}
-          <p className="demo-label">{copy.demoPayment}</p>
         </div>
       )}
       {error && <p className="form-error" role="alert">{error}</p>}

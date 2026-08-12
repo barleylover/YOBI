@@ -6,7 +6,7 @@ const expectsProtectedControl = Boolean(
   configuredBaseUrl && !["127.0.0.1", "localhost", "::1"].includes(configuredHost),
 );
 
-test("onboarding remains accessible at every required viewport", async ({ page }) => {
+test("onboarding and structured selector remain accessible at every required viewport", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: /Hi, I’m YOBI/ })).toBeVisible();
   await expect(page.locator("main")).toHaveCSS("overflow", "hidden");
@@ -16,24 +16,20 @@ test("onboarding remains accessible at every required viewport", async ({ page }
   await page.getByLabel("Language").selectOption("한국어");
   await expect(page.getByLabel("Country").locator("option").first()).toHaveText("South Korea");
   await page.getByRole("button", { name: "Next" }).click();
-  await expect(page.getByRole("checkbox").last()).toBeVisible();
-  await expect(page.getByRole("button", { name: "배달 주소 확인" })).toBeDisabled();
-  await expect(page.getByLabel("Gender")).toHaveCount(0);
-  await expect(page.getByRole("checkbox", { name: "비건" })).toBeVisible();
   await expect(page.getByLabel("종교 (선택)")).toBeVisible();
-  await expect(page.getByRole("checkbox")).toHaveCount(11);
-  await expect(page.getByRole("radio")).toHaveCount(3);
-  await expect(page.getByRole("heading", { name: "배달 주소" })).toBeVisible();
-  await page.getByRole("checkbox").last().check();
+  await expect(page.getByRole("checkbox")).toHaveCount(1);
+  await expect(page.getByRole("radio")).toHaveCount(0);
+  await expect(page.getByText(/알레르기/)).toHaveCount(0);
+  await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "배달 주소 확인" }).click();
   await page.getByRole("button", { name: "확인하고 시작" }).first().click();
-  await expect(page.getByText("당신의 한국 음식 친구")).toBeVisible();
-  await expect(page.getByLabel("YOBI에게 묻기")).toBeVisible();
-  await page.getByRole("button", { name: "데모 질문 사용하기" }).click();
-  await expect(page.getByRole("heading", { name: "근거 기반 추천 메뉴" }).first()).toBeVisible();
+
+  await expect(page.getByRole("heading", { name: "어떤 음식이 끌리세요?" })).toBeVisible();
+  await expect(page.getByRole("checkbox")).toHaveCount(2);
+  await expect(page.locator(".spice-reference-choice")).toHaveCount(5);
+  await expect(page.getByRole("textbox")).toHaveCount(0);
   await page.goto("/demo/qr");
   await expect(page.getByRole("img", { name: /QR code for/ })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Download presentation SVG" })).toBeVisible();
   await page.goto("/demo/control");
   const statusResponsePromise = page.waitForResponse((response) => (
     response.request().method() === "GET" && response.url().endsWith("/api/v1/demo/status")
@@ -44,31 +40,29 @@ test("onboarding remains accessible at every required viewport", async ({ page }
     await expect(page.getByRole("status")).toHaveText(/Status is protected/);
   } else {
     expect(statusResponse.ok()).toBe(true);
-    const status = await statusResponse.json() as {
-      database: { catalog_version?: unknown; last_seed_time?: unknown };
-    };
-    await expect(page.getByText(String(status.database.catalog_version), { exact: true })).toBeVisible();
-    await expect(page.getByText(String(status.database.last_seed_time), { exact: true })).toBeVisible();
   }
 });
 
-test("dietary-risk option starts locked and explains how to proceed", async ({ page }, testInfo) => {
+test("catalog load failure shows retry and never exposes a free-text fallback", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "iPhone 13", "One primary mobile proof is sufficient.");
+  let failCatalog = true;
+  await page.route("**/api/v1/recommendation/preferences/catalog**", async (route) => {
+    if (failCatalog) {
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: { code: "PREFERENCE_CATALOG_NOT_AVAILABLE" } }) });
+      return;
+    }
+    await route.continue();
+  });
   await page.goto("/");
   await page.getByRole("button", { name: "Get started!" }).click();
   await page.getByRole("button", { name: "Next" }).click();
   await page.getByRole("checkbox", { name: /I agree/ }).check();
   await page.getByRole("button", { name: "Check delivery address" }).click();
   await page.getByRole("button", { name: "Confirm & start" }).first().click();
-  await page.getByRole("button", { name: "Try the demo question" }).click();
-  await page.getByTestId("menu-menu_001_01").getByRole("button", { name: "Choose this menu" }).click();
-  await page.getByRole("button", { name: /^Mild/ }).click();
-  await page.getByRole("button", { name: /^Regular/ }).click();
-  await page.getByRole("button", { name: /^Add cheese/ }).click();
-  const riskyOption = page.getByRole("button", { name: /^Keep fish cake/ });
-  await expect(riskyOption).toBeDisabled();
-  await expect(page.getByText("Blocked for your dietary profile")).toBeVisible();
-  await page.getByRole("button", { name: "Unlock option" }).click();
-  await expect(riskyOption).toBeEnabled();
-  await expect(page.getByText(/server checks still apply/i)).toBeVisible();
+  await expect(page).toHaveURL(/\/chat\/session_/);
+  await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+  failCatalog = false;
+  await expect(page.getByRole("textbox")).toHaveCount(0);
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(page.getByRole("heading", { name: "What sounds good?" })).toBeVisible();
 });

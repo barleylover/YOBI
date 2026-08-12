@@ -2,7 +2,8 @@
 
 - No real Yogiyo API, restaurant, courier, card processor, or hotel service is called.
 - All restaurants, menus, reviews, hotels, payments, and orders are synthetic.
-- YOBI never calls food “safe” for an allergy. `UNKNOWN` is not positive evidence.
+- The public structured flow does not accept allergy criteria or make allergy-safety
+  claims. Retained legacy `UNKNOWN` data is never positive evidence.
 - Nationality is never converted into religious or dietary assumptions.
 - The browser cannot submit authoritative prices or option deltas; the server rebuilds
   totals from current database rows.
@@ -23,7 +24,8 @@ reduced to safe error categories. Provider response bodies and chained SDK excep
 details are not printed, so a 429/401 cannot spill an API key, authorization header,
 or full upstream response into terminal logs.
 Do not put API keys, passwords, full DSNs, OCIDs, public IPs, private keys,
-Authorization headers, raw allergy profiles, raw addresses, or card data in Git/logs.
+Authorization headers, retained legacy allergy profiles, raw addresses, or card data
+in Git/logs.
 
 Deployment control state is separated from application-writable data.
 `/opt/yobi/shared` is `root:yobi` mode `0750`, its `control` and `control/release-state`
@@ -46,6 +48,10 @@ Knowledge-pointer changes use the `YOBI_APP` account, bound SQL, `READY` validat
 an expected-current guard, commit, and readback. Deploy/rollback failure restores the
 previous pointer before restarting the previous application, including an explicit
 no-active state. A new-contract target without trusted release state fails closed.
+This describes the existing knowledge pointer only. The structured-v2 recommendation-
+family pointer and independent catalog/certification manifests are not yet captured by
+that release-state contract; atomic activation and rollback for them remain a Phase 8
+deployment gate.
 Historical v1 targets without that contract may skip pointer switching solely for
 current additive-schema compatibility; future incompatible global configuration or
 base-catalog changes require a separate snapshot/restore contract.

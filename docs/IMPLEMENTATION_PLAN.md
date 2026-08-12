@@ -1,15 +1,27 @@
-# YOBI MVP implementation plan
+# YOBI MVP implementation plan (superseded recommendation scope)
+
+> **Superseded product-flow plan.** This file is retained as the 2026-08-06/11
+> implementation history. For the current recommendation experience, allergy scope,
+> five-level spice contract, Wiki authoring, RAG authority, and LLM-call boundary, use
+> [`STRUCTURED_RECOMMENDATION_IMPLEMENTATION_PLAN.md`](STRUCTURED_RECOMMENDATION_IMPLEMENTATION_PLAN.md).
+> The current flow is profile/address → structured selection → objective eligibility
+> → broad lexical+embedding evidence pool → one generation request that selects and
+> explains final pool menus → button-only follow-up. Historical free-chat and
+> server-final-candidate statements below are not current requirements.
 
 Date: 2026-08-06 KST
 Wiki-centric demo update: 2026-08-11 KST
 
 ## Authority and conflict resolution
 
-1. `YOBI_FINAL_MVP_CODEX_MASTER_PROMPT.md` is the product and implementation authority.
-2. `YOBI_OCI_INFRA_HANDOFF_MASTER.md` is the authority for verified OCI facts and constraints.
-3. `references/product_proposal.pdf` supplies product philosophy, trust design, diagrams, and supporting examples.
-4. The preliminary manuscript supplies background only where it does not conflict with the final prompt.
-5. Oracle and Yogiyo orientation PDFs supply competition, submission, and technical guidance; their older `/openai/v1 + project` example and Oracle 23ai references are superseded.
+1. `docs/STRUCTURED_RECOMMENDATION_IMPLEMENTATION_PLAN.md` is the authority for the
+   current recommendation flow and overrides the affected historical items below.
+2. `YOBI_FINAL_MVP_CODEX_MASTER_PROMPT.md` remains historical authority outside the
+   explicitly superseded recommendation scope.
+3. `YOBI_OCI_INFRA_HANDOFF_MASTER.md` is the authority for verified OCI facts and constraints.
+4. `references/product_proposal.pdf` supplies product philosophy, trust design, diagrams, and supporting examples.
+5. The preliminary manuscript supplies background only where it does not conflict with the final prompt.
+6. Oracle and Yogiyo orientation PDFs supply competition, submission, and technical guidance; their older `/openai/v1 + project` example and Oracle 23ai references are superseded.
 
 The current MVP target is an English-speaking foreign tourist entering by QR, not a long-term resident. Onboarding is a visual form. A booking screenshot is supported. Payment is always mock. The production LLM path is `/20231130/actions/v1`, model `xai.grok-4.3`, with no `project=` parameter.
 

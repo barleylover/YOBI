@@ -4,6 +4,7 @@ import hashlib
 import math
 import re
 from collections.abc import Iterable
+from dataclasses import dataclass
 from functools import lru_cache
 
 SYNONYMS: dict[str, tuple[str, ...]] = {
@@ -126,6 +127,16 @@ KNOWLEDGE_FACET_KEYWORDS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+FALLBACK_RECOMMENDATION_QUERY_ALIASES = (
+    "food",
+    "menu",
+    "dish",
+    "ingredient",
+    "preparation",
+    "taste",
+    "texture",
+)
+
 
 def _tokens(text: str) -> list[str]:
     normalized = re.sub(r"[^a-z0-9가-힣]+", " ", text.lower()).strip()
@@ -184,11 +195,181 @@ def query_contains_knowledge_alias(query: str, aliases: Iterable[str]) -> bool:
     return False
 
 
+def lexical_token_similarity(query: str, document: str) -> float:
+    """Return a bounded lexical overlap signal for hybrid Wiki retrieval."""
+
+    query_tokens = set(_tokens(query))
+    document_tokens = set(_tokens(document))
+    if not query_tokens or not document_tokens:
+        return 0.0
+    return len(query_tokens & document_tokens) / len(query_tokens)
+
+
+@dataclass(frozen=True)
+class HybridChunkCandidate:
+    """One unique Wiki chunk with its query-specific vector signal."""
+
+    chunk_id: str
+    content: str
+    facet: str
+    aliases: tuple[str, ...]
+    vector_similarity: float
+
+
+def _contains_normalized_phrase(text: str, phrase: str) -> bool:
+    normalized_text = _normalized_retrieval_text(text)
+    normalized_phrase = _normalized_retrieval_text(phrase)
+    if not normalized_phrase:
+        return False
+    if any("가" <= character <= "힣" for character in normalized_phrase):
+        return normalized_phrase.replace(" ", "") in normalized_text.replace(" ", "")
+    return bool(
+        re.search(
+            rf"(?<![a-z0-9]){re.escape(normalized_phrase)}(?![a-z0-9])",
+            normalized_text,
+        )
+    )
+
+
+def exact_essential_similarity(
+    query_aliases: Iterable[str],
+    document_text: str,
+    facet: str,
+    concept_aliases: Iterable[str] = (),
+) -> float:
+    """Return the exact-name/alias and essential-fact retrieval signal.
+
+    Preference aliases are the stable catalog vocabulary. A direct occurrence in
+    either the reviewed prose or the mapped concept names is strong evidence. An
+    essential fact with lexical overlap remains useful even when the wording is not
+    an exact phrase (for example, ``beef`` versus ``main ingredient: beef``).
+    """
+
+    aliases = tuple(alias for alias in query_aliases if alias.strip())
+    query_text = " ".join(aliases)
+    searchable_aliases = tuple(alias for alias in concept_aliases if alias.strip())
+    exact_match = any(
+        _contains_normalized_phrase(document_text, alias)
+        or any(
+            _contains_normalized_phrase(concept_alias, alias)
+            or _contains_normalized_phrase(alias, concept_alias)
+            for concept_alias in searchable_aliases
+        )
+        for alias in aliases
+    )
+    essential_overlap = (
+        facet.casefold() == "essential_fact"
+        and lexical_token_similarity(query_text, document_text) > 0.0
+    )
+    if exact_match and essential_overlap:
+        return 1.0
+    if exact_match:
+        return 0.9
+    if essential_overlap:
+        return 0.7
+    return 0.0
+
+
+def _positive_ranking(
+    candidates: tuple[HybridChunkCandidate, ...],
+    scores: dict[str, float],
+) -> tuple[str, ...]:
+    return tuple(
+        candidate.chunk_id
+        for candidate in sorted(
+            candidates,
+            key=lambda item: (-scores[item.chunk_id], item.chunk_id),
+        )
+        if scores[candidate.chunk_id] > 0.0
+    )
+
+
+def rank_hybrid_chunks_rrf(
+    query_aliases: Iterable[str],
+    candidates: Iterable[HybridChunkCandidate],
+    *,
+    limit: int,
+    rank_constant: int = 60,
+) -> list[tuple[HybridChunkCandidate, float]]:
+    """Fuse vector, lexical, and exact/essential rankings with reciprocal rank.
+
+    Candidates must represent unique chunks. The returned score is normalized to
+    ``[0, 1]`` against the best possible rank across all three signals; callers can
+    safely compare menu/category aggregates without depending on raw score scales.
+    """
+
+    if limit < 1:
+        return []
+    if rank_constant < 1:
+        raise ValueError("RRF_RANK_CONSTANT_MUST_BE_POSITIVE")
+    aliases = tuple(dict.fromkeys(alias.strip() for alias in query_aliases if alias.strip()))
+    query_text = " ".join(aliases)
+    unique_candidates: dict[str, HybridChunkCandidate] = {}
+    for candidate in candidates:
+        unique_candidates.setdefault(candidate.chunk_id, candidate)
+    values = tuple(unique_candidates.values())
+    if not values:
+        return []
+
+    vector_scores = {
+        item.chunk_id: max(0.0, min(1.0, item.vector_similarity)) for item in values
+    }
+    lexical_scores = {
+        item.chunk_id: lexical_token_similarity(query_text, item.content) for item in values
+    }
+    essential_scores = {
+        item.chunk_id: exact_essential_similarity(
+            aliases,
+            item.content,
+            item.facet,
+            item.aliases,
+        )
+        for item in values
+    }
+    rankings = (
+        _positive_ranking(values, vector_scores),
+        _positive_ranking(values, lexical_scores),
+        _positive_ranking(values, essential_scores),
+    )
+    fused: dict[str, float] = {item.chunk_id: 0.0 for item in values}
+    for ranking in rankings:
+        for rank, chunk_id in enumerate(ranking, start=1):
+            fused[chunk_id] += 1.0 / (rank_constant + rank)
+    best_possible = 3.0 / (rank_constant + 1)
+    ranked = sorted(
+        values,
+        key=lambda item: (-fused[item.chunk_id], item.chunk_id),
+    )
+    return [
+        (item, max(0.0, min(1.0, fused[item.chunk_id] / best_possible)))
+        for item in ranked[:limit]
+        if fused[item.chunk_id] > 0.0
+    ]
+
+
+def apply_soft_profile_retrieval_signal(
+    primary_score: float,
+    soft_profile_score: float | None,
+    *,
+    soft_weight: float = 0.1,
+) -> float:
+    """Use profile affinity only as a bounded tie-break after explicit intent."""
+
+    primary = max(0.0, min(1.0, primary_score))
+    if soft_profile_score is None:
+        return primary
+    if not 0.0 <= soft_weight <= 1.0:
+        raise ValueError("SOFT_PROFILE_WEIGHT_OUT_OF_RANGE")
+    soft = max(0.0, min(1.0, soft_profile_score))
+    return (1.0 - soft_weight) * primary + soft_weight * soft
+
+
 def hybrid_knowledge_chunk_score(
     query: str,
     vector_similarity: float,
     facet: str,
     aliases: Iterable[str] = (),
+    document_text: str = "",
 ) -> float:
     """Combine vector, requested-facet, and exact dish-alias evidence.
 
@@ -198,6 +379,7 @@ def hybrid_knowledge_chunk_score(
     """
 
     vector_score = max(0.0, min(1.0, vector_similarity))
+    lexical_score = lexical_token_similarity(query, document_text)
     routed = routed_knowledge_facets(query)
     alias_match = query_contains_knowledge_alias(query, aliases)
     if routed:
@@ -207,11 +389,16 @@ def hybrid_knowledge_chunk_score(
             facet_signal = 0.0
         else:
             facet_signal = max(0.8, 1.0 - 0.08 * facet_rank)
-        score = 0.55 * vector_score + 0.25 * facet_signal + 0.20 * float(alias_match)
+        score = (
+            0.45 * vector_score
+            + 0.20 * lexical_score
+            + 0.20 * facet_signal
+            + 0.15 * float(alias_match)
+        )
     elif alias_match:
-        score = 0.75 * vector_score + 0.25
+        score = 0.60 * vector_score + 0.20 * lexical_score + 0.20
     else:
-        score = vector_score
+        score = 0.70 * vector_score + 0.30 * lexical_score
     return max(0.0, min(1.0, score))
 
 

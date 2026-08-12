@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import stat
 from pathlib import Path
@@ -62,6 +63,59 @@ def test_release_state_preserves_null_previous_and_replaces_symlink_atomically(
     )
     assert stored["previous_knowledge_release_id"] is None
     assert stored["knowledge_release_id"] == "knowledge-demo-new"
+    assert stored["recommendation_release_family_id"] is None
+
+
+def test_release_state_round_trips_recommendation_family_and_reads_v1(
+    state_root: Path,
+    trusted_ids: tuple[int, int],
+) -> None:
+    uid, gid = trusted_ids
+    release_id = "release-v2"
+    release_state.write_release_state(
+        release_id,
+        "c" * 64,
+        "knowledge-old",
+        "knowledge-new",
+        previous_recommendation_release_family_id="family-old",
+        recommendation_release_family_id="family-new",
+        state_root=state_root,
+        trusted_uid=uid,
+        trusted_gid=gid,
+    )
+    stored = release_state.read_release_state(
+        release_id,
+        state_root=state_root,
+        trusted_uid=uid,
+        trusted_gid=gid,
+    )
+    assert stored["version"] == 2
+    assert stored["previous_recommendation_release_family_id"] == "family-old"
+    assert stored["recommendation_release_family_id"] == "family-new"
+
+    legacy_id = "release-v1"
+    legacy = {
+        "version": 1,
+        "release_id": legacy_id,
+        "archive_sha256": "d" * 64,
+        "previous_knowledge_release_id": None,
+        "knowledge_release_id": "knowledge-legacy",
+    }
+    legacy_path = state_root / f"{legacy_id}.json"
+    legacy_path.write_text(
+        json.dumps(legacy, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    legacy_path.chmod(0o640)
+    read_legacy = release_state.read_release_state(
+        legacy_id,
+        state_root=state_root,
+        trusted_uid=uid,
+        trusted_gid=gid,
+    )
+    assert read_legacy["version"] == 1
+    assert read_legacy["recommendation_release_family_id"] is None
+    assert read_legacy["previous_recommendation_release_family_id"] is None
 
 
 def test_release_state_rejects_untrusted_directory_or_writable_file(

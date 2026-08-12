@@ -30,8 +30,8 @@ HIERARCHY_CONCEPT_IDS = {
 def _compile_golden():
     return compile_directory(
         GOLDEN_ROOT,
-        release_id="knowledge-demo-2026.08.09-v1",
-        catalog_version="demo-authoring-golden-v1",
+        release_id="knowledge-demo-2026.08.12-v2",
+        catalog_version="demo-authoring-prose-v2",
     )
 
 
@@ -65,13 +65,12 @@ def test_golden_wiki_compiles_to_stable_release_manifest() -> None:
         "concepts": 102,
         "relations": 100,
         "closure": 281,
-        "claims": 1997,
+        "claims": 345,
         "documents": 102,
-        "chunks": 918,
+        "chunks": 1263,
     }
     assert {row["concept_id"] for row in first.concepts} == (
-        set(CATEGORY_CONCEPT_MAP.values())
-        | {"dish_korean_cuisine", "dish_korean_chinese_cuisine"}
+        set(CATEGORY_CONCEPT_MAP.values()) | {"dish_korean_cuisine", "dish_korean_chinese_cuisine"}
     )
     rose_ancestors = {
         (row["ancestor_concept_id"], row["depth"], row["inherit_claims"])
@@ -242,7 +241,7 @@ def test_wiki_core_claim_cannot_be_downgraded_to_possible(tmp_path: Path) -> Non
     )
     (tmp_path / "invalid.md").write_text(invalid, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="DEFINING and CORE"):
+    with pytest.raises(ValueError, match="PRESUMED_PRESENT"):
         compile_directory(tmp_path, release_id="test-invalid-core-v1", catalog_version="test")
 
 

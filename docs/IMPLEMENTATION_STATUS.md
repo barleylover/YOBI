@@ -1,73 +1,118 @@
 # YOBI MVP implementation status
 
-Last updated: 2026-08-11 KST
+Last updated: 2026-08-12 KST
 
-> The 2026-08-11 Wiki-centric catalog and recommendation changes described first are
-> present only in the local working tree. They have not been committed, pushed,
-> deployed to OCI, or verified through the public demo in this checkpoint. Do not
-> combine them with the older live evidence below.
+> The current 2026-08-12 structured-recommendation work is local implementation
+> work only. It adds migration `010`, a prose-first Wiki compiler, a persisted
+> structured-preference and recommendation-request ledger, and a bounded hybrid-RAG
+> flow. It has not been applied to Oracle or verified through the public demo. Do not
+> treat the historical deployment evidence below as proof of this new flow.
 
-> Historical release `20260809T084353Z-704f74712d9d` remains live on the existing
-> OCI VM/ADB. Migrations `001`–`008`, catalog
-> `demo-2026.08.09-knowledge-v2`, immutable knowledge release
-> `knowledge-demo-1c7dd5378736fc75567ba871`, public readiness/security, full public
-> Playwright, and three consecutive Primary runs passed. Final local gates passed Ruff,
-> MyPy (62 files), backend Pytest (223), legacy evaluation (100 queries), chatbot
-> acceptance (345 assertions), frontend lint/Vitest (11 tests), and the 1,796-module
-> build. Draft PR #1 remains OPEN/Draft; it is not merged.
+## 2026-08-12 structured recommendation refactor (local, not deployed)
 
-## 2026-08-11 local Wiki-centric demo refactor
+The new discovery screen replaces the free-text recommendation composer with
+multi-select meal preferences. Selected values within a category use OR semantics;
+non-empty categories express the user's cross-category AND intent. The v2 path offers
+a five-level spice ceiling (with Korean and US reference examples), active halal-
+certification filtering, and vegan guidance. Allergy filters are deliberately absent
+from this public path.
+
+The server performs objective eligibility and broad hybrid lexical/vector retrieval.
+One bounded LLM generation request then selects final menus from the captured evidence
+pool and writes their explanations; retrieval order is not final recommendation order.
+There are no generation tools, follow-up turns, or automatic retries. A request ledger
+prevents a replay from producing another dispatch and exposes an interrupted dispatch
+as an unknown result rather than silently duplicating it.
+
+Snapshot completion and later terminal-result reads re-check current menu state
+against the request's pinned family. They remove newly ineligible menus and refresh
+price, fee/ETA, halal, and vegan projections without rerunning or rewriting the model;
+selection, cart review, and checkout use current-meal v2 criteria instead of retained
+profile allergy/religion rules.
+
+Wiki documents now retain only essential objective facts as structured claims while
+subjective descriptions are natural prose passages. The release family pins the Wiki,
+catalog, preference vocabulary, spice reference, certification data, and embedding
+metadata used for an auditable recommendation result. All current merchant and
+certification rows remain synthetic demo data.
+
+The local family pins all version identities, but only knowledge has a release-table
+foreign key. Separate catalog/certification manifests and a proven atomic Oracle
+activation/rollback are still Phase 8 work, not a completed local deployment claim.
+The existing `/readyz` does not yet prove those v2 family-manifest gates.
+
+The current selector starts each new meal with halal/vegan disabled and maximum spice
+`3/5`; Korean profiles initially display KR examples and other locales US examples,
+with an explicit switch. The preceding profile form no longer collects allergy or
+spice values. Nationality, language, and optional religion do not activate dietary
+filters. After results, choose, similar, edit, compare, and Wiki-evidence actions are
+buttons; delivery notes remain a separate order-stage text input.
+
+## Current local Wiki and catalog contract
 
 The current local catalog makes reusable menu knowledge—not merchant descriptions or
 reviews—the primary source for recommendation and explanation. It contains 60
 synthetic merchants and 600 synthetic menus across 100 categories, all mapped to
 family/variant concepts. The Wiki contains 102 concepts/documents (`2` cuisine, `30`
-family, `70` variant), 100 relations, 281 closure rows, 1,997 claims, and 918 chunks.
-Claim totals are 361 ingredient, 371 allergen, 247 dietary, 100 preparation, and 918
-facet claims.
+family, `70` variant), 100 relations, 281 closure rows, 345 essential claims, and
+1,263 chunks. Claim totals are 245 ingredient and 100 preparation; chunks contain 918
+prose paragraphs plus 345 essential-fact passages.
 
 The catalog intentionally resembles an incomplete marketplace feed. Menu-specific
-ingredient declarations cover 206 menus (565 rows), allergen declarations cover 221
-menus (595 rows), and dietary links contain 1,217 rows across 20 attributes. Thirteen
-merchant origin declarations and 119 merchant ingredient rows are limited to
+ingredient declarations cover 206 menus (565 rows), legacy allergen declarations cover
+39 menus (48 rows), and dietary links contain 1,217 rows across 15 attributes. Thirteen
+merchant origin declarations and 120 merchant ingredient rows are limited to
 shared-kitchen cross-contact context. Four option effects remain menu-option specific.
 The 2,400 review rows are display-compatible synthetic data with ranking and safety
 weight `0`; merchant free-text descriptions also contribute `0`.
 
-Retrieval applies hard safety and availability filters before bulk Wiki scoring. A
-`600` cap retains every surviving demo candidate through exact Korean/English aliases,
-Korean facets, vectors, and structured reranking. Party-sized budget and negative
-preferences are enforced before final output. The final score is exactly `60%` Wiki,
-`25%` structured preference, and `15%` operational/menu metadata; that operational
-signal uses menu semantic relevance, price, delivery fee, and ETA—not rating. The LLM
-contract uses evidence precedence
-`OPTION > MENU > VARIANT_WIKI > FAMILY_WIKI` and carries referenced passage IDs,
-grounding scope, and uncertainty codes so possible, unknown, and not-provided facts
-cannot be strengthened into certainty.
+The compiled public corpus has 918 natural prose paragraphs and 345 readable
+essential-fact passages. Legacy safety paragraphs are retained as `INTERNAL_ONLY` and
+are not supplied to the v2 evidence pool or LLM. The recommendation pool uses public
+Wiki passage vector, lexical, and exact/essential ranks fused per selected value only
+after objective eligibility. Configured raw-hit and per-menu passage limits prevent
+zero-score passages from manufacturing category coverage. A lower-weight profile query
+can adjust recall but never supplies category evidence. Retrieval order bounds the
+pool; it is not the final menu order. Reviews, merchant promotional prose, legacy
+allergy data, religion, and raw addresses are not generation context.
 
-Ingredient, allergen/dietary, and preparation questions now preserve their requested
-facet through deterministic and model-tool paths. Korean server text uses taxonomy
-names and scoped status labels rather than exposing English Wiki prose, while the
-frontend renders the structured claims and keeps raw English passages in a collapsed
-supporting-evidence section. All nine onboarding allergens and five safety dietary
-signals remain visible; operational tags are excluded from the risk section.
-
-Explicit absence alternatives are backed by `VERIFIED` synthetic menu evidence while
-cross-contact remains `UNKNOWN`. They can support a qualified alternative but cannot
-be described as allergy-safe.
-
-The local source packages checksum migrations `001`–`009` and uses base catalog
+The current local source packages checksum migrations `001`–`010` and uses base catalog
 `demo-2026.08.11-knowledge-v3` plus knowledge catalog contract
-`demo-knowledge-catalog-2026.08.11-v3`. Local final gates passed: backend Pytest 348,
-100-query recommendation evaluation, 369-assertion chatbot acceptance, Ruff, Mypy
-(64 files), frontend lint/6 files/16 tests/production build, and fresh SQLite exact readiness
-with zero FK violations. No 2026-08-11 Oracle migration, seed, OCI GenAI, `/readyz`,
-public browser, or rollback result is claimed here; full details are in `TEST_REPORT.md`.
+`demo-knowledge-catalog-2026.08.12-v4`. Focused local checks have been rerun during
+integration, and the final full local regressions are recorded below. No Oracle
+migration, seed, OCI GenAI, deployed `/readyz`, public browser, or rollback result is
+claimed here. Historical v3 evidence remains in `TEST_REPORT.md`.
+
+Focused local checks currently pass for the prose Wiki/catalog/generator (26 tests),
+deploy/migration/bootstrap/seed/document contracts (75 tests), structured
+service/generator/migration behavior (21 tests), hybrid retrieval (30 tests), and the
+post-review structured persistence/service hardening scope (21 tests), plus frontend
+ESLint, Vitest (19 tests), the frontend production build, local Playwright (20 pass
+with 24 intentional duplicate-viewport skips), and structured-backend MyPy (7 source
+files). Retained fallback/golden acceptance checks also pass 29 tests and 369
+assertions, and the updated catalog/safety/readiness regression scope passes 23 tests.
+These targeted scopes overlap and are not a combined test total. Live Oracle
+migration/vector execution, OCI generation, `/readyz`, public browser E2E, and rollback
+remain unverified for this revision; see `TEST_REPORT.md` for the exact boundary.
+
+The final pre-deployment whole-backend run passes **386 tests** with one third-party
+Starlette deprecation warning; whole-tree Ruff passes and MyPy passes **72 source files**.
+Frontend ESLint, **19/19 Vitest tests**, and the production build pass (with the
+existing non-fatal 546.57 kB chunk warning). The isolated local Playwright run passes
+**20 tests** with **24 intentional duplicate-viewport skips** in 34.8 seconds. An
+initial default-port launch failure came from port 5173 already being occupied by a
+CashFlow app SSH forward; rerunning this checkout on dedicated ports 15173/18000
+passed, so that collision is recorded as an environment conflict rather than a YOBI
+product failure.
 
 ## Historical public baseline status
 
-The audited Master Spec MVP is implemented and publicly deployed on the existing OCI
-resources. Current release: `20260807T194921Z`. The public address is resolved from
+Everything from this heading to the end of the file is release history. Free-text
+conversation, allergy controls, three-level profile spice, server-final ranking, and
+agent-loop behavior described below are not current structured-flow requirements.
+
+The audited Master Spec MVP was implemented and publicly deployed on the existing OCI
+resources. Recorded release: `20260807T194921Z`. The public address is resolved from
 OCI at runtime and is intentionally absent from this repository.
 
 The 2026-08-07 frontend feedback pass is implemented, committed on
@@ -100,14 +145,14 @@ current-source SSH rules were removed after every window; the final independent 
 state is TCP 22 `0`, existing TCP 80 `1`. The trusted rollback target is
 `20260809T083629Z-bfb59275b93f`.
 
-## Product boundary
+## Historical product boundary
 
 The product covers editable onboarding, conversational discovery, evidence-linked
 recommendation/explanation, merchant comparison, menu options, translated notes,
 three onboarding address methods, cart edit/remove/reprice, delivery confirmation, mock payment
 failure/retry and one synthetic order.
 
-## 2026-08-07 frontend feedback pass
+## Historical 2026-08-07 frontend feedback pass
 
 - 16 language choices and language-prioritized country ordering.
 - Gender removed; explicit vegan and religion context added without nationality,
@@ -125,7 +170,7 @@ failure/retry and one synthetic order.
 - The public iPhone Primary Demo passed three consecutive end-to-end orders on the
   latest release.
 
-## 2026-08-07 multilingual ordering iteration
+## Historical 2026-08-07 multilingual ordering iteration
 
 - Compact no-scroll welcome screen restored the context-first product message and
   removed the speech-bubble/neighbourhood treatment.
@@ -142,7 +187,7 @@ failure/retry and one synthetic order.
 - Public Korean iPhone E2E passed the complete profile-to-confirmation flow on release
   `20260807T093233Z`.
 
-## 2026-08-08 chat-room menu iteration
+## Historical 2026-08-08 chat-room menu iteration
 
 - A localized, collapsible menu above the chat composer exposes **Weekly ranking**,
   **K-POP Demon Hunters**, and **Edit my information** in all 16 supported languages.
@@ -163,7 +208,7 @@ failure/retry and one synthetic order.
   three consecutive times, deployed Oracle deterministic fallback, exact seed/vector
   integrity, and release-window error-log review. The final NSG has no SSH ingress.
 
-## 2026-08-08 initial-chat polish
+## Historical 2026-08-08 initial-chat polish
 
 - Cart action copy is now **Add to cart**; all supported localized action/result labels
   likewise omit demo/mock-cart wording. The payment and synthetic-order boundaries

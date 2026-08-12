@@ -9,7 +9,6 @@
     "soy sauce garlic chicken",
     "ganjang chicken"
   ],
-  "version": "demo-wiki-2026.08.11-v1",
   "language": "en",
   "parents": [
     {
@@ -19,8 +18,17 @@
       "source_ref": "YOBI synthetic taxonomy: Soy garlic chicken hierarchy v1"
     }
   ],
-  "ingredients": [
+  "source_type": "SYNTHETIC_WIKI",
+  "source_refs": [
+    "YOBI synthetic culinary knowledge review: Soy garlic chicken v1"
+  ],
+  "license_state": "SYNTHETIC",
+  "review_status": "REVIEWED_DEMO",
+  "is_synthetic": true,
+  "version": "demo-wiki-2026.08.12-v2",
+  "essential_facts": [
     {
+      "fact_type": "INGREDIENT",
       "ingredient_id": "ingredient_chicken",
       "name_ko": "닭고기",
       "name_en": "chicken",
@@ -29,6 +37,7 @@
       "source_ref": "YOBI synthetic culinary knowledge review: Soy garlic chicken v1"
     },
     {
+      "fact_type": "INGREDIENT",
       "ingredient_id": "ingredient_soy_sauce",
       "name_ko": "간장",
       "name_en": "soy sauce",
@@ -37,93 +46,38 @@
       "source_ref": "YOBI synthetic culinary knowledge review: Soy garlic chicken v1"
     },
     {
-      "ingredient_id": "ingredient_garlic",
-      "name_ko": "마늘",
-      "name_en": "garlic",
-      "role": "COMMON",
-      "status": "POSSIBLE",
-      "source_ref": "YOBI synthetic culinary knowledge review: Soy garlic chicken v1"
-    }
-  ],
-  "allergens": [
-    {
-      "allergen_id": "allergen_soy",
+      "fact_type": "PREPARATION",
+      "method": "deep_fried_and_glazed",
+      "value_text": "Fried chicken is coated in a soy-garlic glaze",
       "status": "PRESUMED_PRESENT",
-      "source_ref": "YOBI synthetic culinary knowledge review: Soy garlic chicken v1"
-    },
-    {
-      "allergen_id": "allergen_wheat",
-      "status": "POSSIBLE",
-      "source_ref": "YOBI synthetic culinary knowledge review: Soy garlic chicken v1"
-    },
-    {
-      "allergen_id": "allergen_egg",
-      "status": "POSSIBLE",
-      "source_ref": "YOBI synthetic culinary knowledge review: Soy garlic chicken v1"
-    },
-    {
-      "allergen_id": "allergen_milk",
-      "status": "POSSIBLE",
-      "source_ref": "YOBI synthetic culinary knowledge review: Soy garlic chicken v1"
+      "source_ref": "YOBI synthetic culinary knowledge review: soy-garlic-chicken v1"
     }
   ],
-    "dietary": [
-      {
-        "attribute_id": "diet_contains_animal_product",
-        "value_text": "Chicken defines the dish",
-        "status": "PRESUMED_PRESENT",
-        "source_ref": "YOBI synthetic culinary knowledge review: soy-garlic-chicken v1"
-      },
-      {
-        "attribute_id": "diet_halal_not_verified",
-        "value_text": "Chicken sourcing, soy sauce and kitchen handling are not halal-verified by the Wiki",
-        "status": "POSSIBLE",
-        "source_ref": "YOBI synthetic culinary knowledge review: soy-garlic-chicken v1"
-      }
-    ],
-    "preparation": [
-      {
-        "method": "deep_fried_and_glazed",
-        "value_text": "Fried chicken is coated in a soy-garlic glaze",
-        "status": "PRESUMED_PRESENT",
-        "source_ref": "YOBI synthetic culinary knowledge review: soy-garlic-chicken v1"
-      }
-    ],
-  "source_type": "SYNTHETIC_WIKI",
-  "source_refs": [
-    "YOBI synthetic culinary knowledge review: Soy garlic chicken v1"
-  ],
-  "license_state": "SYNTHETIC",
-  "review_status": "REVIEWED_DEMO",
-  "is_synthetic": true,
-  "updated_at": "2026-08-11"
+  "updated_at": "2026-08-12"
 }
 ---
 # Soy garlic chicken
 
-## Overview
+## Character and experience
+
 Soy garlic chicken is Korean fried chicken coated or seasoned with a soy-based glaze whose savory garlic profile defines the variant.
 
-## Taste
 It is savory, sweet and aromatic, generally milder in chili heat than red seasoned chicken.
 
-## Texture
 A sticky glaze coats a crisp fried shell, while the interior remains moist.
 
-## Temperature
 It is served hot or warm and the glaze gradually softens the crust.
 
-## Satiety
 It is a rich, shareable main dish.
 
-## Culture
+## Context and comparisons
+
 This is a standard Korean chicken-shop choice for diners wanting a sauced but not necessarily spicy flavor.
 
-## Analogy
 It is crisp fried chicken lacquered with sweet soy and garlic rather than red chili sauce.
 
-## Ingredients
+## Ingredients and variations
+
 Chicken and soy sauce define the variant. Garlic, sugar and frying coating are common supporting components.
 
-## Safety
 Soy is presumed present. Wheat may occur in soy sauce or coating, with egg or milk possible in batter; merchant declarations remain necessary.

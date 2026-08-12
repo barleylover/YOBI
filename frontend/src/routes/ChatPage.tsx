@@ -1,42 +1,32 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, ShoppingBag, Sparkles } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Settings2, ShoppingBag } from "lucide-react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
-import { ChatRoomMenu } from "../components/ChatRoomMenu";
 import { OrderFlowPanel } from "../components/OrderFlowPanel";
-import { RichCard } from "../components/RichCard";
+import { PreferenceSelector } from "../components/PreferenceSelector";
+import { RecommendationResults } from "../components/RecommendationResults";
 import { actionableError, api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
+import {
+  getCatalogChangedCopy,
+  getRecommendationConflictCopy,
+  getRecommendationCopy,
+} from "../lib/recommendationI18n";
+import { usePreferenceCatalog } from "../lib/usePreferenceCatalog";
 import { useSessionStore } from "../stores/session";
 import type {
-  AssistantTurn,
-  CardPayload,
   ConversationEventInput,
-  ConversationMessage,
   ConversationView,
   MenuSummary,
+  RecommendationBatchV2,
+  RecommendationMode,
+  RecommendationRequestV2,
+  StructuredRecommendation,
 } from "../types";
 
-interface ChatEntry {
-  id: string;
-  role: "user" | "assistant";
-  text: string;
-  turn?: AssistantTurn;
-}
-
-function createChatEntryId() {
-  return globalThis.crypto?.randomUUID?.() ?? `entry_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-}
-
-function assistantTurnFromMessage(message: ConversationMessage): AssistantTurn | undefined {
-  const value = message.safe_metadata;
-  if (
-    message.role !== "assistant"
-    || typeof value.message_id !== "string"
-    || typeof value.text !== "string"
-    || !Array.isArray(value.cards)
-    || !Array.isArray(value.suggested_replies)
-  ) return undefined;
-  return value as unknown as AssistantTurn;
+function createId(prefix: string) {
+  const value = globalThis.crypto?.randomUUID?.()
+    ?? `${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}-${value}`;
 }
 
 function findMenu(value: unknown, menuId: string): MenuSummary | null {
@@ -48,19 +38,19 @@ function findMenu(value: unknown, menuId: string): MenuSummary | null {
     return null;
   }
   if (!value || typeof value !== "object") return null;
-  const record = value as Record<string, unknown>;
-  if (record.menu_id === menuId && typeof record.merchant_id === "string" && typeof record.name_en === "string") {
-    return record as unknown as MenuSummary;
+  const item = value as Record<string, unknown>;
+  if (item.menu_id === menuId && typeof item.merchant_id === "string" && typeof item.name_en === "string") {
+    return item as unknown as MenuSummary;
   }
-  for (const item of Object.values(record)) {
-    const match = findMenu(item, menuId);
+  for (const nested of Object.values(item)) {
+    const match = findMenu(nested, menuId);
     if (match) return match;
   }
   return null;
 }
 
-function eventIdempotencyKey(kind: string) {
-  return `${kind}-${createChatEntryId()}`;
+function sameCriteria(left: unknown, right: unknown) {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 export function ChatPage() {
@@ -70,79 +60,76 @@ export function ChatPage() {
   const session = useSessionStore((state) => state.session);
   const addressRefId = useSessionStore((state) => state.addressRefId);
   const cartQuantity = useSessionStore((state) => state.cartQuantity);
-  const { chatMenuCopy, copy, dynamicCopy, journeyCopy, language } = useI18n();
-  const chatCacheKey = `yobi-chat-entries-${sessionId}`;
-  const inputCacheKey = `yobi-chat-input-${sessionId}`;
-  const selectedMenuCacheKey = `yobi-selected-menu-${sessionId}`;
-  const pendingRequestCacheKey = `yobi-chat-pending-request-${sessionId}`;
-  const [input, setInput] = useState(() => sessionStorage.getItem(inputCacheKey) ?? "");
+  const draftCriteria = useSessionStore((state) => state.draftCriteria);
+  const committedCriteria = useSessionStore((state) => state.committedCriteria);
+  const criteriaVersion = useSessionStore((state) => state.criteriaVersion);
+  const recommendationPhase = useSessionStore((state) => state.recommendationPhase);
+  const pendingRecommendation = useSessionStore((state) => state.pendingRecommendation);
+  const latestRecommendation = useSessionStore((state) => state.latestRecommendation);
+  const setDraftCriteria = useSessionStore((state) => state.setDraftCriteria);
+  const commitCriteria = useSessionStore((state) => state.commitCriteria);
+  const setRecommendationPhase = useSessionStore((state) => state.setRecommendationPhase);
+  const setPendingRecommendation = useSessionStore((state) => state.setPendingRecommendation);
+  const setLatestRecommendation = useSessionStore((state) => state.setLatestRecommendation);
+  const { copy, journeyCopy, language, locale } = useI18n();
+  const recommendationCopy = getRecommendationCopy(language);
+  const recommendationConflictCopy = getRecommendationConflictCopy(language);
+  const catalogChangedCopy = getCatalogChangedCopy(language);
+  const { catalog, loading: catalogLoading, stale: catalogStale, error: catalogError, reload: reloadCatalog } = usePreferenceCatalog(locale);
   const [hydrating, setHydrating] = useState(true);
-  const [sending, setSending] = useState(false);
-  const [eventPending, setEventPending] = useState(false);
-  const [interactionError, setInteractionError] = useState("");
-  const [activity, setActivity] = useState(copy.checking);
-  const stateVersionRef = useRef(session?.state_version ?? 0);
-  // A cached menu is only a projection cache. The server conversation must first
-  // confirm the selected menu id before the order builder can be restored.
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   const [selectedMenu, setSelectedMenu] = useState<MenuSummary | null>(null);
-  const [entries, setEntries] = useState<ChatEntry[]>(() => {
-    try {
-      const cached = JSON.parse(sessionStorage.getItem(chatCacheKey) ?? "null") as ChatEntry[] | null;
-      if (cached?.length) return cached;
-    } catch { /* Ignore an invalid browser-only cache. */ }
-    return [{ id: "welcome", role: "assistant", text: copy.hello }];
-  });
+  const stateVersionRef = useRef(session?.state_version ?? 0);
+  const pollCountRef = useRef(0);
+  const criteriaRequestKey = `yobi-pending-criteria-request-${sessionId}`;
 
-  const activeRules = useMemo(() => profile?.dietary_rules ?? [], [profile]);
-  function openCart() {
-    document.querySelector<HTMLElement>("[data-testid='order-flow']")?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
-  const localizedAssistantText = useCallback((turn: AssistantTurn | undefined, serverText: string) => {
-    if (!turn || language === "English") return serverText;
-    if (turn.fallback_used) return dynamicCopy.fallbackResult;
-    const preset = turn.cards.find((card): card is Extract<CardPayload, { type: "preset_collection" }> => card.type === "preset_collection");
-    if (preset?.data.kind === "weekly_ranking") return chatMenuCopy.weeklyResponse;
-    if (preset?.data.kind === "kpop_demon_hunters") return chatMenuCopy.kpopResponse;
-    return serverText;
-  }, [chatMenuCopy.kpopResponse, chatMenuCopy.weeklyResponse, dynamicCopy.fallbackResult, language]);
+  const applyBatch = useCallback((batch: RecommendationBatchV2) => {
+    stateVersionRef.current = batch.state_version;
+    setLatestRecommendation(batch);
+    if (batch.status !== "PENDING") {
+      setPendingRecommendation(null);
+      pollCountRef.current = 0;
+    }
+    if (batch.status === "PENDING") {
+      const current = useSessionStore.getState().pendingRecommendation;
+      if (current?.request_id !== batch.request_id) {
+        setPendingRecommendation({
+          request_id: batch.request_id,
+          expected_state_version: batch.state_version,
+          criteria_version: batch.criteria_version,
+          mode: "INITIAL",
+        });
+      }
+      setRecommendationPhase(batch.phase === "GENERATING" ? "GENERATING" : "RETRIEVING");
+    } else if (batch.status === "RECOMMENDED") {
+      setRecommendationPhase("RESULTS");
+    } else if (batch.status === "SEARCH_FALLBACK") {
+      setRecommendationPhase("SEARCH_FALLBACK");
+    } else if (batch.status === "NO_MATCH") {
+      setRecommendationPhase("NO_RESULTS");
+    } else {
+      setRecommendationPhase("ERROR");
+    }
+  }, [setLatestRecommendation, setPendingRecommendation, setRecommendationPhase]);
 
   const applyConversation = useCallback((conversation: ConversationView) => {
     stateVersionRef.current = conversation.state_version;
-    const authoritativeEntries: ChatEntry[] = conversation.messages.map((message) => {
-      const turn = assistantTurnFromMessage(message);
-      return {
-        id: message.message_id,
-        role: message.role,
-        text: localizedAssistantText(turn, message.content),
-        turn,
-      };
-    });
-    setEntries(authoritativeEntries.length
-      ? authoritativeEntries
-      : [{ id: "welcome", role: "assistant", text: copy.hello }]);
-
+    if (conversation.recommendation_criteria && conversation.criteria_version) {
+      commitCriteria(conversation.recommendation_criteria, conversation.criteria_version);
+    }
+    const batch = conversation.active_recommendation ?? conversation.latest_recommendation;
+    if (batch) applyBatch(batch);
     const selectedMenuId = conversation.meal_need_state.selected_menu_id;
     if (!selectedMenuId) {
       setSelectedMenu(null);
       return;
     }
-    const turns = conversation.messages
-      .map(assistantTurnFromMessage)
-      .filter((turn): turn is AssistantTurn => Boolean(turn));
-    const restored = findMenu(conversation.latest_snapshot?.cards, selectedMenuId)
-      ?? findMenu(turns.map((turn) => turn.cards), selectedMenuId);
-    if (restored) {
-      setSelectedMenu(restored);
-      return;
-    }
-    try {
-      const cached = JSON.parse(sessionStorage.getItem(selectedMenuCacheKey) ?? "null") as MenuSummary | null;
-      setSelectedMenu(cached?.menu_id === selectedMenuId ? cached : null);
-    } catch {
-      setSelectedMenu(null);
-    }
-  }, [copy.hello, localizedAssistantText, selectedMenuCacheKey]);
+    const fromV2 = batch?.recommendations.find((item) => item.menu.menu_id === selectedMenuId)?.menu;
+    const fromLegacy = batch ? null : findMenu(conversation.latest_snapshot?.cards, selectedMenuId);
+    setSelectedMenu(fromV2 ?? fromLegacy ?? null);
+    if (fromV2 || fromLegacy) setRecommendationPhase("ORDERING");
+  }, [applyBatch, commitCriteria, setRecommendationPhase]);
 
   const refreshConversation = useCallback(async () => {
     const conversation = await api.getConversation(sessionId);
@@ -150,48 +137,55 @@ export function ChatPage() {
     return conversation;
   }, [applyConversation, sessionId]);
 
-  async function recordConversationEvent(event: Omit<ConversationEventInput, "idempotency_key" | "expected_state_version">) {
-    const result = await api.postConversationEvent(sessionId, {
-      ...event,
-      expected_state_version: stateVersionRef.current,
-      idempotency_key: eventIdempotencyKey(event.event_type.toLowerCase()),
-    });
-    stateVersionRef.current = result.state_version;
-    return result;
-  }
-
-  async function chooseMenu(menu: MenuSummary, snapshotId: string | null | undefined) {
-    if (!snapshotId) {
-      setInteractionError("This card is no longer linked to a current recommendation. Ask YOBI to show the menu again.");
-      return;
-    }
-    setEventPending(true);
-    setInteractionError("");
+  const executeRecommendation = useCallback(async (request: RecommendationRequestV2) => {
+    setBusy(true);
+    setError("");
+    setPendingRecommendation(request);
     try {
-      const result = await recordConversationEvent({
-        event_type: "SELECT_MENU",
-        snapshot_id: snapshotId,
-        menu_id: menu.menu_id,
-      });
-      setSelectedMenu(result.selected_menu ?? menu);
+      const batch = await api.createRecommendation(sessionId, request);
+      applyBatch(batch);
     } catch (cause) {
-      setInteractionError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
-      await refreshConversation().catch(() => undefined);
+      try {
+        const conversation = await api.getConversation(sessionId);
+        const recovered = conversation.active_recommendation ?? conversation.latest_recommendation;
+        if (recovered?.request_id === request.request_id) {
+          applyConversation(conversation);
+          return;
+        }
+      } catch { /* Keep the stable request id for explicit recovery. */ }
+      setRecommendationPhase("ERROR");
+      setError(language === "English"
+        ? actionableError(cause, recommendationCopy.failedDescription)
+        : recommendationCopy.failedDescription);
     } finally {
-      setEventPending(false);
+      setBusy(false);
     }
-  }
+  }, [applyBatch, applyConversation, language, recommendationCopy.failedDescription, sessionId, setPendingRecommendation, setRecommendationPhase]);
 
-  useEffect(() => {
-    if (!selectedMenu) return;
-    const timer = window.setTimeout(() => {
-      document.querySelector<HTMLElement>("[data-testid='order-flow']")?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
-    }, 80);
-    return () => window.clearTimeout(timer);
-  }, [selectedMenu]);
+  const recoverRecommendation = useCallback(async (request: RecommendationRequestV2) => {
+    setBusy(true);
+    setError("");
+    try {
+      const batch = await api.getRecommendationRequest(sessionId, request.request_id);
+      applyBatch(batch);
+    } catch (cause) {
+      try {
+        const conversation = await api.getConversation(sessionId);
+        const recovered = conversation.active_recommendation ?? conversation.latest_recommendation;
+        if (recovered?.request_id === request.request_id) {
+          applyConversation(conversation);
+          return;
+        }
+      } catch { /* Keep the request available for another GET recovery attempt. */ }
+      setRecommendationPhase("ERROR");
+      setError(language === "English"
+        ? actionableError(cause, recommendationCopy.failedDescription)
+        : recommendationCopy.failedDescription);
+    } finally {
+      setBusy(false);
+    }
+  }, [applyBatch, applyConversation, language, recommendationCopy.failedDescription, sessionId, setRecommendationPhase]);
+
   useEffect(() => {
     if (!sessionId || session?.session_id !== sessionId) return;
     let active = true;
@@ -200,157 +194,158 @@ export function ChatPage() {
       .then((conversation) => { if (active) applyConversation(conversation); })
       .catch(() => undefined)
       .finally(() => { if (active) setHydrating(false); });
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, [applyConversation, session?.session_id, sessionId]);
+
   useEffect(() => {
-    sessionStorage.setItem(chatCacheKey, JSON.stringify(entries));
-  }, [chatCacheKey, entries]);
+    if (hydrating || latestRecommendation?.status !== "PENDING" || !pendingRecommendation || busy) return;
+    if (pollCountRef.current >= 8) {
+      setRecommendationPhase("ERROR");
+      setError(recommendationCopy.failedDescription);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      pollCountRef.current += 1;
+      void recoverRecommendation(pendingRecommendation);
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [busy, hydrating, latestRecommendation, pendingRecommendation, recommendationCopy.failedDescription, recoverRecommendation, setRecommendationPhase]);
+
   useEffect(() => {
-    sessionStorage.setItem(inputCacheKey, input);
-  }, [input, inputCacheKey]);
-  useEffect(() => {
-    if (selectedMenu) sessionStorage.setItem(selectedMenuCacheKey, JSON.stringify(selectedMenu));
-    else sessionStorage.removeItem(selectedMenuCacheKey);
-  }, [selectedMenu, selectedMenuCacheKey]);
-  useEffect(() => {
-    setEntries((current) => current.map((entry) => entry.id === "welcome" ? { ...entry, text: copy.hello } : entry));
-  }, [copy.hello]);
-  useEffect(() => {
-    const saved = Number(sessionStorage.getItem(`yobi-chat-scroll-${sessionId}`) ?? "0");
-    if (saved > 0) requestAnimationFrame(() => window.scrollTo({ top: saved }));
-  }, [sessionId]);
+    if (!catalog) return;
+    const optionCodes = new Map(catalog.categories.map((category) => [
+      category.code,
+      new Set(category.options.map((option) => option.code)),
+    ]));
+    const categoryKeys = [
+      "cuisine_origins",
+      "flavors",
+      "main_ingredients",
+      "food_forms",
+      "temperatures",
+      "price_bands",
+      "textures",
+      "cooking_methods",
+    ] as const;
+    const next = { ...draftCriteria };
+    let changed = false;
+    for (const category of categoryKeys) {
+      const validCodes = optionCodes.get(category) ?? new Set<string>();
+      const retained = draftCriteria[category].filter((code) => validCodes.has(code));
+      if (retained.length !== draftCriteria[category].length) changed = true;
+      next[category] = retained;
+    }
+    if (changed) {
+      setDraftCriteria(next);
+      setError(catalogChangedCopy);
+    }
+  }, [catalog, catalogChangedCopy, draftCriteria, setDraftCriteria]);
+
   if (!profile || !session || session.session_id !== sessionId || !addressRefId) return <Navigate to="/" replace />;
 
-  async function send(
-    text = input,
-    displayText = text,
-    intent?: "weekly_ranking" | "kpop_demon_hunters",
-    responseText?: string,
-  ) {
-    const trimmed = text.trim();
-    if (!trimmed || sending || eventPending) return;
-    let requestId = `chat-${createChatEntryId()}`;
-    let replayAttempt = false;
+  async function recordConversationEvent(event: Omit<ConversationEventInput, "idempotency_key" | "expected_state_version">) {
+    const result = await api.postConversationEvent(sessionId, {
+      ...event,
+      expected_state_version: stateVersionRef.current,
+      idempotency_key: createId(event.event_type.toLowerCase()),
+    });
+    stateVersionRef.current = result.state_version;
+    return result;
+  }
+
+  async function submitCriteria() {
+    if (!catalog || busy) return;
+    setBusy(true);
+    setError("");
+    setRecommendationPhase("RETRIEVING");
+    const savedRequestId = sessionStorage.getItem(criteriaRequestKey);
+    const criteriaRequestId = savedRequestId ?? createId("criteria");
+    sessionStorage.setItem(criteriaRequestKey, criteriaRequestId);
     try {
-      const pending = JSON.parse(sessionStorage.getItem(pendingRequestCacheKey) ?? "null") as {
-        content?: string;
-        intent?: string | null;
-        requestId?: string;
-      } | null;
-      if (
-        pending?.content === trimmed
-        && (pending.intent ?? null) === (intent ?? null)
-        && pending.requestId
-      ) {
-        requestId = pending.requestId;
-        replayAttempt = true;
-      }
-    } catch { /* Replace an invalid browser-only retry record. */ }
-    sessionStorage.setItem(
-      pendingRequestCacheKey,
-      JSON.stringify({ content: trimmed, intent: intent ?? null, requestId }),
-    );
-    setInput("");
-    setInteractionError("");
-    setEntries((current) => [...current, { id: createChatEntryId(), role: "user", text: displayText.trim() }]);
-    setSending(true);
-    setActivity(copy.checking);
-    const pendingId = createChatEntryId();
-    setEntries((current) => [...current, { id: pendingId, role: "assistant", text: "" }]);
-    try {
-      const turn = await api.streamMessage(sessionId, trimmed, {
-        onText: (delta) => {
-          if (responseText) return;
-          setEntries((current) => {
-            return current.map((entry) =>
-              entry.id === pendingId ? { ...entry, text: entry.text + delta } : entry,
-            );
-          });
-        },
-        onStatus: (status) => setActivity(language === "English" ? status : copy.checking),
-      }, intent, requestId);
-      sessionStorage.removeItem(pendingRequestCacheKey);
-      stateVersionRef.current = turn.state_version;
-      setEntries((current) => {
-        const complete = {
-          id: turn.message_id,
-          role: "assistant" as const,
-          text: responseText ?? (turn.fallback_used && language !== "English" ? dynamicCopy.fallbackResult : turn.text),
-          turn,
-        };
-        return current.map((entry) => (entry.id === pendingId ? complete : entry));
-      });
-      // A natural-language selection is committed server-side as part of the
-      // streamed turn. Rehydrate that authoritative state before reopening the
-      // order builder instead of relying on the assistant payload as a local
-      // mutation signal.
-      if (turn.dialogue_act === "SELECT" || replayAttempt) {
-        await refreshConversation().catch(() => undefined);
-      }
-    } catch (cause) {
-      let recovered = false;
+      let committed;
       try {
+        committed = await api.putRecommendationCriteria(
+          sessionId,
+          draftCriteria,
+          stateVersionRef.current,
+          catalog.catalog_version,
+          criteriaRequestId,
+        );
+      } catch (cause) {
+        if (
+          cause instanceof Error
+          && ["PREFERENCE_CATALOG_CHANGED", "PREFERENCE_CATALOG_VERSION_CONFLICT"].includes(cause.message)
+        ) throw cause;
         const conversation = await api.getConversation(sessionId);
-        recovered = conversation.messages.some((message) => (
-          message.role === "assistant"
-          && message.safe_metadata.client_request_id === requestId
-        ));
-        if (recovered) {
-          applyConversation(conversation);
-          sessionStorage.removeItem(pendingRequestCacheKey);
-        }
-      } catch { /* Keep the stable request for an explicit retry. */ }
-      if (recovered) return;
-      if (cause instanceof Error && cause.message === "CHAT_REQUEST_ID_REUSED") {
-        sessionStorage.removeItem(pendingRequestCacheKey);
+        if (!conversation.recommendation_criteria || !sameCriteria(conversation.recommendation_criteria, draftCriteria)) throw cause;
+        committed = {
+          session_id: sessionId,
+          criteria: conversation.recommendation_criteria,
+          criteria_version: conversation.criteria_version ?? 0,
+          state_version: conversation.state_version,
+        };
       }
-      const failure = {
-        id: pendingId,
-        role: "assistant" as const,
-        text: language === "English" ? actionableError(cause, journeyCopy.failedCheck) : journeyCopy.failedCheck,
+      sessionStorage.removeItem(criteriaRequestKey);
+      stateVersionRef.current = committed.state_version;
+      commitCriteria(committed.criteria ?? draftCriteria, committed.criteria_version);
+      const request: RecommendationRequestV2 = {
+        request_id: createId("recommendation"),
+        expected_state_version: committed.state_version,
+        criteria_version: committed.criteria_version,
+        mode: "INITIAL",
       };
-      setEntries((current) =>
-        current.map((entry) => (entry.id === pendingId ? failure : entry)),
-      );
-    } finally {
-      setSending(false);
+      setBusy(false);
+      await executeRecommendation(request);
+    } catch (cause) {
+      if (
+        cause instanceof Error
+        && ["PREFERENCE_CATALOG_CHANGED", "PREFERENCE_CATALOG_VERSION_CONFLICT"].includes(cause.message)
+      ) {
+        sessionStorage.removeItem(criteriaRequestKey);
+        setRecommendationPhase("SELECTING");
+        setError(catalogChangedCopy);
+        reloadCatalog();
+        setBusy(false);
+        return;
+      }
+      setRecommendationPhase("ERROR");
+      setError(language === "English"
+        ? actionableError(cause, recommendationCopy.failedDescription)
+        : recommendationCopy.failedDescription);
+      setBusy(false);
     }
   }
 
-  async function handleSuggestedReply(reply: string, turn: AssistantTurn) {
-    const candidates = turn.recommendation_result?.candidates ?? [];
-    const normalized = reply.toLowerCase();
-    setEventPending(true);
-    setInteractionError("");
+  async function requestAnother(mode: RecommendationMode) {
+    if (!criteriaVersion || busy) return;
+    setRecommendationPhase("RETRIEVING");
+    await executeRecommendation({
+      request_id: createId("recommendation"),
+      expected_state_version: stateVersionRef.current,
+      criteria_version: criteriaVersion,
+      mode,
+    });
+  }
+
+  async function chooseMenu(recommendation: StructuredRecommendation) {
+    const snapshotId = latestRecommendation?.snapshot_id;
+    if (!snapshotId) return;
+    setBusy(true);
+    setError("");
     try {
-      if (normalized.includes("compare") && candidates.length >= 2 && turn.recommendation_snapshot_id) {
-        await recordConversationEvent({
-          event_type: "COMPARE_MENUS",
-          snapshot_id: turn.recommendation_snapshot_id,
-          menu_ids: candidates.map((candidate) => candidate.menu_id),
-        });
-      } else if (
-        (normalized.includes("something else") || normalized.includes("different") || normalized.includes("another"))
-        && turn.recommendation_snapshot_id
-      ) {
-        for (const candidate of candidates) {
-          await recordConversationEvent({
-            event_type: "REJECT_MENU",
-            snapshot_id: turn.recommendation_snapshot_id,
-            menu_id: candidate.menu_id,
-          });
-        }
-      }
+      const result = await recordConversationEvent({
+        event_type: "SELECT_MENU",
+        snapshot_id: snapshotId,
+        menu_id: recommendation.menu.menu_id,
+      });
+      setSelectedMenu(result.selected_menu ?? recommendation.menu);
+      setRecommendationPhase("ORDERING");
     } catch (cause) {
-      setInteractionError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
+      setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
       await refreshConversation().catch(() => undefined);
-      setEventPending(false);
-      return;
+    } finally {
+      setBusy(false);
     }
-    setEventPending(false);
-    await send(reply);
   }
 
   async function updateConversationOptions(
@@ -359,11 +354,9 @@ export function ChatPage() {
     optionItemIds: string[],
     riskAcknowledged: boolean,
   ) {
-    // Same-merchant add-ons are selected inside the existing cart flow and do not
-    // belong to the recommendation snapshot that opened this builder.
     if (selectedMenu?.menu_id !== menuId) return;
-    setEventPending(true);
-    setInteractionError("");
+    setBusy(true);
+    setError("");
     try {
       await recordConversationEvent({
         event_type: "UPDATE_OPTIONS",
@@ -373,83 +366,97 @@ export function ChatPage() {
         risk_acknowledged: riskAcknowledged,
       });
     } catch (cause) {
-      setInteractionError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
+      setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
       await refreshConversation().catch(() => undefined);
       throw cause;
     } finally {
-      setEventPending(false);
+      setBusy(false);
     }
   }
 
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    void send();
+  function editCriteria() {
+    if (committedCriteria) setDraftCriteria(committedCriteria);
+    setSelectedMenu(null);
+    setRecommendationPhase("SELECTING");
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function editProfile() {
-    sessionStorage.setItem(`yobi-chat-scroll-${sessionId}`, String(window.scrollY));
     navigate(`/profile?edit=1&returnTo=${encodeURIComponent(`/chat/${sessionId}`)}`);
   }
 
+  function openCart() {
+    document.querySelector<HTMLElement>("[data-testid='order-flow']")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  const showsLoading = hydrating || recommendationPhase === "RETRIEVING" || recommendationPhase === "GENERATING";
   return (
-    <main className="chat-shell">
+    <main className="chat-shell structured-recommendation-shell">
       <section className="chat-column">
         <header className="chat-header">
           <div className="brand-mark compact">YO<span>BI</span></div>
-          <div><strong>{copy.buddy}</strong><span><i /> {journeyCopy.catalogReady}</span></div>
-          <button className="cart-button" aria-label={language === "English" ? `${journeyCopy.openCart}, ${cartQuantity} items` : `${journeyCopy.openCart}, ${journeyCopy.quantity} ${cartQuantity}`} onClick={openCart} disabled={!selectedMenu} title={selectedMenu ? journeyCopy.openCart : journeyCopy.chooseFirst}><ShoppingBag size={19} />{cartQuantity > 0 && <span className="cart-badge">{cartQuantity}</span>}</button>
+          <div><strong>{copy.buddy}</strong><span><i /> {recommendationCopy.selectorEyebrow}</span></div>
+          <button type="button" aria-label={recommendationCopy.editProfile} title={recommendationCopy.editProfile} onClick={editProfile}><Settings2 size={18} /></button>
+          <button className="cart-button" aria-label={language === "English" ? `${journeyCopy.openCart}, ${cartQuantity} items` : `${journeyCopy.openCart}, ${journeyCopy.quantity} ${cartQuantity}`} onClick={openCart} disabled={!selectedMenu}><ShoppingBag size={19} />{cartQuantity > 0 && <span className="cart-badge">{cartQuantity}</span>}</button>
         </header>
-        <div className="conversation" aria-live="polite">
-          {entries.map((entry) => (
-            <article className={`message ${entry.role}`} key={entry.id}>
-              <div className="message-label">{entry.role === "assistant" ? "YOBI" : copy.you}</div>
-              {entry.text && <div className="message-bubble">{entry.text}</div>}
-              {entry.id === "welcome" && entries.length === 1 && !sending && (
-                <button
-                  type="button"
-                  className="welcome-prompt-suggestion"
-                  disabled={hydrating || eventPending}
-                  onClick={() => void send("I saw people eating some red rice cake dish on the street. What is that? Can I order it?", journeyCopy.demoPrompt)}
-                >
-                  <Sparkles size={13} /> {copy.demoQuestion}
-                </button>
-              )}
-              {entry.turn?.fallback_used && <span className="fallback-chip">{journeyCopy.fallbackMode}</span>}
-              {entry.turn?.cards.map((card, index) => (
-                <RichCard
-                  card={card}
-                  key={`${entry.id}-${index}`}
-                  disabled={sending || eventPending}
-                  onChooseMenu={(menu) => void chooseMenu(menu, entry.turn?.recommendation_snapshot_id)}
-                  onQuickReply={(reply, localizedReply) => void send(reply, localizedReply)}
-                />
-              ))}
-              {entry.turn?.suggested_replies.length && !(entry.turn.fallback_used && language !== "English") ? (
-                <div className="quick-replies">
-                  {entry.turn.suggested_replies.map((reply) => <button disabled={sending || eventPending} key={reply} onClick={() => void handleSuggestedReply(reply, entry.turn as AssistantTurn)}>{reply}</button>)}
-                </div>
-              ) : null}
-            </article>
-          ))}
-          {sending && <div className="typing"><span /><span /><span /><em>{activity}</em></div>}
-          {interactionError && <p className="form-error" role="alert">{interactionError}</p>}
-          {selectedMenu && <OrderFlowPanel sessionId={sessionId} menu={selectedMenu} addressRefId={addressRefId} dietaryRules={activeRules} onClose={() => setSelectedMenu(null)} onOptionChange={updateConversationOptions} />}
-        </div>
 
-        <div className="chat-dock">
-          <ChatRoomMenu
-            disabled={sending || eventPending || hydrating}
-            onPreset={(intent, prompt, response) => void send(prompt, prompt, intent, response)}
-            onEditProfile={editProfile}
-          />
-          <form className="composer" onSubmit={submit}>
-          <label htmlFor="message">{copy.ask}</label>
-          <div>
-            <textarea id="message" value={input} onChange={(event) => setInput(event.target.value)} placeholder={copy.placeholder} rows={1} disabled={hydrating || eventPending} />
-            <button className="send-button" aria-label={journeyCopy.sendMessage} disabled={!input.trim() || sending || hydrating || eventPending}><ArrowUp size={20} /></button>
-          </div>
-          </form>
+        <div className="structured-recommendation-content" aria-live="polite">
+          {catalogLoading && !catalog && <section className="recommendation-progress"><span className="loading-orbit" /><h1>{recommendationCopy.loadingChoices}</h1></section>}
+          {catalogError && !catalog && <section className="recommendation-state-card error"><h1>{recommendationCopy.catalogFailed}</h1><button className="primary-button" onClick={reloadCatalog}>{recommendationCopy.retry}</button></section>}
+          {catalogStale && catalog && <div className="catalog-stale-notice" role="status"><span>{recommendationCopy.savedCatalog}</span><button type="button" onClick={reloadCatalog}>{recommendationCopy.retry}</button></div>}
+          {error && recommendationPhase !== "ERROR" && <p className="form-error" role="alert">{error}</p>}
+
+          {catalog && recommendationPhase === "SELECTING" && (
+            <PreferenceSelector
+              catalog={catalog}
+              criteria={draftCriteria}
+              copy={recommendationCopy}
+              busy={busy}
+              canSubmitUnchanged={Boolean(committedCriteria)}
+              conflictMessage={recommendationConflictCopy}
+              onChange={setDraftCriteria}
+              onComplete={() => void submitCriteria()}
+            />
+          )}
+
+          {catalog && showsLoading && (
+            <section className="recommendation-progress">
+              <span className="loading-orbit" />
+              <h1>{hydrating ? recommendationCopy.restoring : recommendationPhase === "GENERATING" ? recommendationCopy.generating : recommendationCopy.retrieving}</h1>
+              <p>{recommendationCopy.noHiddenRelaxation}</p>
+            </section>
+          )}
+
+          {catalog && latestRecommendation && (recommendationPhase === "RESULTS" || recommendationPhase === "SEARCH_FALLBACK") && (
+            <RecommendationResults
+              batch={latestRecommendation}
+              catalog={catalog}
+              copy={recommendationCopy}
+              language={language}
+              locale={locale}
+              busy={busy}
+              onChoose={(item) => void chooseMenu(item)}
+              onSimilar={() => void requestAnother("SIMILAR")}
+              onEdit={editCriteria}
+              onRetry={() => void requestAnother("RETRY")}
+            />
+          )}
+
+          {recommendationPhase === "NO_RESULTS" && <section className="recommendation-state-card"><h1>{recommendationCopy.noResultsTitle}</h1><p>{recommendationCopy.noResultsDescription}</p><button className="primary-button" onClick={editCriteria}>{recommendationCopy.editCriteria}</button></section>}
+          {recommendationPhase === "ERROR" && <section className="recommendation-state-card error"><h1>{recommendationCopy.failedTitle}</h1><p>{error || recommendationCopy.failedDescription}</p><div className="button-row"><button className="primary-button" onClick={() => pendingRecommendation ? void recoverRecommendation(pendingRecommendation) : void requestAnother("RETRY")}>{recommendationCopy.tryAgain}</button><button className="secondary-button" onClick={editCriteria}>{recommendationCopy.editCriteria}</button></div></section>}
+
+          {selectedMenu && recommendationPhase === "ORDERING" && (
+            <OrderFlowPanel
+              sessionId={sessionId}
+              menu={selectedMenu}
+              addressRefId={addressRefId}
+              dietaryFilters={(committedCriteria ?? draftCriteria).dietary_filters}
+              onClose={() => { setSelectedMenu(null); setRecommendationPhase("RESULTS"); }}
+              onOptionChange={updateConversationOptions}
+            />
+          )}
         </div>
+        <footer className="experience-notice">{recommendationCopy.experienceNotice}</footer>
       </section>
     </main>
   );

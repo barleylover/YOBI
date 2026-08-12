@@ -47,8 +47,10 @@ class ProfileCreate(BaseModel):
     age_band: str = "25-34"
     gender: str = "Prefer not to say"
     religion_selection: str = "No specific religion"
-    dietary_rules: list[str] = Field(default_factory=lambda: ["shellfish_allergy"])
-    allergy_severity: Literal["mild", "moderate", "severe"] = "severe"
+    # Legacy persistence fields remain readable for existing sessions, but the
+    # current product does not collect or default any allergy rule.
+    dietary_rules: list[str] = Field(default_factory=list)
+    allergy_severity: Literal["mild", "moderate", "severe"] = "mild"
     spice_tolerance: int = Field(default=1, ge=1, le=3)
     favorite_foods: list[str] = Field(
         default_factory=lambda: ["creamy pasta", "chicken noodle soup"]
@@ -167,6 +169,14 @@ class OptionItem(BaseModel):
     available: bool
     dietary_conflict: str | None = None
     conflicting_rules: list[str] = Field(default_factory=list)
+    halal_certification_preserved: bool | None = None
+    vegan_status: Literal[
+        "LIKELY_FIT",
+        "POSSIBLE_WITH_CHECKS",
+        "CONFLICT",
+        "UNKNOWN",
+    ] | None = None
+    vegan_warning: str | None = None
 
 
 class OptionGroup(BaseModel):

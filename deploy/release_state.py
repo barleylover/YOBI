@@ -17,8 +17,16 @@ PREVIOUS_RELEASE_RECORD = CONTROL_ROOT / "previous_release"
 LEGACY_PREVIOUS_RELEASE_RECORD = Path("/opt/yobi/shared/previous_release")
 RELEASE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 KNOWLEDGE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
+RECOMMENDATION_FAMILY_ID_PATTERN = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$"
+)
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-STATE_FIELDS = ("knowledge_release_id", "previous_knowledge_release_id")
+STATE_FIELDS = (
+    "knowledge_release_id",
+    "previous_knowledge_release_id",
+    "recommendation_release_family_id",
+    "previous_recommendation_release_family_id",
+)
 
 
 class ReleaseStateError(RuntimeError):
@@ -34,6 +42,15 @@ def _validate_release_id(value: str) -> str:
 def _validate_knowledge_id(value: str | None) -> str | None:
     if value is not None and KNOWLEDGE_ID_PATTERN.fullmatch(value) is None:
         raise ReleaseStateError("RELEASE_STATE_KNOWLEDGE_ID_INVALID")
+    return value
+
+
+def _validate_recommendation_family_id(value: str | None) -> str | None:
+    if (
+        value is not None
+        and RECOMMENDATION_FAMILY_ID_PATTERN.fullmatch(value) is None
+    ):
+        raise ReleaseStateError("RELEASE_STATE_RECOMMENDATION_FAMILY_ID_INVALID")
     return value
 
 
@@ -176,19 +193,29 @@ def write_release_state(
     previous_knowledge_release_id: str | None,
     knowledge_release_id: str,
     *,
+    previous_recommendation_release_family_id: str | None = None,
+    recommendation_release_family_id: str | None = None,
     state_root: Path = RELEASE_STATE_ROOT,
     trusted_uid: int = 0,
     trusted_gid: int = 0,
 ) -> Path:
     release_id = _validate_release_id(release_id)
     state = {
-        "version": 1,
+        "version": 2,
         "release_id": release_id,
         "archive_sha256": _validate_sha256(archive_sha256),
         "previous_knowledge_release_id": _validate_knowledge_id(
             previous_knowledge_release_id
         ),
         "knowledge_release_id": _validate_knowledge_id(knowledge_release_id),
+        "previous_recommendation_release_family_id": (
+            _validate_recommendation_family_id(
+                previous_recommendation_release_family_id
+            )
+        ),
+        "recommendation_release_family_id": _validate_recommendation_family_id(
+            recommendation_release_family_id
+        ),
     }
     path = state_root / f"{release_id}.json"
     payload = (json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n").encode()
@@ -218,15 +245,26 @@ def read_release_state(
         parsed = json.loads(payload)
     except (UnicodeDecodeError, json.JSONDecodeError):
         raise ReleaseStateError("RELEASE_STATE_JSON_INVALID") from None
-    if not isinstance(parsed, dict) or set(parsed) != {
+    if not isinstance(parsed, dict):
+        raise ReleaseStateError("RELEASE_STATE_SCHEMA_INVALID")
+    version = parsed.get("version")
+    v1_fields = {
         "version",
         "release_id",
         "archive_sha256",
         "previous_knowledge_release_id",
         "knowledge_release_id",
-    }:
-        raise ReleaseStateError("RELEASE_STATE_SCHEMA_INVALID")
-    if parsed["version"] != 1 or parsed["release_id"] != release_id:
+    }
+    v2_fields = {
+        *v1_fields,
+        "previous_recommendation_release_family_id",
+        "recommendation_release_family_id",
+    }
+    if (
+        version not in {1, 2}
+        or set(parsed) != (v1_fields if version == 1 else v2_fields)
+        or parsed["release_id"] != release_id
+    ):
         raise ReleaseStateError("RELEASE_STATE_SCHEMA_INVALID")
     _validate_sha256(str(parsed["archive_sha256"]))
     previous = parsed["previous_knowledge_release_id"]
@@ -237,6 +275,18 @@ def read_release_state(
         raise ReleaseStateError("RELEASE_STATE_SCHEMA_INVALID")
     _validate_knowledge_id(previous)
     _validate_knowledge_id(current)
+    if version == 1:
+        parsed["previous_recommendation_release_family_id"] = None
+        parsed["recommendation_release_family_id"] = None
+    else:
+        previous_family = parsed["previous_recommendation_release_family_id"]
+        current_family = parsed["recommendation_release_family_id"]
+        if previous_family is not None and not isinstance(previous_family, str):
+            raise ReleaseStateError("RELEASE_STATE_SCHEMA_INVALID")
+        if current_family is not None and not isinstance(current_family, str):
+            raise ReleaseStateError("RELEASE_STATE_SCHEMA_INVALID")
+        _validate_recommendation_family_id(previous_family)
+        _validate_recommendation_family_id(current_family)
     return parsed
 
 
@@ -293,6 +343,8 @@ def build_parser() -> argparse.ArgumentParser:
     write.add_argument("archive_sha256")
     write.add_argument("knowledge_release_id")
     write.add_argument("--previous-knowledge-release-id")
+    write.add_argument("--recommendation-release-family-id")
+    write.add_argument("--previous-recommendation-release-family-id")
     read = subcommands.add_parser("read-field")
     read.add_argument("release_id")
     read.add_argument("field", choices=STATE_FIELDS)
@@ -313,6 +365,12 @@ def run(argv: list[str] | None = None) -> int:
                 args.archive_sha256,
                 args.previous_knowledge_release_id,
                 args.knowledge_release_id,
+                previous_recommendation_release_family_id=(
+                    args.previous_recommendation_release_family_id
+                ),
+                recommendation_release_family_id=(
+                    args.recommendation_release_family_id
+                ),
             )
         elif args.command == "read-field":
             try:

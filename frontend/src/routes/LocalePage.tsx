@@ -45,7 +45,7 @@ export function LocalePage() {
           <span className="input-help">Countries commonly using {language} appear first.</span>
         </label>
         <button className="primary-button full large" onClick={next}>Next <ArrowRight size={19} /></button>
-        <p className="demo-notice">Language applies to chat, ordering and payment.</p>
+        <p className="demo-notice">Language applies to recommendations, ordering and payment.</p>
       </section>
     </main>
   );

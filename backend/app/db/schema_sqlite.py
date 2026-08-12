@@ -50,6 +50,15 @@ CREATE TABLE IF NOT EXISTS recommendation_snapshot (
   meal_need_state_json TEXT NOT NULL,
   result_json TEXT NOT NULL,
   cards_json TEXT NOT NULL,
+  structured_request_id TEXT,
+  criteria_version INTEGER,
+  criteria_json TEXT,
+  criteria_hash TEXT,
+  recommendation_release_family_id TEXT,
+  evidence_pool_json TEXT NOT NULL DEFAULT '[]',
+  generation_status TEXT,
+  generation_call_count INTEGER NOT NULL DEFAULT 0 CHECK (generation_call_count BETWEEN 0 AND 1),
+  grounding_validation_json TEXT,
   created_at TEXT NOT NULL
 );
 
@@ -94,7 +103,7 @@ CREATE TABLE IF NOT EXISTS menu (
   price INTEGER NOT NULL CHECK (price >= 0),
   serves_min INTEGER NOT NULL,
   serves_max INTEGER NOT NULL,
-  spice_level INTEGER NOT NULL CHECK (spice_level BETWEEN 1 AND 3),
+  spice_level INTEGER NOT NULL CHECK (spice_level BETWEEN 1 AND 5),
   dietary_tags_json TEXT NOT NULL,
   allergen_tags_json TEXT NOT NULL,
   semantic_text TEXT NOT NULL,
@@ -287,7 +296,9 @@ CREATE TABLE IF NOT EXISTS service_area (
 CREATE TABLE IF NOT EXISTS menu_category (
   category_id TEXT PRIMARY KEY, name_ko TEXT NOT NULL, name_en TEXT NOT NULL,
   description TEXT NOT NULL, tags_json TEXT NOT NULL,
-  typical_spice_min INTEGER NOT NULL, typical_spice_max INTEGER NOT NULL
+  typical_spice_min INTEGER NOT NULL CHECK (typical_spice_min BETWEEN 1 AND 5),
+  typical_spice_max INTEGER NOT NULL CHECK (typical_spice_max BETWEEN 1 AND 5),
+  CHECK (typical_spice_min <= typical_spice_max)
 );
 CREATE TABLE IF NOT EXISTS ingredient (
   ingredient_id TEXT PRIMARY KEY, name_ko TEXT NOT NULL, name_en TEXT NOT NULL,
@@ -509,6 +520,123 @@ CREATE TABLE IF NOT EXISTS knowledge_runtime_state (
   active_release_id TEXT NOT NULL REFERENCES knowledge_release(release_id),
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS recommendation_release_family (
+  release_family_id TEXT PRIMARY KEY,
+  knowledge_release_id TEXT NOT NULL REFERENCES knowledge_release(release_id),
+  catalog_release_id TEXT NOT NULL,
+  preference_catalog_version TEXT NOT NULL,
+  spice_reference_version TEXT NOT NULL,
+  certification_release_id TEXT NOT NULL,
+  embedding_model TEXT NOT NULL,
+  embedding_version TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('LOADING','READY','ACTIVE','RETIRED')),
+  activated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS recommendation_runtime_state (
+  state_key TEXT PRIMARY KEY CHECK (state_key = 'ACTIVE'),
+  active_release_family_id TEXT NOT NULL
+    REFERENCES recommendation_release_family(release_family_id),
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS recommendation_preference_option (
+  catalog_version TEXT NOT NULL,
+  category_code TEXT NOT NULL,
+  option_code TEXT NOT NULL,
+  label_ko TEXT NOT NULL,
+  label_en TEXT NOT NULL,
+  query_aliases_json TEXT NOT NULL,
+  display_order INTEGER NOT NULL CHECK (display_order >= 0),
+  active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
+  PRIMARY KEY(catalog_version, category_code, option_code)
+);
+
+CREATE TABLE IF NOT EXISTS spice_reference (
+  reference_version TEXT NOT NULL,
+  country_code TEXT NOT NULL CHECK (country_code IN ('KR','US')),
+  spice_level INTEGER NOT NULL CHECK (spice_level BETWEEN 1 AND 5),
+  label_ko TEXT NOT NULL,
+  label_en TEXT NOT NULL,
+  example_ko TEXT NOT NULL,
+  example_en TEXT NOT NULL,
+  PRIMARY KEY(reference_version, country_code, spice_level)
+);
+
+CREATE TABLE IF NOT EXISTS merchant_certification (
+  certification_id TEXT PRIMARY KEY,
+  certification_release_id TEXT NOT NULL,
+  merchant_id TEXT NOT NULL REFERENCES merchant(merchant_id),
+  certification_type TEXT NOT NULL CHECK (certification_type = 'HALAL'),
+  status TEXT NOT NULL CHECK (status IN ('ACTIVE','EXPIRED','REVOKED')),
+  issuer TEXT NOT NULL,
+  certificate_number TEXT NOT NULL,
+  valid_from TEXT NOT NULL,
+  valid_to TEXT,
+  scope_type TEXT NOT NULL CHECK (scope_type IN ('MERCHANT','MENU')),
+  scope_ref TEXT,
+  source_type TEXT NOT NULL,
+  source_ref TEXT NOT NULL,
+  last_verified_at TEXT NOT NULL,
+  is_synthetic INTEGER NOT NULL DEFAULT 1 CHECK (is_synthetic IN (0,1)),
+  CHECK (
+    (scope_type='MERCHANT' AND scope_ref IS NULL)
+    OR (scope_type='MENU' AND scope_ref IS NOT NULL)
+  )
+);
+
+CREATE TABLE IF NOT EXISTS session_recommendation_criteria (
+  session_id TEXT NOT NULL REFERENCES chat_session(session_id) ON DELETE CASCADE,
+  criteria_version INTEGER NOT NULL CHECK (criteria_version >= 1),
+  criteria_json TEXT NOT NULL,
+  criteria_hash TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  state_version INTEGER NOT NULL CHECK (state_version >= 0),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(session_id, criteria_version),
+  UNIQUE(session_id, request_id)
+);
+
+CREATE TABLE IF NOT EXISTS structured_recommendation_request (
+  session_id TEXT NOT NULL REFERENCES chat_session(session_id) ON DELETE CASCADE,
+  request_id TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  criteria_version INTEGER NOT NULL,
+  mode TEXT NOT NULL CHECK (mode IN ('INITIAL','SIMILAR','RETRY')),
+  status TEXT NOT NULL CHECK (
+    status IN (
+      'CREATED','DISPATCHED','COMPLETED','NO_RESULTS','NO_MATCH',
+      'SEARCH_FALLBACK','FAILED','UNKNOWN_AFTER_DISPATCH'
+    )
+  ),
+  state_version INTEGER NOT NULL CHECK (state_version >= 0),
+  recommendation_release_family_id TEXT NOT NULL
+    REFERENCES recommendation_release_family(release_family_id),
+  eligibility_as_of TEXT NOT NULL,
+  snapshot_id TEXT,
+  evidence_pool_json TEXT NOT NULL DEFAULT '[]',
+  result_json TEXT,
+  dispatch_count INTEGER NOT NULL DEFAULT 0 CHECK (dispatch_count BETWEEN 0 AND 1),
+  failure_code TEXT,
+  created_at TEXT NOT NULL,
+  dispatched_at TEXT,
+  completed_at TEXT,
+  PRIMARY KEY(session_id, request_id),
+  FOREIGN KEY(session_id, criteria_version)
+    REFERENCES session_recommendation_criteria(session_id, criteria_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rec_criteria_latest
+  ON session_recommendation_criteria(session_id, criteria_version DESC);
+CREATE INDEX IF NOT EXISTS idx_rec_request_status
+  ON structured_recommendation_request(session_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_merchant_cert_active
+  ON merchant_certification(
+    certification_release_id, certification_type, status, merchant_id, valid_from, valid_to
+  );
+CREATE INDEX IF NOT EXISTS idx_preference_option_active
+  ON recommendation_preference_option(catalog_version, category_code, active, display_order);
 
 CREATE INDEX IF NOT EXISTS idx_menu_category ON menu(category, availability, price);
 CREATE INDEX IF NOT EXISTS idx_menu_merchant ON menu(merchant_id);

@@ -133,7 +133,7 @@ def test_vegan_fallback_does_not_invent_an_allergy_or_severity(
     assert "verified vegan" in visible_copy
 
 
-def test_tteokbokki_fallback_does_not_invent_shellfish_or_low_spice_need(
+def test_legacy_tteokbokki_chat_uses_the_catalog_gated_alternative(
     repository: SQLiteYobiRepository,
 ) -> None:
     profile = repository.create_profile(
@@ -148,9 +148,13 @@ def test_tteokbokki_fallback_does_not_invent_shellfish_or_low_spice_need(
     )
 
     assert "your shellfish" not in turn.text.lower()
-    assert "exceeds your current maximum" not in turn.text.lower()
-    assert [card.type for card in turn.cards] == ["menu_recommendations"]
-    assert turn.cards[0].data["menus"][0]["menu_id"] == "menu_002_01"
+    assert [card.type for card in turn.cards] == [
+        "menu_explanation",
+        "menu_recommendations",
+    ]
+    assert turn.cards[0].data["menu"]["menu_id"] == "menu_002_01"
+    assert turn.cards[0].data["menu"]["spice_level"] == 4
+    assert turn.cards[1].data["menus"][0]["menu_id"] == "menu_001_01"
 
 
 def test_server_narrative_uses_profile_language_and_discloses_parser_boundary(
@@ -313,7 +317,7 @@ def test_korean_dietary_questions_explain_wiki_without_changing_profile_rules(
         assert saved is not None and saved.meal_need_state.dietary_rules == []
 
 
-def test_korean_safety_explanation_does_not_truncate_supported_allergens(
+def test_korean_safety_explanation_does_not_publish_an_allergen_inventory(
     repository: SQLiteYobiRepository,
 ) -> None:
     profile = repository.create_profile(
@@ -340,8 +344,10 @@ def test_korean_safety_explanation_does_not_truncate_supported_allergens(
     )
     turn.text = service._server_grounded_text(turn, profile.preferred_language)
 
+    assert "음식 특징 관련 합성 Wiki 근거" in turn.text
+    assert "확인되지 않은 내용" in turn.text
     for label in ("달걀", "생선", "우유", "참깨", "갑각류·조개류", "대두", "밀"):
-        assert label in turn.text
+        assert label not in turn.text
 
 
 def test_server_grounded_result_is_localized_for_japanese_and_spanish(
@@ -590,14 +596,12 @@ def test_weekly_ranking_is_fixed_and_does_not_enter_fallback(
         "BHC",
         "No More Pizza",
         "Hong Kong Banjeom",
-        "Yeopgi Tteokbokki",
     ]
     assert [entry["menu"]["menu_id"] for entry in entries] == [
         "menu_021_01",
         "menu_022_01",
         "menu_023_01",
         "menu_024_01",
-        "menu_025_01",
     ]
 
 

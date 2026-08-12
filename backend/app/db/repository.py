@@ -30,6 +30,18 @@ from app.domain.models import (
     ProfileUpdate,
     Session,
 )
+from app.domain.structured_recommendation import (
+    EvidencePoolItem,
+    LiveRecommendationMenuState,
+    RecommendationCriteriaCommit,
+    RecommendationCriteriaRecord,
+    RecommendationCriteriaV2,
+    RecommendationMode,
+    RecommendationReleaseFamily,
+    RecommendationRequestInput,
+    RecommendationRequestRecord,
+    RecommendationRequestStatus,
+)
 
 
 class YobiRepository(Protocol):
@@ -88,6 +100,92 @@ class YobiRepository(Protocol):
     def get_recommendation_snapshot(
         self, session_id: str, snapshot_id: str | None = None
     ) -> RecommendationSnapshot | None: ...
+
+    def save_recommendation_criteria(
+        self,
+        session_id: str,
+        commit: RecommendationCriteriaCommit,
+    ) -> RecommendationCriteriaRecord: ...
+
+    def get_recommendation_criteria(
+        self,
+        session_id: str,
+        version: int | None = None,
+    ) -> RecommendationCriteriaRecord | None: ...
+
+    def reserve_recommendation_request(
+        self,
+        session_id: str,
+        data: RecommendationRequestInput,
+        request_hash: str,
+    ) -> RecommendationRequestRecord: ...
+
+    def mark_recommendation_dispatched(
+        self,
+        session_id: str,
+        request_id: str,
+        evidence_pool: list[EvidencePoolItem],
+    ) -> RecommendationRequestRecord: ...
+
+    def complete_recommendation_request(
+        self,
+        session_id: str,
+        request_id: str,
+        status: RecommendationRequestStatus,
+        *,
+        result_json: dict[str, Any] | None = None,
+        snapshot: RecommendationSnapshot | None = None,
+        failure_code: str | None = None,
+    ) -> RecommendationRequestRecord: ...
+
+    def get_recommendation_request(
+        self,
+        session_id: str,
+        request_id: str,
+    ) -> RecommendationRequestRecord | None: ...
+
+    def get_latest_recommendation_request(
+        self,
+        session_id: str,
+        *,
+        active_only: bool = False,
+    ) -> RecommendationRequestRecord | None: ...
+
+    def get_live_recommendation_menu_states(
+        self,
+        session_id: str,
+        criteria: RecommendationCriteriaV2,
+        release_family_id: str,
+        menu_ids: list[str],
+        *,
+        at: datetime,
+    ) -> dict[str, LiveRecommendationMenuState]: ...
+
+    def build_recommendation_evidence_pool(
+        self,
+        session_id: str,
+        profile: Profile,
+        criteria: RecommendationCriteriaV2,
+        mode: RecommendationMode,
+        limit: int,
+        *,
+        release_family_id: str,
+        eligibility_as_of: datetime,
+        raw_hits_per_value: int,
+        passages_per_menu: int,
+    ) -> list[EvidencePoolItem]: ...
+
+    def get_active_recommendation_release_family(
+        self,
+    ) -> RecommendationReleaseFamily | None: ...
+
+    def list_valid_halal_certified_menu_ids(
+        self,
+        *,
+        at: datetime | None = None,
+    ) -> set[str]: ...
+
+    def get_preference_catalog(self, locale: str) -> dict[str, Any]: ...
 
     def apply_conversation_event(
         self, session_id: str, event: ConversationEventInput

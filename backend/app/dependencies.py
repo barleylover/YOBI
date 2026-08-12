@@ -6,6 +6,7 @@ from app.db.repository import YobiRepository
 from app.db.sqlite_repository import SQLiteYobiRepository
 from app.services.chat_service import ChatService
 from app.services.demo_control import DemoControl
+from app.services.structured_recommendation import StructuredRecommendationService
 
 
 @lru_cache(maxsize=1)
@@ -28,3 +29,12 @@ def get_demo_control() -> DemoControl:
 @lru_cache(maxsize=1)
 def get_chat_service() -> ChatService:
     return ChatService(get_repository(), get_settings(), get_demo_control())
+
+
+@lru_cache(maxsize=1)
+def get_structured_recommendation_service() -> StructuredRecommendationService:
+    return StructuredRecommendationService(
+        get_repository(),
+        get_settings(),
+        get_demo_control(),
+    )

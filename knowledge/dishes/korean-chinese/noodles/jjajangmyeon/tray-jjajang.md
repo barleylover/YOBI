@@ -9,7 +9,6 @@
     "jaengban jjajang",
     "shared platter black-bean noodles"
   ],
-  "version": "demo-wiki-2026.08.09-v1",
   "language": "en",
   "parents": [
     {
@@ -19,8 +18,17 @@
       "source_ref": "YOBI synthetic culinary taxonomy review: Jjajangmyeon variants v1"
     }
   ],
-  "ingredients": [
+  "source_type": "SYNTHETIC_WIKI",
+  "source_refs": [
+    "YOBI synthetic culinary knowledge review: Tray jjajang v1"
+  ],
+  "license_state": "SYNTHETIC",
+  "review_status": "REVIEWED_DEMO",
+  "is_synthetic": true,
+  "version": "demo-wiki-2026.08.12-v2",
+  "essential_facts": [
     {
+      "fact_type": "INGREDIENT",
       "ingredient_id": "ingredient_black_bean_paste",
       "name_ko": "춘장",
       "name_en": "black bean paste",
@@ -29,92 +37,38 @@
       "source_ref": "YOBI synthetic culinary knowledge review: Tray jjajang v1"
     },
     {
-      "ingredient_id": "ingredient_shellfish",
-      "name_ko": "갑각류 또는 조개류",
-      "name_en": "shellfish",
-      "role": "COMMON",
-      "status": "POSSIBLE",
-      "source_ref": "Seafood is common in tray jjajang but not universal"
-    },
-    {
-      "ingredient_id": "ingredient_mixed_vegetables",
-      "name_ko": "채소",
-      "name_en": "mixed vegetables",
-      "role": "COMMON",
-      "status": "POSSIBLE",
-      "source_ref": "YOBI synthetic culinary knowledge review: Tray jjajang v1"
-    }
-  ],
-  "allergens": [
-    {
-      "allergen_id": "allergen_shellfish_risk",
-      "status": "POSSIBLE",
-      "source_ref": "Seafood versions and shared wok preparation are common"
-    }
-  ],
-  "dietary": [
-    {
-      "attribute_id": "diet_contains_animal_product",
-      "value_text": "Seafood, pork or egg may be present",
-      "status": "POSSIBLE",
-      "source_ref": "YOBI synthetic culinary knowledge review: tray-jjajang structured claims v1"
-    },
-    {
-      "attribute_id": "diet_pork_possible",
-      "value_text": "Pork is possible but not required by the variant",
-      "status": "POSSIBLE",
-      "source_ref": "YOBI synthetic culinary knowledge review: tray-jjajang structured claims v1"
-    },
-    {
-      "attribute_id": "diet_vegetarian_possible",
-      "value_text": "A vegetarian version requires explicit confirmation of sauce and toppings",
-      "status": "POSSIBLE",
-      "source_ref": "YOBI synthetic culinary knowledge review: tray-jjajang structured claims v1"
-    }
-  ],
-  "preparation": [
-    {
+      "fact_type": "PREPARATION",
       "method": "wok_fried_and_mixed",
       "value_text": "A large portion of noodles and toppings is wok-finished with black bean sauce",
       "status": "PRESUMED_PRESENT",
       "source_ref": "YOBI synthetic culinary knowledge review: tray-jjajang structured claims v1"
     }
   ],
-  "source_type": "SYNTHETIC_WIKI",
-  "source_refs": [
-    "YOBI synthetic culinary knowledge review: Tray jjajang v1"
-  ],
-  "license_state": "SYNTHETIC",
-  "review_status": "REVIEWED_DEMO",
-  "is_synthetic": true,
-  "updated_at": "2026-08-09"
+  "updated_at": "2026-08-12"
 }
 ---
 # Tray jjajang
 
-## Overview
+## Character and experience
+
 Tray jjajang is a shareable jjajangmyeon variant in which noodles, black-bean sauce and generous toppings are stir-fried or combined on a wide platter.
 
-## Taste
 It keeps the savory, roasted and mildly sweet black-bean profile of jjajangmyeon, often with stronger wok flavor and topping richness.
 
-## Texture
 Springy noodles are heavily coated in sauce, while larger-cut vegetables, meat or seafood can add crisp, tender or bouncy contrasts.
 
-## Temperature
 It is served hot on a broad platter and is best mixed and shared before the noodles absorb too much sauce.
 
-## Satiety
 The platter format and larger topping portion usually make it suitable for two or more diners, though merchant sizes vary.
 
-## Culture
+## Context and comparisons
+
 It is a Korean-Chinese restaurant sharing dish often ordered with fried sides for family or group meals.
 
-## Analogy
 Think of jjajangmyeon expanded into a wok-tossed sharing platter rather than a fundamentally different black-bean sauce dish.
 
-## Ingredients
+## Ingredients and variations
+
 Wheat noodles, black bean paste and onion are inherited from jjajangmyeon. Mixed vegetables and seafood are common in tray versions but are not universal.
 
-## Safety
 Inherited wheat remains presumed present and soy remains possible. Shellfish is an additional possible risk, but only merchant evidence can confirm the actual topping and shared-wok exposure.
