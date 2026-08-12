@@ -143,6 +143,19 @@ EXPECTED_RUNTIME_COUNTS = {
     "menu_dietary_attribute": 1217,
     "option_dietary_conflict": 1,
 }
+UPGRADE_RETAINED_RUNTIME_COUNT_KEYS = frozenset(
+    {"allergen", "dietary_attribute", "ingredient", "menu_allergen"}
+)
+
+
+def _runtime_counts_compatible(counts: dict[str, int]) -> bool:
+    return set(counts) == set(EXPECTED_RUNTIME_COUNTS) and all(
+        actual >= expected
+        if key in UPGRADE_RETAINED_RUNTIME_COUNT_KEYS
+        else actual == expected
+        for key, expected in EXPECTED_RUNTIME_COUNTS.items()
+        for actual in (counts[key],)
+    )
 
 
 def _now() -> datetime:
@@ -5360,7 +5373,7 @@ class OracleYobiRepository:
                 and knowledge["embedding_version"] == self.embedding_provider.version
             )
             readiness_checks = {
-                "base_catalog_counts_exact": counts == EXPECTED_RUNTIME_COUNTS,
+                "base_catalog_counts_compatible": _runtime_counts_compatible(counts),
                 "canonical_rows_present": canonical,
                 "active_release_matches_runtime_corpus": bool(
                     knowledge
@@ -5400,7 +5413,7 @@ class OracleYobiRepository:
             "catalog_version": CATALOG_VERSION,
             "knowledge_catalog_version": knowledge["catalog_version"] if knowledge else None,
             "counts": counts,
-            "canonical_ready": canonical and counts == EXPECTED_RUNTIME_COUNTS,
+            "canonical_ready": canonical and _runtime_counts_compatible(counts),
             "vector_ready": menu_vector_mismatches == 0 and release_embedding_matches_runtime,
             "embedding_model": self.embedding_provider.model,
             "last_seed_time": str(last_seed_time) if last_seed_time else None,

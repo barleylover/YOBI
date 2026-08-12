@@ -205,3 +205,9 @@ def test_historical_release_keeps_dimension_rows_required_by_its_claims(
             == 1
         )
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+    status = repository.status()
+    assert status["counts"]["ingredient"] == EXPECTED_RUNTIME_COUNTS["ingredient"] + 1
+    assert status["canonical_ready"] is True
+    assert status["knowledge_ready"] is True
+    assert status["readiness_checks"]["base_catalog_counts_compatible"] is True

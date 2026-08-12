@@ -120,6 +120,16 @@ def test_release_identity_and_failure_restore_are_verified() -> None:
         assert "readlink -f" in restore_body
 
 
+def test_recovery_mode_requires_explicit_health_only_opt_in() -> None:
+    source = (ROOT / "deploy" / "deploy.sh").read_text(encoding="utf-8")
+
+    assert 'YOBI_RECOVERY_ALLOW_UNREADY_CURRENT:-false' in source
+    assert "YOBI_RECOVERY_ALLOW_UNREADY_CURRENT must be true or false" in source
+    assert "check_local_health" in source
+    assert "will not be registered as a rollback target" in source
+    assert 'old_release_verified" == true && -n "$old_release"' in source
+
+
 def test_deploy_and_rollback_share_a_nonblocking_root_lock() -> None:
     deploy_source = (ROOT / "deploy" / "deploy.sh").read_text(encoding="utf-8")
     rollback_source = (ROOT / "deploy" / "rollback.sh").read_text(encoding="utf-8")

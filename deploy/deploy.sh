@@ -8,6 +8,11 @@ readonly INSTANCE_NAME="yobi-app-01"
 readonly SSH_KEY="${YOBI_SSH_KEY:-${HOME}/.ssh/yobi_oci_vm_ed25519}"
 readonly SSH_USER="${YOBI_SSH_USER:-opc}"
 readonly ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly RECOVERY_ALLOW_UNREADY_CURRENT="${YOBI_RECOVERY_ALLOW_UNREADY_CURRENT:-false}"
+
+[[ "$RECOVERY_ALLOW_UNREADY_CURRENT" == "true" \
+  || "$RECOVERY_ALLOW_UNREADY_CURRENT" == "false" ]] \
+  || { printf 'YOBI_RECOVERY_ALLOW_UNREADY_CURRENT must be true or false.\n' >&2; exit 1; }
 
 for command in oci ssh scp tar shasum; do
   command -v "$command" >/dev/null || { printf 'Missing command: %s\n' "$command" >&2; exit 1; }
@@ -74,7 +79,7 @@ readonly REMOTE_ARCHIVE="/home/${SSH_USER}/.yobi-release-${RELEASE_ID}-${ARCHIVE
 scp -q -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new \
   "$archive" "$SSH_USER@$host:$REMOTE_ARCHIVE"
 ssh -t -i "$SSH_KEY" "$SSH_USER@$host" \
-  "sudo -n bash -s -- '$RELEASE_ID' '$ARCHIVE_SHA256' '$REMOTE_ARCHIVE' '$SSH_USER' '$ARCHIVE_NONCE'" <<'REMOTE'
+  "sudo -n bash -s -- '$RELEASE_ID' '$ARCHIVE_SHA256' '$REMOTE_ARCHIVE' '$SSH_USER' '$ARCHIVE_NONCE' '$RECOVERY_ALLOW_UNREADY_CURRENT'" <<'REMOTE'
 set -euo pipefail
 [[ "${EUID}" -eq 0 ]] || { printf 'Remote deployment requires root.\n' >&2; exit 1; }
 release_id="$1"
@@ -82,10 +87,13 @@ archive_sha256="$2"
 remote_archive="$3"
 upload_user="$4"
 archive_nonce="$5"
+recovery_allow_unready_current="$6"
 [[ "$release_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$ \
   && "$archive_sha256" =~ ^[0-9a-f]{64}$ \
   && "$upload_user" =~ ^[a-z_][a-z0-9_-]{0,31}$ \
   && "$archive_nonce" =~ ^[0-9a-f]{16}$ \
+  && ( "$recovery_allow_unready_current" == "true" \
+    || "$recovery_allow_unready_current" == "false" ) \
   && "$remote_archive" == "/home/${upload_user}/.yobi-release-${release_id}-${archive_nonce}.tar.gz" ]] \
   || { printf 'Remote release identity is invalid.\n' >&2; exit 1; }
 
@@ -173,6 +181,11 @@ check_local_services() {
     --max-time 10 http://127.0.0.1/healthz >/dev/null \
     && curl --fail --silent --retry 8 --retry-delay 2 --retry-connrefused \
       --max-time 30 http://127.0.0.1/readyz >/dev/null
+}
+
+check_local_health() {
+  curl --fail --silent --retry 8 --retry-delay 2 --retry-connrefused \
+    --max-time 10 http://127.0.0.1/healthz >/dev/null
 }
 
 run_knowledge_manager() {
@@ -270,6 +283,9 @@ verify_old_release_on_failure() {
       printf 'CRITICAL: failed deployment left no health/ready verified release.\n' >&2
     fi
   elif [[ "$deployment_complete" != true \
+    && "$recovery_allow_unready_current" == "true" ]]; then
+    printf 'CRITICAL: recovery deployment failed; no rollback-safe prior release was registered.\n' >&2
+  elif [[ "$deployment_complete" != true \
     && ( "$knowledge_restore_required" == true \
       || "$recommendation_restore_required" == true ) ]]; then
     if ! restore_knowledge_release || ! restore_recommendation_release; then
@@ -299,13 +315,16 @@ if [[ -n "$old_release" ]]; then
     || { printf 'Current release is not a trusted direct release path.\n' >&2; exit 1; }
   harden_release_tree "$old_release" \
     || { printf 'Current release permissions could not be hardened.\n' >&2; exit 1; }
-  if ! check_local_services; then
+  if check_local_services; then
+    old_release_verified=true
+    write_ready_marker "$old_release" \
+      || { printf 'Current release marker could not be trusted.\n' >&2; exit 1; }
+  elif [[ "$recovery_allow_unready_current" == "true" ]] && check_local_health; then
+    printf 'RECOVERY: current release is health-only and will not be registered as a rollback target.\n' >&2
+  else
     printf 'Current release is not healthy enough to register as rollback target.\n' >&2
     exit 1
   fi
-  old_release_verified=true
-  write_ready_marker "$old_release" \
-    || { printf 'Current release marker could not be trusted.\n' >&2; exit 1; }
 fi
 
 [[ ! -e "$new_release" ]] \
@@ -357,25 +376,30 @@ new_knowledge_release_id="$(run_knowledge_manager get-active)"
 new_recommendation_release_family_id="$(run_recommendation_manager get-active)"
 [[ -n "$new_recommendation_release_family_id" ]] \
   || { printf 'Seed completed without an active recommendation release family.\n' >&2; exit 1; }
+recorded_previous_knowledge_release_id="none"
+recorded_previous_recommendation_release_family_id="none"
 release_state_command=(
   sudo "$new_release/venv/bin/python" "$new_release/deploy/release_state.py"
   write-state "$release_id" "$archive_sha256" "$new_knowledge_release_id"
   --recommendation-release-family-id "$new_recommendation_release_family_id"
 )
-if [[ -n "$old_knowledge_release_id" ]]; then
+if [[ "$old_release_verified" == true && -n "$old_knowledge_release_id" ]]; then
   release_state_command+=(--previous-knowledge-release-id "$old_knowledge_release_id")
+  recorded_previous_knowledge_release_id="$old_knowledge_release_id"
 fi
-if [[ -n "$old_recommendation_release_family_id" ]]; then
+if [[ "$old_release_verified" == true \
+  && -n "$old_recommendation_release_family_id" ]]; then
   release_state_command+=(
     --previous-recommendation-release-family-id
     "$old_recommendation_release_family_id"
   )
+  recorded_previous_recommendation_release_family_id="$old_recommendation_release_family_id"
 fi
 "${release_state_command[@]}"
 printf 'knowledge_release_id=%s\nprevious_knowledge_release_id=%s\nrecommendation_release_family_id=%s\nprevious_recommendation_release_family_id=%s\n' \
-  "$new_knowledge_release_id" "${old_knowledge_release_id:-none}" \
+  "$new_knowledge_release_id" "$recorded_previous_knowledge_release_id" \
   "$new_recommendation_release_family_id" \
-  "${old_recommendation_release_family_id:-none}" \
+  "$recorded_previous_recommendation_release_family_id" \
   | sudo tee -a "$new_release/.yobi-release-manifest" >/dev/null
 
 harden_release_tree "$new_release" \
@@ -390,16 +414,19 @@ if ! sudo systemctl daemon-reload \
     "$new_release/scripts/structured_recommendation_smoke.py" \
     --base-url http://127.0.0.1 \
   || ! write_ready_marker "$new_release"; then
-  if [[ -n "$old_release" ]]; then
+  if [[ "$old_release_verified" == true && -n "$old_release" ]]; then
     if ! restore_old_release; then
       printf 'CRITICAL: release activation failed and restored release did not pass health/ready.\n' >&2
       exit 1
     fi
+  elif [[ "$recovery_allow_unready_current" == "true" ]]; then
+    printf 'CRITICAL: recovery activation failed and no rollback-safe prior release exists.\n' >&2
+    exit 1
   fi
   printf 'Release activation failed; previous release restoration was verified.\n' >&2
   exit 1
 fi
-if [[ -n "$old_release" ]]; then
+if [[ "$old_release_verified" == true && -n "$old_release" ]]; then
   old_release_id="${old_release##*/}"
   if ! sudo "$new_release/venv/bin/python" "$new_release/deploy/release_state.py" \
     write-previous "$old_release_id"; then

@@ -143,6 +143,19 @@ EXPECTED_RUNTIME_COUNTS = {
     "menu_dietary_attribute": 1217,
     "option_dietary_conflict": 1,
 }
+UPGRADE_RETAINED_RUNTIME_COUNT_KEYS = frozenset(
+    {"allergen", "dietary_attribute", "ingredient", "menu_allergen"}
+)
+
+
+def _runtime_counts_compatible(counts: dict[str, int]) -> bool:
+    return set(counts) == set(EXPECTED_RUNTIME_COUNTS) and all(
+        actual >= expected
+        if key in UPGRADE_RETAINED_RUNTIME_COUNT_KEYS
+        else actual == expected
+        for key, expected in EXPECTED_RUNTIME_COUNTS.items()
+        for actual in (counts[key],)
+    )
 
 SPICE_REFERENCE_VERSION = f"{PREFERENCE_CATALOG_VERSION}-spice"
 CERTIFICATION_RELEASE_ID = "synthetic-halal-certifications-v1"
@@ -5793,7 +5806,7 @@ class SQLiteYobiRepository:
                 and knowledge["embedding_version"] == runtime_embedding.version
             )
             readiness_checks = {
-                "base_catalog_counts_exact": counts == EXPECTED_RUNTIME_COUNTS,
+                "base_catalog_counts_compatible": _runtime_counts_compatible(counts),
                 "canonical_rows_present": int(canonical) == 3,
                 "active_release_matches_runtime_corpus": bool(
                     knowledge
@@ -5833,7 +5846,8 @@ class SQLiteYobiRepository:
             "catalog_version": CATALOG_VERSION,
             "knowledge_catalog_version": knowledge["catalog_version"] if knowledge else None,
             "counts": counts,
-            "canonical_ready": int(canonical) == 3 and counts == EXPECTED_RUNTIME_COUNTS,
+            "canonical_ready": int(canonical) == 3
+            and _runtime_counts_compatible(counts),
             "last_seed_time": last_seed_time,
             "knowledge_ready": knowledge_ready,
             "vector_ready": release_embedding_matches_runtime and missing_menu_semantics == 0,
