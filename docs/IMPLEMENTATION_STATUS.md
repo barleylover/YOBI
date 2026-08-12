@@ -2,13 +2,13 @@
 
 Last updated: 2026-08-12 KST
 
-> The current 2026-08-12 structured-recommendation work is local implementation
-> work only. It adds migration `010`, a prose-first Wiki compiler, a persisted
-> structured-preference and recommendation-request ledger, and a bounded hybrid-RAG
-> flow. It has not been applied to Oracle or verified through the public demo. Do not
-> treat the historical deployment evidence below as proof of this new flow.
+> The 2026-08-12 structured-recommendation revision is deployed as release
+> `20260812T141008Z-8418f92b7e37`. Migration `010`, the prose-first Wiki, persisted
+> criteria/request ledger, bounded hybrid-RAG retrieval, one-dispatch OCI generation,
+> public product flow, and rollback/redeploy path were verified against the live OCI
+> environment. Historical sections remain labelled and are not the current contract.
 
-## 2026-08-12 structured recommendation refactor (local, not deployed)
+## 2026-08-12 structured recommendation refactor (deployed and verified)
 
 The new discovery screen replaces the free-text recommendation composer with
 multi-select meal preferences. Selected values within a category use OR semantics;
@@ -36,10 +36,12 @@ catalog, preference vocabulary, spice reference, certification data, and embeddi
 metadata used for an auditable recommendation result. All current merchant and
 certification rows remain synthetic demo data.
 
-The local family pins all version identities, but only knowledge has a release-table
-foreign key. Separate catalog/certification manifests and a proven atomic Oracle
-activation/rollback are still Phase 8 work, not a completed local deployment claim.
-The existing `/readyz` does not yet prove those v2 family-manifest gates.
+The release family pins all version identities; knowledge has a release-table foreign
+key while catalog and certification identities remain versioned family fields rather
+than independent immutable manifest tables. Deployment readiness verifies their
+compatible seeded state and active family. The live rollback rehearsal restored a
+compatible application and data pointers, retained the additive migration ledger,
+and passed health/readiness before the final release was redeployed.
 
 The current selector starts each new meal with halal/vegan disabled and maximum spice
 `3/5`; Korean profiles initially display KR examples and other locales US examples,
@@ -76,12 +78,11 @@ can adjust recall but never supplies category evidence. Retrieval order bounds t
 pool; it is not the final menu order. Reviews, merchant promotional prose, legacy
 allergy data, religion, and raw addresses are not generation context.
 
-The current local source packages checksum migrations `001`–`010` and uses base catalog
+The current source packages checksum migrations `001`–`010` and uses base catalog
 `demo-2026.08.11-knowledge-v3` plus knowledge catalog contract
 `demo-knowledge-catalog-2026.08.12-v4`. Focused local checks have been rerun during
-integration, and the final full local regressions are recorded below. No Oracle
-migration, seed, OCI GenAI, deployed `/readyz`, public browser, or rollback result is
-claimed here. Historical v3 evidence remains in `TEST_REPORT.md`.
+integration. Oracle migration/seed, OCI GenAI, deployed `/readyz`, public browser, and
+rollback results are recorded in `TEST_REPORT.md` for the exact active release.
 
 Focused local checks currently pass for the prose Wiki/catalog/generator (26 tests),
 deploy/migration/bootstrap/seed/document contracts (75 tests), structured
@@ -93,10 +94,10 @@ files). Retained fallback/golden acceptance checks also pass 29 tests and 369
 assertions, and the updated catalog/safety/readiness regression scope passes 23 tests.
 These targeted scopes overlap and are not a combined test total. Live Oracle
 migration/vector execution, OCI generation, `/readyz`, public browser E2E, and rollback
-remain unverified for this revision; see `TEST_REPORT.md` for the exact boundary.
+were subsequently verified; see `TEST_REPORT.md` for the exact boundary.
 
-The final pre-deployment whole-backend run passes **386 tests** with one third-party
-Starlette deprecation warning; whole-tree Ruff passes and MyPy passes **72 source files**.
+The final deployed-source whole-backend run passes **392 tests** with one third-party
+Starlette deprecation warning; whole-tree Ruff passes and MyPy passes **69 source files**.
 Frontend ESLint, **19/19 Vitest tests**, and the production build pass (with the
 existing non-fatal 546.57 kB chunk warning). The isolated local Playwright run passes
 **20 tests** with **24 intentional duplicate-viewport skips** in 34.8 seconds. An

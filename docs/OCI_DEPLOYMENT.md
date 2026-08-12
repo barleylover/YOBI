@@ -3,20 +3,20 @@
 The existing `yobi-app-01` VM and private `yobi-adb` are reused. Scripts resolve
 current identifiers and the ephemeral public IP at runtime; none are stored in Git.
 
-Verified 2026-08-09 deployment: release `20260809T084353Z-704f74712d9d` is active,
-the exact migration ledger is `001`–`008`, and the trusted rollback target is
-`20260809T083629Z-bfb59275b93f`. Public readiness, the configured product E2E suite,
-and three consecutive Primary runs passed. The approved temporary current-source
-`/32` TCP 22 rules were removed after every SSH window; the final independent NSG
-state is TCP 22 `0`, existing TCP 80 `1`. See `TEST_REPORT.md` for exact data and
-GenAI smoke evidence.
+Verified 2026-08-12 deployment: structured-recommendation release
+`20260812T141008Z-8418f92b7e37` is active and its recorded rollback predecessor is
+`20260812T135513Z-8f91a6c7120a`. The exact migration ledger is `001`–`010`.
+Oracle readiness, live vector retrieval, one-dispatch OCI generation, public product
+E2E, and a compatible rollback/redeploy rehearsal passed. The approved temporary
+current-source `/32` TCP 22 rule was removed by exact rule identity after verification;
+the final independent NSG state is TCP 22 `0`, existing TCP 80 `1`. See
+`TEST_REPORT.md` for exact data and generation evidence.
 
-The 2026-08-12 structured-recommendation working tree is newer than that verified
-deployment. Its release package contains migrations `001`–`010`, base catalog
+The active release contains migrations `001`–`010`, base catalog
 `demo-2026.08.11-knowledge-v3`, and knowledge catalog contract
-`demo-knowledge-catalog-2026.08.12-v4`, but it has **not** been applied to Oracle or
-deployed/verified on the OCI public demo at this checkpoint. The commands and gates
-below describe what a future deployment must prove; they are not live evidence.
+`demo-knowledge-catalog-2026.08.12-v4`. The commands and gates below are the deployed
+operational contract; the completed 2026-08-12 evidence is recorded separately in
+`TEST_REPORT.md` so future runs do not inherit it without re-verification.
 
 ```bash
 make test
@@ -223,15 +223,13 @@ One controlled Oracle release window must establish all of the following:
   certification validity at the current operation time. The proof must exercise
   Oracle, not only the SQLite fixture.
 
-The source currently gives `RECOMMENDATION_RELEASE_FAMILY` a foreign key to
-`KNOWLEDGE_RELEASE`, but catalog and certification are version strings rather than
-independent immutable manifest foreign keys. The seed transaction validates their
-expected row counts, while `/readyz` still reports the older canonical
-catalog/knowledge/provider checks. Before calling Phase 8 complete, add and verify the
-operational manifest compatibility gate and make activation/rollback restore the
-recommendation-family pointer together with the application and knowledge pointer.
-The present release-state file records only the knowledge pointer, so a successful
-local seed or current deploy-script dry run is not that proof.
+`RECOMMENDATION_RELEASE_FAMILY` has a foreign key to `KNOWLEDGE_RELEASE`; catalog and
+certification are pinned version strings rather than independent immutable manifest
+tables. The seed transaction validates their compatible expected state and readiness
+validates the active family alongside the canonical catalog/knowledge/provider
+checks. The 2026-08-12 rollback rehearsal verified the implemented application,
+knowledge, and compatible recommendation-family boundary. This must not be described
+as proof of a stronger external catalog/certification manifest registry.
 
 ### Live Oracle retrieval and generation evidence
 
@@ -300,8 +298,10 @@ invalid.
 
 The repository deploy path requires authenticated VM access. Do not add TCP 22, IAM
 policy, a Bastion, or an artifact channel merely to make deployment possible unless
-that infrastructure change has been separately approved. An unreachable target is a
-deployment blocker, not permission to broaden ingress.
+that infrastructure change has been separately approved. When an ephemeral SSH rule
+is approved, restrict it to the observed current-source `/32`, record its exact rule
+ID, remove that ID after the final remote check, and independently assert that TCP 22
+returns to zero without altering the existing TCP 80 rule.
 
 On the VM:
 

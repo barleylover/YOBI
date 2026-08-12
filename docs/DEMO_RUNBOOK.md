@@ -42,10 +42,10 @@ courier, or public-network behavior.
 ### Oracle, OCI, and public verification
 
 Do not present the historical 2026-08-09 release as evidence for the current v2
-structured flow. This revision still requires a separate release-specific run of
-migration `010`, seed/readiness verification, live Oracle vector queries, one-call OCI
-generation, and public browser E2E. The exact gate is in
-[`OCI_DEPLOYMENT.md`](OCI_DEPLOYMENT.md), and only completed results belong in
+structured flow. The 2026-08-12 release separately passed migration `010`,
+seed/readiness verification, live Oracle vector queries, one-call OCI generation,
+public browser E2E, and rollback/redeploy. The repeatable gate is in
+[`OCI_DEPLOYMENT.md`](OCI_DEPLOYMENT.md), and the exact completed evidence belongs in
 [`TEST_REPORT.md`](TEST_REPORT.md).
 
 Before any deployed rehearsal, reconfirm both `/healthz` and `/readyz` and the exact

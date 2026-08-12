@@ -24,12 +24,14 @@ scope-verified certification filter; vegan recommendations may carry a check-bef
 ordering warning. Allergy input is not part of the new public recommendation path.
 All catalog, certification, and merchant data remains synthetic demo data.
 
-Implementation in Git is not, by itself, evidence that the same revision is live.
+The structured revision is live as OCI release
+`20260812T141008Z-8418f92b7e37`; Git source alone is still not evidence for a future
+release.
 The [structured-recommendation plan](docs/STRUCTURED_RECOMMENDATION_IMPLEMENTATION_PLAN.md)
 is the current product and implementation authority,
 [implementation status](docs/IMPLEMENTATION_STATUS.md) summarizes what is connected,
-and the [test report](docs/TEST_REPORT.md) separates local verification from the
-historical public-release baseline. The
+and the [test report](docs/TEST_REPORT.md) records the exact local, Oracle/OCI,
+rollback, and public evidence. The
 [chatbot-improvement record](docs/CHATBOT_IMPROVEMENT_IMPLEMENTATION.md) is retained
 only as superseded free-chat history. The public URL and OCI identifiers are resolved
 at runtime and are intentionally not committed.
@@ -55,9 +57,10 @@ port without stopping the existing process and prints the actual URLs.
 
 The local launcher explicitly uses a deterministic SQLite demo database, fixture
 address extraction, deterministic embeddings, and no OCI credentials. The structured
-flow therefore exercises its labelled saved-search fallback locally; its normal
-model-selected result path is covered by fake-provider tests until a live OCI gate is
-run. See the [demo runbook](docs/DEMO_RUNBOOK.md) for the exact new-UI walkthrough and
+flow therefore exercises its labelled saved-search fallback locally. The normal
+model-selected result path was separately verified against the deployed OCI provider;
+local startup does not reproduce that external call. See the
+[demo runbook](docs/DEMO_RUNBOOK.md) for the exact new-UI walkthrough and
 focused regression checklist.
 
 ## Verification

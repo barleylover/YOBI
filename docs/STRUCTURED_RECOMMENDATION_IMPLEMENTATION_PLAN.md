@@ -1,12 +1,14 @@
 # YOBI 구조화 선택 기반 Hybrid RAG 추천 전면 개편 구현계획서
 
-- 상태: **로컬 소스 통합·전체 회귀 검증 완료, Oracle/OCI/Public 배포 검증 대기(Local source integration and full regression complete; Oracle/OCI/Public deployment gates pending)**
+- 상태: **구현·Oracle/OCI 배포·공개 회귀·롤백 리허설 완료(Implementation, Oracle/OCI deployment, public regression, and rollback rehearsal complete)**
 - 제품 결정 승인일: **2026-08-12 KST**
 - 기준 체크아웃: `codex/master-spec-completion` / `68ad8ef05080bf341d9ed84ed6e91f8dc20ff02a`
-- 현재 문서 상태: 제품 코드, SQLite/Oracle 저장소 구현, additive migration
-  `010`, Wiki/seed, 프런트엔드, 로컬 전체 회귀와 문서에 반영됐다. 실제 Oracle
-  적용, OCI GenAI, OCI release, Public E2E는 수행하지 않았으며 별도 Phase 8
-  게이트로 남아 있다.
+- 현재 문서 상태: 제품 코드, SQLite/Oracle 저장소, additive migration `010`,
+  Wiki/seed, 프런트엔드와 문서가 배포 릴리스
+  `20260812T141008Z-8418f92b7e37`에 반영됐다. Oracle ledger `001`–`010`, 실제
+  Oracle vector query, OCI GenAI 단일 dispatch, 공개 E2E, 호환 릴리스 롤백 및
+  최종 재배포를 2026-08-12 KST에 검증했다. 상세 증적은 `TEST_REPORT.md`가
+  권위다.
 - 적용 대상: React 프런트엔드, FastAPI 백엔드, SQLite/Oracle 저장소, 내부 음식 Wiki, 추천/RAG, 테스트, 데모 문서
 
 ## 1. 문서 권위와 대체 범위
