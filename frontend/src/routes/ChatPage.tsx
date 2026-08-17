@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Settings2, ShoppingBag } from "lucide-react";
+import { ChevronLeft, Settings2, ShoppingBag } from "lucide-react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { OrderFlowPanel } from "../components/OrderFlowPanel";
 import { PostAddressNavigation } from "../components/PostAddressNavigation";
 import { PreferenceSelector } from "../components/PreferenceSelector";
 import { RecommendationResults } from "../components/RecommendationResults";
+import { YobiBotAvatar, YobiVerifiedBadge } from "../components/YobiVisualAssets";
 import { actionableError, api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import { asSupportedLanguage, menuName } from "../lib/locale";
@@ -569,12 +570,15 @@ export function ChatPage() {
 
   const showsLoading = hydrating || recommendationPhase === "RETRIEVING" || recommendationPhase === "GENERATING";
   return (
-    <main className="chat-shell structured-recommendation-shell">
+    <main className={`chat-shell structured-recommendation-shell figma-chat-shell phase-${recommendationPhase.toLowerCase()}`}>
       <section className="chat-column">
         <header className="chat-header">
-          <div className="brand-mark compact">YO<span>BI</span></div>
-          <div><strong>{copy.buddy}</strong><span><i /> {recommendationCopy.selectorEyebrow}</span></div>
-          <button type="button" aria-label={recommendationCopy.editProfile} title={recommendationCopy.editProfile} onClick={editProfile}><Settings2 size={18} /></button>
+          <button className="chat-back-button" type="button" aria-label={productCopy.handoff.back} onClick={() => navigate("/")}><ChevronLeft size={21} /></button>
+          <div className="chat-identity">
+            <div><strong>YOBI</strong><YobiVerifiedBadge className="chat-verified-badge" /></div>
+            <span>{copy.buddy} · {recommendationCopy.selectorEyebrow}</span>
+          </div>
+          <button className="chat-profile-button" type="button" aria-label={recommendationCopy.editProfile} title={recommendationCopy.editProfile} onClick={editProfile}><Settings2 size={18} /></button>
           <button className="cart-button" aria-label={language === "English" ? `${journeyCopy.openCart}, ${cartQuantity} items` : `${journeyCopy.openCart}, ${journeyCopy.quantity} ${cartQuantity}`} onClick={openCart} disabled={!selectedMenu}><ShoppingBag size={19} />{cartQuantity > 0 && <span className="cart-badge">{cartQuantity}</span>}</button>
         </header>
 
@@ -588,7 +592,7 @@ export function ChatPage() {
 
           {catalog && recommendationPhase === "SELECTING" && (
             <div className="assistant-message-row preference-prompt-message" data-testid="assistant-preference-prompt">
-              <div className="assistant-avatar" aria-hidden="true">Y</div>
+              <div className="assistant-avatar" aria-hidden="true"><YobiBotAvatar /></div>
               <div className="assistant-message-stack">
                 <strong className="assistant-name"><i /> {productCopy.recommendation.assistantName}</strong>
                 <section className="assistant-bubble preference-prompt-bubble">
@@ -603,7 +607,7 @@ export function ChatPage() {
           {catalog && recommendationPhase !== "SELECTING" && (
             <section className="conversation-history" aria-label={copy.conversation}>
               <div className="assistant-message-row compact-message">
-                <div className="assistant-avatar" aria-hidden="true">Y</div>
+                <div className="assistant-avatar" aria-hidden="true"><YobiBotAvatar /></div>
                 <div className="assistant-message-stack">
                   <strong className="assistant-name"><i /> {productCopy.recommendation.assistantName}</strong>
                   <section className="assistant-bubble compact-prompt">
@@ -636,6 +640,7 @@ export function ChatPage() {
               canSubmitUnchanged={Boolean(committedCriteria)}
               conversationMode
               conflictMessage={recommendationConflictCopy}
+              onBack={editProfile}
               onChange={applyDraftCriteria}
               onValidateAdd={(nextCriteria) => checkCriteriaPreview(nextCriteria, true)}
               onComplete={() => void submitCriteria()}
@@ -644,7 +649,7 @@ export function ChatPage() {
 
           {catalog && showsLoading && (
             <div className="assistant-message-row state-message">
-              <div className="assistant-avatar" aria-hidden="true">Y</div>
+              <div className="assistant-avatar" aria-hidden="true"><YobiBotAvatar /></div>
               <div className="assistant-message-stack">
                 <strong className="assistant-name">{productCopy.recommendation.assistantName}</strong>
                 <section className="assistant-bubble recommendation-progress">
@@ -681,7 +686,7 @@ export function ChatPage() {
 
           {recommendationPhase === "NO_RESULTS" && (
             <div className="assistant-message-row state-message">
-              <div className="assistant-avatar" aria-hidden="true">Y</div>
+              <div className="assistant-avatar" aria-hidden="true"><YobiBotAvatar /></div>
               <div className="assistant-message-stack">
                 <strong className="assistant-name">{productCopy.recommendation.assistantName}</strong>
                 <section className="assistant-bubble recommendation-state-card">
@@ -694,7 +699,7 @@ export function ChatPage() {
           )}
           {recommendationPhase === "ERROR" && (
             <div className="assistant-message-row state-message">
-              <div className="assistant-avatar" aria-hidden="true">Y</div>
+              <div className="assistant-avatar" aria-hidden="true"><YobiBotAvatar /></div>
               <div className="assistant-message-stack">
                 <strong className="assistant-name">{productCopy.recommendation.assistantName}</strong>
                 <section className="assistant-bubble recommendation-state-card error">
@@ -715,7 +720,7 @@ export function ChatPage() {
                 </div>
               </div>
               <div className="assistant-message-row order-message">
-                <div className="assistant-avatar" aria-hidden="true">Y</div>
+                <div className="assistant-avatar" aria-hidden="true"><YobiBotAvatar /></div>
                 <div className="assistant-message-stack">
                   <strong className="assistant-name"><i /> {productCopy.recommendation.assistantName}</strong>
                   <section className="assistant-bubble order-bubble">
@@ -741,6 +746,7 @@ export function ChatPage() {
         language={language}
         locale={locale}
         disabled={busy}
+        onEditProfile={editProfile}
         onChoose={chooseCollectionMenu}
       />
     </main>

@@ -89,12 +89,12 @@ describe("merged welcome and neutral demo address flow", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole("heading", { name: /Hi, I’m YOBI/ })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Korean food, made easy/ })).toBeInTheDocument();
     expect(screen.getAllByRole("combobox")).toHaveLength(2);
     expect(screen.getByLabelText("Language").querySelectorAll("option")).toHaveLength(16);
 
     fireEvent.change(screen.getByLabelText("Language"), { target: { value: "한국어" } });
-    expect(await screen.findByRole("heading", { name: /안녕하세요, YOBI예요/ })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /한국 음식, YOBI가 쉽게/ })).toBeInTheDocument();
     expect(document.documentElement).toHaveAttribute("lang", "ko");
     expect(document.documentElement).toHaveAttribute("dir", "ltr");
     expect(useSessionStore.getState().draftLanguage).toBe("한국어");
@@ -135,7 +135,7 @@ describe("merged welcome and neutral demo address flow", () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole("heading", { name: /Hi, I’m YOBI/ })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /Korean food, made easy/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Get started/ }));
     expect(await screen.findByText(/Profile route \?edit=1/)).toHaveTextContent(
       `returnTo=${encodeURIComponent(`/chat/${session.session_id}`)}`,

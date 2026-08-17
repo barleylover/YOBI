@@ -22,9 +22,9 @@ test("halal and vegan conflicts are resolved explicitly before recommendation", 
     });
   });
   await startStructuredSession(page);
-  const ingredients = page.locator("details.preference-category").filter({ hasText: "Main ingredient" });
-  if (await ingredients.getAttribute("open") === null) await ingredients.locator("summary").click();
+  const ingredients = page.locator("[data-category='main_ingredients']");
   await ingredients.getByRole("button", { name: "Pork", exact: true }).click();
+  await page.locator("details.preference-more-panel > summary").click();
   const halal = page.getByRole("checkbox", { name: /Only show halal-certified restaurants/ });
   if (await halal.isDisabled()) {
     await expect(halal).toBeDisabled();
@@ -63,7 +63,7 @@ test("search fallback keeps menu selection, retry and edit actions", async ({ pa
   await modeControl.click();
   await startStructuredSession(page);
   await selectFirstPreferenceAndRecommend(page);
-  await expect(page.getByRole("heading", { name: "Closest matching menus" })).toBeVisible();
+  await expect(page.locator(".recommendation-result-heading")).toBeVisible();
   await expect(page.getByRole("button", { name: "Try recommendation again" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Edit choices" })).toBeVisible();
 });

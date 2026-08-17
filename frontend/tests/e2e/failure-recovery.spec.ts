@@ -8,7 +8,7 @@ const expectsProtectedControl = Boolean(
 
 test("onboarding and structured selector remain accessible at every required viewport", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: /Hi, I’m YOBI/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Korean food, made easy/ })).toBeVisible();
   const languageSelect = page.locator(".welcome-locale select").first();
   const countrySelect = page.locator(".welcome-locale select").nth(1);
   await expect(languageSelect.locator("option")).toHaveCount(16);
@@ -25,20 +25,12 @@ test("onboarding and structured selector remain accessible at every required vie
   await page.getByRole("button", { name: "이 주소 선택" }).first().click();
 
   await expect(page.getByRole("heading", { name: "어떤 음식이 끌리세요?" })).toBeVisible();
+  await page.locator("details.preference-more-panel > summary").click();
   await expect(page.getByRole("checkbox")).toHaveCount(2);
   await expect(page.locator(".spice-reference-choice")).toHaveCount(5);
   await expect(page.getByRole("textbox")).toHaveCount(0);
   const discoveryToggle = page.locator(".discovery-nav-toggle");
-  await discoveryToggle.click();
-  await page.getByRole("button", { name: "케데헌 특집" }).click();
-  const discoveryDialog = page.getByRole("dialog");
-  await expect(discoveryDialog).toBeVisible();
-  await expect(discoveryDialog.locator(".dialog-close")).toBeFocused();
-  await page.keyboard.press("Shift+Tab");
-  expect(await discoveryDialog.evaluate((element) => element.contains(document.activeElement))).toBe(true);
-  await page.keyboard.press("Escape");
-  await expect(discoveryDialog).toBeHidden();
-  await expect(discoveryToggle).toBeFocused();
+  await expect(discoveryToggle).toBeHidden();
   await page.goto("/demo/qr");
   await expect(page.getByRole("img", { name: /QR code for/ })).toBeVisible();
   await page.goto("/demo/control");
@@ -65,7 +57,7 @@ test("catalog load failure shows retry and never exposes a free-text fallback", 
     await route.continue();
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "Get started!" }).click();
+  await page.getByRole("button", { name: "Get started" }).click();
   await page.getByRole("checkbox", { name: /neutral profile/ }).check();
   await page.getByRole("button", { name: "Find the demo address" }).click();
   await page.getByRole("button", { name: "Select this address" }).first().click();
@@ -93,7 +85,7 @@ test("Japanese and Arabic product copy persist into the address step and Arabic 
   await page.goto("/");
   await page.locator(".welcome-locale select").first().selectOption("العربية");
   await expect(page.getByRole("heading", { name: /مرحبًا، أنا YOBI/ })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "اختر الطعام الكوري بمعلومات واضحة، لا بالتخمين." })).toBeVisible();
+  await expect(page.getByText(/اختر أنواع المطبخ والنكهات والمكونات/)).toBeVisible();
   await expect(page.getByText("ما الطعام الذي ترغب فيه؟")).toHaveCount(0);
   await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
@@ -119,7 +111,7 @@ test("reduced-motion preference disables smooth motion in the new flow", async (
   test.skip(testInfo.project.name !== "iPhone 13", "One computed-style proof is sufficient.");
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
-  const styles = await page.getByRole("button", { name: "Get started!" }).evaluate((element) => {
+  const styles = await page.getByRole("button", { name: "Get started" }).evaluate((element) => {
     const style = getComputedStyle(element);
     const duration = Number.parseFloat(style.transitionDuration);
     return {

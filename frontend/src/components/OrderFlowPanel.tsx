@@ -30,6 +30,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
   const navigate = useNavigate();
   const setCartQuantity = useSessionStore((state) => state.setCartQuantity);
   const cartQuantity = useSessionStore((state) => state.cartQuantity);
+  const addressSummary = useSessionStore((state) => state.addressSummary);
   const { copy, dynamicCopy, journeyCopy, language } = useI18n();
   const productCopy = getProductCopy(asSupportedLanguage(language));
   const recommendationCopy = getRecommendationCopy(language);
@@ -206,7 +207,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
   }
 
   return (
-    <section className="order-flow" aria-label={copy.orderBuilder} data-testid="order-flow">
+    <section className={`order-flow phase-${phase}`} aria-label={copy.orderBuilder} data-testid="order-flow">
       <header>
         <div>
           <p className="eyebrow">{copy.orderBuilder}</p>
@@ -227,6 +228,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
       {phase === "options" && currentGroup && (
         <div className="decision-panel" data-testid={`option-group-${currentGroup.option_group_id}`}>
           <p className="step-count">{groupIndex + 1} of {groups.length}</p>
+          <div className="option-group-progress" aria-hidden="true">{groups.map((group, index) => <span className={index <= groupIndex ? "active" : ""} key={group.option_group_id} />)}</div>
           <h4>{language === "한국어" ? currentGroup.name_ko : currentGroup.name_en}</h4>
           <p>{language === "English" ? currentGroup.description : dynamicCopy.catalogDescription}</p>
           <div className="option-list">
@@ -243,6 +245,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
               return <div className="option-item-shell" key={option.option_item_id}>
                 <button
                   className={selections[currentGroup.option_group_id] === option.option_item_id ? "option-button selected" : "option-button"}
+                  aria-pressed={selections[currentGroup.option_group_id] === option.option_item_id}
                   onClick={() => void selectOption(currentGroup, option.option_item_id)}
                   disabled={busy || !option.available || breaksHalal || breaksVegan}
                 >
@@ -318,6 +321,10 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
         <div className="decision-panel cart-review" data-testid="cart-review">
           <p className="step-count">{copy.finalReview}</p>
           <h4>{journeyCopy.reviewTitle}</h4>
+          <section className="order-review-address">
+            <small>{copy.delivery}</small>
+            <strong>{addressSummary}</strong>
+          </section>
           {cart.items.map((item) => (
             <div className="cart-line" key={item.cart_item_id}>
               <div><strong>{language === "한국어" ? item.menu_name_ko : item.menu_name}</strong><small>{item.options.map((option) => language === "한국어" ? option.name_ko : option.name_en).join(", ")}</small></div>
@@ -335,6 +342,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
           <div className="price-row"><span>{journeyCopy.items}</span><span>₩{cart.subtotal.toLocaleString()}</span></div>
           <div className="price-row"><span>{copy.delivery}</span><span>₩{cart.delivery_fee.toLocaleString()}</span></div>
           <div className="price-row total"><span>{journeyCopy.total}</span><strong>₩{cart.total_price.toLocaleString()}</strong></div>
+          <p className="order-review-warning">{productCopy.handoff.boundary}</p>
           <section className="checkout-readiness" aria-label={copy.readyCheckout}>
             <h5>{copy.readyCheckout}</h5>
             <div className={!cart.missing_slots.includes("minimum_order_amount") ? "readiness-pass" : "readiness-fail"}><Check size={16} /><span><strong>{journeyCopy.restaurantMinimum}</strong><small>{cart.minimum_order_amount ? `₩${cart.subtotal.toLocaleString()} / ₩${cart.minimum_order_amount.toLocaleString()}${cart.minimum_order_shortfall ? ` · ${journeyCopy.add} ₩${cart.minimum_order_shortfall.toLocaleString()}` : ` · ${journeyCopy.met}`}` : journeyCopy.noMinimum}</small></span></div>

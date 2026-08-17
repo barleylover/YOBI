@@ -1,4 +1,4 @@
-import { Check, RotateCcw, Sparkles } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight } from "lucide-react";
 import { useMemo } from "react";
 import type {
   PreferenceCatalog,
@@ -33,6 +33,7 @@ interface Props {
   canSubmitUnchanged?: boolean;
   conversationMode?: boolean;
   conflictMessage: string;
+  onBack?: () => void;
   onChange: (criteria: RecommendationCriteriaV2) => void;
   onValidateAdd?: (criteria: RecommendationCriteriaV2) => Promise<boolean>;
   onComplete: () => void;
@@ -55,6 +56,7 @@ export function PreferenceSelector({
   canSubmitUnchanged = false,
   conversationMode = false,
   conflictMessage,
+  onBack,
   onChange,
   onValidateAdd,
   onComplete,
@@ -73,11 +75,14 @@ export function PreferenceSelector({
 
   const selectedCount = countCriteria(criteria);
   const groupCopy = getPreferenceGroupCopy(catalog.locale);
-  const groupedCategories = useMemo(() => ({
-    core: catalog.categories.filter((category) => category.group === "core"),
-    additional: catalog.categories.filter((category) => category.group === "additional"),
-    exact: catalog.categories.filter((category) => category.group === "exact"),
-  }), [catalog.categories]);
+  const primaryCategories = useMemo(() => catalog.categories.filter((category) => (
+    category.code === "cuisine_origins" || category.code === "main_ingredients"
+  )), [catalog.categories]);
+  const moreCategories = useMemo(() => catalog.categories.filter((category) => (
+    category.code !== "cuisine_origins" && category.code !== "main_ingredients"
+  )), [catalog.categories]);
+  const exactCategories = moreCategories.filter((category) => category.group === "exact");
+  const additionalCategories = moreCategories.filter((category) => category.group !== "exact");
   const ingredientCodes = new Set(criteria.main_ingredients);
   const hasConflict = (
     criteria.dietary_filters.halal_certified_only && ingredientCodes.has("PORK")
@@ -127,6 +132,48 @@ export function PreferenceSelector({
   }
 
   const completeEnabled = (selectedCount > 0 || canSubmitUnchanged) && !hasConflict;
+  const primarySelectedCount = primaryCategories.reduce((total, category) => total + criteria[category.code].length, 0);
+  const moreSelectedCount = Math.max(0, selectedCount - primarySelectedCount);
+
+  function optionGrid(category: PreferenceCatalogCategory) {
+    return (
+      <div className="preference-chip-grid">
+        {category.options.map((option) => {
+          const selected = criteria[category.code].includes(option.code);
+          return (
+            <button
+              type="button"
+              key={option.code}
+              data-option-code={option.code}
+              className={selected ? "preference-chip selected" : "preference-chip"}
+              aria-pressed={selected}
+              disabled={busy}
+              onClick={() => void toggle(category.code, option.code)}
+            >
+              {selected && <Check size={14} />}
+              <span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span>
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function inlineCategory(category: PreferenceCatalogCategory) {
+    return (
+      <section className="preference-category-inline" data-category={category.code} key={category.code}>
+        <header>
+          <h2>{category.label}</h2>
+          <div>
+            {criteria[category.code].length > 0 && <strong>{copy.selectedCount(criteria[category.code].length)}</strong>}
+            {criteria[category.code].length > 0 && <button type="button" onClick={() => clearCategory(category.code)}>{copy.clearCategory}</button>}
+            {criteria[category.code].length === 0 && <span>{copy.multiSelect}</span>}
+          </div>
+        </header>
+        {optionGrid(category)}
+      </section>
+    );
+  }
 
   function categoryPanel(category: PreferenceCatalogCategory, open = false) {
     return (
@@ -136,132 +183,96 @@ export function PreferenceSelector({
           <span>{copy.multiSelect}</span>
           {criteria[category.code].length > 0 && <button type="button" onClick={() => clearCategory(category.code)}>{copy.clearCategory}</button>}
         </div>
-        <div className="preference-chip-grid">
-          {category.options.map((option) => {
-            const selected = criteria[category.code].includes(option.code);
-            return (
-              <button
-                type="button"
-                key={option.code}
-                data-option-code={option.code}
-                className={selected ? "preference-chip selected" : "preference-chip"}
-                aria-pressed={selected}
-                disabled={busy}
-                onClick={() => void toggle(category.code, option.code)}
-              >
-                {selected && <Check size={14} />}
-                <span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span>
-              </button>
-            );
-          })}
-        </div>
+        {optionGrid(category)}
       </details>
     );
   }
 
   return (
-    <section className={conversationMode ? "preference-selector conversation-quick-replies" : "preference-selector"} aria-labelledby="preference-selector-title">
-      <header className={conversationMode ? "preference-selector-heading visually-hidden" : "preference-selector-heading"}>
-        <p className="eyebrow">{copy.selectorEyebrow}</p>
-        <h1 id="preference-selector-title">{copy.selectorTitle}</h1>
-        <p>{copy.selectorDescription}</p>
-        <span><Check size={14} /> {copy.multiSelect}</span>
+    <section className={conversationMode ? "preference-selector conversation-quick-replies figma-preference-selector" : "preference-selector"} aria-labelledby="preference-selector-title">
+      <header className="preference-mobile-header">
+        <div className="preference-mobile-nav">
+          <button type="button" aria-label={copy.editProfile} onClick={onBack} disabled={!onBack}><ChevronLeft size={20} /></button>
+          <strong>{copy.selectorEyebrow}</strong>
+          <button type="button" className="preference-clear-all" onClick={clearAll} disabled={busy || selectedCount === 0}>{copy.clearAll}</button>
+        </div>
+        <div className="mobile-step-progress" aria-hidden="true"><span className="active" /><span className="active" /><span /></div>
       </header>
 
-      <div className="preference-preview" aria-live="polite">
-        {previewLoading && <span>{copy.loadingChoices}</span>}
-        {!previewLoading && previewMessage && <span className={preview?.eligible_menu_count === 0 ? "warning" : ""}>{previewMessage}</span>}
-      </div>
+      <header className="preference-selector-heading">
+        <h1 id="preference-selector-title">{copy.selectorTitle}</h1>
+        <p>{copy.selectorDescription}</p>
+      </header>
 
-      {selectedLabels.length > 0 && (
+      {(selectedLabels.length > 0 || conversationMode) && (
         <section className="preference-summary" aria-label={copy.selectedSummary}>
           <div><strong>{copy.selectedSummary}</strong><span>{copy.selectedCount(selectedCount)}</span></div>
           <div className="preference-summary-tags">{selectedLabels.map((label, index) => <span key={`${label}-${index}`}>{label}</span>)}</div>
         </section>
       )}
 
-      <section className="preference-group" data-preference-group="core" aria-labelledby="preference-group-core">
-        <header><span>01</span><div><h2 id="preference-group-core">{groupCopy.core.title}</h2><p>{groupCopy.core.help}</p></div></header>
-        <div className="preference-category-list">
-          {groupedCategories.core.map((category, index) => categoryPanel(category, index < 2))}
-        </div>
+      <div className="preference-preview" aria-live="polite">
+        {previewLoading && <span>{copy.loadingChoices}</span>}
+        {!previewLoading && previewMessage && <span className={preview?.eligible_menu_count === 0 ? "warning" : ""}>{previewMessage}</span>}
+      </div>
+
+      <section data-preference-group="core">
+        <h2 className="visually-hidden">{groupCopy.core.title}</h2>
+        <p className="visually-hidden">{groupCopy.core.help}</p>
+        <div className="preference-primary-categories">{primaryCategories.map(inlineCategory)}</div>
       </section>
 
-      <section className="preference-group" data-preference-group="additional" aria-labelledby="preference-group-additional">
-        <header><span>02</span><div><h2 id="preference-group-additional">{groupCopy.additional.title}</h2><p>{groupCopy.additional.help}</p></div></header>
-        <div className="preference-category-list">
-          {groupedCategories.additional.map((category) => categoryPanel(category))}
-        </div>
-      </section>
+      <details className="preference-more-panel">
+        <summary>
+          <div><strong>{groupCopy.additional.title}</strong><small>{groupCopy.additional.help}</small></div>
+          {moreSelectedCount > 0 && <em>{moreSelectedCount}</em>}
+          <ChevronRight size={18} />
+        </summary>
+        <div className="preference-more-content">
+          <aside className="preference-meaning-guide" aria-labelledby="preference-meaning-title">
+            <strong id="preference-meaning-title">{groupCopy.semanticTitle}</strong>
+            <p>{groupCopy.semanticHelp}</p>
+          </aside>
+          <section data-preference-group="additional">
+            <h2 className="visually-hidden">{groupCopy.additional.title}</h2>
+            <div className="preference-category-list">{additionalCategories.map((category) => categoryPanel(category))}</div>
+          </section>
 
-      <section className="preference-group preference-group-exact" data-preference-group="exact" aria-labelledby="preference-group-exact">
-        <header><span>03</span><div><h2 id="preference-group-exact">{groupCopy.exact.title}</h2><p>{groupCopy.exact.help}</p></div></header>
-        <aside className="preference-meaning-guide" aria-labelledby="preference-meaning-title">
-          <strong id="preference-meaning-title">{groupCopy.semanticTitle}</strong>
-          <p>{groupCopy.semanticHelp}</p>
-        </aside>
-        <div className="preference-category-list">
-          {groupedCategories.exact.map((category) => categoryPanel(category, true))}
-        </div>
+          <section data-preference-group="exact">
+            <h2 className="visually-hidden">{groupCopy.exact.title}</h2>
+            <div className="preference-category-list">{exactCategories.map((category) => categoryPanel(category))}</div>
+            <fieldset className="preference-dietary">
+            <legend>{copy.dietaryTitle}</legend>
+            <label className={criteria.dietary_filters.halal_certified_only ? "dietary-toggle selected" : "dietary-toggle"}>
+              <input type="checkbox" checked={criteria.dietary_filters.halal_certified_only} disabled={busy || catalog.capabilities?.halal_certified_only?.enabled === false} onChange={(event) => void changeDietary("halal_certified_only", event.target.checked)} />
+              <span><strong>{copy.halal}</strong><small>{capabilityReason(catalog.capabilities?.halal_certified_only, copy.halalHelp, "검증 가능한 공식 인증 정보가 없어 현재 사용할 수 없습니다.")}</small></span>
+            </label>
+            <label className={criteria.dietary_filters.vegan ? "dietary-toggle selected" : "dietary-toggle"}>
+              <input type="checkbox" checked={criteria.dietary_filters.vegan} disabled={busy || catalog.capabilities?.vegan?.enabled === false} onChange={(event) => void changeDietary("vegan", event.target.checked)} />
+              <span><strong>{copy.vegan}</strong><small>{capabilityReason(catalog.capabilities?.vegan, copy.veganHelp, "검토된 메뉴별 재료 정보가 없어 현재 사용할 수 없습니다.")}</small></span>
+            </label>
+            </fieldset>
 
-        <fieldset className="preference-dietary">
-          <legend>{copy.dietaryTitle}</legend>
-          <label className={criteria.dietary_filters.halal_certified_only ? "dietary-toggle selected" : "dietary-toggle"}>
-            <input
-              type="checkbox"
-              checked={criteria.dietary_filters.halal_certified_only}
-              disabled={busy || catalog.capabilities?.halal_certified_only?.enabled === false}
-              onChange={(event) => void changeDietary("halal_certified_only", event.target.checked)}
+            <SpiceReferenceScale
+              value={criteria.max_spice_level}
+              country={criteria.spice_reference_country}
+              references={catalog.spice_references}
+              copy={copy}
+              disabled={busy || catalog.capabilities?.max_spice_level?.enabled === false}
+              onChange={(max_spice_level) => onChange({ ...criteria, max_spice_level })}
+              onCountryChange={(spice_reference_country) => onChange({ ...criteria, spice_reference_country })}
             />
-            <span><strong>{copy.halal}</strong><small>{capabilityReason(
-              catalog.capabilities?.halal_certified_only,
-              copy.halalHelp,
-              "검증 가능한 공식 인증 정보가 없어 현재 사용할 수 없습니다.",
-            )}</small></span>
-          </label>
-          <label className={criteria.dietary_filters.vegan ? "dietary-toggle selected" : "dietary-toggle"}>
-            <input
-              type="checkbox"
-              checked={criteria.dietary_filters.vegan}
-              disabled={busy || catalog.capabilities?.vegan?.enabled === false}
-              onChange={(event) => void changeDietary("vegan", event.target.checked)}
-            />
-            <span><strong>{copy.vegan}</strong><small>{capabilityReason(
-              catalog.capabilities?.vegan,
-              copy.veganHelp,
-              "검토된 메뉴별 재료 정보가 없어 현재 사용할 수 없습니다.",
-            )}</small></span>
-          </label>
-        </fieldset>
-
-        <SpiceReferenceScale
-          value={criteria.max_spice_level}
-          country={criteria.spice_reference_country}
-          references={catalog.spice_references}
-          copy={copy}
-          disabled={busy || catalog.capabilities?.max_spice_level?.enabled === false}
-          onChange={(max_spice_level) => {
-            onChange({ ...criteria, max_spice_level });
-          }}
-          onCountryChange={(spice_reference_country) => {
-            onChange({ ...criteria, spice_reference_country });
-          }}
-        />
-        {catalog.capabilities?.max_spice_level?.enabled === false && (
-          <p className="preference-capability-note" role="status">{capabilityReason(
-            catalog.capabilities.max_spice_level,
-            copy.spiceHelp,
-            "검토된 메뉴별 맵기 정보가 없어 현재 사용할 수 없습니다.",
-          )}</p>
-        )}
-      </section>
+            {catalog.capabilities?.max_spice_level?.enabled === false && <p className="preference-capability-note" role="status">{capabilityReason(catalog.capabilities.max_spice_level, copy.spiceHelp, "검토된 메뉴별 맵기 정보가 없어 현재 사용할 수 없습니다.")}</p>}
+          </section>
+        </div>
+      </details>
 
       {hasConflict && <p className="preference-conflict" role="alert">{conflictMessage}</p>}
 
       <footer className="preference-submit-bar">
-        <div><strong>{copy.selectedCount(selectedCount)}</strong><small>{copy.noHiddenRelaxation}</small></div>
-        <button type="button" className="text-button" onClick={clearAll} disabled={busy || selectedCount === 0}><RotateCcw size={16} /> {copy.clearAll}</button>
-        <button type="button" className="primary-button" onClick={onComplete} disabled={busy || !completeEnabled}><Sparkles size={18} /> {copy.complete}</button>
+        <button type="button" className="primary-button" onClick={onComplete} disabled={busy || !completeEnabled}>
+          {copy.complete}{preview?.eligible_menu_count ? ` · ${preview.eligible_menu_count.toLocaleString()}` : ""}
+        </button>
       </footer>
     </section>
   );

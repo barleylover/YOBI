@@ -10,8 +10,8 @@ export async function startStructuredSession(page: Page, korean = false) {
     await countrySelect.selectOption("South Korea");
     await page.getByRole("button", { name: "시작하기" }).click();
   } else {
-    await expect(page.getByRole("heading", { name: /Hi, I’m YOBI/ })).toBeVisible();
-    await page.getByRole("button", { name: "Get started!" }).click();
+    await expect(page.getByRole("heading", { name: /Korean food, made easy/ })).toBeVisible();
+    await page.getByRole("button", { name: "Get started" }).click();
   }
   await expect(page).toHaveURL(/\/profile/);
   await page.getByRole("checkbox", { name: korean ? /중립 프로필/ : /neutral profile/ }).check();
@@ -22,6 +22,8 @@ export async function startStructuredSession(page: Page, korean = false) {
 }
 
 export async function selectFirstPricePreference(page: Page) {
+  const morePanel = page.locator("details.preference-more-panel");
+  if (await morePanel.getAttribute("open") === null) await morePanel.locator(":scope > summary").click();
   const priceCategory = page.locator("[data-category='price_bands']");
   if (await priceCategory.getAttribute("open") === null) await priceCategory.locator("summary").click();
   const firstChip = priceCategory.locator(".preference-chip:visible").first();

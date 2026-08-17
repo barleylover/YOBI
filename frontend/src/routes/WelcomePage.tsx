@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight, Languages, MapPin, MapPinned, ShieldCheck, Sparkles } from "lucide-react";
+import { ArrowLeft, Languages, MapPinned } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
@@ -10,6 +10,7 @@ import {
 } from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
 import { useSessionStore } from "../stores/session";
+import { YobiLogoMark } from "../components/YobiVisualAssets";
 
 export function WelcomePage() {
   const navigate = useNavigate();
@@ -53,33 +54,22 @@ export function WelcomePage() {
   }
 
   return (
-    <main className="welcome-shell">
-      <section className="welcome-card">
+    <main className="welcome-shell figma-welcome-shell">
+      <section className="welcome-card figma-welcome-card">
         <header className="welcome-brand">
-          <div className="brand-mark">YO<span>BI</span></div>
-          <span>{productCopy.entry.benefitFlavor}</span>
+          <YobiLogoMark className="welcome-logo-mark" />
+          {editMode && (
+            <button className="text-button welcome-back" type="button" onClick={() => navigate(returnTo)}>
+              <ArrowLeft size={17} /> {productCopy.handoff.back}
+            </button>
+          )}
         </header>
 
-        {editMode && (
-          <button className="text-button welcome-back" type="button" onClick={() => navigate(returnTo)}>
-            <ArrowLeft size={17} /> {productCopy.handoff.back}
-          </button>
-        )}
-
         <div className="welcome-content">
-          <div className="welcome-hero">
-            <div className="yobi-avatar" aria-hidden="true">Y</div>
-            <h1>{productCopy.entry.heroTitle}<span>{productCopy.entry.heroBuddy}</span></h1>
-          </div>
-          <section className="welcome-pitch">
-            <h2>{productCopy.entry.pitchTitle}</h2>
+          <section className="welcome-hero">
+            <h1>{productCopy.entry.heroTitle}</h1>
             <p>{productCopy.entry.pitchDescription}</p>
           </section>
-          <div className="welcome-benefits">
-            <span><Sparkles size={16} /> {productCopy.entry.benefitFlavor}</span>
-            <span><ShieldCheck size={16} /> {productCopy.entry.benefitDietary}</span>
-            <span><MapPin size={16} /> {productCopy.entry.benefitDelivery}</span>
-          </div>
 
           <section className="welcome-locale" aria-label={`${productCopy.entry.languageLabel} · ${productCopy.entry.countryLabel}`}>
             <label>
@@ -101,13 +91,13 @@ export function WelcomePage() {
         </div>
 
         <footer>
+          <button className="primary-button welcome-cta" type="button" onClick={start}>
+            {productCopy.entry.start}
+          </button>
           <div>
             <p>{productCopy.entry.localeApplies}</p>
             <p>{productCopy.entry.experienceNotice}</p>
           </div>
-          <button className="primary-button welcome-cta" type="button" onClick={start}>
-            {productCopy.entry.start} <ArrowRight size={20} />
-          </button>
         </footer>
       </section>
     </main>
