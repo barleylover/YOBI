@@ -8,7 +8,6 @@ import {
   Pencil,
   RotateCcw,
   Search,
-  Soup,
   Sparkles,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -28,6 +27,7 @@ import {
   carouselIndexFromOffset,
   carouselOffsetForIndex,
 } from "../lib/carouselScroll";
+import { YOBI_FOOD_ILLUSTRATION, YobiBotAvatar } from "./YobiVisualAssets";
 
 interface Props {
   batch: RecommendationBatchV2;
@@ -119,7 +119,7 @@ export function RecommendationResults({
   return (
     <section className="recommendation-results chat-result-experience" aria-labelledby="recommendation-results-title">
       <div className="assistant-message-row">
-        <div className="assistant-avatar" aria-hidden="true">Y</div>
+        <div className="assistant-avatar" aria-hidden="true"><YobiBotAvatar /></div>
         <div className="assistant-message-stack">
           <strong className="assistant-name">{productCopy.assistantName}</strong>
           <section className={isFallback ? "assistant-bubble result fallback" : "assistant-bubble result"}>
@@ -162,14 +162,17 @@ export function RecommendationResults({
               setActiveIndex(carouselIndexFromOffset(element, batch.recommendations.length - 1));
             }}
           >
-            {batch.recommendations.map((item) => {
+            {batch.recommendations.map((item, index) => {
               const evidenceVisible = evidenceOpen.has(item.menu.menu_id);
               const foodDescription = item.description || item.menu.cultural_description || item.menu.description;
               return (
                 <article className="structured-menu-card" key={item.menu.menu_id} data-testid={`menu-${item.menu.menu_id}`}>
-                  <div className="menu-artwork" aria-label={`${productCopy.foodDescription} · YOBI`} role="img">
-                    <Soup size={42} />
-                    <span>YOBI K-FOOD</span>
+                  <header className="menu-card-strip">
+                    <strong>YOBI PICK ARRIVED</strong>
+                    <span>{index + 1} / {batch.recommendations.length}</span>
+                  </header>
+                  <div className="menu-artwork">
+                    <img src={item.menu.image_url || YOBI_FOOD_ILLUSTRATION} alt="" aria-hidden="true" />
                   </div>
                   <div className="structured-menu-content">
                     <div className="structured-menu-title-row">
@@ -226,7 +229,7 @@ export function RecommendationResults({
 
       {comparisonOpen && (
         <div className="assistant-message-row comparison-message">
-          <div className="assistant-avatar" aria-hidden="true">Y</div>
+          <div className="assistant-avatar" aria-hidden="true"><YobiBotAvatar /></div>
           <div className="assistant-message-stack">
             <strong className="assistant-name">{productCopy.assistantName}</strong>
             <section className="assistant-bubble comparison" aria-live="polite">

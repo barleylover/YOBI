@@ -6,6 +6,7 @@ import {
   Flame,
   ListOrdered,
   Star,
+  UserRound,
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -13,6 +14,7 @@ import { actionableError, api } from "../lib/api";
 import { getDynamicCopy } from "../lib/i18n";
 import { asSupportedLanguage, menuName } from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
+import { getRecommendationCopy } from "../lib/recommendationI18n";
 import {
   carouselDeltaForArrow,
   carouselIndexFromOffset,
@@ -30,16 +32,18 @@ interface Props {
   language: string;
   locale: string;
   disabled?: boolean;
+  onEditProfile?: () => void;
   onChoose: (menu: MenuSummary, snapshotId: string) => void | Promise<void>;
 }
 
 type DiscoveryView = "rankings" | "feature" | null;
 
-export function PostAddressNavigation({ sessionId, language, locale, disabled = false, onChoose }: Props) {
+export function PostAddressNavigation({ sessionId, language, locale, disabled = false, onEditProfile, onChoose }: Props) {
   const productCopy = getProductCopy(asSupportedLanguage(language));
   const dynamicCopy = getDynamicCopy(asSupportedLanguage(language));
   const copy = productCopy.navigation;
   const recommendationCopy = productCopy.recommendation;
+  const selectionCopy = getRecommendationCopy(asSupportedLanguage(language));
   const navRef = useRef<HTMLElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const dialogCloseRef = useRef<HTMLButtonElement>(null);
@@ -253,6 +257,7 @@ export function PostAddressNavigation({ sessionId, language, locale, disabled = 
       <nav ref={navRef} className={expanded ? "post-address-nav expanded" : "post-address-nav"} aria-label={copy.expand.replace(/\s[+]$/, "")}>
         {expanded && (
           <div className="discovery-nav-actions">
+            {onEditProfile && <button className="discovery-profile-action" type="button" onClick={() => { setExpanded(false); onEditProfile(); }}><UserRound size={22} /> {selectionCopy.editProfile}</button>}
             <button type="button" onClick={() => setView("rankings")} disabled={disabled}><ListOrdered size={18} /> {copy.foodRankings}</button>
             <button type="button" onClick={() => setView("feature")} disabled={disabled}><Star size={18} /> {copy.feature}</button>
           </div>
@@ -264,7 +269,7 @@ export function PostAddressNavigation({ sessionId, language, locale, disabled = 
           aria-label={expanded ? copy.collapse : copy.expand}
           onClick={() => setExpanded((value) => !value)}
         >
-          {expanded ? <ChevronDown size={22} /> : <ChevronUp size={22} />}
+          <span>{copy.expand.replace(/\s[+]$/, "")}</span>{expanded ? <ChevronDown size={20} /> : <ChevronUp size={20} />}
         </button>
       </nav>
     </>

@@ -90,26 +90,26 @@ export interface ProductCopy {
 }
 
 const entryEn: EntryCopy = {
-  heroTitle: "Hi, I’m YOBI!",
+  heroTitle: "Korean food, made easy for you",
   heroBuddy: "Your Korean food buddy.",
-  pitchTitle: "Order K-food with context, not guesswork.",
-  pitchDescription: "Choose the cuisines, flavours, ingredients and food styles you want, then confirm where the food should arrive. YOBI uses those choices to prepare your recommendations.",
+  pitchTitle: "Korean food, made easy for you",
+  pitchDescription: "Tell YOBI what you are craving. Every pick is checked for your diet, spice limit and budget — with sources you can verify.",
   benefitFlavor: "Understand flavour & texture",
   benefitDietary: "Use halal & vegan guidance",
   benefitDelivery: "Check delivery before choosing",
   languageLabel: "Language",
   countryLabel: "Country",
   countryHelp: (language) => `Countries commonly using ${language} appear first.`,
-  start: "Get started!",
+  start: "Get started",
   localeApplies: "Language applies to recommendations, ordering and the pre-payment handoff.",
   experienceNotice: "Restaurant and order information is prepared for this experience. No real order or charge is made.",
 };
 
 const entryKo: EntryCopy = {
-  heroTitle: "안녕하세요, YOBI예요!",
+  heroTitle: "한국 음식, YOBI가 쉽게 골라드려요",
   heroBuddy: "당신의 한국 음식 친구.",
-  pitchTitle: "추측 대신 맥락으로 한국 음식을 골라보세요.",
-  pitchDescription: "원하는 음식 계통, 맛, 재료와 형태를 고르고 배달받을 장소를 확인하세요. YOBI가 선택한 조건을 바탕으로 추천을 준비합니다.",
+  pitchTitle: "한국 음식, YOBI가 쉽게 골라드려요",
+  pitchDescription: "먹고 싶은 느낌을 알려주세요. 식단, 맵기, 예산 조건을 확인하고 직접 검증할 수 있는 근거와 함께 추천해 드려요.",
   benefitFlavor: "맛과 식감 이해하기",
   benefitDietary: "할랄·비건 안내 확인하기",
   benefitDelivery: "메뉴 선택 전 배달 확인하기",

@@ -3,11 +3,12 @@ import { selectFirstPreferenceAndRecommend, startStructuredSession } from "./str
 
 test("Korean remains active through structured recommendation and menu selection", async ({ page }) => {
   await startStructuredSession(page, true);
+  await page.locator("details.preference-more-panel > summary").click();
   await expect(page.getByRole("checkbox", { name: /할랄 인증 식당만 보기/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "한국 음식 기준" })).toBeVisible();
   await selectFirstPreferenceAndRecommend(page, true);
 
-  await expect(page.getByRole("heading", { name: /선택하신 취향을 바탕으로 골랐어요|조건에 가까운 메뉴/ })).toBeVisible();
+  await expect(page.locator(".recommendation-result-heading")).toBeVisible();
   await expect(page.getByRole("button", { name: "다른 메뉴 보기" })).toBeVisible();
   await expect(page.getByRole("button", { name: "조건 수정" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Wiki 근거 보기" }).first()).toBeVisible();

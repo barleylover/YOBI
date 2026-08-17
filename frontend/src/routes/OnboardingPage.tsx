@@ -1,5 +1,5 @@
 import { ChangeEvent, FormEvent, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Building2, ImageUp, MapPin, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, ImageUp, MapPin, Search } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { actionableError, api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
@@ -85,8 +85,7 @@ export function OnboardingPage() {
     }
   }
 
-  async function findAddress(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function findAddress() {
     setLoading(true);
     setError("");
     setCandidates([]);
@@ -107,17 +106,26 @@ export function OnboardingPage() {
   }
 
   async function confirmCandidate(candidate: AddressCandidate) {
-    if (!createdContext) return;
     setLoading(true);
     setError("");
     try {
-      const result = await api.confirmAddress(createdContext.session.session_id, candidate);
-      finish(result.address_ref_id, `${candidate.hotel_name} · ${candidate.road_address}`, createdContext.session);
+      const context = createdContext ?? await ensureContext();
+      const result = await api.confirmAddress(context.session.session_id, candidate);
+      finish(result.address_ref_id, `${candidate.hotel_name} · ${candidate.road_address}`, context.session);
     } catch (cause) {
       setError(language === "English" ? actionableError(cause, selectionCopy.confirmError) : selectionCopy.confirmError);
     } finally {
       setLoading(false);
     }
+  }
+
+  async function submitAddress(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (candidates.length > 0) {
+      await confirmCandidate(candidates[0]);
+      return;
+    }
+    await findAddress();
   }
 
   async function loadDemoBooking() {
@@ -151,30 +159,28 @@ export function OnboardingPage() {
   const addressReady = addressMode === "search" ? searchQuery.trim().length > 0 : Boolean(addressImage);
 
   return (
-    <main className="onboarding-shell profile-only">
-      <form className="onboarding-card simplified-address-card" onSubmit={findAddress}>
-        <div className="profile-card-heading">
-          <div>
-            <div className="step-label">{productCopy.address.step}</div>
-            <h2>{productCopy.address.title}</h2>
-          </div>
+    <main className="onboarding-shell profile-only figma-address-shell">
+      <form className="onboarding-card simplified-address-card figma-address-card" onSubmit={submitAddress}>
+        <header className="mobile-step-header">
           <button
             type="button"
-            className="text-button"
+            className="mobile-step-back"
+            aria-label={productCopy.address.changeLocale}
             onClick={() => navigate(editMode ? `/?edit=1&returnTo=${encodeURIComponent(returnTo)}` : "/")}
           >
-            <ArrowLeft size={16} /> {productCopy.address.changeLocale}
+            <ChevronLeft size={20} />
           </button>
-        </div>
+          <strong>{productCopy.address.step}</strong>
+        </header>
+        <div className="mobile-step-progress" aria-hidden="true"><span className="active" /><span /><span /></div>
 
-        <p className="address-intro">{productCopy.address.description}</p>
+        <section className="address-screen-heading">
+          <h1>{productCopy.address.title}</h1>
+          <p className="address-intro">{productCopy.address.description}</p>
+        </section>
 
         <section className="onboarding-address" aria-labelledby="delivery-address-title">
-          <div className="address-heading">
-            <MapPin size={19} />
-            <div><p className="eyebrow">{productCopy.address.step}</p><h3 id="delivery-address-title">{productCopy.address.title}</h3></div>
-          </div>
-          <p className="demo-address-notice"><ShieldNotice /> {productCopy.address.demoNotice}</p>
+          <h2 id="delivery-address-title" className="visually-hidden">{productCopy.address.title}</h2>
 
           {editMode && addressRefId && (
             <article className="current-address">
@@ -206,7 +212,7 @@ export function OnboardingPage() {
           {addressMode === "search" && (
             <label role="tabpanel">
               {productCopy.address.searchLabel}
-              <div className="address-search-field"><Search size={18} /><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder={productCopy.address.searchPlaceholder} /></div>
+              <div className="address-search-field"><Search size={18} /><input value={searchQuery} onChange={(event) => { setSearchQuery(event.target.value); setCandidates([]); }} placeholder={productCopy.address.searchPlaceholder} /></div>
             </label>
           )}
 
@@ -224,14 +230,13 @@ export function OnboardingPage() {
             </div>
           )}
 
-          {addressNotice && <p className="notice-copy" role="status">{addressNotice}</p>}
+          <p className="notice-copy" role="status">{addressNotice || productCopy.address.demoNotice}</p>
           <div ref={candidateRef} className="address-results">
             {candidates.map((candidate) => (
               <article className="address-candidate" key={candidate.place_id}>
-                <Building2 size={20} />
                 <div><strong>{candidate.hotel_name}</strong><p>{candidate.road_address}</p></div>
-                <button type="button" className="primary-button" onClick={() => void confirmCandidate(candidate)} disabled={loading}>
-                  {productCopy.address.select}
+                <button type="button" className="address-candidate-select" onClick={() => void confirmCandidate(candidate)} disabled={loading}>
+                  <span className="visually-hidden">{productCopy.address.select}</span><ChevronRight size={18} />
                 </button>
               </article>
             ))}
@@ -243,14 +248,10 @@ export function OnboardingPage() {
           <span>{productCopy.address.consent}</span>
         </label>
         {error && <p className="form-error" role="alert">{error}</p>}
-        <button className="primary-button full large" disabled={!consent || !addressReady || loading}>
-          {loading ? selectionCopy.checkingContext : productCopy.address.check}<ArrowRight size={19} />
+        <button className="primary-button full large address-submit" disabled={!consent || (!candidates.length && !addressReady) || loading}>
+          {loading ? selectionCopy.checkingContext : candidates.length ? productCopy.address.select : productCopy.address.check}
         </button>
       </form>
     </main>
   );
-}
-
-function ShieldNotice() {
-  return <span aria-hidden="true">ⓘ</span>;
 }
