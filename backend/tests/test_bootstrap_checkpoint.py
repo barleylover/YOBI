@@ -64,12 +64,14 @@ def test_runtime_environment_can_resume_and_upgrade_release_policy(
     assert bootstrap.load_runtime_env() is True
     assert os.environ["ADB_DSN"] == "synthetic-dsn"
     persisted = runtime_env.read_text(encoding="utf-8")
-    assert 'LLM_MAX_RETRIES="1"' in persisted
-    assert 'LLM_MAX_RETRIES="0"' not in persisted
-    assert 'EMBEDDING_PROVIDER="deterministic"' in persisted
-    assert 'STRUCTURED_RECOMMENDATION_MODEL="openai.gpt-oss-120b"' in persisted
-    assert 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="2048"' in persisted
+    assert persisted.count('LLM_MAX_RETRIES="0"') == 1
+    assert 'EMBEDDING_PROVIDER="oci"' in persisted
+    assert 'STRUCTURED_RECOMMENDATION_MODEL="xai.grok-4.3"' in persisted
+    assert 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="4096"' in persisted
     assert 'STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS="2"' in persisted
+    assert 'RECOMMENDATION_CANDIDATE_LIMIT="100"' in persisted
+    assert 'RECOMMENDATION_LLM_SHORTLIST_LIMIT="15"' in persisted
+    assert 'RECOMMENDATION_LLM_SELECTION_ENABLED="true"' in persisted
     assert 'DB_PASSWORD="synthetic-password"' in persisted
     assert stat.S_IMODE(runtime_env.stat().st_mode) == 0o600
     captured = capsys.readouterr()
@@ -86,33 +88,38 @@ def test_runtime_environment_can_resume_and_upgrade_release_policy(
         "STRUCTURED_RECOMMENDATION_MODEL",
         "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS",
         "STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS",
+        "RECOMMENDATION_CANDIDATE_LIMIT",
+        "RECOMMENDATION_LLM_SHORTLIST_LIMIT",
+        "RECOMMENDATION_LLM_SELECTION_ENABLED",
+        "OCI_GENAI_STRUCTURED_OUTPUT_ENABLED",
+        "OCI_GENAI_STREAMING_ENABLED",
     ):
         os.environ.pop(key, None)
 
 
 def test_retry_policy_matches_settings_and_runtime_restore() -> None:
-    assert bootstrap.Settings.model_fields["llm_max_retries"].default == 1
-    assert "quote('1')" in inspect.getsource(bootstrap.write_env)
-    assert '"LLM_MAX_RETRIES": "1"' in inspect.getsource(bootstrap.main)
+    assert bootstrap.Settings.model_fields["llm_max_retries"].default == 0
+    assert "quote('0')" in inspect.getsource(bootstrap.write_env)
+    assert '"LLM_MAX_RETRIES": "0"' in inspect.getsource(bootstrap.main)
     restore = (ROOT / "deploy" / "restore_runtime_env.sh").read_text(encoding="utf-8")
-    assert "LLM_MAX_RETRIES=\"1\"" in restore
-    assert "LLM_MAX_RETRIES=\"0\"" not in restore
+    assert "LLM_MAX_RETRIES=\"0\"" in restore
+    assert "LLM_MAX_RETRIES=\"1\"" not in restore
     assert bootstrap.Settings.model_fields["embedding_provider"].default == "deterministic"
-    assert "quote('deterministic')" in inspect.getsource(bootstrap.write_env)
-    assert 'EMBEDDING_PROVIDER="deterministic"' in restore
+    assert "quote('oci')" in inspect.getsource(bootstrap.write_env)
+    assert 'EMBEDDING_PROVIDER="oci"' in restore
     assert 'OCI_GENAI_MAX_INPUT_TOKENS="131072"' in restore
     assert 'LLM_MAX_INPUT_TOKENS="131072"' in restore
     assert 'OCI_GENAI_MAX_OUTPUT_TOKENS="4096"' in restore
     assert 'LLM_MAX_OUTPUT_TOKENS="4096"' in restore
     assert (
         bootstrap.Settings.model_fields["structured_recommendation_model"].default
-        == "openai.gpt-oss-120b"
+        == "xai.grok-4.3"
     )
     assert (
         bootstrap.Settings.model_fields[
             "structured_recommendation_max_output_tokens"
         ].default
-        == 2048
+        == 4096
     )
     assert (
         bootstrap.Settings.model_fields[
@@ -122,15 +129,20 @@ def test_retry_policy_matches_settings_and_runtime_restore() -> None:
     )
     write_source = inspect.getsource(bootstrap.write_env)
     main_source = inspect.getsource(bootstrap.main)
-    assert "STRUCTURED_RECOMMENDATION_MODEL={quote('openai.gpt-oss-120b')}" in write_source
-    assert "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS={quote('2048')}" in write_source
+    assert "STRUCTURED_RECOMMENDATION_MODEL={quote('xai.grok-4.3')}" in write_source
+    assert "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS={quote('4096')}" in write_source
     assert "STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS={quote('2')}" in write_source
-    assert '"STRUCTURED_RECOMMENDATION_MODEL": "openai.gpt-oss-120b"' in main_source
-    assert '"STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS": "2048"' in main_source
+    assert '"STRUCTURED_RECOMMENDATION_MODEL": "xai.grok-4.3"' in main_source
+    assert '"STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS": "4096"' in main_source
     assert '"STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS": "2"' in main_source
-    assert 'STRUCTURED_RECOMMENDATION_MODEL="openai.gpt-oss-120b"' in restore
-    assert 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="2048"' in restore
+    assert 'STRUCTURED_RECOMMENDATION_MODEL="xai.grok-4.3"' in restore
+    assert 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="4096"' in restore
     assert 'STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS="2"' in restore
+    assert 'RECOMMENDATION_CANDIDATE_LIMIT="100"' in restore
+    assert 'RECOMMENDATION_LLM_SHORTLIST_LIMIT="15"' in restore
+    assert 'RECOMMENDATION_LLM_SELECTION_ENABLED="true"' in restore
+    assert 'OCI_GENAI_STRUCTURED_OUTPUT_ENABLED="false"' in restore
+    assert 'OCI_GENAI_STREAMING_ENABLED="false"' in restore
 
 
 def test_grok_43_release_envelope_is_persisted() -> None:
@@ -147,6 +159,8 @@ def test_grok_43_release_envelope_is_persisted() -> None:
         "STRUCTURED_RECOMMENDATION_MODEL",
         "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS",
         "STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS",
+        "OCI_GENAI_STRUCTURED_OUTPUT_ENABLED",
+        "OCI_GENAI_STREAMING_ENABLED",
     ):
         assert key in source
 
@@ -211,6 +225,11 @@ def test_runtime_environment_load_disables_interpolation_and_execution(
             "STRUCTURED_RECOMMENDATION_MODEL",
             "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS",
             "STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS",
+            "RECOMMENDATION_CANDIDATE_LIMIT",
+            "RECOMMENDATION_LLM_SHORTLIST_LIMIT",
+            "RECOMMENDATION_LLM_SELECTION_ENABLED",
+            "OCI_GENAI_STRUCTURED_OUTPUT_ENABLED",
+            "OCI_GENAI_STREAMING_ENABLED",
         ):
             os.environ.pop(key, None)
 
@@ -230,6 +249,8 @@ def test_bootstrap_requires_every_migration_shipped_in_the_release() -> None:
     assert records["009"][0] == "009_cart_confirmation_fingerprint.sql"
     assert records["010"][0] == "010_structured_hybrid_rag_recommendation.sql"
     assert records["011"][0] == "011_external_catalog_import.sql"
+    assert records["012"][0] == "012_concept_preference_support_and_server_ranking.sql"
+    assert records["013"][0] == "013_menu_preference_features_and_hybrid_rank.sql"
     assert all(len(checksum) == 64 for _, checksum in records.values())
 
 

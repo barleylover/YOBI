@@ -272,6 +272,20 @@ def test_menu_classification_is_total_conservative_and_provenance_explicit() -> 
     )
 
 
+def test_equivalent_alias_spellings_have_a_deterministic_source_reference() -> None:
+    compiled = compile_external_release("catalog-test-v1")
+
+    row = classify_menus(
+        [_menu("squid", "오징어튀김", "튀김")],
+        compiled,
+    )[0]
+
+    assert row["concept_id"] == "dish_fried_squid"
+    assert row["source_ref"].startswith(
+        "yobi-reviewed-name-map-v4:alias=오징어 튀김:"
+    )
+
+
 def test_support_manifest_is_reviewed_grounded_and_deterministic() -> None:
     compiled = compile_external_release("catalog-test-v1")
     first = build_support_rows(compiled)

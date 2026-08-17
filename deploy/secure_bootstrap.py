@@ -18,19 +18,24 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_ENV = Path("/etc/yobi/yobi.env")
 CHECKPOINT = Path("/opt/yobi/shared/control/bootstrap_state.json")
 LEGACY_CHECKPOINT = Path("/opt/yobi/shared/bootstrap_state.json")
-RUNTIME_RETRY_POLICY = 'LLM_MAX_RETRIES="1"'
-RUNTIME_EMBEDDING_POLICY = 'EMBEDDING_PROVIDER="deterministic"'
+RUNTIME_RETRY_POLICY = 'LLM_MAX_RETRIES="0"'
+RUNTIME_EMBEDDING_POLICY = 'EMBEDDING_PROVIDER="oci"'
 RUNTIME_OCI_INPUT_POLICY = 'OCI_GENAI_MAX_INPUT_TOKENS="131072"'
 RUNTIME_LLM_INPUT_POLICY = 'LLM_MAX_INPUT_TOKENS="131072"'
 RUNTIME_OCI_OUTPUT_POLICY = 'OCI_GENAI_MAX_OUTPUT_TOKENS="4096"'
 RUNTIME_LLM_OUTPUT_POLICY = 'LLM_MAX_OUTPUT_TOKENS="4096"'
+RUNTIME_STRUCTURED_OUTPUT_MODE_POLICY = 'OCI_GENAI_STRUCTURED_OUTPUT_ENABLED="false"'
+RUNTIME_STREAMING_POLICY = 'OCI_GENAI_STREAMING_ENABLED="false"'
 RUNTIME_STRUCTURED_MODEL_POLICY = (
-    'STRUCTURED_RECOMMENDATION_MODEL="openai.gpt-oss-120b"'
+    'STRUCTURED_RECOMMENDATION_MODEL="xai.grok-4.3"'
 )
-RUNTIME_STRUCTURED_OUTPUT_POLICY = 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="2048"'
+RUNTIME_STRUCTURED_OUTPUT_POLICY = 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="4096"'
 RUNTIME_STRUCTURED_CONCURRENCY_POLICY = (
     'STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS="2"'
 )
+RUNTIME_RECOMMENDATION_CANDIDATE_POLICY = 'RECOMMENDATION_CANDIDATE_LIMIT="100"'
+RUNTIME_RECOMMENDATION_SHORTLIST_POLICY = 'RECOMMENDATION_LLM_SHORTLIST_LIMIT="15"'
+RUNTIME_RECOMMENDATION_SELECTION_POLICY = 'RECOMMENDATION_LLM_SELECTION_ENABLED="true"'
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "backend"))
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -95,19 +100,24 @@ def write_env(dsn: str, app_password: str, api_key: str, control_token: str) -> 
         f"OCI_GENAI_API_KEY={quote(api_key)}",
         f"OCI_GENAI_MODEL={quote('xai.grok-4.3')}",
         f"OCI_GENAI_FALLBACK_MODEL={quote('openai.gpt-oss-120b')}",
-        f"STRUCTURED_RECOMMENDATION_MODEL={quote('openai.gpt-oss-120b')}",
-        f"STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS={quote('2048')}",
+        f"OCI_GENAI_STRUCTURED_OUTPUT_ENABLED={quote('false')}",
+        f"OCI_GENAI_STREAMING_ENABLED={quote('false')}",
+        f"STRUCTURED_RECOMMENDATION_MODEL={quote('xai.grok-4.3')}",
+        f"STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS={quote('4096')}",
         f"STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS={quote('2')}",
+        f"RECOMMENDATION_CANDIDATE_LIMIT={quote('100')}",
+        f"RECOMMENDATION_LLM_SHORTLIST_LIMIT={quote('15')}",
+        f"RECOMMENDATION_LLM_SELECTION_ENABLED={quote('true')}",
         f"OCI_GENAI_MAX_INPUT_TOKENS={quote('131072')}",
         f"OCI_GENAI_MAX_OUTPUT_TOKENS={quote('4096')}",
         f"OCI_EMBED_MODEL={quote('cohere.embed-v4.0')}",
         f"OCI_EMBED_DIMENSION={quote('1536')}",
-        f"EMBEDDING_PROVIDER={quote('deterministic')}",
+        f"EMBEDDING_PROVIDER={quote('oci')}",
         f"ADB_DSN={quote(dsn)}",
         f"DB_USERNAME={quote('YOBI_APP')}",
         f"DB_PASSWORD={quote(app_password)}",
         f"LLM_TIMEOUT_SECONDS={quote('120')}",
-        f"LLM_MAX_RETRIES={quote('1')}",
+        f"LLM_MAX_RETRIES={quote('0')}",
         f"LLM_MAX_INPUT_TOKENS={quote('131072')}",
         f"LLM_MAX_OUTPUT_TOKENS={quote('4096')}",
         f"TOOL_CALL_MAX_STEPS={quote('6')}",
@@ -187,6 +197,11 @@ def persist_runtime_release_policy(path: Path = RUNTIME_ENV) -> bool:
         ("LLM_MAX_INPUT_TOKENS", RUNTIME_LLM_INPUT_POLICY),
         ("OCI_GENAI_MAX_OUTPUT_TOKENS", RUNTIME_OCI_OUTPUT_POLICY),
         ("LLM_MAX_OUTPUT_TOKENS", RUNTIME_LLM_OUTPUT_POLICY),
+        (
+            "OCI_GENAI_STRUCTURED_OUTPUT_ENABLED",
+            RUNTIME_STRUCTURED_OUTPUT_MODE_POLICY,
+        ),
+        ("OCI_GENAI_STREAMING_ENABLED", RUNTIME_STREAMING_POLICY),
         ("STRUCTURED_RECOMMENDATION_MODEL", RUNTIME_STRUCTURED_MODEL_POLICY),
         (
             "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS",
@@ -195,6 +210,15 @@ def persist_runtime_release_policy(path: Path = RUNTIME_ENV) -> bool:
         (
             "STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS",
             RUNTIME_STRUCTURED_CONCURRENCY_POLICY,
+        ),
+        ("RECOMMENDATION_CANDIDATE_LIMIT", RUNTIME_RECOMMENDATION_CANDIDATE_POLICY),
+        (
+            "RECOMMENDATION_LLM_SHORTLIST_LIMIT",
+            RUNTIME_RECOMMENDATION_SHORTLIST_POLICY,
+        ),
+        (
+            "RECOMMENDATION_LLM_SELECTION_ENABLED",
+            RUNTIME_RECOMMENDATION_SELECTION_POLICY,
         ),
     ):
         matches = list(re.finditer(rf"(?m)^[ \t]*{key}[ \t]*=.*$", updated))
@@ -271,6 +295,9 @@ def verify_database(settings: Settings) -> dict[str, object]:
         "KNOWLEDGE_RELEASE",
         "KNOWLEDGE_CHUNK",
         "KNOWLEDGE_RUNTIME_STATE",
+        "MENU_PREFERENCE_FEATURE",
+        "MENU_PREFERENCE_FEATURE_EVIDENCE",
+        "MENU_CONCEPT_MEMBERSHIP",
     }
     with oracledb.connect(user=username, password=password, dsn=dsn) as connection:
         cursor = connection.cursor()
@@ -336,11 +363,16 @@ def main() -> None:
                 "DB_PASSWORD": app_password,
                 "OCI_GENAI_API_KEY": api_key,
                 "OCI_GENAI_FALLBACK_MODEL": "openai.gpt-oss-120b",
-                "STRUCTURED_RECOMMENDATION_MODEL": "openai.gpt-oss-120b",
-                "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS": "2048",
+                "OCI_GENAI_STRUCTURED_OUTPUT_ENABLED": "false",
+                "OCI_GENAI_STREAMING_ENABLED": "false",
+                "STRUCTURED_RECOMMENDATION_MODEL": "xai.grok-4.3",
+                "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS": "4096",
                 "STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS": "2",
-                "EMBEDDING_PROVIDER": "deterministic",
-                "LLM_MAX_RETRIES": "1",
+                "RECOMMENDATION_CANDIDATE_LIMIT": "100",
+                "RECOMMENDATION_LLM_SHORTLIST_LIMIT": "15",
+                "RECOMMENDATION_LLM_SELECTION_ENABLED": "true",
+                "EMBEDDING_PROVIDER": "oci",
+                "LLM_MAX_RETRIES": "0",
             }
         )
     from migrate import migrate

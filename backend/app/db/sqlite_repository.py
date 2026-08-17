@@ -13,7 +13,12 @@ from typing import Any, cast
 from uuid import uuid4
 
 from app.db.browse_rankings import food_ranking_sql
-from app.db.concept_query import build_concept_candidate_query, build_concept_preview_query
+from app.db.concept_query import (
+    build_candidate_recall_channel_query,
+    build_concept_candidate_query,
+    build_concept_preview_count_query,
+    build_semantic_candidate_query,
+)
 from app.db.demo_address import demo_address_status
 from app.db.message_ordering import order_conversation_messages
 from app.db.schema_sqlite import SCHEMA_SQL
@@ -23,6 +28,9 @@ from app.domain.concept_ranking import (
     RANKING_POLICY_SHA256,
     RANKING_POLICY_VERSION,
     ConceptRankCandidate,
+    bayesian_review_prior,
+    candidate_channel_fusion_trace,
+    merge_candidate_channels,
     rank_concept_candidates,
 )
 from app.domain.dialogue import (
@@ -106,6 +114,10 @@ from app.knowledge.catalog_seed import (
     KNOWLEDGE_RELEASE_ID,
     build_knowledge_catalog_seed,
 )
+from app.knowledge.menu_features import MEMBERSHIP_EXTRACTOR_VERSION
+from app.knowledge.menu_features import (
+    feature_manifest_sha256 as menu_feature_manifest_sha256,
+)
 from app.knowledge.preference_support import (
     REVIEWED_CUISINE_ORIGIN_CODES,
     SUPPORT_MANIFEST_FIELDS,
@@ -134,8 +146,10 @@ from app.rag.embeddings import (
     apply_soft_profile_retrieval_signal,
     cosine_similarity,
     deterministic_embedding,
+    deterministic_sparse_embedding,
     hybrid_knowledge_chunk_score,
     rank_hybrid_chunks_rrf,
+    sparse_cosine_similarity,
 )
 from app.rag.providers import DeterministicEmbeddingProvider
 
@@ -387,6 +401,7 @@ class SQLiteYobiRepository:
                 ("ranking_trace_json", "TEXT"),
                 ("ranking_policy_version", "TEXT"),
                 ("support_manifest_sha256", "TEXT"),
+                ("feature_manifest_sha256", "TEXT"),
             ):
                 if column not in snapshot_columns:
                     connection.execute(
@@ -490,6 +505,7 @@ class SQLiteYobiRepository:
         }
         for column, definition in (
             ("support_manifest_sha256", f"TEXT NOT NULL DEFAULT '{zero_hash}'"),
+            ("feature_manifest_sha256", f"TEXT NOT NULL DEFAULT '{zero_hash}'"),
             ("ranking_policy_version", "TEXT NOT NULL DEFAULT 'legacy-llm-rank-v2'"),
             ("ranking_policy_sha256", f"TEXT NOT NULL DEFAULT '{zero_hash}'"),
         ):
@@ -509,6 +525,7 @@ class SQLiteYobiRepository:
             ("ranking_trace_json", "TEXT NOT NULL DEFAULT '{}'"),
             ("ranking_policy_version", "TEXT NOT NULL DEFAULT 'legacy-llm-rank-v2'"),
             ("support_manifest_sha256", f"TEXT NOT NULL DEFAULT '{zero_hash}'"),
+            ("feature_manifest_sha256", f"TEXT NOT NULL DEFAULT '{zero_hash}'"),
             ("finalized_at", "TEXT"),
         ):
             if column not in request_columns:
@@ -588,6 +605,33 @@ class SQLiteYobiRepository:
             knowledge_release_id=knowledge_release_id,
             updated_at=now,
         )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO menu_concept_membership(
+              knowledge_release_id,menu_id,concept_id,membership_role,confidence,
+              provenance_type,source_ref,review_status,extractor_version,
+              is_synthetic,updated_at
+            )
+            SELECT release_id,menu_id,concept_id,'PRIMARY',1.0,source_type,source_ref,
+                   review_status,?,is_synthetic,updated_at
+            FROM menu_concept_map
+            WHERE release_id=? AND mapping_status='MAPPED' AND concept_id IS NOT NULL
+            """,
+            (MEMBERSHIP_EXTRACTOR_VERSION, knowledge_release_id),
+        )
+        membership_rows = [
+            dict(row)
+            for row in connection.execute(
+                """
+                SELECT knowledge_release_id,menu_id,concept_id,membership_role,confidence,
+                       provenance_type,source_ref,review_status,extractor_version,is_synthetic
+                FROM menu_concept_membership
+                WHERE knowledge_release_id=? ORDER BY menu_id,concept_id
+                """,
+                (knowledge_release_id,),
+            ).fetchall()
+        ]
+        feature_manifest_sha256 = menu_feature_manifest_sha256([], [], membership_rows)
         family_identity = {
             "knowledge_release_id": knowledge_release_id,
             "catalog_release_id": CATALOG_VERSION,
@@ -597,6 +641,7 @@ class SQLiteYobiRepository:
             "embedding_model": str(active["embedding_model"]),
             "embedding_version": str(active["embedding_version"]),
             "support_manifest_sha256": support_manifest_sha256,
+            "feature_manifest_sha256": feature_manifest_sha256,
             "ranking_policy_version": RANKING_POLICY_VERSION,
             "ranking_policy_sha256": RANKING_POLICY_SHA256,
         }
@@ -617,9 +662,10 @@ class SQLiteYobiRepository:
               release_family_id,knowledge_release_id,catalog_release_id,
               preference_catalog_version,spice_reference_version,
               certification_release_id,embedding_model,embedding_version,
-              support_manifest_sha256,ranking_policy_version,ranking_policy_sha256,
+              support_manifest_sha256,feature_manifest_sha256,
+              ranking_policy_version,ranking_policy_sha256,
               status,activated_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(release_family_id) DO UPDATE SET
               status='ACTIVE',activated_at=excluded.activated_at
             """,
@@ -633,6 +679,7 @@ class SQLiteYobiRepository:
                 str(active["embedding_model"]),
                 str(active["embedding_version"]),
                 support_manifest_sha256,
+                feature_manifest_sha256,
                 RANKING_POLICY_VERSION,
                 RANKING_POLICY_SHA256,
                 "ACTIVE",
@@ -1640,6 +1687,11 @@ class SQLiteYobiRepository:
                 if "support_manifest_sha256" in columns and row["support_manifest_sha256"]
                 else "0" * 64
             ),
+            feature_manifest_sha256=(
+                str(row["feature_manifest_sha256"])
+                if "feature_manifest_sha256" in columns and row["feature_manifest_sha256"]
+                else "0" * 64
+            ),
             finalized_at=(
                 datetime.fromisoformat(str(row["finalized_at"]))
                 if "finalized_at" in columns and row["finalized_at"]
@@ -1855,7 +1907,7 @@ class SQLiteYobiRepository:
             pinned_family = connection.execute(
                 """
                 SELECT family.release_family_id,family.ranking_policy_version,
-                       family.support_manifest_sha256
+                       family.support_manifest_sha256,family.feature_manifest_sha256
                 FROM recommendation_runtime_state state
                 JOIN recommendation_release_family family
                   ON family.release_family_id=state.active_release_family_id
@@ -1874,10 +1926,11 @@ class SQLiteYobiRepository:
                   session_id,request_id,request_hash,criteria_version,mode,status,state_version,
                   recommendation_release_family_id,eligibility_as_of,snapshot_id,
                   evidence_pool_json,result_json,final_candidates_json,ranking_trace_json,
-                  ranking_policy_version,support_manifest_sha256,finalized_at,
+                  ranking_policy_version,support_manifest_sha256,
+                  feature_manifest_sha256,finalized_at,
                   dispatch_count,failure_code,
                   created_at,dispatched_at,completed_at
-                ) VALUES (?,?,?,?,?,'CREATED',?,?,?,NULL,'[]',NULL,'[]','{}',?,?,NULL,0,NULL,?,NULL,NULL)
+                ) VALUES (?,?,?,?,?,'CREATED',?,?,?,NULL,'[]',NULL,'[]','{}',?,?,?,NULL,0,NULL,?,NULL,NULL)
                 """,
                 (
                     session_id,
@@ -1890,6 +1943,7 @@ class SQLiteYobiRepository:
                     eligibility_as_of,
                     str(pinned_family["ranking_policy_version"]),
                     str(pinned_family["support_manifest_sha256"]),
+                    str(pinned_family["feature_manifest_sha256"]),
                     created_at,
                 ),
             )
@@ -1918,25 +1972,16 @@ class SQLiteYobiRepository:
             sort_keys=True,
             separators=(",", ":"),
         )
-        final_candidates = [
-            {
-                "rank": item.server_rank or rank,
-                "menu_id": item.menu.menu_id,
-                "merchant_id": item.menu.merchant_id,
-                "concept_id": item.knowledge_concept_id,
-            }
-            for rank, item in enumerate(evidence_pool[:3], start=1)
-        ]
-        serialized_final = json.dumps(
-            final_candidates, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-        )
+        serialized_final = "[]"
         serialized_trace = json.dumps(
             {
                 "ranking_policy_version": (
                     evidence_pool[0].ranking_trace.get("ranking_policy_version")
                     or RANKING_POLICY_VERSION
                 ),
-                "candidates": [item.ranking_trace for item in evidence_pool[:3]],
+                "shortlist_count": len(evidence_pool),
+                "selection_status": "PENDING",
+                "candidates": [item.ranking_trace for item in evidence_pool],
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -1962,14 +2007,13 @@ class SQLiteYobiRepository:
                 """
                 UPDATE structured_recommendation_request
                 SET status='DISPATCHED',evidence_pool_json=?,final_candidates_json=?,
-                    ranking_trace_json=?,finalized_at=?,dispatch_count=1,dispatched_at=?
+                    ranking_trace_json=?,dispatched_at=?
                 WHERE session_id=? AND request_id=? AND status='CREATED' AND dispatch_count=0
                 """,
                 (
                     serialized,
                     serialized_final,
                     serialized_trace,
-                    dispatched_at,
                     dispatched_at,
                     session_id,
                     request_id,
@@ -1987,6 +2031,35 @@ class SQLiteYobiRepository:
             if current is None:
                 raise RuntimeError("RECOMMENDATION_DISPATCH_WRITE_FAILED")
             return self._request_record_from_row(current)
+
+    def mark_recommendation_provider_called(
+        self,
+        session_id: str,
+        request_id: str,
+    ) -> RecommendationRequestRecord:
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            updated = connection.execute(
+                """
+                UPDATE structured_recommendation_request
+                SET dispatch_count=1
+                WHERE session_id=? AND request_id=?
+                  AND status='DISPATCHED' AND dispatch_count=0
+                """,
+                (session_id, request_id),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("RECOMMENDATION_PROVIDER_CALL_CONFLICT")
+            row = connection.execute(
+                """
+                SELECT * FROM structured_recommendation_request
+                WHERE session_id=? AND request_id=?
+                """,
+                (session_id, request_id),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("RECOMMENDATION_PROVIDER_CALL_WRITE_FAILED")
+            return self._request_record_from_row(row)
 
     def complete_recommendation_request(
         self,
@@ -2255,6 +2328,45 @@ class SQLiteYobiRepository:
                 if result_json is not None
                 else None
             )
+            final_candidates = []
+            if result_json is not None:
+                for rank, item in enumerate(result_json.get("recommendations", []), start=1):
+                    if not isinstance(item, dict):
+                        continue
+                    menu = cast(dict[str, Any], item.get("menu") or {})
+                    final_candidates.append(
+                        {
+                            "rank": rank,
+                            "menu_id": str(item.get("menu_id") or menu.get("menu_id") or ""),
+                            "merchant_id": str(menu.get("merchant_id") or ""),
+                        }
+                    )
+            serialized_final = json.dumps(
+                final_candidates,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            ranking_trace = json.loads(str(row["ranking_trace_json"] or "{}"))
+            ranking_trace.update(
+                {
+                    "selection_status": (
+                        "GROK_SELECTED"
+                        if status is RecommendationRequestStatus.COMPLETED
+                        else "DETERMINISTIC_FALLBACK"
+                        if status is RecommendationRequestStatus.SEARCH_FALLBACK
+                        else status.value
+                    ),
+                    "fallback_reason": failure_code,
+                    "final_candidates": final_candidates,
+                }
+            )
+            serialized_ranking_trace = json.dumps(
+                ranking_trace,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
             if snapshot is not None:
                 connection.execute(
                     """
@@ -2285,8 +2397,9 @@ class SQLiteYobiRepository:
                       criteria_version,criteria_json,criteria_hash,
                       recommendation_release_family_id,evidence_pool_json,
                       generation_status,generation_call_count,grounding_validation_json,
-                      ranking_trace_json,ranking_policy_version,support_manifest_sha256,created_at
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                      ranking_trace_json,ranking_policy_version,support_manifest_sha256,
+                      feature_manifest_sha256,created_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         snapshot.snapshot_id,
@@ -2305,9 +2418,10 @@ class SQLiteYobiRepository:
                         status.value,
                         int(row["dispatch_count"]),
                         json.dumps({"validated": True}, separators=(",", ":")),
-                        str(row["ranking_trace_json"]),
+                        serialized_ranking_trace,
                         str(row["ranking_policy_version"]),
                         str(row["support_manifest_sha256"]),
+                        str(row["feature_manifest_sha256"]),
                         snapshot.created_at.isoformat(),
                     ),
                 )
@@ -2315,7 +2429,8 @@ class SQLiteYobiRepository:
             updated = connection.execute(
                 """
                 UPDATE structured_recommendation_request
-                SET status=?,result_json=?,snapshot_id=?,failure_code=?,completed_at=?,state_version=?
+                SET status=?,result_json=?,snapshot_id=?,failure_code=?,completed_at=?,
+                    state_version=?,final_candidates_json=?,ranking_trace_json=?,finalized_at=?
                 WHERE session_id=? AND request_id=? AND status=?
                 """,
                 (
@@ -2325,6 +2440,9 @@ class SQLiteYobiRepository:
                     failure_code,
                     completed_at,
                     persisted_state_version,
+                    serialized_final,
+                    serialized_ranking_trace,
+                    completed_at,
                     session_id,
                     request_id,
                     current_status.value,
@@ -2879,6 +2997,7 @@ class SQLiteYobiRepository:
                     connection,
                     session_id=session_id,
                     criteria=criteria,
+                    profile=profile,
                     mode=mode,
                     limit=limit,
                     family=family,
@@ -3195,26 +3314,49 @@ class SQLiteYobiRepository:
             parameters.extend((category, option))
         return connection.execute(
             f"""
-            SELECT mapping.menu_id,support.category_code,support.option_code,
-                   support.support_strength,support.evidence_chunk_id,
-                   support.review_status,chunk.content,chunk.facet
-            FROM menu_concept_map mapping
+            SELECT feature.menu_id,feature.category_code,feature.option_code,
+                   feature.support_strength,evidence.evidence_id,
+                   feature.review_status,evidence.excerpt AS content,
+                   evidence.source_type AS facet,feature.evidence_scope
+            FROM menu_preference_feature feature
+            JOIN menu_preference_feature_evidence evidence
+              ON evidence.knowledge_release_id=feature.knowledge_release_id
+             AND evidence.feature_id=feature.feature_id
+             AND evidence.evidence_role='SUPPORT'
+            WHERE feature.knowledge_release_id=?
+              AND feature.support_status='SUPPORTED'
+              AND feature.evidence_scope='MENU_DIRECT'
+              AND feature.menu_id IN ({placeholders})
+              AND ({selected_predicates.replace('support.', 'feature.')})
+            UNION ALL
+            SELECT membership.menu_id,support.category_code,support.option_code,
+                   support.support_strength*0.65 AS support_strength,
+                   support.evidence_chunk_id AS evidence_id,
+                   support.review_status,chunk.content,chunk.facet,
+                   'CONCEPT_GENERAL' AS evidence_scope
+            FROM menu_concept_membership membership
             JOIN concept_preference_support support
-              ON support.knowledge_release_id=mapping.release_id
-             AND support.concept_id=mapping.concept_id
+              ON support.knowledge_release_id=membership.knowledge_release_id
+             AND support.concept_id=membership.concept_id
              AND support.support_status='SUPPORTED'
             JOIN knowledge_chunk chunk
               ON chunk.release_id=support.knowledge_release_id
              AND chunk.chunk_id=support.evidence_chunk_id
-            WHERE mapping.release_id=? AND mapping.mapping_status='MAPPED'
-              AND mapping.confidence_band='high'
-              AND mapping.menu_id IN ({placeholders})
+            WHERE membership.knowledge_release_id=?
+              AND membership.menu_id IN ({placeholders})
               AND ({selected_predicates})
-            ORDER BY mapping.menu_id,support.category_code,
-                     support.support_strength DESC,support.option_code,
-                     support.evidence_chunk_id
+              AND NOT EXISTS (
+                SELECT 1 FROM menu_preference_feature contradiction
+                WHERE contradiction.knowledge_release_id=membership.knowledge_release_id
+                  AND contradiction.menu_id=membership.menu_id
+                  AND contradiction.category_code=support.category_code
+                  AND contradiction.option_code=support.option_code
+                  AND contradiction.support_status='CONTRADICTED'
+                  AND contradiction.evidence_scope='MENU_DIRECT'
+              )
+            ORDER BY menu_id,category_code,support_strength DESC,option_code,evidence_id
             """,
-            parameters,
+            [*parameters, *parameters],
         ).fetchall()
 
     @staticmethod
@@ -3231,15 +3373,15 @@ class SQLiteYobiRepository:
         rows = connection.execute(
             f"""
             SELECT * FROM (
-              SELECT mapping.menu_id,chunk.chunk_id,chunk.content,chunk.facet,
+              SELECT membership.menu_id,chunk.chunk_id,chunk.content,chunk.facet,
                      ROW_NUMBER() OVER (
-                       PARTITION BY mapping.menu_id
+                       PARTITION BY membership.menu_id
                        ORDER BY closure.depth,chunk.chunk_id
                      ) AS passage_rank
-              FROM menu_concept_map mapping
+              FROM menu_concept_membership membership
               JOIN dish_concept_closure closure
-                ON closure.release_id=mapping.release_id
-               AND closure.descendant_concept_id=mapping.concept_id
+                ON closure.release_id=membership.knowledge_release_id
+               AND closure.descendant_concept_id=membership.concept_id
                AND closure.inherit_claims=1
               JOIN knowledge_chunk chunk
                 ON chunk.release_id=closure.release_id
@@ -3247,9 +3389,8 @@ class SQLiteYobiRepository:
               JOIN knowledge_document document
                 ON document.release_id=chunk.release_id
                AND document.document_id=chunk.document_id
-              WHERE mapping.release_id=? AND mapping.mapping_status='MAPPED'
-                AND mapping.confidence_band='high'
-                AND mapping.menu_id IN ({placeholders})
+              WHERE membership.knowledge_release_id=?
+                AND membership.menu_id IN ({placeholders})
                 AND document.source_type='SYNTHETIC_WIKI'
                 AND document.review_status='REVIEWED_DEMO'
                 AND lower(chunk.facet)<>'safety'
@@ -3273,6 +3414,7 @@ class SQLiteYobiRepository:
         *,
         session_id: str,
         criteria: RecommendationCriteriaV2,
+        profile: Profile,
         mode: RecommendationMode,
         limit: int,
         family: sqlite3.Row,
@@ -3289,21 +3431,141 @@ class SQLiteYobiRepository:
         )
         query_count += 2
         session_filter_ms = int((monotonic() - session_filter_started) * 1000)
-        candidate_query = build_concept_candidate_query(
+        channel_limit = max(3, limit)
+        query_text = " ".join(
+            alias
+            for selected_codes in criteria.subjective_groups().values()
+            for code in selected_codes
+            # Structured preference codes are language-neutral.  Use one
+            # canonical bilingual alias pack so an otherwise identical Korean
+            # and English request has the same semantic retrieval channel.
+            for alias in preference_query_aliases(code, "English")
+        ) or "meal menu"
+        query_sparse_vector = deterministic_sparse_embedding(f"query: {query_text}")
+        objective_started = monotonic()
+        if criteria.subjective_groups():
+            feature_query = build_candidate_recall_channel_query(
+                dialect="sqlite",
+                criteria=criteria,
+                knowledge_release_id=str(family["knowledge_release_id"]),
+                certification_release_id=str(family["certification_release_id"]),
+                service_area_id=service_area_id,
+                excluded_menu_ids=excluded,
+                eligibility_as_of=eligibility_as_of.isoformat(),
+                candidate_limit=channel_limit,
+                support_channel="MENU_FEATURE",
+            )
+            feature_rows = connection.execute(
+                feature_query.sql, feature_query.parameters
+            ).fetchall()
+            concept_query = build_candidate_recall_channel_query(
+                dialect="sqlite",
+                criteria=criteria,
+                knowledge_release_id=str(family["knowledge_release_id"]),
+                certification_release_id=str(family["certification_release_id"]),
+                service_area_id=service_area_id,
+                excluded_menu_ids=excluded,
+                eligibility_as_of=eligibility_as_of.isoformat(),
+                candidate_limit=channel_limit,
+                support_channel="CONCEPT_SUPPORT",
+            )
+            concept_rows = connection.execute(
+                concept_query.sql, concept_query.parameters
+            ).fetchall()
+            query_count += 2
+        else:
+            # With no selected preference value there is no feature channel to
+            # recall. Keep one reviewed-concept objective population.
+            feature_rows = []
+            concept_query = build_candidate_recall_channel_query(
+                dialect="sqlite",
+                criteria=criteria,
+                knowledge_release_id=str(family["knowledge_release_id"]),
+                certification_release_id=str(family["certification_release_id"]),
+                service_area_id=service_area_id,
+                excluded_menu_ids=excluded,
+                eligibility_as_of=eligibility_as_of.isoformat(),
+                candidate_limit=channel_limit,
+                support_channel="CONCEPT_SUPPORT",
+            )
+            concept_rows = connection.execute(
+                concept_query.sql, concept_query.parameters
+            ).fetchall()
+            query_count += 1
+        semantic_query = build_semantic_candidate_query(
             dialect="sqlite",
             criteria=criteria,
-            knowledge_release_id=str(family["knowledge_release_id"]),
             certification_release_id=str(family["certification_release_id"]),
             service_area_id=service_area_id,
             excluded_menu_ids=excluded,
             eligibility_as_of=eligibility_as_of.isoformat(),
-            candidate_limit=max(3, limit),
+            candidate_limit=channel_limit,
         )
-        objective_started = monotonic()
-        candidate_rows = connection.execute(
-            candidate_query.sql, candidate_query.parameters
+        semantic_rows = connection.execute(
+            semantic_query.sql,
+            semantic_query.parameters,
         ).fetchall()
-        query_count += 1
+        semantic_ranked = sorted(
+            (
+                (
+                    max(
+                        0.0,
+                        min(
+                            1.0,
+                            sparse_cosine_similarity(
+                                query_sparse_vector,
+                                deterministic_sparse_embedding(
+                                    f"document: {str(row['semantic_text'] or '')}"
+                                ),
+                            ),
+                        ),
+                    ),
+                    row,
+                )
+                for row in semantic_rows
+            ),
+            key=lambda item: (
+                -item[0],
+                str(item[1]["merchant_id"]),
+                str(item[1]["menu_id"]),
+            ),
+        )[:channel_limit]
+        feature_channel_ids = [str(row["menu_id"]) for row in feature_rows]
+        concept_channel_ids = [str(row["menu_id"]) for row in concept_rows]
+        semantic_channel_ids = [str(row["menu_id"]) for _score, row in semantic_ranked]
+        named_channels = {
+            "MENU_FEATURE": feature_channel_ids,
+            "CONCEPT_SUPPORT": concept_channel_ids,
+            "SEMANTIC": semantic_channel_ids,
+        }
+        channel_fusion_by_menu = candidate_channel_fusion_trace(named_channels)
+        raw_channel_union_count = len(
+            set(feature_channel_ids)
+            | set(concept_channel_ids)
+            | set(semantic_channel_ids)
+        )
+        channel_union_ids = merge_candidate_channels(
+            list(named_channels.values()),
+            limit=channel_limit,
+        )
+        candidate_rows: list[sqlite3.Row] = []
+        if channel_union_ids:
+            grounded_query = build_concept_candidate_query(
+                dialect="sqlite",
+                criteria=criteria,
+                knowledge_release_id=str(family["knowledge_release_id"]),
+                certification_release_id=str(family["certification_release_id"]),
+                service_area_id=service_area_id,
+                excluded_menu_ids=excluded,
+                eligibility_as_of=eligibility_as_of.isoformat(),
+                candidate_limit=None,
+                included_menu_ids=channel_union_ids,
+            )
+            candidate_rows = connection.execute(
+                grounded_query.sql,
+                grounded_query.parameters,
+            ).fetchall()
+        query_count += 1 + int(bool(channel_union_ids))
         objective_sql_ms = int((monotonic() - objective_started) * 1000)
         if not candidate_rows:
             self._recommendation_retrieval_metrics[session_id] = {
@@ -3314,6 +3576,14 @@ class SQLiteYobiRepository:
                 "evidence_ms": 0,
                 "query_count": query_count,
                 "selected_category_count": len(criteria.subjective_groups()),
+                "explicit_channel_count": len(
+                    set(feature_channel_ids) | set(concept_channel_ids)
+                ),
+                "menu_feature_channel_count": len(feature_channel_ids),
+                "concept_support_channel_count": len(concept_channel_ids),
+                "semantic_channel_count": len(semantic_channel_ids),
+                "raw_channel_union_count": raw_channel_union_count,
+                "channel_union_count": len(channel_union_ids),
                 "fetched_candidate_count": 0,
                 "candidate_merchant_count": 0,
                 "candidate_concept_count": 0,
@@ -3341,6 +3611,49 @@ class SQLiteYobiRepository:
             strength = float(support["support_strength"])
             if current is None or strength > current[0]:
                 supports_by_menu[menu_id][category] = (strength, support)
+        signal_rows = connection.execute(
+            f"""
+            SELECT menu.menu_id,menu.semantic_text,
+                   COALESCE(menu_source.review_count,merchant_source.review_count,0)
+                     AS review_count,
+                   merchant_source.review_average
+            FROM menu
+            LEFT JOIN menu_source_detail menu_source ON menu_source.menu_id=menu.menu_id
+            LEFT JOIN merchant_source_detail merchant_source
+              ON merchant_source.merchant_id=menu.merchant_id
+            WHERE menu.menu_id IN ({','.join('?' for _ in candidate_by_id)})
+            ORDER BY menu.menu_id
+            """,
+            tuple(sorted(candidate_by_id)),
+        ).fetchall()
+        # SQLite is the offline/test mirror and has no native VECTOR column. Use
+        # the deterministic on-read strategy advertised by readiness so a request
+        # never sends every candidate menu back to the external embedding API.
+        # Production Oracle embeds only the query and compares it with the
+        # already-persisted Cohere menu vectors through VECTOR_DISTANCE.
+        ordered_signal_rows = list(signal_rows)
+        signals_by_menu: dict[str, tuple[float, float]] = {}
+        for row in ordered_signal_rows:
+            signals_by_menu[str(row["menu_id"])] = (
+                max(
+                    0.0,
+                    min(
+                        1.0,
+                        sparse_cosine_similarity(
+                            query_sparse_vector,
+                            deterministic_sparse_embedding(
+                                f"document: {str(row['semantic_text'] or '')}"
+                            ),
+                        ),
+                    ),
+                ),
+                bayesian_review_prior(
+                    int(row["review_count"] or 0),
+                    float(row["review_average"])
+                    if row["review_average"] is not None
+                    else None,
+                ),
+            )
         rank_inputs = []
         for row in candidate_rows:
             menu_id = str(row["menu_id"])
@@ -3350,6 +3663,7 @@ class SQLiteYobiRepository:
             }
             if not category_supports:
                 category_supports = {"__objective__": 1.0}
+            semantic_score, review_prior = signals_by_menu.get(menu_id, (0.0, 0.5))
             rank_inputs.append(
                 ConceptRankCandidate(
                     menu_id=menu_id,
@@ -3357,13 +3671,16 @@ class SQLiteYobiRepository:
                     concept_id=str(row["concept_id"]),
                     category_supports=category_supports,
                     reviewed_evidence_count=int(row["reviewed_evidence_count"]),
+                    semantic_score=semantic_score,
+                    direct_evidence_ratio=float(row["direct_evidence_ratio"]),
+                    review_prior=review_prior,
                 )
             )
         scoring_started = monotonic()
         decisions = rank_concept_candidates(
             rank_inputs,
             has_soft_profile=False,
-            limit=min(3, limit),
+            limit=limit,
         )
         scoring_rerank_ms = int((monotonic() - scoring_started) * 1000)
         evidence_started = monotonic()
@@ -3386,26 +3703,32 @@ class SQLiteYobiRepository:
                 )
                 for chunk in wiki_by_menu.get(decision.menu_id, [])
             ]
-            if not wiki_passages:
+            if not wiki_passages and not criteria.subjective_groups():
                 continue
             criterion_evidence = []
+            direct_feature_facts: list[EvidenceReference] = []
             for category, (_strength, support) in sorted(
                 supports_by_menu.get(decision.menu_id, {}).items()
             ):
+                reference = EvidenceReference(
+                    evidence_id=str(support["evidence_id"]),
+                    evidence_type=(
+                        "MENU_FACT"
+                        if str(support["evidence_scope"]) == "MENU_DIRECT"
+                        else "WIKI_PASSAGE"
+                    ),
+                    content=str(support["content"]),
+                    score=round(float(support["support_strength"]), 6),
+                )
                 criterion_evidence.append(
                     CriterionEvidence(
                         category_code=cast(Any, category),
                         selected_value_code=str(support["option_code"]),
-                        evidence=[
-                            EvidenceReference(
-                                evidence_id=str(support["evidence_chunk_id"]),
-                                evidence_type="WIKI_PASSAGE",
-                                content=str(support["content"]),
-                                score=round(float(support["support_strength"]), 6),
-                            )
-                        ],
+                        evidence=[reference],
                     )
                 )
+                if reference.evidence_type == "MENU_FACT":
+                    direct_feature_facts.append(reference)
             facts = [
                 EvidenceReference(
                     evidence_id=f"fact_{decision.menu_id}_price",
@@ -3421,11 +3744,31 @@ class SQLiteYobiRepository:
                         else "The source did not provide a reviewed spice level."
                     ),
                 ),
+                *direct_feature_facts,
+            ]
+            channel_fusion = channel_fusion_by_menu.get(
+                decision.menu_id,
+                {"channel_ranks": {}, "rrf_contributions": {}, "rrf_score": 0.0},
+            )
+            retrieval_channels = [
+                channel
+                for channel in named_channels
+                if channel in channel_fusion["channel_ranks"]
             ]
             trace = {
                 **decision.trace_payload(),
                 "qualified_candidate_count": len(candidate_rows),
                 "support_manifest_sha256": str(family["support_manifest_sha256"]),
+                "feature_manifest_sha256": str(family["feature_manifest_sha256"]),
+                "retrieval_channels": retrieval_channels,
+                "channel_fusion": channel_fusion,
+                "channel_candidate_counts": {
+                    "menu_feature": len(feature_channel_ids),
+                    "concept_support": len(concept_channel_ids),
+                    "semantic": len(semantic_channel_ids),
+                    "raw_union": raw_channel_union_count,
+                    "bounded_union_before_grounding": len(channel_union_ids),
+                },
             }
             menu = self._menu_summary(
                 row,
@@ -3471,6 +3814,14 @@ class SQLiteYobiRepository:
             "evidence_ms": evidence_ms,
             "query_count": query_count,
             "selected_category_count": len(criteria.subjective_groups()),
+            "explicit_channel_count": len(
+                set(feature_channel_ids) | set(concept_channel_ids)
+            ),
+            "menu_feature_channel_count": len(feature_channel_ids),
+            "concept_support_channel_count": len(concept_channel_ids),
+            "semantic_channel_count": len(semantic_channel_ids),
+            "raw_channel_union_count": raw_channel_union_count,
+            "channel_union_count": len(channel_union_ids),
             "fetched_candidate_count": len(candidate_rows),
             "candidate_merchant_count": len(
                 {str(row["merchant_id"]) for row in candidate_rows}
@@ -3576,7 +3927,7 @@ class SQLiteYobiRepository:
                 merchant_count = 0
                 reasons = unsupported_reasons
             else:
-                candidate_query = build_concept_candidate_query(
+                preview_query = build_concept_preview_count_query(
                     dialect="sqlite",
                     criteria=criteria,
                     knowledge_release_id=str(family["knowledge_release_id"]),
@@ -3584,9 +3935,7 @@ class SQLiteYobiRepository:
                     service_area_id=service_area_id,
                     excluded_menu_ids=excluded,
                     eligibility_as_of=_now(),
-                    candidate_limit=None,
                 )
-                preview_query = build_concept_preview_query(candidate_query)
                 counts = connection.execute(
                     preview_query.sql, preview_query.parameters
                 ).fetchone()
@@ -3627,6 +3976,7 @@ class SQLiteYobiRepository:
             embedding_model=str(row["embedding_model"]),
             embedding_version=str(row["embedding_version"]),
             support_manifest_sha256=str(row["support_manifest_sha256"]),
+            feature_manifest_sha256=str(row["feature_manifest_sha256"]),
             ranking_policy_version=str(row["ranking_policy_version"]),
             ranking_policy_sha256=str(row["ranking_policy_sha256"]),
             status=cast(Any, str(row["status"])),
@@ -3882,6 +4232,7 @@ class SQLiteYobiRepository:
         payload["spice_reference_version"] = family.spice_reference_version
         payload["knowledge_release_id"] = family.knowledge_release_id
         payload["support_manifest_sha256"] = family.support_manifest_sha256
+        payload["feature_manifest_sha256"] = family.feature_manifest_sha256
         payload["ranking_policy_version"] = family.ranking_policy_version
         return dict(payload)
 
@@ -7385,6 +7736,27 @@ class SQLiteYobiRepository:
                     """,
                     (release_id, release_id, release_id, release_id),
                 ).fetchone()
+                feature_count = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM menu_preference_feature "
+                        "WHERE knowledge_release_id=?",
+                        (release_id,),
+                    ).fetchone()[0]
+                )
+                feature_evidence_count = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM menu_preference_feature_evidence "
+                        "WHERE knowledge_release_id=?",
+                        (release_id,),
+                    ).fetchone()[0]
+                )
+                membership_count = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM menu_concept_membership "
+                        "WHERE knowledge_release_id=?",
+                        (release_id,),
+                    ).fetchone()[0]
+                )
                 synthetic_core = int(
                     connection.execute(
                         """
@@ -7465,6 +7837,14 @@ class SQLiteYobiRepository:
                         and len(str(active_family_row["support_manifest_sha256"] or "")) == 64
                         and str(active_family_row["support_manifest_sha256"]) != "0" * 64
                     ),
+                    "menu_preference_features_present": feature_count > 0,
+                    "menu_preference_evidence_present": feature_evidence_count > 0,
+                    "menu_concept_memberships_present": membership_count > 0,
+                    "feature_manifest_valid": bool(
+                        active_family_row
+                        and len(str(active_family_row["feature_manifest_sha256"] or "")) == 64
+                        and str(active_family_row["feature_manifest_sha256"]) != "0" * 64
+                    ),
                     "ranking_policy_active": bool(
                         active_family_row
                         and str(active_family_row["ranking_policy_version"])
@@ -7507,7 +7887,21 @@ class SQLiteYobiRepository:
                         "mapped_menus": mapped_count,
                         "unmapped_menus": unmapped_count,
                         "source_fact_rows": source_fact_rows,
+                        "menu_preference_features": feature_count,
+                        "menu_preference_feature_evidence": feature_evidence_count,
+                        "menu_concept_memberships": membership_count,
                     },
+                    "feature_count": feature_count,
+                    "feature_manifest_sha256": (
+                        str(active_family_row["feature_manifest_sha256"])
+                        if active_family_row
+                        else None
+                    ),
+                    "ranking_policy_version": (
+                        str(active_family_row["ranking_policy_version"])
+                        if active_family_row
+                        else None
+                    ),
                     "knowledge_release_id": (
                         str(source_release["release_id"]) if source_release else None
                     ),

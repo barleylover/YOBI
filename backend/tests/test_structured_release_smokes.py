@@ -52,10 +52,13 @@ class _GroundedFakeGenerator:
         *,
         criteria: dict[str, Any],
         evidence_pool: list[dict[str, Any]],
+        before_provider_call: Any | None = None,
         **_: Any,
     ) -> RecommendationGenerationV2:
+        if before_provider_call is not None:
+            before_provider_call()
         recommendations: list[GeneratedMenuRecommendation] = []
-        for rank, item in enumerate(evidence_pool, start=1):
+        for rank, item in enumerate(evidence_pool[:3], start=1):
             matched: list[MatchedCriterion] = []
             criterion_evidence = item.get("criterion_evidence", {})
             for category_code, selected_values in criteria.items():
@@ -199,7 +202,7 @@ def test_structured_fallback_uses_frozen_server_order_and_cleans_profile(
     assert result["result_count"] == 3
     assert result["server_order_preserved"] is True
     assert result["deterministic_explanation"] is True
-    assert result["generation_dispatch_count"] == 1
+    assert result["generation_dispatch_count"] == 0
     assert result["failure_mode_scope"] == "isolated-process-control"
     assert result["profile_cascade_cleanup"] is True
     with sqlite3.connect(repository.path) as connection:

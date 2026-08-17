@@ -4,7 +4,7 @@ import json
 import re
 from enum import Enum
 from threading import BoundedSemaphore
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -44,15 +44,15 @@ class RecommendationGenerationV2(BaseModel):
 
     status: RecommendationGenerationStatus
     criteria_summary: str = Field(min_length=1, max_length=1000)
-    recommendations: list[GeneratedMenuRecommendation] = Field(max_length=3)
+    recommendations: list[GeneratedMenuRecommendation] = Field(min_length=3, max_length=3)
     unmatched_category_codes: list[str] = Field(max_length=20)
 
     @model_validator(mode="after")
     def validate_status_and_order(self) -> RecommendationGenerationV2:
         if self.status is RecommendationGenerationStatus.NO_MATCH:
             raise ValueError("Server-frozen recommendations cannot be changed to NO_MATCH")
-        if not self.recommendations:
-            raise ValueError("RECOMMENDED requires at least one recommendation")
+        if len(self.recommendations) != 3:
+            raise ValueError("RECOMMENDED requires exactly three recommendations")
         menu_ids = [item.menu_id for item in self.recommendations]
         ranks = [item.rank for item in self.recommendations]
         if len(menu_ids) != len(set(menu_ids)):
@@ -90,6 +90,7 @@ RECOMMENDATION_GENERATION_JSON_SCHEMA: dict[str, Any] = {
         "criteria_summary": {"type": "string", "minLength": 1, "maxLength": 1000},
         "recommendations": {
             "type": "array",
+            "minItems": 3,
             "maxItems": 3,
             "items": {
                 "type": "object",
@@ -220,7 +221,7 @@ def recommendation_generation_text_config() -> dict[str, Any]:
         "format": {
             "type": "json_schema",
             "name": "yobi_structured_recommendation_v2",
-            "description": "Grounded explanations for server-frozen menu IDs and order.",
+            "description": "Grounded selection of three menus from a server-validated shortlist.",
             "schema": RECOMMENDATION_GENERATION_JSON_SCHEMA,
             "strict": True,
         }
@@ -255,7 +256,7 @@ _INTERNAL_ID_PATTERN = re.compile(
 
 
 class RecommendationGenerationValidator:
-    """Validate explanations against the server-frozen IDs and order."""
+    """Validate a bounded three-menu selection against the server shortlist."""
 
     def __init__(self, *, result_limit: int) -> None:
         self.result_limit = result_limit
@@ -271,11 +272,20 @@ class RecommendationGenerationValidator:
             raise GenAIProviderError(GenAIErrorCode.GROUNDING_REJECTED, retryable=False)
         if result.status is RecommendationGenerationStatus.NO_MATCH:
             raise GenAIProviderError(GenAIErrorCode.GROUNDING_REJECTED, retryable=False)
+        if result.unmatched_category_codes:
+            raise GenAIProviderError(GenAIErrorCode.GROUNDING_REJECTED, retryable=False)
 
         pool_by_menu = {str(item.get("menu_id", "")): item for item in evidence_pool}
-        expected_menu_ids = [str(item.get("menu_id", "")) for item in evidence_pool]
         actual_menu_ids = [item.menu_id for item in result.recommendations]
-        if actual_menu_ids != expected_menu_ids:
+        if len(actual_menu_ids) != 3 or not set(actual_menu_ids) <= set(pool_by_menu):
+            raise GenAIProviderError(GenAIErrorCode.GROUNDING_REJECTED, retryable=False)
+        available_merchants = {
+            str(item.get("merchant_id", "")) for item in evidence_pool if item.get("merchant_id")
+        }
+        selected_merchants = {
+            str(pool_by_menu[menu_id].get("merchant_id", "")) for menu_id in actual_menu_ids
+        }
+        if len(available_merchants) >= 3 and len(selected_merchants) != 3:
             raise GenAIProviderError(GenAIErrorCode.GROUNDING_REJECTED, retryable=False)
         active_categories = {
             key: {str(value) for value in criteria.get(key, [])}
@@ -289,11 +299,15 @@ class RecommendationGenerationValidator:
                     GenAIErrorCode.GROUNDING_REJECTED,
                     retryable=False,
                 )
+            self._validate_hard_constraints(pool_item, criteria)
             self._reject_internal_id_leak(recommendation)
             matched_by_category = {
                 matched.category_code: matched for matched in recommendation.matched_criteria
             }
-            if not active_categories.keys() <= matched_by_category.keys():
+            if (
+                len(matched_by_category) != len(recommendation.matched_criteria)
+                or matched_by_category.keys() != active_categories.keys()
+            ):
                 raise GenAIProviderError(
                     GenAIErrorCode.GROUNDING_REJECTED,
                     retryable=False,
@@ -328,6 +342,80 @@ class RecommendationGenerationValidator:
                     retryable=False,
                 )
         return result
+
+    @staticmethod
+    def _validate_hard_constraints(
+        pool_item: dict[str, Any],
+        criteria: dict[str, Any],
+    ) -> None:
+        """Recheck objective constraints on every model-selected shortlist item."""
+
+        raw_price = pool_item.get("base_price")
+        try:
+            price = int(raw_price) if raw_price is not None else 0
+        except (TypeError, ValueError):
+            raise GenAIProviderError(
+                GenAIErrorCode.GROUNDING_REJECTED,
+                retryable=False,
+            ) from None
+        price_bands = {str(value) for value in criteria.get("price_bands", [])}
+        price_matches = {
+            "UNDER_10000": price < 10_000,
+            "FROM_10000_TO_19999": 10_000 <= price < 20_000,
+            "FROM_20000_TO_29999": 20_000 <= price < 30_000,
+            "OVER_30000": price >= 30_000,
+        }
+        if price <= 0 or (
+            price_bands
+            and not any(price_matches.get(band, False) for band in price_bands)
+        ):
+            raise GenAIProviderError(
+                GenAIErrorCode.GROUNDING_REJECTED,
+                retryable=False,
+            )
+
+        try:
+            max_spice_level = int(criteria.get("max_spice_level", 5))
+        except (TypeError, ValueError):
+            raise GenAIProviderError(
+                GenAIErrorCode.GROUNDING_REJECTED,
+                retryable=False,
+            ) from None
+        raw_spice_level = pool_item.get("spice_level")
+        if max_spice_level < 5:
+            try:
+                spice_level = int(raw_spice_level) if raw_spice_level is not None else 6
+            except (TypeError, ValueError):
+                raise GenAIProviderError(
+                    GenAIErrorCode.GROUNDING_REJECTED,
+                    retryable=False,
+                ) from None
+            if spice_level > max_spice_level:
+                raise GenAIProviderError(
+                    GenAIErrorCode.GROUNDING_REJECTED,
+                    retryable=False,
+                )
+
+        dietary = criteria.get("dietary_filters", {})
+        if not isinstance(dietary, dict):
+            raise GenAIProviderError(
+                GenAIErrorCode.GROUNDING_REJECTED,
+                retryable=False,
+            )
+        if dietary.get("halal_certified_only") is True and pool_item.get(
+            "halal_certified"
+        ) is not True:
+            raise GenAIProviderError(
+                GenAIErrorCode.GROUNDING_REJECTED,
+                retryable=False,
+            )
+        if dietary.get("vegan") is True and str(
+            pool_item.get("vegan_status") or "UNKNOWN"
+        ) not in {"LIKELY_FIT", "POSSIBLE_WITH_CHECKS"}:
+            raise GenAIProviderError(
+                GenAIErrorCode.GROUNDING_REJECTED,
+                retryable=False,
+            )
 
     @staticmethod
     def _criterion_evidence_ids(
@@ -396,11 +484,12 @@ class RecommendationGenerator:
         soft_profile_context: dict[str, Any],
         evidence_pool: list[dict[str, Any]],
         locale: str,
+        before_provider_call: Callable[[], None] | None = None,
     ) -> RecommendationGenerationV2:
         if not evidence_pool:
             raise ValueError("EVIDENCE_POOL_EMPTY")
-        if len(evidence_pool) > self.settings.recommendation_result_limit:
-            raise ValueError("SERVER_FROZEN_CANDIDATE_LIMIT_EXCEEDED")
+        if not 3 <= len(evidence_pool) <= self.settings.recommendation_llm_shortlist_limit:
+            raise ValueError("SERVER_SHORTLIST_SIZE_INVALID")
         capabilities = self.provider.capabilities
         if not capabilities.responses_api:
             raise GenAIProviderError(GenAIErrorCode.PROVIDER_UNAVAILABLE, retryable=False)
@@ -414,7 +503,7 @@ class RecommendationGenerator:
             "criteria": criteria,
             "soft_profile_context": soft_profile_context,
             "evidence_pool": evidence_pool,
-            "final_recommendation_count": len(evidence_pool),
+            "final_recommendation_count": 3,
             # Native structured output is an explicit provider capability flag. The
             # response contract must still be present when an OCI endpoint accepts
             # JSON text but does not enforce `text.format` server-side.
@@ -442,6 +531,8 @@ class RecommendationGenerator:
         self._enforce_input_limit(request)
         try:
             with self._request_slots:
+                if before_provider_call is not None:
+                    before_provider_call()
                 response = self.provider.create_response(
                     self.settings.structured_recommendation_model,
                     **request,
@@ -593,10 +684,11 @@ The server has already applied objective eligibility for delivery area, current 
 price bands, maximum spice, explicit halal certification scope, and confirmed vegan conflicts.
 Never weaken or revisit those decisions. Every final menu_id must be copied from evidence_pool.
 
-The evidence_pool is the server's frozen final recommendation list. Return exactly one explanation
-for every supplied menu_id, in exactly the supplied order, with contiguous ranks starting at 1.
-You have no authority to add, remove, replace, rerank, or reject a menu. Values inside one category
-mean OR and categories mean AND; the server has already enforced this contract.
+The evidence_pool is a server-validated shortlist, not the final order. Select and order exactly
+three unique menu_id values from it, with contiguous ranks 1, 2, and 3. Prefer three different
+merchants whenever the shortlist contains at least three merchants. You may not output any menu
+outside the shortlist. Values inside one category mean OR and categories mean AND; every selected
+menu must cite valid evidence for every selected category.
 
 For every matched category, cite only evidence IDs attached to that menu and selected value. Use
 the supplied Wiki prose for the explanation. General Wiki prose describes the food generally; it
@@ -607,7 +699,7 @@ allergen-absence, or cross-contact claims even if incidental Wiki prose mentions
 
 Always return status RECOMMENDED. NO_MATCH is a server decision made before this call. Do not ask
 questions, call tools, request more data, or emit Markdown fences. This request only explains the
-server-frozen candidates in one response. Prompt profile: {self.settings.recommendation_prompt_version}.
+bounded shortlist in one response. Prompt profile: {self.settings.recommendation_prompt_version}.
 """.strip()
 
     @staticmethod

@@ -131,6 +131,12 @@ class YobiRepository(Protocol):
         evidence_pool: list[EvidencePoolItem],
     ) -> RecommendationRequestRecord: ...
 
+    def mark_recommendation_provider_called(
+        self,
+        session_id: str,
+        request_id: str,
+    ) -> RecommendationRequestRecord: ...
+
     def complete_recommendation_request(
         self,
         session_id: str,

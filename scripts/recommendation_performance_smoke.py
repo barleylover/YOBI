@@ -44,6 +44,7 @@ from app.domain.structured_recommendation import (
     RecommendationCriteriaV2,
     RecommendationMode,
 )
+from app.services.structured_recommendation import StructuredRecommendationService
 
 WARM_REQUIRED = 100
 COLD_REQUIRED = 20
@@ -386,6 +387,7 @@ def _discover_scenarios(
     metadata = {
         "release_id": family.release_family_id,
         "support_manifest_sha256": family.support_manifest_sha256,
+        "feature_manifest_sha256": family.feature_manifest_sha256,
         "ranking_policy_version": family.ranking_policy_version,
         "catalog_version": str(catalog.get("catalog_version", "unknown")),
     }
@@ -402,17 +404,18 @@ def _ranked_evidence(
     family = repository.get_active_recommendation_release_family()
     if family is None:
         raise RuntimeError("RECOMMENDATION_RELEASE_NOT_READY")
-    return repository.build_recommendation_evidence_pool(
+    pool = repository.build_recommendation_evidence_pool(
         context.session_id,
         context.profile,
         criteria,
         mode,
-        24,
+        100,
         release_family_id=family.release_family_id,
         eligibility_as_of=datetime.now(timezone.utc),
-        raw_hits_per_value=24,
-        passages_per_menu=3,
+        raw_hits_per_value=20,
+        passages_per_menu=4,
     )
+    return StructuredRecommendationService._freeze_server_candidates(pool, limit=15)
 
 
 def _validate_ranked_evidence(items: list[Any], *, expect_empty: bool) -> None:
@@ -420,7 +423,7 @@ def _validate_ranked_evidence(items: list[Any], *, expect_empty: bool) -> None:
         if items:
             raise RuntimeError("NO_MATCH_EVIDENCE_NOT_EMPTY")
         return
-    if not items or len(items) > 3:
+    if not items or len(items) > 15:
         raise RuntimeError("RANKED_EVIDENCE_COUNT_INVALID")
     ranks = [getattr(item, "server_rank", None) for item in items]
     if ranks != list(range(1, len(items) + 1)):

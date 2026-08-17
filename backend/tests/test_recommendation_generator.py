@@ -49,7 +49,7 @@ class FakeProvider:
         return self._capabilities
 
     def supports_model(self, model: str) -> bool:
-        return model == "openai.gpt-oss-120b"
+        return model == "xai.grok-4.3"
 
     def normalize_request(self, model: str, **kwargs: Any) -> dict[str, Any]:
         return {"model": model, **kwargs}
@@ -112,6 +112,11 @@ def _criteria() -> dict[str, Any]:
 def _pool_item(menu_id: str, cuisine_id: str, flavor_id: str) -> dict[str, Any]:
     return {
         "menu_id": menu_id,
+        "merchant_id": f"merchant-{menu_id}",
+        "base_price": 9_000,
+        "spice_level": 3,
+        "halal_certified": False,
+        "vegan_status": "UNKNOWN",
         "criterion_evidence": {
             "cuisine_origins": {
                 "KOREAN": {"evidence_ids": [cuisine_id]},
@@ -125,6 +130,31 @@ def _pool_item(menu_id: str, cuisine_id: str, flavor_id: str) -> dict[str, Any]:
             {"passage_id": flavor_id, "content": "It can taste spicy."},
         ],
     }
+
+
+def _pool_three() -> list[dict[str, Any]]:
+    return [
+        _pool_item(
+            f"dish-{suffix}",
+            f"chunk-{suffix}-cuisine",
+            f"chunk-{suffix}-flavor",
+        )
+        for suffix in ("a", "b", "c")
+    ]
+
+
+def _recommendations_three(
+    menu_ids: tuple[str, str, str] = ("dish-a", "dish-b", "dish-c"),
+) -> list[dict[str, Any]]:
+    return [
+        _recommendation(
+            menu_id,
+            rank,
+            f"chunk-{menu_id.removeprefix('dish-')}-cuisine",
+            f"chunk-{menu_id.removeprefix('dish-')}-flavor",
+        )
+        for rank, menu_id in enumerate(menu_ids, start=1)
+    ]
 
 
 def _recommendation(menu_id: str, rank: int, cuisine_id: str, flavor_id: str) -> dict[str, Any]:
@@ -151,14 +181,11 @@ def _recommendation(menu_id: str, rank: int, cuisine_id: str, flavor_id: str) ->
     }
 
 
-def test_generator_dispatches_once_without_tools_and_preserves_frozen_server_order() -> None:
+def test_generator_dispatches_once_without_tools_and_allows_bounded_rerank() -> None:
     output = {
         "status": "RECOMMENDED",
         "criteria_summary": "Korean and spicy",
-        "recommendations": [
-            _recommendation("dish-a", 1, "chunk-a-cuisine", "chunk-a-flavor"),
-            _recommendation("dish-b", 2, "chunk-b-cuisine", "chunk-b-flavor"),
-        ],
+        "recommendations": _recommendations_three(("dish-c", "dish-a", "dish-b")),
         "unmatched_category_codes": [],
     }
     provider = FakeProvider(output)
@@ -167,17 +194,18 @@ def test_generator_dispatches_once_without_tools_and_preserves_frozen_server_ord
     result = generator.generate(
         criteria=_criteria(),
         soft_profile_context={"nationality": "United States"},
-        evidence_pool=[
-            _pool_item("dish-a", "chunk-a-cuisine", "chunk-a-flavor"),
-            _pool_item("dish-b", "chunk-b-cuisine", "chunk-b-flavor"),
-        ],
+        evidence_pool=_pool_three(),
         locale="English",
     )
 
-    assert [item.menu_id for item in result.recommendations] == ["dish-a", "dish-b"]
+    assert [item.menu_id for item in result.recommendations] == [
+        "dish-c",
+        "dish-a",
+        "dish-b",
+    ]
     assert len(provider.calls) == 1
-    assert provider.calls[0]["model"] == "openai.gpt-oss-120b"
-    assert provider.calls[0]["max_output_tokens"] == 2048
+    assert provider.calls[0]["model"] == "xai.grok-4.3"
+    assert provider.calls[0]["max_output_tokens"] == 4096
     assert "tools" not in provider.calls[0]
     instructions = str(provider.calls[0]["instructions"])
     assert "Return the JSON immediately without analysis or preamble." in instructions
@@ -194,9 +222,7 @@ def test_generator_supplies_json_contract_without_native_structured_output() -> 
         {
             "status": "RECOMMENDED",
             "criteria_summary": "Korean and spicy",
-            "recommendations": [
-                _recommendation("dish-a", 1, "chunk-cuisine", "chunk-flavor")
-            ],
+            "recommendations": _recommendations_three(),
             "unmatched_category_codes": [],
         },
         structured_output=False,
@@ -206,7 +232,7 @@ def test_generator_supplies_json_contract_without_native_structured_output() -> 
     generator.generate(
         criteria=_criteria(),
         soft_profile_context={},
-        evidence_pool=[_pool_item("dish-a", "chunk-cuisine", "chunk-flavor")],
+        evidence_pool=_pool_three(),
         locale="English",
     )
 
@@ -220,7 +246,11 @@ def test_generator_rejects_menu_outside_evidence_pool_without_second_dispatch() 
         "status": "RECOMMENDED",
         "criteria_summary": "Korean and spicy",
         "recommendations": [
-            _recommendation("dish-outside", 1, "chunk-cuisine", "chunk-flavor"),
+            _recommendation(
+                "dish-outside", 1, "chunk-outside-cuisine", "chunk-outside-flavor"
+            ),
+            _recommendation("dish-b", 2, "chunk-b-cuisine", "chunk-b-flavor"),
+            _recommendation("dish-c", 3, "chunk-c-cuisine", "chunk-c-flavor"),
         ],
         "unmatched_category_codes": [],
     }
@@ -231,7 +261,123 @@ def test_generator_rejects_menu_outside_evidence_pool_without_second_dispatch() 
         generator.generate(
             criteria=_criteria(),
             soft_profile_context={},
-            evidence_pool=[_pool_item("dish-a", "chunk-cuisine", "chunk-flavor")],
+            evidence_pool=_pool_three(),
+            locale="English",
+        )
+
+    assert caught.value.code is GenAIErrorCode.GROUNDING_REJECTED
+    assert len(provider.calls) == 1
+
+
+def test_generator_rejects_duplicate_menu_ids_without_second_dispatch() -> None:
+    provider = FakeProvider(
+        {
+            "status": "RECOMMENDED",
+            "criteria_summary": "Korean and spicy",
+            "recommendations": [
+                _recommendation("dish-a", 1, "chunk-a-cuisine", "chunk-a-flavor"),
+                _recommendation("dish-a", 2, "chunk-a-cuisine", "chunk-a-flavor"),
+                _recommendation("dish-c", 3, "chunk-c-cuisine", "chunk-c-flavor"),
+            ],
+            "unmatched_category_codes": [],
+        }
+    )
+    generator = RecommendationGenerator(Settings(), provider=provider)
+
+    with pytest.raises(GenAIProviderError) as caught:
+        generator.generate(
+            criteria=_criteria(),
+            soft_profile_context={},
+            evidence_pool=_pool_three(),
+            locale="English",
+        )
+
+    assert caught.value.code is GenAIErrorCode.GROUNDING_REJECTED
+    assert len(provider.calls) == 1
+
+
+def test_generator_rejects_evidence_owned_by_another_menu() -> None:
+    first = _recommendation(
+        "dish-a", 1, "chunk-a-cuisine", "chunk-a-flavor"
+    )
+    first["matched_criteria"][0]["evidence_ids"] = ["chunk-b-cuisine"]
+    provider = FakeProvider(
+        {
+            "status": "RECOMMENDED",
+            "criteria_summary": "Korean and spicy",
+            "recommendations": [first, *_recommendations_three()[1:]],
+            "unmatched_category_codes": [],
+        }
+    )
+    generator = RecommendationGenerator(Settings(), provider=provider)
+
+    with pytest.raises(GenAIProviderError) as caught:
+        generator.generate(
+            criteria=_criteria(),
+            soft_profile_context={},
+            evidence_pool=_pool_three(),
+            locale="English",
+        )
+
+    assert caught.value.code is GenAIErrorCode.GROUNDING_REJECTED
+    assert len(provider.calls) == 1
+
+
+def test_generator_enforces_three_merchants_when_shortlist_supports_it() -> None:
+    pool = [*_pool_three(), _pool_item("dish-d", "chunk-d-cuisine", "chunk-d-flavor")]
+    pool[1]["merchant_id"] = pool[0]["merchant_id"]
+    provider = FakeProvider(
+        {
+            "status": "RECOMMENDED",
+            "criteria_summary": "Korean and spicy",
+            "recommendations": _recommendations_three(),
+            "unmatched_category_codes": [],
+        }
+    )
+    generator = RecommendationGenerator(Settings(), provider=provider)
+
+    with pytest.raises(GenAIProviderError) as caught:
+        generator.generate(
+            criteria=_criteria(),
+            soft_profile_context={},
+            evidence_pool=pool,
+            locale="English",
+        )
+
+    assert caught.value.code is GenAIErrorCode.GROUNDING_REJECTED
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("pool_update", "criteria_update"),
+    [
+        ({"base_price": 12_000}, {}),
+        ({"spice_level": 4}, {}),
+        ({"halal_certified": False}, {"dietary_filters": {"halal_certified_only": True, "vegan": False}}),
+        ({"vegan_status": "CONFLICT"}, {"dietary_filters": {"halal_certified_only": False, "vegan": True}}),
+    ],
+)
+def test_generator_rechecks_hard_constraints_after_model_selection(
+    pool_update: dict[str, Any],
+    criteria_update: dict[str, Any],
+) -> None:
+    pool = _pool_three()
+    pool[0].update(pool_update)
+    criteria = {**_criteria(), **criteria_update}
+    provider = FakeProvider(
+        {
+            "status": "RECOMMENDED",
+            "criteria_summary": "Korean and spicy",
+            "recommendations": _recommendations_three(),
+            "unmatched_category_codes": [],
+        }
+    )
+
+    with pytest.raises(GenAIProviderError) as caught:
+        RecommendationGenerator(Settings(), provider=provider).generate(
+            criteria=criteria,
+            soft_profile_context={},
+            evidence_pool=pool,
             locale="English",
         )
 
@@ -241,18 +387,18 @@ def test_generator_rejects_menu_outside_evidence_pool_without_second_dispatch() 
 
 def test_generator_rejects_menu_fact_used_as_wiki_evidence() -> None:
     recommendation = _recommendation(
-        "dish-a", 1, "chunk-cuisine", "chunk-flavor"
+        "dish-a", 1, "chunk-a-cuisine", "chunk-a-flavor"
     )
     recommendation["wiki_evidence_ids"] = ["fact_dish_a_price"]
     provider = FakeProvider(
         {
             "status": "RECOMMENDED",
             "criteria_summary": "Korean and spicy",
-            "recommendations": [recommendation],
+            "recommendations": [recommendation, *_recommendations_three()[1:]],
             "unmatched_category_codes": [],
         }
     )
-    pool_item = _pool_item("dish-a", "chunk-cuisine", "chunk-flavor")
+    pool_item = _pool_item("dish-a", "chunk-a-cuisine", "chunk-a-flavor")
     pool_item["menu_facts"] = [
         {
             "evidence_id": "fact_dish_a_price",
@@ -265,7 +411,7 @@ def test_generator_rejects_menu_fact_used_as_wiki_evidence() -> None:
         generator.generate(
             criteria=_criteria(),
             soft_profile_context={},
-            evidence_pool=[pool_item],
+            evidence_pool=[pool_item, *_pool_three()[1:]],
             locale="English",
         )
 
@@ -289,7 +435,7 @@ def test_generator_rejects_model_no_match_after_server_freezes_candidates() -> N
         generator.generate(
             criteria=_criteria(),
             soft_profile_context={},
-            evidence_pool=[_pool_item("dish-a", "chunk-cuisine", "chunk-flavor")],
+            evidence_pool=_pool_three(),
             locale="English",
         )
 
@@ -333,8 +479,8 @@ def test_comparison_uses_structured_model_cap_in_one_dispatch() -> None:
 
     assert [item.menu_id for item in result.items] == ["dish-a", "dish-b"]
     assert len(provider.calls) == 1
-    assert provider.calls[0]["model"] == "openai.gpt-oss-120b"
-    assert provider.calls[0]["max_output_tokens"] == 2048
+    assert provider.calls[0]["model"] == "xai.grok-4.3"
+    assert provider.calls[0]["max_output_tokens"] == 4096
 
 
 def test_structured_rate_limit_never_retries_or_dispatches_fallback_model() -> None:
@@ -351,21 +497,19 @@ def test_structured_rate_limit_never_retries_or_dispatches_fallback_model() -> N
         generator.generate(
             criteria=_criteria(),
             soft_profile_context={},
-            evidence_pool=[_pool_item("dish-a", "chunk-cuisine", "chunk-flavor")],
+            evidence_pool=_pool_three(),
             locale="English",
         )
 
     assert caught.value.code is GenAIErrorCode.RATE_LIMIT
-    assert [call["model"] for call in provider.calls] == ["openai.gpt-oss-120b"]
+    assert [call["model"] for call in provider.calls] == ["xai.grok-4.3"]
 
 
 def test_structured_concurrency_setting_limits_provider_dispatches_to_two() -> None:
     output = {
         "status": "RECOMMENDED",
         "criteria_summary": "Korean and spicy",
-        "recommendations": [
-            _recommendation("dish-a", 1, "chunk-cuisine", "chunk-flavor")
-        ],
+        "recommendations": _recommendations_three(),
         "unmatched_category_codes": [],
     }
     provider = BlockingProvider(output)
@@ -378,7 +522,7 @@ def test_structured_concurrency_setting_limits_provider_dispatches_to_two() -> N
         result = generator.generate(
             criteria=_criteria(),
             soft_profile_context={},
-            evidence_pool=[_pool_item("dish-a", "chunk-cuisine", "chunk-flavor")],
+            evidence_pool=_pool_three(),
             locale="English",
         )
         return [item.menu_id for item in result.recommendations]
@@ -392,7 +536,7 @@ def test_structured_concurrency_setting_limits_provider_dispatches_to_two() -> N
             provider.release.set()
         results = [future.result(timeout=2) for future in futures]
 
-    assert results == [["dish-a"], ["dish-a"], ["dish-a"]]
+    assert results == [["dish-a", "dish-b", "dish-c"]] * 3
     assert provider.max_active == 2
     assert len(provider.calls) == 3
 

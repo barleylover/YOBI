@@ -299,6 +299,20 @@ def readyz(
                 )
             ),
         },
+        "structured_recommendation": {
+            "model_id": current_settings.structured_recommendation_model,
+            "selection_enabled": current_settings.recommendation_llm_selection_enabled,
+            "candidate_limit": current_settings.recommendation_candidate_limit,
+            "shortlist_limit": current_settings.recommendation_llm_shortlist_limit,
+            "ranking_policy_version": db.get("ranking_policy_version"),
+            "feature_count": db.get("feature_count", 0),
+            "feature_manifest_sha256": db.get("feature_manifest_sha256"),
+            "ready": bool(
+                current_settings.recommendation_llm_selection_enabled
+                and current_settings.structured_recommendation_model == "xai.grok-4.3"
+                and db.get("recommendation_ready") is True
+            ),
+        },
     }
 
 
@@ -449,6 +463,7 @@ def get_recommendation_preference_catalog(
             str(payload.get("catalog_version", "")),
             str(payload.get("knowledge_release_id", "")),
             str(payload.get("support_manifest_sha256", "")),
+            str(payload.get("feature_manifest_sha256", "")),
             str(payload.get("ranking_policy_version", "")),
         )
     )

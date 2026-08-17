@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS recommendation_snapshot (
   ranking_trace_json TEXT,
   ranking_policy_version TEXT,
   support_manifest_sha256 TEXT,
+  feature_manifest_sha256 TEXT,
   created_at TEXT NOT NULL
 );
 
@@ -681,6 +682,7 @@ CREATE TABLE IF NOT EXISTS recommendation_release_family (
   embedding_model TEXT NOT NULL,
   embedding_version TEXT NOT NULL,
   support_manifest_sha256 TEXT NOT NULL DEFAULT '0000000000000000000000000000000000000000000000000000000000000000',
+  feature_manifest_sha256 TEXT NOT NULL DEFAULT '0000000000000000000000000000000000000000000000000000000000000000',
   ranking_policy_version TEXT NOT NULL DEFAULT 'legacy-llm-rank-v2',
   ranking_policy_sha256 TEXT NOT NULL DEFAULT '0000000000000000000000000000000000000000000000000000000000000000',
   status TEXT NOT NULL CHECK (status IN ('LOADING','READY','ACTIVE','RETIRED')),
@@ -708,6 +710,66 @@ CREATE TABLE IF NOT EXISTS concept_preference_support (
   FOREIGN KEY(knowledge_release_id, evidence_chunk_id)
     REFERENCES knowledge_chunk(release_id, chunk_id),
   CHECK (support_status != 'SUPPORTED' OR evidence_chunk_id IS NOT NULL)
+);
+
+CREATE TABLE IF NOT EXISTS menu_preference_feature (
+  knowledge_release_id TEXT NOT NULL REFERENCES knowledge_release(release_id),
+  feature_id TEXT NOT NULL,
+  menu_id TEXT NOT NULL REFERENCES menu(menu_id),
+  category_code TEXT NOT NULL,
+  option_code TEXT NOT NULL,
+  support_status TEXT NOT NULL
+    CHECK (support_status IN ('SUPPORTED','CONTRADICTED','REVIEW_REQUIRED')),
+  support_strength REAL NOT NULL CHECK (support_strength >= 0 AND support_strength <= 1),
+  confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+  specificity REAL NOT NULL CHECK (specificity >= 0 AND specificity <= 1),
+  evidence_scope TEXT NOT NULL
+    CHECK (evidence_scope IN ('MENU_DIRECT','SECTION_CONTEXT','OPTION_AVAILABILITY','CONCEPT_GENERAL')),
+  provenance_type TEXT NOT NULL,
+  source_ref TEXT NOT NULL,
+  review_status TEXT NOT NULL,
+  extractor_version TEXT NOT NULL,
+  is_synthetic INTEGER NOT NULL DEFAULT 1 CHECK (is_synthetic IN (0,1)),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(knowledge_release_id, feature_id),
+  UNIQUE(knowledge_release_id, menu_id, category_code, option_code)
+);
+
+CREATE TABLE IF NOT EXISTS menu_preference_feature_evidence (
+  knowledge_release_id TEXT NOT NULL,
+  evidence_id TEXT NOT NULL,
+  feature_id TEXT NOT NULL,
+  evidence_role TEXT NOT NULL
+    CHECK (evidence_role IN ('SUPPORT','CONTRADICTION','CONTEXT','OVERRIDDEN_GENERAL')),
+  source_type TEXT NOT NULL
+    CHECK (source_type IN ('MENU_NAME','MENU_DESCRIPTION','MENU_SECTION','MENU_OPTION','WIKI_CHUNK')),
+  excerpt TEXT NOT NULL,
+  excerpt_sha256 TEXT NOT NULL,
+  source_ref TEXT NOT NULL,
+  provenance_type TEXT NOT NULL,
+  is_synthetic INTEGER NOT NULL DEFAULT 1 CHECK (is_synthetic IN (0,1)),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(knowledge_release_id, evidence_id),
+  FOREIGN KEY(knowledge_release_id, feature_id)
+    REFERENCES menu_preference_feature(knowledge_release_id, feature_id)
+);
+
+CREATE TABLE IF NOT EXISTS menu_concept_membership (
+  knowledge_release_id TEXT NOT NULL REFERENCES knowledge_release(release_id),
+  menu_id TEXT NOT NULL REFERENCES menu(menu_id),
+  concept_id TEXT NOT NULL,
+  membership_role TEXT NOT NULL
+    CHECK (membership_role IN ('PRIMARY','COMPONENT','SECONDARY')),
+  confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+  provenance_type TEXT NOT NULL,
+  source_ref TEXT NOT NULL,
+  review_status TEXT NOT NULL,
+  extractor_version TEXT NOT NULL,
+  is_synthetic INTEGER NOT NULL DEFAULT 1 CHECK (is_synthetic IN (0,1)),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(knowledge_release_id, menu_id, concept_id),
+  FOREIGN KEY(knowledge_release_id, concept_id)
+    REFERENCES dish_concept(release_id, concept_id)
 );
 
 CREATE TABLE IF NOT EXISTS recommendation_runtime_state (
@@ -797,6 +859,7 @@ CREATE TABLE IF NOT EXISTS structured_recommendation_request (
   ranking_trace_json TEXT NOT NULL DEFAULT '{}',
   ranking_policy_version TEXT NOT NULL DEFAULT 'legacy-llm-rank-v2',
   support_manifest_sha256 TEXT NOT NULL DEFAULT '0000000000000000000000000000000000000000000000000000000000000000',
+  feature_manifest_sha256 TEXT NOT NULL DEFAULT '0000000000000000000000000000000000000000000000000000000000000000',
   finalized_at TEXT,
   dispatch_count INTEGER NOT NULL DEFAULT 0 CHECK (dispatch_count BETWEEN 0 AND 1),
   failure_code TEXT,
@@ -812,6 +875,16 @@ CREATE INDEX IF NOT EXISTS idx_rec_criteria_latest
   ON session_recommendation_criteria(session_id, criteria_version DESC);
 CREATE INDEX IF NOT EXISTS idx_rec_request_status
   ON structured_recommendation_request(session_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_menu_pref_feature_lookup
+  ON menu_preference_feature(
+    knowledge_release_id, category_code, option_code, support_status, menu_id
+  );
+CREATE INDEX IF NOT EXISTS idx_menu_pref_feature_menu
+  ON menu_preference_feature(knowledge_release_id, menu_id, support_status);
+CREATE INDEX IF NOT EXISTS idx_menu_pref_evidence_feature
+  ON menu_preference_feature_evidence(knowledge_release_id, feature_id, evidence_role);
+CREATE INDEX IF NOT EXISTS idx_menu_concept_membership_lookup
+  ON menu_concept_membership(knowledge_release_id, concept_id, membership_role, menu_id);
 CREATE INDEX IF NOT EXISTS idx_merchant_cert_active
   ON merchant_certification(
     certification_release_id, certification_type, status, merchant_id, valid_from, valid_to

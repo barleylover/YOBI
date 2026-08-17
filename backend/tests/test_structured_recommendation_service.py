@@ -51,7 +51,7 @@ class FakeProvider:
             client_managed_continuation=True,
             server_managed_continuation=False,
             max_input_tokens=32768,
-            max_output_tokens=1200,
+            max_output_tokens=4096,
             max_tools_per_request=4,
             max_tool_calls_per_response=4,
         )
@@ -65,7 +65,7 @@ class FakeProvider:
         return self._capabilities
 
     def supports_model(self, model: str) -> bool:
-        return model == "openai.gpt-oss-120b"
+        return model == "xai.grok-4.3"
 
     def normalize_request(self, model: str, **kwargs: Any) -> dict[str, Any]:
         return {"model": model, **kwargs}
@@ -119,7 +119,7 @@ class FakeRecommendationRepository:
             zero_reason_codes=list(self.preview_zero_reasons),
             release_id="knowledge-demo-v1",
             support_manifest_sha256="a" * 64,
-            ranking_policy_version="yobi-concept-rank-v1",
+            ranking_policy_version="yobi-hybrid-rank-v2",
             timing_ms=0,
         )
 
@@ -212,10 +212,23 @@ class FakeRecommendationRepository:
             update={
                 "status": RecommendationRequestStatus.DISPATCHED,
                 "evidence_pool_json": [item.model_dump(mode="json") for item in evidence_pool],
-                "dispatch_count": 1,
+                "dispatch_count": 0,
                 "dispatched_at": datetime.now(timezone.utc),
             }
         )
+        self.requests[request_id] = updated
+        return updated
+
+    def mark_recommendation_provider_called(
+        self,
+        session_id: str,
+        request_id: str,
+    ) -> RecommendationRequestRecord:
+        record = self.requests[request_id]
+        assert record.session_id == session_id
+        assert record.status is RecommendationRequestStatus.DISPATCHED
+        assert record.dispatch_count == 0
+        updated = record.model_copy(update={"dispatch_count": 1})
         self.requests[request_id] = updated
         return updated
 
@@ -626,32 +639,38 @@ def test_empty_history_excluding_request_persists_canonical_exhausted_code() -> 
         assert provider.calls == []
 
 
-def test_model_reorder_is_rejected_and_fallback_preserves_server_order() -> None:
+def test_model_can_select_and_reorder_three_from_the_frozen_shortlist() -> None:
     repository = FakeRecommendationRepository(_criteria())
     repository.evidence_pool = [
         _pool_item("menu-a", score=0.99),
         _pool_item("menu-b", score=0.70),
+        _pool_item("menu-c", score=0.69),
     ]
-    provider = FakeProvider(_recommended_output(["menu-b", "menu-a"]))
+    provider = FakeProvider(_recommended_output(["menu-b", "menu-c", "menu-a"]))
     service = _service(repository, provider)
 
     result = service.request_recommendation(_session(), _profile(), _request())
 
     assert len(provider.calls) == 1
-    assert result.status == "SEARCH_FALLBACK"
+    assert result.status == "RECOMMENDED"
     assert [item.menu.menu_id for item in result.recommendations] == [
-        "menu-a",
         "menu-b",
+        "menu-c",
+        "menu-a",
     ]
     stored = repository.requests["recommendation-request-0001"]
     assert stored.dispatch_count == 1
-    assert stored.status is RecommendationRequestStatus.SEARCH_FALLBACK
+    assert stored.status is RecommendationRequestStatus.COMPLETED
 
 
 def test_same_request_replay_does_not_dispatch_again() -> None:
     repository = FakeRecommendationRepository(_criteria())
-    repository.evidence_pool = [_pool_item("menu-a", score=0.90)]
-    provider = FakeProvider(_recommended_output(["menu-a"]))
+    repository.evidence_pool = [
+        _pool_item("menu-a", score=0.90),
+        _pool_item("menu-b", score=0.80),
+        _pool_item("menu-c", score=0.70),
+    ]
+    provider = FakeProvider(_recommended_output(["menu-a", "menu-b", "menu-c"]))
     service = _service(repository, provider)
     request = _request()
 
@@ -663,13 +682,37 @@ def test_same_request_replay_does_not_dispatch_again() -> None:
     assert repository.requests[request.request_id].dispatch_count == 1
 
 
+def test_pre_provider_failure_is_not_counted_as_an_oci_dispatch() -> None:
+    repository = FakeRecommendationRepository(_criteria())
+    repository.evidence_pool = [
+        _pool_item("menu-a", score=0.90),
+        _pool_item("menu-b", score=0.80),
+        _pool_item("menu-c", score=0.70),
+    ]
+    provider = FakeProvider(_recommended_output(["menu-a", "menu-b", "menu-c"]))
+    settings = Settings(_env_file=None, recommendation_llm_selection_enabled=False)
+    service = StructuredRecommendationService(
+        repository,  # type: ignore[arg-type]
+        settings,
+        DemoControl(),
+        generator=RecommendationGenerator(settings, provider=provider),
+    )
+
+    result = service.request_recommendation(_session(), _profile(), _request())
+
+    assert result.status == "SEARCH_FALLBACK"
+    assert provider.calls == []
+    assert repository.requests["recommendation-request-0001"].dispatch_count == 0
+
+
 def test_terminal_get_refreshes_server_fields_without_generation() -> None:
     repository = FakeRecommendationRepository(_criteria())
     repository.evidence_pool = [
         _pool_item("menu-a", score=0.90),
         _pool_item("menu-b", score=0.80),
+        _pool_item("menu-c", score=0.70),
     ]
-    provider = FakeProvider(_recommended_output(["menu-a", "menu-b"]))
+    provider = FakeProvider(_recommended_output(["menu-a", "menu-b", "menu-c"]))
     service = _service(repository, provider)
     created = service.request_recommendation(_session(), _profile(), _request())
     assert created.status == "RECOMMENDED"
@@ -718,8 +761,11 @@ def test_invalid_provider_output_falls_back_without_second_dispatch() -> None:
     repository.evidence_pool = [
         _pool_item("menu-a", score=0.90),
         _pool_item("menu-b", score=0.80),
+        _pool_item("menu-c", score=0.70),
     ]
-    provider = FakeProvider(_recommended_output(["menu-outside-pool"]))
+    provider = FakeProvider(
+        _recommended_output(["menu-outside-pool", "menu-b", "menu-c"])
+    )
     service = _service(repository, provider)
 
     result = service.request_recommendation(_session(), _profile(), _request())
@@ -729,6 +775,7 @@ def test_invalid_provider_output_falls_back_without_second_dispatch() -> None:
     assert [item.menu.menu_id for item in result.recommendations] == [
         "menu-a",
         "menu-b",
+        "menu-c",
     ]
     assert result.failure_code == "GROUNDING_REJECTED"
     assert repository.completed_statuses == [RecommendationRequestStatus.SEARCH_FALLBACK]
@@ -782,8 +829,9 @@ def test_comparison_is_cached_once_per_snapshot_across_idempotency_keys() -> Non
     repository.evidence_pool = [
         _pool_item("menu-a", score=0.90),
         _pool_item("menu-b", score=0.80),
+        _pool_item("menu-c", score=0.70),
     ]
-    provider = FakeProvider(_recommended_output(["menu-a", "menu-b"]))
+    provider = FakeProvider(_recommended_output(["menu-a", "menu-b", "menu-c"]))
     service = _service(repository, provider)
     batch = service.request_recommendation(_session(), _profile(), _request())
     assert batch.snapshot_id is not None
@@ -801,7 +849,7 @@ def test_comparison_is_cached_once_per_snapshot_across_idempotency_keys() -> Non
                 "best_for": "Choose according to the grounded card.",
                 "unverified_dietary_info": "Untrusted model dietary prose.",
             }
-            for menu_id in ("menu-a", "menu-b")
+            for menu_id in ("menu-a", "menu-b", "menu-c")
         ],
     }
     first = service.compare_recommendations(
@@ -825,7 +873,7 @@ def test_comparison_is_cached_once_per_snapshot_across_idempotency_keys() -> Non
 
     assert len(provider.calls) == 2  # one recommendation call and one comparison call
     assert replay == first
-    assert [item.name for item in first.items] == ["Dish A", "Dish B"]
+    assert [item.name for item in first.items] == ["Dish A", "Dish B", "Dish C"]
     assert all(
         item.unverified_dietary_info
         == (
@@ -841,8 +889,9 @@ def test_invalid_comparison_output_falls_back_with_same_ids_names_and_order() ->
     repository.evidence_pool = [
         _pool_item("menu-a", score=0.90),
         _pool_item("menu-b", score=0.80),
+        _pool_item("menu-c", score=0.70),
     ]
-    provider = FakeProvider(_recommended_output(["menu-a", "menu-b"]))
+    provider = FakeProvider(_recommended_output(["menu-a", "menu-b", "menu-c"]))
     service = _service(repository, provider)
     batch = service.request_recommendation(_session(), _profile(), _request())
     assert batch.snapshot_id is not None
@@ -860,7 +909,7 @@ def test_invalid_comparison_output_falls_back_with_same_ids_names_and_order() ->
                 "best_for": "Best for",
                 "unverified_dietary_info": "Unverified",
             }
-            for menu_id in ("menu-b", "menu-a")
+            for menu_id in ("menu-c", "menu-b", "menu-a")
         ],
     }
 
@@ -876,8 +925,8 @@ def test_invalid_comparison_output_falls_back_with_same_ids_names_and_order() ->
 
     assert len(provider.calls) == 2
     assert comparison.generated_by == "DETERMINISTIC_FALLBACK"
-    assert [item.menu_id for item in comparison.items] == ["menu-a", "menu-b"]
-    assert [item.name for item in comparison.items] == ["Dish A", "Dish B"]
+    assert [item.menu_id for item in comparison.items] == ["menu-a", "menu-b", "menu-c"]
+    assert [item.name for item in comparison.items] == ["Dish A", "Dish B", "Dish C"]
 
 
 def test_korean_and_arabic_fallbacks_use_human_localized_copy() -> None:
@@ -908,8 +957,9 @@ def test_korean_and_arabic_fallbacks_use_human_localized_copy() -> None:
         repository.evidence_pool = [
             _pool_item("menu-a", score=0.90),
             _pool_item("menu-b", score=0.80),
+            _pool_item("menu-c", score=0.70),
         ]
-        provider = FailingProvider(_recommended_output(["menu-a", "menu-b"]))
+        provider = FailingProvider(_recommended_output(["menu-a", "menu-b", "menu-c"]))
         service = _service(repository, provider)
         request = _request(f"recommendation-localized-fallback-{index:04d}")
 
@@ -954,11 +1004,13 @@ def test_korean_and_arabic_fallbacks_use_human_localized_copy() -> None:
         assert all("=" not in value for value in localized_fields)
         assert all("unverified" not in value.lower() for value in localized_fields)
         if language == "한국어":
-            assert [item.name for item in comparison.items] == ["메뉴 A", "메뉴 B"]
+            assert [item.name for item in comparison.items] == ["메뉴 A", "메뉴 B", "메뉴 C"]
 
         normal_repository = FakeRecommendationRepository(_criteria())
         normal_repository.evidence_pool = list(repository.evidence_pool)
-        normal_provider = FakeProvider(_recommended_output(["menu-a", "menu-b"]))
+        normal_provider = FakeProvider(
+            _recommended_output(["menu-a", "menu-b", "menu-c"])
+        )
         normal_service = _service(normal_repository, normal_provider)
         normal_request = _request(f"recommendation-localized-normal-{index:04d}")
         normal_batch = normal_service.request_recommendation(
@@ -979,7 +1031,7 @@ def test_korean_and_arabic_fallbacks_use_human_localized_copy() -> None:
                     "best_for": "Provider comparison",
                     "unverified_dietary_info": "Provider warning",
                 }
-                for menu_id in ("menu-a", "menu-b")
+                for menu_id in ("menu-a", "menu-b", "menu-c")
             ],
         }
         normal_comparison = normal_service.compare_recommendations(
@@ -997,13 +1049,21 @@ def test_korean_and_arabic_fallbacks_use_human_localized_copy() -> None:
             for item in normal_comparison.items
         )
         if language == "한국어":
-            assert [item.name for item in normal_comparison.items] == ["메뉴 A", "메뉴 B"]
+            assert [item.name for item in normal_comparison.items] == [
+                "메뉴 A",
+                "메뉴 B",
+                "메뉴 C",
+            ]
 
 
 def test_generation_soft_profile_context_excludes_sensitive_legacy_fields() -> None:
     repository = FakeRecommendationRepository(_criteria())
-    repository.evidence_pool = [_pool_item("menu-a", score=0.90)]
-    provider = FakeProvider(_recommended_output(["menu-a"]))
+    repository.evidence_pool = [
+        _pool_item("menu-a", score=0.90),
+        _pool_item("menu-b", score=0.80),
+        _pool_item("menu-c", score=0.70),
+    ]
+    provider = FakeProvider(_recommended_output(["menu-a", "menu-b", "menu-c"]))
     service = _service(repository, provider)
 
     service.request_recommendation(_session(), _profile(), _request())
@@ -1059,6 +1119,36 @@ def test_stale_dispatched_request_becomes_unknown_without_redispatch() -> None:
     assert repository.requests[request.request_id].status is (
         RecommendationRequestStatus.UNKNOWN_AFTER_DISPATCH
     )
+    assert provider.calls == []
+
+
+def test_stale_shortlist_owner_loss_is_not_reported_as_a_provider_dispatch() -> None:
+    repository = FakeRecommendationRepository(_criteria())
+    provider = FakeProvider(_recommended_output(["menu-a"]))
+    service = _service(repository, provider)
+    request = _request()
+    repository.requests[request.request_id] = RecommendationRequestRecord(
+        request_id=request.request_id,
+        session_id=_session().session_id,
+        request_hash="c" * 64,
+        criteria_version=request.criteria_version,
+        mode=request.mode,
+        status=RecommendationRequestStatus.DISPATCHED,
+        state_version=request.expected_state_version,
+        release_family_id="recommendation-family-v1",
+        eligibility_as_of=datetime.now(timezone.utc) - timedelta(minutes=5),
+        evidence_pool_json=[],
+        dispatch_count=0,
+        created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        dispatched_at=datetime.now(timezone.utc) - timedelta(minutes=4),
+    )
+
+    result = service.get_request(_session().session_id, request.request_id)
+
+    assert result is not None
+    assert result.status == "FAILED"
+    assert result.failure_code == "PROVIDER_CALL_OWNER_LOST"
+    assert repository.requests[request.request_id].dispatch_count == 0
     assert provider.calls == []
 
 

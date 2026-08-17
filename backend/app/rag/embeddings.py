@@ -402,6 +402,42 @@ def hybrid_knowledge_chunk_score(
     return max(0.0, min(1.0, score))
 
 
+@lru_cache(maxsize=32_768)
+def deterministic_sparse_embedding(
+    text: str,
+    dimension: int = 1536,
+) -> tuple[tuple[int, float], ...]:
+    """Return the sparse form of the deterministic offline embedding.
+
+    Menu retrieval evaluates the same 15k-document mirror repeatedly. Caching
+    only non-zero coordinates keeps that channel bounded without retaining
+    thousands of 1536-element Python lists.
+    """
+
+    values: dict[int, float] = {}
+    for token in _tokens(text):
+        digest = hashlib.sha256(token.encode("utf-8")).digest()
+        index = int.from_bytes(digest[:4], "big") % dimension
+        sign = 1.0 if digest[4] & 1 else -1.0
+        weight = 1.0 + min(len(token), 20) / 20.0
+        values[index] = values.get(index, 0.0) + sign * weight
+    norm = math.sqrt(sum(value * value for value in values.values()))
+    if norm == 0:
+        return ()
+    return tuple(sorted((index, value / norm) for index, value in values.items()))
+
+
+def sparse_cosine_similarity(
+    left: Iterable[tuple[int, float]],
+    right: Iterable[tuple[int, float]],
+) -> float:
+    left_values = dict(left)
+    right_values = dict(right)
+    if len(left_values) > len(right_values):
+        left_values, right_values = right_values, left_values
+    return sum(value * right_values.get(index, 0.0) for index, value in left_values.items())
+
+
 def deterministic_embedding(text: str, dimension: int = 1536) -> list[float]:
     """Produce a deterministic semantic hashing vector for offline demo fallback.
 
@@ -410,16 +446,9 @@ def deterministic_embedding(text: str, dimension: int = 1536) -> list[float]:
     """
 
     vector = [0.0] * dimension
-    for token in _tokens(text):
-        digest = hashlib.sha256(token.encode("utf-8")).digest()
-        index = int.from_bytes(digest[:4], "big") % dimension
-        sign = 1.0 if digest[4] & 1 else -1.0
-        weight = 1.0 + min(len(token), 20) / 20.0
-        vector[index] += sign * weight
-    norm = math.sqrt(sum(value * value for value in vector))
-    if norm == 0:
-        return vector
-    return [value / norm for value in vector]
+    for index, value in deterministic_sparse_embedding(text, dimension):
+        vector[index] = value
+    return vector
 
 
 def cosine_similarity(left: Iterable[float], right: Iterable[float]) -> float:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import sys
 from pathlib import Path
 
@@ -17,10 +18,18 @@ sys.modules[SPEC.name] = query_plan
 SPEC.loader.exec_module(query_plan)
 
 
-def test_oracle_plan_accepts_menu_mapping_covering_index_access() -> None:
+def test_oracle_index_inventory_queries_every_required_v2_index() -> None:
+    source = inspect.getsource(query_plan._oracle_plan)
+
+    for index_name in query_plan.EXPECTED_INDEXES:
+        assert f"'{index_name}'" in source
+
+
+def test_oracle_plan_accepts_feature_and_membership_index_access() -> None:
     object_names = {
         "CONCEPT_PREFERENCE_SUPPORT",
-        "IDX_MENU_CONCEPT_HIGH",
+        "IDX_MENU_PREF_FEATURE_LOOKUP",
+        "IDX_MENU_CONCEPT_MEMBERSHIP_LOOKUP",
         "MENU",
         "MERCHANT",
     }
@@ -28,7 +37,7 @@ def test_oracle_plan_accepts_menu_mapping_covering_index_access() -> None:
     assert query_plan._oracle_required_tables_planned(object_names)
 
 
-def test_oracle_plan_rejects_missing_menu_mapping_table_and_index() -> None:
+def test_oracle_plan_rejects_missing_feature_and_membership_access() -> None:
     object_names = {
         "CONCEPT_PREFERENCE_SUPPORT",
         "MENU",
@@ -41,7 +50,8 @@ def test_oracle_plan_rejects_missing_menu_mapping_table_and_index() -> None:
 def test_oracle_plan_still_requires_every_other_table_explicitly() -> None:
     object_names = {
         "CONCEPT_PREFERENCE_SUPPORT",
-        "IDX_MENU_CONCEPT_HIGH",
+        "IDX_MENU_PREF_FEATURE_LOOKUP",
+        "IDX_MENU_CONCEPT_MEMBERSHIP_LOOKUP",
         "MERCHANT",
     }
 

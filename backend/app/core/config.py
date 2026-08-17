@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     oci_genai_api_key: SecretStr = SecretStr("")
     oci_genai_model: str = "xai.grok-4.3"
     oci_genai_fallback_model: str = "openai.gpt-oss-120b"
-    structured_recommendation_model: str = "openai.gpt-oss-120b"
-    structured_recommendation_max_output_tokens: int = Field(default=2048, ge=64)
+    structured_recommendation_model: str = "xai.grok-4.3"
+    structured_recommendation_max_output_tokens: int = Field(default=4096, ge=64)
     structured_recommendation_max_concurrent_requests: int = Field(
         default=2, ge=1, le=8
     )
@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     db_password: SecretStr = SecretStr("")
 
     llm_timeout_seconds: float = Field(default=120.0, gt=0.0, le=300.0)
-    llm_max_retries: int = Field(default=1, ge=0, le=3)
+    llm_max_retries: int = Field(default=0, ge=0, le=3)
     llm_retry_base_seconds: float = Field(default=0.25, ge=0.0, le=5.0)
     llm_retry_max_seconds: float = Field(default=2.0, ge=0.0, le=10.0)
     llm_max_concurrent_requests: int = Field(default=4, ge=1, le=32)
@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     recommendation_prompt_version: str = "yobi-structured-rag-v2"
     recommendation_raw_hits_per_value: int = Field(default=20, ge=4, le=100)
     recommendation_evidence_pool_limit: int = Field(default=24, ge=6, le=60)
+    recommendation_candidate_limit: int = Field(default=100, ge=15, le=100)
+    recommendation_llm_shortlist_limit: int = Field(default=15, ge=3, le=15)
+    recommendation_llm_selection_enabled: bool = True
     recommendation_passages_per_menu: int = Field(default=4, ge=1, le=8)
     recommendation_result_limit: int = Field(default=3, ge=1, le=5)
     recommendation_request_orphan_seconds: int = Field(default=180, ge=30, le=3600)

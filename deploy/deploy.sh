@@ -10,6 +10,7 @@ readonly SSH_USER="${YOBI_SSH_USER:-opc}"
 readonly ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly RECOVERY_ALLOW_UNREADY_CURRENT="${YOBI_RECOVERY_ALLOW_UNREADY_CURRENT:-false}"
 readonly PROVISIONAL_DEPLOY="${YOBI_PROVISIONAL_DEPLOY:-false}"
+readonly ZERO_PROVIDER_PROVISIONAL="${YOBI_ZERO_PROVIDER_PROVISIONAL:-false}"
 readonly QUALITY_FIVE_ONLY="${YOBI_QUALITY_FIVE_ONLY:-false}"
 readonly POST_QUALITY_REVIEW_DEPLOY="${YOBI_POST_QUALITY_REVIEW_DEPLOY:-false}"
 readonly GUARDED_SSH_HOST="${YOBI_GUARDED_SSH_HOST:-}"
@@ -22,6 +23,9 @@ readonly GUARDED_SSH_CONTROL_PATH="${YOBI_GUARDED_SSH_CONTROL_PATH:-}"
   || { printf 'YOBI_RECOVERY_ALLOW_UNREADY_CURRENT must be true or false.\n' >&2; exit 1; }
 [[ "$PROVISIONAL_DEPLOY" == "true" || "$PROVISIONAL_DEPLOY" == "false" ]] \
   || { printf 'YOBI_PROVISIONAL_DEPLOY must be true or false.\n' >&2; exit 1; }
+[[ "$ZERO_PROVIDER_PROVISIONAL" == "true" \
+  || "$ZERO_PROVIDER_PROVISIONAL" == "false" ]] \
+  || { printf 'YOBI_ZERO_PROVIDER_PROVISIONAL must be true or false.\n' >&2; exit 1; }
 [[ "$QUALITY_FIVE_ONLY" == "true" || "$QUALITY_FIVE_ONLY" == "false" ]] \
   || { printf 'YOBI_QUALITY_FIVE_ONLY must be true or false.\n' >&2; exit 1; }
 [[ "$POST_QUALITY_REVIEW_DEPLOY" == "true" \
@@ -33,6 +37,11 @@ readonly GUARDED_SSH_CONTROL_PATH="${YOBI_GUARDED_SSH_CONTROL_PATH:-}"
   && [[ "$POST_QUALITY_REVIEW_DEPLOY" != "true" \
     || "$QUALITY_FIVE_ONLY" != "true" ]] \
   || { printf 'Quality-five deployment modes are mutually exclusive.\n' >&2; exit 1; }
+[[ "$ZERO_PROVIDER_PROVISIONAL" != "true" \
+  || ( "$PROVISIONAL_DEPLOY" == "true" \
+    && "$QUALITY_FIVE_ONLY" == "false" \
+    && "$POST_QUALITY_REVIEW_DEPLOY" == "false" ) ]] \
+  || { printf 'Zero-provider mode requires the exclusive provisional deployment mode.\n' >&2; exit 1; }
 
 for command in git oci ssh tar shasum python3; do
   command -v "$command" >/dev/null || { printf 'Missing command: %s\n' "$command" >&2; exit 1; }
@@ -116,6 +125,7 @@ readonly REQUIRED_RELEASE_TOOLS=(
   scripts/structured_fallback_smoke.py
   scripts/recommendation_performance_smoke.py
   scripts/recommendation_quality_smoke.py
+  scripts/recommendation_v2_live_harness.py
   deploy/release_gate_contract.py
 )
 for release_tool in "${REQUIRED_RELEASE_TOOLS[@]}"; do
@@ -135,6 +145,7 @@ readonly EXPECTED_MIGRATIONS=(
   010_structured_hybrid_rag_recommendation.sql
   011_external_catalog_import.sql
   012_concept_preference_support_and_server_ranking.sql
+  013_menu_preference_features_and_hybrid_rank.sql
 )
 for migration in "${EXPECTED_MIGRATIONS[@]}"; do
   [[ -f "$ROOT_DIR/database/migrations/$migration" ]] \
@@ -147,7 +158,7 @@ actual_migration_list="$(
   done | LC_ALL=C sort
 )"
 [[ "$actual_migration_list" == "$expected_migration_list" ]] \
-  || { printf 'Migration directory must contain exactly 001-012.\n' >&2; exit 1; }
+  || { printf 'Migration directory must contain exactly 001-013.\n' >&2; exit 1; }
 
 source_git_commit="$(git -C "$ROOT_DIR" rev-parse --verify HEAD)"
 source_git_branch="$(git -C "$ROOT_DIR" branch --show-current)"
@@ -262,7 +273,7 @@ ssh -t -p "$ssh_port" -i "$SSH_KEY" \
   "${ssh_host_key_options[@]}" \
   "${ssh_connection_options[@]}" \
   "$SSH_USER@$host" \
-  "sudo -n bash -s -- '$RELEASE_ID' '$ARCHIVE_SHA256' '$REMOTE_ARCHIVE' '$SSH_USER' '$ARCHIVE_NONCE' '$RECOVERY_ALLOW_UNREADY_CURRENT' '$PROVISIONAL_DEPLOY' '$QUALITY_FIVE_ONLY' '$POST_QUALITY_REVIEW_DEPLOY' '$source_git_commit'" <<'REMOTE'
+  "sudo -n bash -s -- '$RELEASE_ID' '$ARCHIVE_SHA256' '$REMOTE_ARCHIVE' '$SSH_USER' '$ARCHIVE_NONCE' '$RECOVERY_ALLOW_UNREADY_CURRENT' '$PROVISIONAL_DEPLOY' '$ZERO_PROVIDER_PROVISIONAL' '$QUALITY_FIVE_ONLY' '$POST_QUALITY_REVIEW_DEPLOY' '$source_git_commit'" <<'REMOTE'
 set -euo pipefail
 [[ "${EUID}" -eq 0 ]] || { printf 'Remote deployment requires root.\n' >&2; exit 1; }
 release_id="$1"
@@ -272,9 +283,10 @@ upload_user="$4"
 archive_nonce="$5"
 recovery_allow_unready_current="$6"
 provisional_deploy="$7"
-quality_five_only="$8"
-post_quality_review_deploy="$9"
-source_git_commit="${10}"
+zero_provider_provisional="$8"
+quality_five_only="$9"
+post_quality_review_deploy="${10}"
+source_git_commit="${11}"
 [[ "$release_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$ \
   && "$archive_sha256" =~ ^[0-9a-f]{64}$ \
   && "$source_git_commit" =~ ^[0-9a-f]{40}$ \
@@ -284,6 +296,8 @@ source_git_commit="${10}"
     || "$recovery_allow_unready_current" == "false" ) \
   && ( "$provisional_deploy" == "true" \
     || "$provisional_deploy" == "false" ) \
+  && ( "$zero_provider_provisional" == "true" \
+    || "$zero_provider_provisional" == "false" ) \
   && ( "$quality_five_only" == "true" \
     || "$quality_five_only" == "false" ) \
   && ( "$post_quality_review_deploy" == "true" \
@@ -296,6 +310,11 @@ source_git_commit="${10}"
   && [[ "$post_quality_review_deploy" != "true" \
     || "$quality_five_only" != "true" ]] \
   || { printf 'Remote quality-five deployment modes are mutually exclusive.\n' >&2; exit 1; }
+[[ "$zero_provider_provisional" != "true" \
+  || ( "$provisional_deploy" == "true" \
+    && "$quality_five_only" == "false" \
+    && "$post_quality_review_deploy" == "false" ) ]] \
+  || { printf 'Remote zero-provider mode requires exclusive provisional deployment.\n' >&2; exit 1; }
 
 cleanup_remote_archive() {
   if [[ -n "$remote_archive" ]]; then
@@ -370,11 +389,17 @@ write_provisional_marker() {
   local marker_path="$release_path/.yobi-release-provisional"
   validate_release_path "$release_path" || return 1
   install -o root -g yobi -m 0644 /dev/null "$marker_path" || return 1
-  printf '%s\n' 'quality-five-gate=pending' \
-    | tee "$marker_path" >/dev/null || return 1
+  if [[ "$zero_provider_provisional" == "true" ]]; then
+    printf '%s\n' 'recommendation-v2-five=pending' \
+      | tee "$marker_path" >/dev/null || return 1
+  else
+    printf '%s\n' 'quality-five-gate=pending' \
+      | tee "$marker_path" >/dev/null || return 1
+  fi
   [[ -f "$marker_path" && ! -L "$marker_path" \
     && "$(stat -c '%U:%G:%a' "$marker_path")" == "root:yobi:644" \
-    && "$(cat "$marker_path")" == "quality-five-gate=pending" ]]
+    && ( "$(cat "$marker_path")" == "quality-five-gate=pending" \
+      || "$(cat "$marker_path")" == "recommendation-v2-five=pending" ) ]]
 }
 
 write_reviewed_quality_marker() {
@@ -586,13 +611,13 @@ sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \
   'from deploy.secure_bootstrap import Settings, verify_database
 status = verify_database(Settings())
 if not (
-    status["expected_migration_count"] == status["applied_migration_count"] == 12
+    status["expected_migration_count"] == status["applied_migration_count"] == 13
     and status["latest_expected_migration"]
     == status["latest_applied_migration"]
-    == "012"
+    == "013"
 ):
     raise SystemExit("MIGRATION_LEDGER_NOT_EXACT")
-print("Verified exact migrations=001-012 runtime_user=YOBI_APP")'
+print("Verified exact migrations=001-013 runtime_user=YOBI_APP")'
 old_knowledge_release_id="$(run_knowledge_manager get-active)"
 old_recommendation_release_family_id="$(run_recommendation_manager get-active)"
 knowledge_restore_required=true
@@ -633,6 +658,20 @@ print(family)'
     "$new_release/venv/bin/python" "$new_release/scripts/manage_demo_address.py" --apply
   sudo env PYTHONPATH="$new_release/backend:$new_release" "${runtime_env_runner[@]}" \
     "$new_release/venv/bin/python" "$new_release/scripts/manage_demo_address.py" --verify-only
+  if [[ "$zero_provider_provisional" == "true" ]]; then
+    # The one allowed staged-family Grok probe happens before either the app or
+    # recommendation-family active pointer changes. A failure exits here and
+    # leaves the existing live release active.
+    predeploy_run_id="predeploy-$(printf '%s' "$new_recommendation_release_family_id" \
+      | sha256sum | awk '{print substr($1,1,32)}')"
+    sudo env PYTHONPATH="$new_release/backend:$new_release" \
+      "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
+      "$new_release/scripts/recommendation_v2_live_harness.py" predeploy \
+      --run-id "$predeploy_run_id" \
+      --output-dir /opt/yobi/shared/evidence/recommendation-v2 \
+      --release-family-id "$new_recommendation_release_family_id"
+    unset predeploy_run_id
+  fi
 elif [[ "$catalog_mode" == "synthetic" ]]; then
   sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \
     "$new_release/venv/bin/python" "$new_release/scripts/seed_demo.py" --upsert
@@ -701,6 +740,17 @@ run_release_smokes() {
       "$new_release/scripts/catalog_mode.py" verify-external \
       || return 1
     completed_release_gates+=(source-integrity)
+  fi
+  if [[ "$zero_provider_provisional" == "true" ]]; then
+    if [[ "$catalog_mode" != "external" \
+      || "${#completed_release_gates[@]}" -ne 2 \
+      || "${completed_release_gates[0]}" != "query-plan" \
+      || "${completed_release_gates[1]}" != "source-integrity" ]]; then
+      printf 'Zero-provider provisional gates are incomplete.\n' >&2
+      return 1
+    fi
+    printf 'PROVISIONAL-V2: activated with zero post-activation provider calls; fixed five-call gate remains pending.\n'
+    return 0
   fi
   if [[ "$quality_five_only" != "true" \
     && "$post_quality_review_deploy" != "true" ]]; then

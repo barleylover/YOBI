@@ -754,6 +754,12 @@ def test_snapshot_completion_revalidates_filters_increments_once_and_hides_audit
         request.request_id,
         pool,
     )
+    assert dispatched.dispatch_count == 0
+    dispatched = repository.mark_recommendation_provider_called(
+        session.session_id,
+        request.request_id,
+    )
+    assert dispatched.dispatch_count == 1
     selected = pool[0]
     unavailable = pool[1]
     with repository._connection() as connection:

@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from app.domain.preference_catalog import PREFERENCE_CATEGORIES, preference_query_aliases
+from app.knowledge.menu_features import normalize_preference_text, preference_term_matches
 
-SUPPORT_METHOD_VERSION = "yobi-reviewed-wiki-support-v1"
+SUPPORT_METHOD_VERSION = "yobi-reviewed-wiki-support-v2"
 SUPPORT_PROVENANCE = "SYNTHETIC_WIKI"
 REVIEWED_CUISINE_ORIGIN_CODES = frozenset(
     {
@@ -56,17 +56,24 @@ def preference_alias_matches(text: str, aliases: tuple[str, ...]) -> bool:
         "with",
         "won",
     }
+    normalized_text = normalize_preference_text(text)
     for alias in aliases:
         words = [
             word
-            for word in re.sub(r"[^a-z0-9가-힣]+", " ", alias.lower()).split()
+            for word in normalize_preference_text(alias).split()
             if word not in ignored
             and (len(word) >= 3 or any("가" <= character <= "힣" for character in word))
         ]
         if not words:
             continue
         required_matches = 1 if len(words) == 1 else 2
-        if sum(word in text for word in words) >= required_matches:
+        if (
+            sum(
+                preference_term_matches(normalized_text, word)
+                for word in words
+            )
+            >= required_matches
+        ):
             return True
     return False
 

@@ -172,7 +172,7 @@ class StructuredRecommendationService:
             profile,
             criteria_record.criteria,
             request.mode,
-            self.settings.recommendation_evidence_pool_limit,
+            self.settings.recommendation_candidate_limit,
             release_family_id=record.release_family_id,
             eligibility_as_of=record.eligibility_as_of,
             raw_hits_per_value=self.settings.recommendation_raw_hits_per_value,
@@ -188,7 +188,10 @@ class StructuredRecommendationService:
             metrics_reader(session.session_id) if callable(metrics_reader) else {}
         )
         freeze_started = monotonic()
-        evidence_pool = self._freeze_server_candidates(evidence_pool)
+        evidence_pool = self._freeze_server_candidates(
+            evidence_pool,
+            limit=self.settings.recommendation_llm_shortlist_limit,
+        )
         freeze_ms = int((monotonic() - freeze_started) * 1000)
         if not evidence_pool:
             exhausted = request.mode in {
@@ -238,14 +241,26 @@ class StructuredRecommendationService:
 
         soft_profile_context = {"preferred_language": profile.preferred_language}
         provider_started = monotonic()
+
+        def mark_provider_call() -> None:
+            called = self.repository.mark_recommendation_provider_called(
+                session.session_id,
+                request.request_id,
+            )
+            if called.dispatch_count != 1:
+                raise RuntimeError("RECOMMENDATION_PROVIDER_CALL_NOT_RECORDED")
+
         try:
             if self.demo_control.mode in {"force_fallback", "force_genai_timeout"}:
                 raise RuntimeError("DEMO_FORCED_RECOMMENDATION_FALLBACK")
+            if not self.settings.recommendation_llm_selection_enabled:
+                raise RuntimeError("RECOMMENDATION_LLM_SELECTION_DISABLED")
             generated = self.generator.generate(
                 criteria=criteria_record.criteria.model_dump(mode="json"),
                 soft_profile_context=soft_profile_context,
                 evidence_pool=pool_payload,
                 locale=profile.preferred_language,
+                before_provider_call=mark_provider_call,
             )
             if generated.status is RecommendationGenerationStatus.NO_MATCH:
                 raise ValueError("GENERATOR_NO_MATCH_NOT_AUTHORIZED")
@@ -304,16 +319,18 @@ class StructuredRecommendationService:
             provider_ms=provider_ms,
             persistence_ms=persistence_ms,
             started=started,
-            final_count=len(evidence_pool),
+            final_count=len((completed.result_json or {}).get("recommendations", [])),
         )
         return self._live_batch(completed)
 
     @staticmethod
     def _freeze_server_candidates(
         evidence_pool: list[EvidencePoolItem],
+        *,
+        limit: int,
     ) -> list[EvidencePoolItem]:
         frozen: list[EvidencePoolItem] = []
-        for rank, item in enumerate(evidence_pool[:3], start=1):
+        for rank, item in enumerate(evidence_pool[:limit], start=1):
             trace = {
                 **item.ranking_trace,
                 "rank": rank,
@@ -357,6 +374,7 @@ class StructuredRecommendationService:
             "generation_dispatch_count": record.dispatch_count,
             "ranking_policy_version": record.ranking_policy_version,
             "support_manifest_sha256": record.support_manifest_sha256,
+            "feature_manifest_sha256": record.feature_manifest_sha256,
             "safe_error_code": record.failure_code,
         }
         # New-policy repositories expose measured SQL/support/rerank/evidence
@@ -412,11 +430,20 @@ class StructuredRecommendationService:
             - timedelta(seconds=self.settings.recommendation_request_orphan_seconds)
         ):
             try:
+                provider_called = record.dispatch_count == 1
                 record = self.repository.complete_recommendation_request(
                     session_id,
                     request_id,
-                    RecommendationRequestStatus.UNKNOWN_AFTER_DISPATCH,
-                    failure_code="DISPATCH_RESULT_UNKNOWN",
+                    (
+                        RecommendationRequestStatus.UNKNOWN_AFTER_DISPATCH
+                        if provider_called
+                        else RecommendationRequestStatus.FAILED
+                    ),
+                    failure_code=(
+                        "DISPATCH_RESULT_UNKNOWN"
+                        if provider_called
+                        else "PROVIDER_CALL_OWNER_LOST"
+                    ),
                 )
             except (RuntimeError, ValueError):
                 # A concurrent owner may have committed while the stale read was
@@ -746,10 +773,12 @@ class StructuredRecommendationService:
         generated: Any,
         evidence_pool: list[EvidencePoolItem],
     ) -> dict[str, Any]:
-        generated_by_id = {item.menu_id: item for item in generated.recommendations}
+        pool_by_id = {item.menu.menu_id: item for item in evidence_pool}
         recommendations: list[dict[str, Any]] = []
-        for rank, pool_item in enumerate(evidence_pool, start=1):
-            generated_item = generated_by_id[pool_item.menu.menu_id]
+        for rank, generated_item in enumerate(generated.recommendations, start=1):
+            pool_item = pool_by_id.get(generated_item.menu_id)
+            if pool_item is None:
+                raise ValueError("GENERATED_MENU_OUTSIDE_SERVER_SHORTLIST")
             recommendations.append(
                 {
                     **generated_item.model_dump(mode="json"),

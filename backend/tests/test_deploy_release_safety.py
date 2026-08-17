@@ -22,13 +22,14 @@ def test_release_archive_contains_knowledge_and_all_migrations() -> None:
     assert "010_structured_hybrid_rag_recommendation.sql" in source
     assert "011_external_catalog_import.sql" in source
     assert "012_concept_preference_support_and_server_ranking.sql" in source
+    assert "013_menu_preference_features_and_hybrid_rank.sql" in source
     assert "persist_runtime_release_policy" in source
     assert "actual_migration_list" in source
-    assert "Migration directory must contain exactly 001-012" in source
-    assert 'status["expected_migration_count"] == status["applied_migration_count"] == 12' in source
+    assert "Migration directory must contain exactly 001-013" in source
+    assert 'status["expected_migration_count"] == status["applied_migration_count"] == 13' in source
     assert 'status["latest_expected_migration"]' in source
     assert 'status["latest_applied_migration"]' in source
-    assert '== "012"' in source
+    assert '== "013"' in source
     assert 'raise SystemExit("MIGRATION_LEDGER_NOT_EXACT")' in source
     assert "assert status[" not in source
     runtime_import = source.index('import app.main; print("Verified Python 3.9 application imports.")')
@@ -45,6 +46,8 @@ def test_release_archive_contains_knowledge_and_all_migrations() -> None:
     assert "--activate-staged" in source
     assert "--scope staged --verify" in source
     assert "--scope active --verify" in source
+    assert "recommendation_v2_live_harness.py\" predeploy" in source
+    assert '--release-family-id "$new_recommendation_release_family_id"' in source
     assert "verify-external-gates" in source
     assert "release_gate_contract.py" in source
     assert source.index('"$new_release/scripts/manage_demo_address.py" --apply') < source.index(
@@ -52,6 +55,9 @@ def test_release_archive_contains_knowledge_and_all_migrations() -> None:
     )
     assert source.index("--stage-only") < source.index("--scope staged --verify")
     assert source.index("--scope staged --verify") < source.index(
+        'sudo ln -sfn "$new_release" /opt/yobi/current'
+    )
+    assert source.index('"$new_release/scripts/recommendation_v2_live_harness.py" predeploy') < source.index(
         'sudo ln -sfn "$new_release" /opt/yobi/current'
     )
     assert source.index('sudo ln -sfn "$new_release" /opt/yobi/current') < source.index(

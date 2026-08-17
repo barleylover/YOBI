@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from app.domain.structured_recommendation import RecommendationCriteriaV2
 
 SqlDialect = Literal["sqlite", "oracle"]
+SelectedSupportChannel = Literal["COMBINED", "MENU_FEATURE", "CONCEPT_SUPPORT"]
 
 
 @dataclass(frozen=True)
@@ -15,152 +17,19 @@ class ConceptCandidateQuery:
     parameters: dict[str, Any]
 
 
-def build_concept_candidate_query(
+def _hard_eligibility_conditions(
     *,
-    dialect: SqlDialect,
     criteria: RecommendationCriteriaV2,
-    knowledge_release_id: str,
     certification_release_id: str,
     service_area_id: str | None,
     excluded_menu_ids: set[str],
+    included_menu_ids: Sequence[str] | None,
     eligibility_as_of: Any,
-    candidate_limit: int | None,
-) -> ConceptCandidateQuery:
-    """Build the shared SQL-first eligibility and concept-support query."""
-
-    selected = [
-        (category, option)
-        for category, options in criteria.subjective_groups().items()
-        for option in options
-    ]
-    parameters: dict[str, Any] = {
-        "knowledge_release_id": knowledge_release_id,
-    }
-    if selected:
-        parameters["selected_category_count"] = len(criteria.subjective_groups())
-        if dialect == "sqlite":
-            values: list[str] = []
-            for index, (category, option) in enumerate(selected):
-                values.append(f"(:selected_category_{index},:selected_option_{index})")
-                parameters[f"selected_category_{index}"] = category
-                parameters[f"selected_option_{index}"] = option
-            selected_cte = "selected(category_code,option_code) AS (VALUES " + ",".join(values) + ")"
-        else:
-            values = []
-            for index, (category, option) in enumerate(selected):
-                values.append(
-                    f"SELECT :selected_category_{index} category_code,"
-                    f":selected_option_{index} option_code FROM dual"
-                )
-                parameters[f"selected_category_{index}"] = category
-                parameters[f"selected_option_{index}"] = option
-            selected_cte = "selected AS (" + " UNION ALL ".join(values) + ")"
-        # Collapse same-category options before scoring.  This is the SQL form of
-        # same-category OR: a concept receives the strongest supported selected
-        # option once per category, rather than an average over every matching
-        # option.  The final HAVING below then implements cross-category AND.
-        support_ctes = """,
-      selected_support AS (
-        SELECT mapping.menu_id,mapping.release_id,mapping.concept_id,
-               support.category_code,support.support_strength,
-               support.evidence_chunk_id
-        FROM menu_concept_map mapping
-        JOIN concept_preference_support support
-          ON support.knowledge_release_id=mapping.release_id
-         AND support.concept_id=mapping.concept_id
-         AND support.support_status='SUPPORTED'
-         AND support.evidence_chunk_id IS NOT NULL
-        JOIN selected
-          ON selected.category_code=support.category_code
-         AND selected.option_code=support.option_code
-        WHERE mapping.release_id=:knowledge_release_id
-          AND mapping.mapping_status='MAPPED'
-          AND mapping.confidence_band='high'
-      ),
-      category_support AS (
-        SELECT menu_id,release_id,concept_id,category_code,
-               MAX(support_strength) AS category_support
-        FROM selected_support
-        GROUP BY menu_id,release_id,concept_id,category_code
-      ),
-      concept_evidence AS (
-        SELECT menu_id,release_id,concept_id,
-               COUNT(DISTINCT evidence_chunk_id) AS reviewed_evidence_count
-        FROM selected_support
-        GROUP BY menu_id,release_id,concept_id
-      )"""
-        support_join = """
-          JOIN category_support support
-            ON support.menu_id=mapping.menu_id
-           AND support.release_id=mapping.release_id
-           AND support.concept_id=mapping.concept_id
-          JOIN concept_evidence support_evidence
-            ON support_evidence.menu_id=mapping.menu_id
-           AND support_evidence.release_id=mapping.release_id
-           AND support_evidence.concept_id=mapping.concept_id
-        """
-        support_projection = """
-          AVG(support.category_support) AS explicit_score,
-          MIN(support.category_support) AS min_category_support,
-          support_evidence.reviewed_evidence_count AS reviewed_evidence_count
-        """
-        support_having = (
-            "HAVING COUNT(DISTINCT support.category_code)=:selected_category_count"
-        )
-    else:
-        selected_cte = "selected AS (SELECT NULL category_code,NULL option_code WHERE 1=0)"
-        if dialect == "oracle":
-            selected_cte = "selected AS (SELECT NULL category_code,NULL option_code FROM dual WHERE 1=0)"
-        public_visibility = (
-            "json_extract(chunk.metadata_json,'$.recommendation_visibility')"
-            if dialect == "sqlite"
-            else "JSON_VALUE(chunk.metadata_json,'$.recommendation_visibility')"
-        )
-        # Exact/objective-only requests do not need to multiply every menu row by
-        # every knowledge chunk.  Pre-aggregate the small reviewed concept set once,
-        # then join it to mapped menus.  This preserves the evidence eligibility
-        # boundary while keeping price-only preview and retrieval bounded.
-        support_ctes = f""",
-      objective_concept AS (
-        SELECT closure.release_id,
-               closure.descendant_concept_id AS concept_id,
-               COUNT(DISTINCT chunk.chunk_id) AS reviewed_evidence_count
-        FROM dish_concept_closure closure
-        JOIN knowledge_chunk chunk
-          ON chunk.release_id=closure.release_id
-         AND chunk.concept_id=closure.ancestor_concept_id
-        JOIN knowledge_document document
-          ON document.release_id=chunk.release_id
-         AND document.document_id=chunk.document_id
-        WHERE closure.release_id=:knowledge_release_id
-          AND closure.inherit_claims=1
-          AND document.source_type='SYNTHETIC_WIKI'
-          AND document.review_status='REVIEWED_DEMO'
-          AND lower(chunk.facet)<>'safety'
-          AND (
-            {public_visibility}='PUBLIC_RAG'
-            OR {public_visibility} IS NULL
-          )
-        GROUP BY closure.release_id,closure.descendant_concept_id
-      )"""
-        support_join = """
-          JOIN objective_concept objective_support
-            ON objective_support.release_id=mapping.release_id
-           AND objective_support.concept_id=mapping.concept_id
-        """
-        support_projection = """
-          1.0 AS explicit_score,
-          1.0 AS min_category_support,
-          objective_support.reviewed_evidence_count AS reviewed_evidence_count
-        """
-        support_having = ""
-
+    parameters: dict[str, Any],
+) -> list[str]:
     conditions = [
         "menu.availability='AVAILABLE'",
         "menu.price>0",
-        "mapping.release_id=:knowledge_release_id",
-        "mapping.mapping_status='MAPPED'",
-        "mapping.confidence_band='high'",
         "COALESCE(source_detail.liquor,0)=0",
         "COALESCE(source_detail.is_adult,0)=0",
         "COALESCE(source_detail.verified_adult,0)=0",
@@ -176,17 +45,27 @@ def build_concept_candidate_query(
             excluded_placeholders.append(f":{key}")
             parameters[key] = menu_id
         conditions.append("menu.menu_id NOT IN (" + ",".join(excluded_placeholders) + ")")
+    if included_menu_ids is not None:
+        unique_ids = list(dict.fromkeys(included_menu_ids))
+        if not unique_ids:
+            conditions.append("1=0")
+        else:
+            included_placeholders: list[str] = []
+            for index, menu_id in enumerate(unique_ids):
+                key = f"included_menu_{index}"
+                included_placeholders.append(f":{key}")
+                parameters[key] = menu_id
+            conditions.append("menu.menu_id IN (" + ",".join(included_placeholders) + ")")
 
-    price_conditions: list[str] = []
-    for band in criteria.price_bands:
-        price_conditions.append(
-            {
-                "UNDER_10000": "menu.price<10000",
-                "FROM_10000_TO_19999": "menu.price BETWEEN 10000 AND 19999",
-                "FROM_20000_TO_29999": "menu.price BETWEEN 20000 AND 29999",
-                "OVER_30000": "menu.price>=30000",
-            }[band]
-        )
+    price_conditions = [
+        {
+            "UNDER_10000": "menu.price<10000",
+            "FROM_10000_TO_19999": "menu.price BETWEEN 10000 AND 19999",
+            "FROM_20000_TO_29999": "menu.price BETWEEN 20000 AND 29999",
+            "OVER_30000": "menu.price>=30000",
+        }[band]
+        for band in criteria.price_bands
+    ]
     if price_conditions:
         conditions.append("(" + " OR ".join(price_conditions) + ")")
 
@@ -230,16 +109,254 @@ def build_concept_candidate_query(
                 )""",
             ]
         )
+    return conditions
+
+
+def build_concept_candidate_query(
+    *,
+    dialect: SqlDialect,
+    criteria: RecommendationCriteriaV2,
+    knowledge_release_id: str,
+    certification_release_id: str,
+    service_area_id: str | None,
+    excluded_menu_ids: set[str],
+    eligibility_as_of: Any,
+    candidate_limit: int | None,
+    included_menu_ids: Sequence[str] | None = None,
+    support_channel: SelectedSupportChannel = "COMBINED",
+) -> ConceptCandidateQuery:
+    """Build one grounded candidate channel or the final combined grounding query.
+
+    ``MENU_FEATURE`` is allowed to use section/option ``REVIEW_REQUIRED`` rows
+    only to recall a candidate. ``COMBINED`` deliberately removes those weak
+    rows again, so the final population still requires menu-direct or reviewed
+    concept evidence for every selected category.
+    """
+
+    selected = [
+        (category, option)
+        for category, options in criteria.subjective_groups().items()
+        for option in options
+    ]
+    parameters: dict[str, Any] = {"knowledge_release_id": knowledge_release_id}
+    if selected:
+        parameters.update(
+            {
+                "include_menu_feature": int(
+                    support_channel in {"COMBINED", "MENU_FEATURE"}
+                ),
+                "include_concept_support": int(
+                    support_channel in {"COMBINED", "CONCEPT_SUPPORT"}
+                ),
+                "allow_auxiliary_feature": int(
+                    support_channel == "MENU_FEATURE"
+                ),
+            }
+        )
+        parameters["selected_category_count"] = len(criteria.subjective_groups())
+        if dialect == "sqlite":
+            values: list[str] = []
+            for index, (category, option) in enumerate(selected):
+                values.append(f"(:selected_category_{index},:selected_option_{index})")
+                parameters[f"selected_category_{index}"] = category
+                parameters[f"selected_option_{index}"] = option
+            selected_cte = "selected(category_code,option_code) AS (VALUES " + ",".join(values) + ")"
+        else:
+            values = []
+            for index, (category, option) in enumerate(selected):
+                values.append(
+                    f"SELECT :selected_category_{index} category_code,"
+                    f":selected_option_{index} option_code FROM dual"
+                )
+                parameters[f"selected_category_{index}"] = category
+                parameters[f"selected_option_{index}"] = option
+            selected_cte = "selected AS (" + " UNION ALL ".join(values) + ")"
+        # Collapse same-category options before scoring. Direct menu support and
+        # reviewed concept support are unioned, while a direct contradiction
+        # blocks inheritance for that exact selected value.
+        support_ctes = """,
+      menu_feature_support AS (
+        SELECT feature.menu_id,NULL AS concept_id,feature.category_code,
+               feature.option_code,feature.support_strength,
+               feature.feature_id AS evidence_id,
+               CASE WHEN feature.support_status='SUPPORTED'
+                          AND feature.evidence_scope='MENU_DIRECT'
+                    THEN 1 ELSE 0 END AS direct_supported,
+               CASE WHEN feature.support_status='SUPPORTED'
+                          AND feature.evidence_scope='MENU_DIRECT'
+                    THEN 1 ELSE 0 END AS final_grounding_allowed
+        FROM menu_preference_feature feature
+        JOIN selected
+          ON selected.category_code=feature.category_code
+         AND selected.option_code=feature.option_code
+        WHERE feature.knowledge_release_id=:knowledge_release_id
+          AND feature.support_status IN ('SUPPORTED','REVIEW_REQUIRED')
+          AND feature.evidence_scope IN (
+            'MENU_DIRECT','SECTION_CONTEXT','OPTION_AVAILABILITY'
+          )
+      ),
+      concept_support AS (
+        SELECT membership.menu_id,membership.concept_id,support.category_code,
+               support.option_code,support.support_strength,
+               support.evidence_chunk_id AS evidence_id,0 AS direct_supported,
+               1 AS final_grounding_allowed
+        FROM menu_concept_membership membership
+        JOIN concept_preference_support support
+          ON support.knowledge_release_id=membership.knowledge_release_id
+         AND support.concept_id=membership.concept_id
+         AND support.support_status='SUPPORTED'
+         AND support.evidence_chunk_id IS NOT NULL
+        JOIN selected
+          ON selected.category_code=support.category_code
+         AND selected.option_code=support.option_code
+        WHERE membership.knowledge_release_id=:knowledge_release_id
+          AND NOT EXISTS (
+            SELECT 1 FROM menu_preference_feature contradiction
+            WHERE contradiction.knowledge_release_id=membership.knowledge_release_id
+              AND contradiction.menu_id=membership.menu_id
+              AND contradiction.category_code=support.category_code
+              AND contradiction.option_code=support.option_code
+              AND contradiction.support_status='CONTRADICTED'
+              AND contradiction.evidence_scope='MENU_DIRECT'
+          )
+      ),
+      selected_support AS (
+        SELECT * FROM menu_feature_support
+        WHERE :include_menu_feature=1
+          AND (
+            :allow_auxiliary_feature=1
+            OR final_grounding_allowed=1
+          )
+        UNION ALL
+        SELECT * FROM concept_support WHERE :include_concept_support=1
+      ),
+      category_support AS (
+        SELECT menu_id,category_code,
+               MAX(support_strength) AS category_support,
+               MAX(direct_supported) AS direct_supported,
+               COUNT(DISTINCT evidence_id) AS reviewed_evidence_count
+        FROM selected_support
+        GROUP BY menu_id,category_code
+      ),
+      candidate_concept AS (
+        SELECT menu_id,concept_id
+        FROM (
+          SELECT membership.menu_id,membership.concept_id,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY membership.menu_id
+                   ORDER BY CASE membership.membership_role
+                     WHEN 'PRIMARY' THEN 1 WHEN 'COMPONENT' THEN 2 ELSE 3 END,
+                     membership.concept_id
+                 ) AS membership_rank
+          FROM menu_concept_membership membership
+          WHERE membership.knowledge_release_id=:knowledge_release_id
+        )
+        WHERE membership_rank=1
+      )"""
+        support_join = """
+          JOIN category_support support
+            ON support.menu_id=menu.menu_id
+          LEFT JOIN candidate_concept
+            ON candidate_concept.menu_id=menu.menu_id
+        """
+        support_projection = """
+          COALESCE(candidate_concept.concept_id,menu.menu_id) AS concept_id,
+          AVG(support.category_support) AS explicit_score,
+          MIN(support.category_support) AS min_category_support,
+          SUM(support.reviewed_evidence_count) AS reviewed_evidence_count,
+          AVG(support.direct_supported) AS direct_evidence_ratio
+        """
+        support_having = (
+            "HAVING COUNT(DISTINCT support.category_code)=:selected_category_count"
+        )
+    else:
+        selected_cte = "selected AS (SELECT NULL category_code,NULL option_code WHERE 1=0)"
+        if dialect == "oracle":
+            selected_cte = "selected AS (SELECT NULL category_code,NULL option_code FROM dual WHERE 1=0)"
+        public_visibility = (
+            "json_extract(chunk.metadata_json,'$.recommendation_visibility')"
+            if dialect == "sqlite"
+            else "JSON_VALUE(chunk.metadata_json,'$.recommendation_visibility')"
+        )
+        # Exact/objective-only requests do not need to multiply every menu row by
+        # every knowledge chunk.  Pre-aggregate the small reviewed concept set once,
+        # then join it to mapped menus.  This preserves the evidence eligibility
+        # boundary while keeping price-only preview and retrieval bounded.
+        support_ctes = f""",
+      candidate_membership AS (
+        SELECT menu_id,concept_id
+        FROM (
+          SELECT membership.menu_id,membership.concept_id,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY membership.menu_id
+                   ORDER BY CASE membership.membership_role
+                     WHEN 'PRIMARY' THEN 1 WHEN 'COMPONENT' THEN 2 ELSE 3 END,
+                     membership.concept_id
+                 ) AS membership_rank
+          FROM menu_concept_membership membership
+          WHERE membership.knowledge_release_id=:knowledge_release_id
+        )
+        WHERE membership_rank=1
+      ),
+      objective_concept AS (
+        SELECT closure.release_id,
+               closure.descendant_concept_id AS concept_id,
+               COUNT(DISTINCT chunk.chunk_id) AS reviewed_evidence_count
+        FROM dish_concept_closure closure
+        JOIN knowledge_chunk chunk
+          ON chunk.release_id=closure.release_id
+         AND chunk.concept_id=closure.ancestor_concept_id
+        JOIN knowledge_document document
+          ON document.release_id=chunk.release_id
+         AND document.document_id=chunk.document_id
+        WHERE closure.release_id=:knowledge_release_id
+          AND closure.inherit_claims=1
+          AND document.source_type='SYNTHETIC_WIKI'
+          AND document.review_status='REVIEWED_DEMO'
+          AND lower(chunk.facet)<>'safety'
+          AND (
+            {public_visibility}='PUBLIC_RAG'
+            OR {public_visibility} IS NULL
+          )
+        GROUP BY closure.release_id,closure.descendant_concept_id
+      )"""
+        support_join = """
+          JOIN candidate_membership membership
+            ON membership.menu_id=menu.menu_id
+          JOIN objective_concept objective_support
+            ON objective_support.release_id=:knowledge_release_id
+           AND objective_support.concept_id=membership.concept_id
+        """
+        support_projection = """
+          membership.concept_id AS concept_id,
+          1.0 AS explicit_score,
+          1.0 AS min_category_support,
+          objective_support.reviewed_evidence_count AS reviewed_evidence_count,
+          0.0 AS direct_evidence_ratio
+        """
+        support_having = ""
+
+    conditions = _hard_eligibility_conditions(
+        criteria=criteria,
+        certification_release_id=certification_release_id,
+        service_area_id=service_area_id,
+        excluded_menu_ids=excluded_menu_ids,
+        included_menu_ids=included_menu_ids,
+        eligibility_as_of=eligibility_as_of,
+        parameters=parameters,
+    )
 
     group_by = """
       menu.menu_id,menu.merchant_id,merchant.name_en,merchant.name_ko,
       menu.name_en,menu.name_ko,menu.category,menu.description,
       menu.cultural_description,menu.price,merchant.delivery_fee,
       merchant.eta_min,merchant.eta_max,menu.spice_level,
-      menu.serves_min,menu.serves_max,menu.is_synthetic,mapping.concept_id
+      menu.serves_min,menu.serves_max,menu.is_synthetic
     """
     if selected:
-        group_by += ",support_evidence.reviewed_evidence_count"
+        group_by += ",candidate_concept.concept_id"
+    else:
+        group_by += ",membership.concept_id,objective_support.reviewed_evidence_count"
     group_by_clause = f"GROUP BY {group_by}" if selected else ""
     limit_clause = ""
     diversity_cte = ""
@@ -277,11 +394,9 @@ def build_concept_candidate_query(
           COALESCE(merchant.eta_min,0) AS eta_min,
           COALESCE(merchant.eta_max,0) AS eta_max,
           menu.spice_level,menu.serves_min,menu.serves_max,menu.is_synthetic,
-          mapping.concept_id,
           {support_projection}
         FROM menu
         JOIN merchant ON merchant.merchant_id=menu.merchant_id
-        JOIN menu_concept_map mapping ON mapping.menu_id=menu.menu_id
         LEFT JOIN menu_source_detail source_detail ON source_detail.menu_id=menu.menu_id
         {support_join}
         WHERE {' AND '.join(conditions)}
@@ -293,6 +408,404 @@ def build_concept_candidate_query(
       ORDER BY explicit_score DESC,min_category_support DESC,
                reviewed_evidence_count DESC,merchant_id,menu_id
       {limit_clause}
+    """
+    return ConceptCandidateQuery(sql=sql, parameters=parameters)
+
+
+def build_concept_preview_count_query(
+    *,
+    dialect: SqlDialect,
+    criteria: RecommendationCriteriaV2,
+    knowledge_release_id: str,
+    certification_release_id: str,
+    service_area_id: str | None,
+    excluded_menu_ids: set[str],
+    eligibility_as_of: Any,
+) -> ConceptCandidateQuery:
+    """Count grounded hard-eligible menus without materializing ranking columns."""
+
+    selected = [
+        (category, option)
+        for category, options in criteria.subjective_groups().items()
+        for option in options
+    ]
+    parameters: dict[str, Any] = {"knowledge_release_id": knowledge_release_id}
+    if selected:
+        parameters["selected_category_count"] = len(criteria.subjective_groups())
+        values: list[str] = []
+        for index, (category, option) in enumerate(selected):
+            parameters[f"selected_category_{index}"] = category
+            parameters[f"selected_option_{index}"] = option
+            if dialect == "sqlite":
+                values.append(
+                    f"(:selected_category_{index},:selected_option_{index})"
+                )
+            else:
+                values.append(
+                    f"SELECT :selected_category_{index} category_code,"
+                    f":selected_option_{index} option_code FROM dual"
+                )
+        selected_cte = (
+            "selected(category_code,option_code) AS (VALUES "
+            + ",".join(values)
+            + ")"
+            if dialect == "sqlite"
+            else "selected AS (" + " UNION ALL ".join(values) + ")"
+        )
+        grounding_ctes = f"""
+          {selected_cte},
+          grounded_support AS (
+            SELECT feature.menu_id,feature.category_code
+            FROM menu_preference_feature feature
+            JOIN selected
+              ON selected.category_code=feature.category_code
+             AND selected.option_code=feature.option_code
+            WHERE feature.knowledge_release_id=:knowledge_release_id
+              AND feature.support_status='SUPPORTED'
+              AND feature.evidence_scope='MENU_DIRECT'
+            UNION ALL
+            SELECT membership.menu_id,support.category_code
+            FROM concept_preference_support support
+            JOIN selected
+              ON selected.category_code=support.category_code
+             AND selected.option_code=support.option_code
+            JOIN menu_concept_membership membership
+              ON membership.knowledge_release_id=support.knowledge_release_id
+             AND membership.concept_id=support.concept_id
+            WHERE support.knowledge_release_id=:knowledge_release_id
+              AND support.support_status='SUPPORTED'
+              AND support.evidence_chunk_id IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM menu_preference_feature contradiction
+                WHERE contradiction.knowledge_release_id=membership.knowledge_release_id
+                  AND contradiction.menu_id=membership.menu_id
+                  AND contradiction.category_code=support.category_code
+                  AND contradiction.option_code=support.option_code
+                  AND contradiction.support_status='CONTRADICTED'
+                  AND contradiction.evidence_scope='MENU_DIRECT'
+              )
+          ),
+          grounded_menu AS (
+            SELECT menu_id FROM grounded_support
+            GROUP BY menu_id
+            HAVING COUNT(DISTINCT category_code)=:selected_category_count
+          )
+        """
+    else:
+        public_visibility = (
+            "json_extract(chunk.metadata_json,'$.recommendation_visibility')"
+            if dialect == "sqlite"
+            else "JSON_VALUE(chunk.metadata_json,'$.recommendation_visibility')"
+        )
+        grounding_ctes = f"""
+          reviewed_concept AS (
+            SELECT DISTINCT closure.descendant_concept_id AS concept_id
+            FROM dish_concept_closure closure
+            JOIN knowledge_chunk chunk
+              ON chunk.release_id=closure.release_id
+             AND chunk.concept_id=closure.ancestor_concept_id
+            JOIN knowledge_document document
+              ON document.release_id=chunk.release_id
+             AND document.document_id=chunk.document_id
+            WHERE closure.release_id=:knowledge_release_id
+              AND closure.inherit_claims=1
+              AND document.source_type='SYNTHETIC_WIKI'
+              AND document.review_status='REVIEWED_DEMO'
+              AND lower(chunk.facet)<>'safety'
+              AND (
+                {public_visibility}='PUBLIC_RAG'
+                OR {public_visibility} IS NULL
+              )
+          ),
+          grounded_menu AS (
+            SELECT DISTINCT membership.menu_id
+            FROM menu_concept_membership membership
+            JOIN reviewed_concept
+              ON reviewed_concept.concept_id=membership.concept_id
+            WHERE membership.knowledge_release_id=:knowledge_release_id
+          )
+        """
+    conditions = _hard_eligibility_conditions(
+        criteria=criteria,
+        certification_release_id=certification_release_id,
+        service_area_id=service_area_id,
+        excluded_menu_ids=excluded_menu_ids,
+        included_menu_ids=None,
+        eligibility_as_of=eligibility_as_of,
+        parameters=parameters,
+    )
+    sql = f"""
+      WITH {grounding_ctes}
+      SELECT COUNT(*) AS eligible_menu_count,
+             COUNT(DISTINCT menu.merchant_id) AS eligible_merchant_count
+      FROM grounded_menu grounding
+      JOIN menu ON menu.menu_id=grounding.menu_id
+      JOIN merchant ON merchant.merchant_id=menu.merchant_id
+      LEFT JOIN menu_source_detail source_detail ON source_detail.menu_id=menu.menu_id
+      WHERE {' AND '.join(conditions)}
+    """
+    return ConceptCandidateQuery(sql=sql, parameters=parameters)
+
+
+def build_candidate_recall_channel_query(
+    *,
+    dialect: SqlDialect,
+    criteria: RecommendationCriteriaV2,
+    knowledge_release_id: str,
+    certification_release_id: str,
+    service_area_id: str | None,
+    excluded_menu_ids: set[str],
+    eligibility_as_of: Any,
+    candidate_limit: int,
+    support_channel: Literal["MENU_FEATURE", "CONCEPT_SUPPORT"],
+) -> ConceptCandidateQuery:
+    """Return one cheap recall channel before combined cross-category grounding."""
+
+    if candidate_limit < 1:
+        raise ValueError("GROUNDED_CHANNEL_LIMIT_INVALID")
+    selected = [
+        (category, option)
+        for category, options in criteria.subjective_groups().items()
+        for option in options
+    ]
+    if selected and support_channel not in {"MENU_FEATURE", "CONCEPT_SUPPORT"}:
+        raise ValueError("GROUNDED_CHANNEL_INVALID")
+    parameters: dict[str, Any] = {
+        "knowledge_release_id": knowledge_release_id,
+        "candidate_limit": candidate_limit,
+        "per_merchant_limit": max(1, math.ceil(candidate_limit * 0.25)),
+    }
+    if selected:
+        values: list[str] = []
+        for index, (category, option) in enumerate(selected):
+            parameters[f"selected_category_{index}"] = category
+            parameters[f"selected_option_{index}"] = option
+            if dialect == "sqlite":
+                values.append(
+                    f"(:selected_category_{index},:selected_option_{index})"
+                )
+            else:
+                values.append(
+                    f"SELECT :selected_category_{index} category_code,"
+                    f":selected_option_{index} option_code FROM dual"
+                )
+        selected_cte = (
+            "selected(category_code,option_code) AS (VALUES "
+            + ",".join(values)
+            + ")"
+            if dialect == "sqlite"
+            else "selected AS (" + " UNION ALL ".join(values) + ")"
+        )
+        if support_channel == "MENU_FEATURE":
+            support_source = """
+              SELECT feature.menu_id,feature.category_code,
+                     feature.support_strength,feature.feature_id AS evidence_id,
+                     CASE WHEN feature.support_status='SUPPORTED'
+                                AND feature.evidence_scope='MENU_DIRECT'
+                          THEN 1 ELSE 0 END AS direct_supported
+              FROM menu_preference_feature feature
+              JOIN selected
+                ON selected.category_code=feature.category_code
+               AND selected.option_code=feature.option_code
+              WHERE feature.knowledge_release_id=:knowledge_release_id
+                AND feature.support_status IN ('SUPPORTED','REVIEW_REQUIRED')
+                AND feature.evidence_scope IN (
+                  'MENU_DIRECT','SECTION_CONTEXT','OPTION_AVAILABILITY'
+                )
+            """
+        else:
+            support_source = """
+              SELECT membership.menu_id,support.category_code,
+                     support.support_strength,
+                     support.evidence_chunk_id AS evidence_id,
+                     0 AS direct_supported
+              FROM concept_preference_support support
+              JOIN selected
+                ON selected.category_code=support.category_code
+               AND selected.option_code=support.option_code
+              JOIN menu_concept_membership membership
+                ON membership.knowledge_release_id=support.knowledge_release_id
+               AND membership.concept_id=support.concept_id
+              WHERE support.knowledge_release_id=:knowledge_release_id
+                AND support.support_status='SUPPORTED'
+                AND support.evidence_chunk_id IS NOT NULL
+                AND NOT EXISTS (
+                  SELECT 1 FROM menu_preference_feature contradiction
+                  WHERE contradiction.knowledge_release_id=membership.knowledge_release_id
+                    AND contradiction.menu_id=membership.menu_id
+                    AND contradiction.category_code=support.category_code
+                    AND contradiction.option_code=support.option_code
+                    AND contradiction.support_status='CONTRADICTED'
+                    AND contradiction.evidence_scope='MENU_DIRECT'
+                )
+            """
+        support_ctes = f"""
+          {selected_cte},
+          channel_support AS ({support_source}),
+          category_support AS (
+            SELECT menu_id,category_code,
+                   MAX(support_strength) AS category_support,
+                   MAX(direct_supported) AS direct_supported,
+                   COUNT(DISTINCT evidence_id) AS reviewed_evidence_count
+            FROM channel_support
+            GROUP BY menu_id,category_code
+          ),
+          grounded AS (
+            SELECT menu_id,AVG(category_support) AS explicit_score,
+                   MIN(category_support) AS min_category_support,
+                   SUM(reviewed_evidence_count) AS reviewed_evidence_count,
+                   AVG(direct_supported) AS direct_evidence_ratio,
+                   COUNT(*) AS matched_category_count
+            FROM category_support
+            GROUP BY menu_id
+          )
+        """
+    else:
+        if support_channel != "CONCEPT_SUPPORT":
+            raise ValueError("OBJECTIVE_MENU_FEATURE_CHANNEL_UNAVAILABLE")
+        public_visibility = (
+            "json_extract(chunk.metadata_json,'$.recommendation_visibility')"
+            if dialect == "sqlite"
+            else "JSON_VALUE(chunk.metadata_json,'$.recommendation_visibility')"
+        )
+        support_ctes = f"""
+          reviewed_concept AS (
+            SELECT closure.descendant_concept_id AS concept_id,
+                   COUNT(DISTINCT chunk.chunk_id) AS reviewed_evidence_count
+            FROM dish_concept_closure closure
+            JOIN knowledge_chunk chunk
+              ON chunk.release_id=closure.release_id
+             AND chunk.concept_id=closure.ancestor_concept_id
+            JOIN knowledge_document document
+              ON document.release_id=chunk.release_id
+             AND document.document_id=chunk.document_id
+            WHERE closure.release_id=:knowledge_release_id
+              AND closure.inherit_claims=1
+              AND document.source_type='SYNTHETIC_WIKI'
+              AND document.review_status='REVIEWED_DEMO'
+              AND lower(chunk.facet)<>'safety'
+              AND (
+                {public_visibility}='PUBLIC_RAG'
+                OR {public_visibility} IS NULL
+              )
+            GROUP BY closure.descendant_concept_id
+          ),
+          grounded AS (
+            SELECT membership.menu_id,1.0 AS explicit_score,
+                   1.0 AS min_category_support,
+                   reviewed_concept.reviewed_evidence_count,
+                   0.0 AS direct_evidence_ratio,
+                   1 AS matched_category_count
+            FROM menu_concept_membership membership
+            JOIN reviewed_concept
+              ON reviewed_concept.concept_id=membership.concept_id
+            WHERE membership.knowledge_release_id=:knowledge_release_id
+              AND membership.membership_role='PRIMARY'
+          )
+        """
+    conditions = _hard_eligibility_conditions(
+        criteria=criteria,
+        certification_release_id=certification_release_id,
+        service_area_id=service_area_id,
+        excluded_menu_ids=excluded_menu_ids,
+        included_menu_ids=None,
+        eligibility_as_of=eligibility_as_of,
+        parameters=parameters,
+    )
+    limit_clause = (
+        "LIMIT :candidate_limit"
+        if dialect == "sqlite"
+        else "FETCH FIRST :candidate_limit ROWS ONLY"
+    )
+    sql = f"""
+      WITH {support_ctes},
+      qualified AS (
+        SELECT grounded.*,menu.merchant_id
+        FROM grounded
+        JOIN menu ON menu.menu_id=grounded.menu_id
+        JOIN merchant ON merchant.merchant_id=menu.merchant_id
+        LEFT JOIN menu_source_detail source_detail ON source_detail.menu_id=menu.menu_id
+        WHERE {' AND '.join(conditions)}
+      ),
+      merchant_limited AS (
+        SELECT qualified.*,
+               ROW_NUMBER() OVER (
+                 PARTITION BY merchant_id
+                 ORDER BY matched_category_count DESC,explicit_score DESC,
+                          min_category_support DESC,
+                          direct_evidence_ratio DESC,reviewed_evidence_count DESC,menu_id
+               ) AS merchant_candidate_rank
+        FROM qualified
+      )
+      SELECT menu_id,merchant_id FROM merchant_limited
+      WHERE merchant_candidate_rank<=:per_merchant_limit
+      ORDER BY matched_category_count DESC,explicit_score DESC,
+               min_category_support DESC,
+               direct_evidence_ratio DESC,reviewed_evidence_count DESC,
+               merchant_id,menu_id
+      {limit_clause}
+    """
+    return ConceptCandidateQuery(sql=sql, parameters=parameters)
+
+
+def build_semantic_candidate_query(
+    *,
+    dialect: SqlDialect,
+    criteria: RecommendationCriteriaV2,
+    certification_release_id: str,
+    service_area_id: str | None,
+    excluded_menu_ids: set[str],
+    eligibility_as_of: Any,
+    candidate_limit: int,
+    query_vector: Any | None = None,
+) -> ConceptCandidateQuery:
+    """Build the independent hard-eligible semantic retrieval channel.
+
+    Oracle ranks persisted Cohere menu vectors in SQL. SQLite returns the same
+    hard-eligible population for the deterministic offline mirror scorer.
+    Grounding is deliberately not joined here: callers union channel IDs and
+    then re-run the concept query over that bounded set, which removes every
+    semantic-only item lacking per-category direct or reviewed concept evidence.
+    """
+
+    if candidate_limit < 1:
+        raise ValueError("SEMANTIC_CANDIDATE_LIMIT_INVALID")
+    parameters: dict[str, Any] = {}
+    conditions = _hard_eligibility_conditions(
+        criteria=criteria,
+        certification_release_id=certification_release_id,
+        service_area_id=service_area_id,
+        excluded_menu_ids=excluded_menu_ids,
+        included_menu_ids=None,
+        eligibility_as_of=eligibility_as_of,
+        parameters=parameters,
+    )
+    if dialect == "oracle":
+        if query_vector is None:
+            raise ValueError("SEMANTIC_QUERY_VECTOR_REQUIRED")
+        parameters["query_vector"] = query_vector
+        parameters["candidate_limit"] = candidate_limit
+        semantic_projection = """
+          CASE WHEN menu.embedding_vector IS NULL THEN 0
+               ELSE 1-VECTOR_DISTANCE(menu.embedding_vector,:query_vector,COSINE)
+          END AS semantic_score
+        """
+        order_and_limit = """
+          ORDER BY semantic_score DESC,menu.merchant_id,menu.menu_id
+          FETCH FIRST :candidate_limit ROWS ONLY
+        """
+    else:
+        semantic_projection = "menu.semantic_text"
+        # SQLite has no native VECTOR column. The repository applies the
+        # deterministic offline scorer and then keeps exactly candidate_limit.
+        order_and_limit = "ORDER BY menu.merchant_id,menu.menu_id"
+    sql = f"""
+      SELECT menu.menu_id,menu.merchant_id,{semantic_projection}
+      FROM menu
+      JOIN merchant ON merchant.merchant_id=menu.merchant_id
+      LEFT JOIN menu_source_detail source_detail ON source_detail.menu_id=menu.menu_id
+      WHERE {' AND '.join(conditions)}
+      {order_and_limit}
     """
     return ConceptCandidateQuery(sql=sql, parameters=parameters)
 
