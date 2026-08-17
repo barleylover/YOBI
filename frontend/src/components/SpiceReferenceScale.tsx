@@ -33,7 +33,6 @@ export function SpiceReferenceScale({
           type="button"
           aria-pressed={country === "KR"}
           className={country === "KR" ? "active" : ""}
-          disabled={disabled}
           onClick={() => onCountryChange("KR")}
         >
           {copy.koreanReference}
@@ -42,7 +41,6 @@ export function SpiceReferenceScale({
           type="button"
           aria-pressed={country === "US"}
           className={country === "US" ? "active" : ""}
-          disabled={disabled}
           onClick={() => onCountryChange("US")}
         >
           {copy.usReference}

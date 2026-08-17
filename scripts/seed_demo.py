@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import re
 import sys
 from array import array
 from collections import defaultdict
@@ -19,6 +18,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from app.core.config import Settings
 from app.db.seed_data import CATALOG_VERSION, build_seed
+from app.domain.concept_ranking import RANKING_POLICY_SHA256, RANKING_POLICY_VERSION
 from app.domain.preference_catalog import (
     PREFERENCE_CATALOG_VERSION,
     PREFERENCE_CATEGORIES,
@@ -35,6 +35,11 @@ from app.knowledge.catalog_seed import (
     build_knowledge_catalog_seed,
 )
 from app.knowledge.oracle_store import load_oracle_release
+from app.knowledge.preference_support import (
+    build_synthetic_support_rows,
+    preference_alias_matches,
+    support_manifest_sha256,
+)
 from app.rag.providers import choose_embedding_provider
 
 if TYPE_CHECKING:
@@ -121,8 +126,8 @@ UPGRADE_RETAINED_COUNT_KEYS = frozenset(
 
 EXPECTED_KNOWLEDGE_COUNTS = {
     "concepts": 102,
-    "relations": 100,
-    "closure": 281,
+    "relations": 99,
+    "closure": 279,
     "claims": 345,
     "documents": 102,
     "chunks": 1263,
@@ -358,37 +363,6 @@ def _oracle_text(value: Any) -> str:
     return str(raw or "")
 
 
-def _preference_alias_matches(text: str, aliases: tuple[str, ...]) -> bool:
-    ignored = {
-        "and",
-        "cuisine",
-        "dish",
-        "flavor",
-        "food",
-        "method",
-        "or",
-        "served",
-        "temperature",
-        "the",
-        "to",
-        "with",
-        "won",
-    }
-    for alias in aliases:
-        words = [
-            word
-            for word in re.sub(r"[^a-z0-9가-힣]+", " ", alias.lower()).split()
-            if word not in ignored
-            and (len(word) >= 3 or any("가" <= character <= "힣" for character in word))
-        ]
-        if not words:
-            continue
-        required_matches = 1 if len(words) == 1 else 2
-        if sum(word in text for word in words) >= required_matches:
-            return True
-    return False
-
-
 def _price_matches_v2(price: int, code: str) -> bool:
     return {
         "UNDER_10000": price < 10_000,
@@ -457,7 +431,7 @@ def _supported_preference_codes(
                     is_match = _price_matches_v2(int(menu["price"]), option.code)
                 else:
                     support_text = " ".join(menu["parts"]).lower()
-                    is_match = _preference_alias_matches(
+                    is_match = preference_alias_matches(
                         support_text,
                         preference_query_aliases(option.code, "en"),
                     )
@@ -481,16 +455,111 @@ def _supported_preference_codes(
     return frozenset(supported)
 
 
+def _seed_synthetic_concept_support(
+    cursor: oracledb.Cursor,
+    *,
+    knowledge_release_id: str,
+    updated_at: datetime,
+) -> tuple[list[dict[str, Any]], str]:
+    """Backfill Oracle support with the shared reviewed-Wiki algorithm."""
+
+    cursor.execute(
+        "SELECT is_synthetic FROM knowledge_release WHERE release_id=:release_id",
+        release_id=knowledge_release_id,
+    )
+    release = cursor.fetchone()
+    if release is None or not bool(release[0]):
+        raise RuntimeError("SYNTHETIC_SUPPORT_RELEASE_REQUIRED")
+    cursor.execute(
+        """
+        SELECT mapping.concept_id,closure.depth,chunk.chunk_id,
+               chunk.document_id,chunk.content
+        FROM menu_concept_map mapping
+        JOIN dish_concept_closure closure
+          ON closure.release_id=mapping.release_id
+         AND closure.descendant_concept_id=mapping.concept_id
+         AND closure.inherit_claims=1
+        JOIN knowledge_chunk chunk
+          ON chunk.release_id=closure.release_id
+         AND chunk.concept_id=closure.ancestor_concept_id
+        JOIN knowledge_document document
+          ON document.release_id=chunk.release_id
+         AND document.document_id=chunk.document_id
+        WHERE mapping.release_id=:release_id
+          AND mapping.mapping_status='MAPPED'
+          AND mapping.confidence_band='high'
+          AND document.source_type='SYNTHETIC_WIKI'
+          AND document.review_status='REVIEWED_DEMO'
+          AND LOWER(chunk.facet)<>'safety'
+          AND (
+            JSON_VALUE(chunk.metadata_json,'$.recommendation_visibility')='PUBLIC_RAG'
+            OR JSON_VALUE(chunk.metadata_json,'$.recommendation_visibility') IS NULL
+          )
+        GROUP BY mapping.concept_id,closure.depth,chunk.chunk_id,
+                 chunk.document_id,chunk.content
+        ORDER BY mapping.concept_id,closure.depth,chunk.chunk_id
+        """,
+        release_id=knowledge_release_id,
+    )
+    reviewed_chunks = [
+        {
+            "concept_id": str(row[0]),
+            "depth": int(row[1]),
+            "chunk_id": str(row[2]),
+            "document_id": str(row[3]),
+            "content": _oracle_text(row[4]),
+        }
+        for row in cursor.fetchall()
+    ]
+    support_rows = build_synthetic_support_rows(
+        knowledge_release_id=knowledge_release_id,
+        reviewed_chunks=reviewed_chunks,
+        updated_at=updated_at,
+    )
+    if not support_rows:
+        raise RuntimeError("SYNTHETIC_CONCEPT_SUPPORT_EMPTY")
+    manifest_sha256 = support_manifest_sha256(support_rows)
+    cursor.execute(
+        "DELETE FROM concept_preference_support WHERE knowledge_release_id=:release_id",
+        release_id=knowledge_release_id,
+    )
+    for row in support_rows:
+        _merge(
+            cursor,
+            "concept_preference_support",
+            ("knowledge_release_id", "concept_id", "category_code", "option_code"),
+            row,
+        )
+    return support_rows, manifest_sha256
+
+
 def _seed_structured_recommendation(
     cursor: oracledb.Cursor,
     prepared: PreparedSeed,
 ) -> None:
     knowledge_release_id = prepared.compiled_knowledge.release_id
+    now = datetime.now(timezone.utc)
+    _support_rows, support_manifest = _seed_synthetic_concept_support(
+        cursor,
+        knowledge_release_id=knowledge_release_id,
+        updated_at=now,
+    )
+    family_identity = {
+        "knowledge_release_id": knowledge_release_id,
+        "catalog_release_id": CATALOG_VERSION,
+        "preference_catalog_version": PREFERENCE_CATALOG_VERSION,
+        "spice_reference_version": SPICE_REFERENCE_VERSION,
+        "certification_release_id": CERTIFICATION_RELEASE_ID,
+        "embedding_model": prepared.provider.model,
+        "embedding_version": prepared.provider.version,
+        "support_manifest_sha256": support_manifest,
+        "ranking_policy_version": RANKING_POLICY_VERSION,
+        "ranking_policy_sha256": RANKING_POLICY_SHA256,
+    }
     release_family_id = (
         f"{RECOMMENDATION_RELEASE_FAMILY_PREFIX}:"
-        f"{hashlib.sha256(knowledge_release_id.encode()).hexdigest()[:16]}"
+        f"{hashlib.sha256(json.dumps(family_identity, sort_keys=True, separators=(',', ':')).encode()).hexdigest()[:24]}"
     )
-    now = datetime.now(timezone.utc)
     cursor.execute(
         """
         UPDATE recommendation_release_family SET status='READY'
@@ -511,6 +580,9 @@ def _seed_structured_recommendation(
             "certification_release_id": CERTIFICATION_RELEASE_ID,
             "embedding_model": prepared.provider.model,
             "embedding_version": prepared.provider.version,
+            "support_manifest_sha256": support_manifest,
+            "ranking_policy_version": RANKING_POLICY_VERSION,
+            "ranking_policy_sha256": RANKING_POLICY_SHA256,
             "status": "ACTIVE",
             "activated_at": now,
         },
@@ -723,7 +795,9 @@ def verify(connection: oracledb.Connection) -> dict[str, Any]:
         SELECT family.release_family_id,family.knowledge_release_id,
                family.preference_catalog_version,family.spice_reference_version,
                family.certification_release_id,family.embedding_model,
-               family.embedding_version,family.status
+               family.embedding_version,family.status,
+               family.support_manifest_sha256,family.ranking_policy_version,
+               family.ranking_policy_sha256
         FROM recommendation_runtime_state state
         JOIN recommendation_release_family family
           ON family.release_family_id=state.active_release_family_id
@@ -731,6 +805,73 @@ def verify(connection: oracledb.Connection) -> dict[str, Any]:
         """
     )
     active_recommendation = cursor.fetchone()
+    cursor.execute(
+        """
+        SELECT support.knowledge_release_id,support.concept_id,
+               support.category_code,support.option_code,support.support_status,
+               support.support_strength,support.evidence_chunk_id,
+               support.provenance_type,support.source_ref,support.review_status,
+               support.support_method_version,support.is_synthetic
+        FROM concept_preference_support support
+        WHERE support.knowledge_release_id=:release_id
+        ORDER BY support.concept_id,support.category_code,support.option_code
+        """,
+        release_id=active_release_id or "none",
+    )
+    concept_support_rows = [
+        {
+            "knowledge_release_id": str(row[0]),
+            "concept_id": str(row[1]),
+            "category_code": str(row[2]),
+            "option_code": str(row[3]),
+            "support_status": str(row[4]),
+            "support_strength": float(row[5]),
+            "evidence_chunk_id": str(row[6]),
+            "provenance_type": str(row[7]),
+            "source_ref": str(row[8]),
+            "review_status": str(row[9]),
+            "support_method_version": str(row[10]),
+            "is_synthetic": int(row[11]),
+        }
+        for row in cursor.fetchall()
+    ]
+    computed_support_manifest = support_manifest_sha256(concept_support_rows)
+    cursor.execute(
+        """
+        SELECT COUNT(*)
+        FROM concept_preference_support support
+        LEFT JOIN knowledge_chunk chunk
+          ON chunk.release_id=support.knowledge_release_id
+         AND chunk.chunk_id=support.evidence_chunk_id
+        LEFT JOIN knowledge_document document
+          ON document.release_id=chunk.release_id
+         AND document.document_id=chunk.document_id
+        WHERE support.knowledge_release_id=:release_id
+          AND (
+            support.support_status<>'SUPPORTED'
+            OR support.support_strength<>1
+            OR support.evidence_chunk_id IS NULL
+            OR support.provenance_type<>'SYNTHETIC_WIKI'
+            OR support.source_ref IS NULL
+            OR support.source_ref<>(
+              'knowledge:' || document.document_id || ':' || chunk.chunk_id
+            )
+            OR support.review_status<>'REVIEWED_DEMO'
+            OR support.support_method_version<>'yobi-reviewed-wiki-support-v1'
+            OR support.is_synthetic<>1
+            OR chunk.chunk_id IS NULL
+            OR LOWER(chunk.facet)='safety'
+            OR document.source_type<>'SYNTHETIC_WIKI'
+            OR document.review_status<>'REVIEWED_DEMO'
+            OR NOT (
+              JSON_VALUE(chunk.metadata_json,'$.recommendation_visibility')='PUBLIC_RAG'
+              OR JSON_VALUE(chunk.metadata_json,'$.recommendation_visibility') IS NULL
+            )
+          )
+        """,
+        release_id=active_release_id or "none",
+    )
+    invalid_concept_support_count = int(cursor.fetchone()[0])
     cursor.execute(
         """
         SELECT COUNT(*),COALESCE(SUM(active),0)
@@ -784,10 +925,16 @@ def verify(connection: oracledb.Connection) -> dict[str, Any]:
                 "embedding_model": str(active_recommendation[5]),
                 "embedding_version": str(active_recommendation[6]),
                 "status": str(active_recommendation[7]),
+                "support_manifest_sha256": str(active_recommendation[8]),
+                "ranking_policy_version": str(active_recommendation[9]),
+                "ranking_policy_sha256": str(active_recommendation[10]),
             }
             if active_recommendation
             else None
         ),
+        "concept_preference_support_count": len(concept_support_rows),
+        "invalid_concept_preference_support_count": invalid_concept_support_count,
+        "computed_support_manifest_sha256": computed_support_manifest,
         "preference_option_count": int(preference_option_count),
         "active_preference_option_count": int(active_preference_option_count),
         "spice_reference_count": spice_reference_count,
@@ -851,9 +998,23 @@ def validate(result: dict[str, Any]) -> None:
         and recommendation_release.get("spice_reference_version") == SPICE_REFERENCE_VERSION
         and recommendation_release.get("certification_release_id")
         == CERTIFICATION_RELEASE_ID
+        and recommendation_release.get("support_manifest_sha256")
+        == result.get("computed_support_manifest_sha256")
+        and recommendation_release.get("support_manifest_sha256") != "0" * 64
+        and recommendation_release.get("ranking_policy_version")
+        == RANKING_POLICY_VERSION
+        and recommendation_release.get("ranking_policy_sha256")
+        == RANKING_POLICY_SHA256
         and recommendation_release.get("status") == "ACTIVE"
     ):
         raise RuntimeError("SEED_RECOMMENDATION_RELEASE_NOT_ACTIVE")
+    if (
+        not isinstance(result.get("concept_preference_support_count"), int)
+        or result["concept_preference_support_count"] < 1
+        or result.get("invalid_concept_preference_support_count") != 0
+        or len(str(result.get("computed_support_manifest_sha256") or "")) != 64
+    ):
+        raise RuntimeError("SEED_CONCEPT_PREFERENCE_SUPPORT_INTEGRITY_FAILED")
     if result.get("preference_option_count") != EXPECTED_PREFERENCE_OPTIONS:
         raise RuntimeError("SEED_PREFERENCE_CATALOG_INTEGRITY_FAILED")
     if result.get("active_preference_option_count") != EXPECTED_ACTIVE_PREFERENCE_OPTIONS:
@@ -956,6 +1117,7 @@ def _apply_seed_transaction(
         for table in (
             "structured_recommendation_request",
             "session_recommendation_criteria",
+            "concept_preference_support",
             "recommendation_runtime_state",
             "merchant_certification",
             "spice_reference",
@@ -1089,6 +1251,30 @@ def main() -> None:
     password = settings.db_password.get_secret_value()
     if not dsn or not password:
         raise SystemExit("ADB_DSN and DB_PASSWORD are required")
+
+    if not args.verify_only:
+        with oracledb.connect(
+            user=settings.db_username,
+            password=password,
+            dsn=dsn,
+        ) as connection:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT COUNT(*) FROM catalog_import_batch
+                    WHERE status='ACTIVE' AND data_origin='YOGIYO_PUBLIC_WEB'
+                    """
+                )
+            except oracledb.DatabaseError as exc:
+                error = exc.args[0]
+                if getattr(error, "code", None) != 942:
+                    raise
+            else:
+                if int(cursor.fetchone()[0]) > 0:
+                    raise SystemExit(
+                        "EXTERNAL_CATALOG_ACTIVE: synthetic seed replacement is disabled"
+                    )
 
     if args.verify_only:
         with oracledb.connect(

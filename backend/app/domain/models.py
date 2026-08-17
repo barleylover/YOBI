@@ -44,7 +44,7 @@ class EvidenceStatus(str, Enum):
 class ProfileCreate(BaseModel):
     preferred_language: str = "English"
     nationality: str = "United States"
-    age_band: str = "25-34"
+    age_band: str = "Not collected"
     gender: str = "Prefer not to say"
     religion_selection: str = "No specific religion"
     # Legacy persistence fields remain readable for existing sessions, but the
@@ -52,9 +52,7 @@ class ProfileCreate(BaseModel):
     dietary_rules: list[str] = Field(default_factory=list)
     allergy_severity: Literal["mild", "moderate", "severe"] = "mild"
     spice_tolerance: int = Field(default=1, ge=1, le=3)
-    favorite_foods: list[str] = Field(
-        default_factory=lambda: ["creamy pasta", "chicken noodle soup"]
-    )
+    favorite_foods: list[str] = Field(default_factory=list)
     consent_demo_data: bool
     remember_profile: bool = False
 
@@ -128,9 +126,9 @@ class MenuSummary(BaseModel):
     delivery_fee: int
     eta_min: int
     eta_max: int
-    spice_level: int
-    serves_min: int
-    serves_max: int
+    spice_level: int | None = None
+    serves_min: int | None = None
+    serves_max: int | None = None
     dietary_summary: str
     evidence_status: EvidenceStatus
     match_reasons: list[str]

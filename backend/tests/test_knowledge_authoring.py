@@ -63,8 +63,8 @@ def test_golden_wiki_compiles_to_stable_release_manifest() -> None:
     assert first.manifest_sha256 == second.manifest_sha256
     assert first.expected_counts == {
         "concepts": 102,
-        "relations": 100,
-        "closure": 281,
+        "relations": 99,
+        "closure": 279,
         "claims": 345,
         "documents": 102,
         "chunks": 1263,
@@ -133,6 +133,37 @@ def test_golden_authoring_load_and_search_round_trip() -> None:
         assert results
         assert any(item.concept_id == "dish_rose_tteokbokki" for item in results)
         assert all(item.score <= 1.0 for item in results)
+    finally:
+        connection.close()
+
+
+def test_sqlite_release_can_be_staged_without_changing_the_active_pointer() -> None:
+    active_release = _compile_golden()
+    staged_release = compile_directory(
+        GOLDEN_ROOT,
+        release_id="knowledge-demo-staged-release-v1",
+        catalog_version="demo-authoring-staged-v1",
+    )
+    connection = _knowledge_connection()
+    try:
+        load_sqlite_release(connection, active_release)
+        load_sqlite_release(connection, staged_release, activate=False)
+
+        active = connection.execute(
+            "SELECT active_release_id FROM knowledge_runtime_state WHERE state_key='ACTIVE'"
+        ).fetchone()
+        staged = connection.execute(
+            "SELECT status FROM knowledge_release WHERE release_id=?",
+            (staged_release.release_id,),
+        ).fetchone()
+        assert active == (active_release.release_id,)
+        assert staged == ("READY",)
+
+        load_sqlite_release(connection, staged_release)
+        activated = connection.execute(
+            "SELECT active_release_id FROM knowledge_runtime_state WHERE state_key='ACTIVE'"
+        ).fetchone()
+        assert activated == (staged_release.release_id,)
     finally:
         connection.close()
 

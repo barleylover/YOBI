@@ -26,7 +26,15 @@ from app.domain.dialogue import (
     RecommendationSnapshot,
 )
 from app.domain.knowledge import GroundedMenuKnowledge
-from app.domain.models import AssistantTurn, Card, CartItemInput, ChatState, Profile, Session
+from app.domain.models import (
+    AssistantTurn,
+    Card,
+    CartItemInput,
+    ChatState,
+    MenuSummary,
+    Profile,
+    Session,
+)
 from app.genai.agent_loop import AgentLoop
 from app.genai.contracts import GenAIProviderError
 from app.genai.grounding import GroundedResponseValidator
@@ -369,7 +377,7 @@ _PREPARATION_KO = {
 _GROUNDED_COPY = {
     "English": {
         "menus": (
-            "Based on the needs you shared, the strongest synthetic menu matches are {names}. "
+            "Based on the needs you shared, the strongest current-catalog matches are {names}. "
             "I kept menu-specific unknowns and cross-contact limits visible on each card."
         ),
         "categories": (
@@ -416,7 +424,7 @@ _GROUNDED_COPY = {
     },
     "한국어": {
         "menus": (
-            "공유해 주신 조건을 기준으로 합성 메뉴 중 가장 잘 맞는 후보는 {names}입니다. "
+            "공유해 주신 조건을 기준으로 현재 카탈로그에서 가장 잘 맞는 후보는 {names}입니다. "
             "메뉴별 미확인 정보와 교차 접촉 한계는 각 카드에 그대로 표시했어요."
         ),
         "categories": (
@@ -592,6 +600,12 @@ class ChatService:
     def _request_message_ids(session_id: str, request_id: str) -> tuple[str, str]:
         digest = hashlib.sha256(f"{session_id}:{request_id}".encode()).hexdigest()[:40]
         return f"msg_u_{digest}", f"msg_a_{digest}"
+
+    @staticmethod
+    def _portion_text(menu: MenuSummary, prefix: str = "Usually serves") -> str:
+        if menu.serves_min is None or menu.serves_max is None:
+            return "Serving size was not provided by the source"
+        return f"{prefix} {menu.serves_min}-{menu.serves_max}"
 
     def _replayed_turn(
         self,
@@ -1338,7 +1352,7 @@ class ChatService:
                 "price": menu.price,
                 "delivery_fee": menu.delivery_fee,
                 "eta": f"{menu.eta_min}-{menu.eta_max} min",
-                "portion": f"Serves {menu.serves_min}-{menu.serves_max}",
+                "portion": self._portion_text(menu, "Serves"),
                 "flavor": menu.description,
                 "packaging_signal": "Not used for safety or ranking in this demo",
                 "dietary_status": menu.evidence_status.value,
@@ -1347,7 +1361,7 @@ class ChatService:
                 "best_for": "; ".join(menu.match_reasons),
                 "evidence_ids": menu.evidence_ids,
                 "menu": menu.model_dump(mode="json"),
-                "is_synthetic": True,
+                "is_synthetic": menu.is_synthetic,
             }
             for menu in menus
         ]
@@ -1360,7 +1374,7 @@ class ChatService:
                 Card(
                     type="merchant_comparison",
                     title="Compare the saved recommendations",
-                    subtitle="Synthetic demo menus · current constraints reapplied",
+                    subtitle="Current catalog menus · active constraints reapplied",
                     data={"merchants": comparisons},
                 )
             ],
@@ -1810,7 +1824,7 @@ class ChatService:
                                 )
                             },
                             "cultural_analogy": analogy,
-                            "portion": f"Usually serves {menu.serves_min}-{menu.serves_max}",
+                            "portion": self._portion_text(menu),
                             "unknown_fields": unknowns,
                             "evidence_ids": [item.evidence_id for item in evidence],
                             "wiki_passages": [
@@ -1938,7 +1952,7 @@ class ChatService:
                 )
             },
             "cultural_analogy": analogy,
-            "portion": f"Usually serves {menu.serves_min}-{menu.serves_max}",
+            "portion": self._portion_text(menu),
             "unknown_fields": knowledge.unknowns,
             "evidence_ids": source_ids,
             "wiki_passages": [passage.model_dump(mode="json") for passage in knowledge.passages],
@@ -2612,7 +2626,7 @@ class ChatService:
                     Card(
                         type="category_recommendations",
                         title="Korean food directions that fit",
-                        subtitle="Grounded in the synthetic menu catalog",
+                        subtitle="Grounded in the current source catalog",
                         data={"categories": categories},
                     )
                 )
@@ -3002,6 +3016,16 @@ class ChatService:
 
         if "vegan" in lowered:
             vegan = self.repository.get_menu("menu_004_01", profile)
+            if vegan is None:
+                return self._make_turn(
+                    "The provided source catalog does not include reviewed ingredient or vegan "
+                    "status data, so I cannot label any listing as verified vegan. Please confirm "
+                    "ingredients and cross-contact directly with the merchant.",
+                    ChatState.SAFETY_WARNING,
+                    [],
+                    False,
+                    ["Try another food direction", "Review my active constraints"],
+                )
             assert vegan
             active_allergies = [
                 rule.removesuffix("_allergy").replace("_", " ")
@@ -3062,6 +3086,17 @@ class ChatService:
         if "chicken kalguksu" in lowered:
             explained_menu = self.repository.get_menu("menu_003_01", profile)
             evidence = self.repository.get_evidence("menu_003_01")
+            if explained_menu is None:
+                return self._make_turn(
+                    "The provided source catalog has no reviewed dish-concept entry for chicken "
+                    "kalguksu. I can only use the merchant names, menu names, descriptions, and "
+                    "prices supplied by the source.",
+                    ChatState.MENU_EXPLANATION,
+                    [],
+                    False,
+                    ["Find matching menu names", "Try another food direction"],
+                    dialogue_act=DialogueAct.EXPLAIN,
+                )
             assert explained_menu
             knowledge = self.repository.get_grounded_menu_knowledge(
                 "menu_003_01",
@@ -3070,9 +3105,7 @@ class ChatService:
             )
             explanation = {
                 "cultural_analogy": explained_menu.cultural_description,
-                "portion": (
-                    f"Usually serves {explained_menu.serves_min}-{explained_menu.serves_max}"
-                ),
+                "portion": self._portion_text(explained_menu),
                 "unknown_fields": list(
                     dict.fromkeys([*explained_menu.risk_hints, *knowledge.unknowns])
                 ),
@@ -3129,10 +3162,23 @@ class ChatService:
             classic = self.repository.get_menu("menu_002_01", profile)
             mild = self.repository.get_menu("menu_001_01", profile)
             evidence = self.repository.get_evidence("menu_002_01")
+            if classic is None or mild is None:
+                return self._make_turn(
+                    "The provided source catalog does not include reviewed tteokbokki concept, "
+                    "ingredient, or spice facts. I will not reuse the removed synthetic demo "
+                    "claims; please rely on supplied listing text and confirm details with the "
+                    "merchant.",
+                    ChatState.MENU_EXPLANATION,
+                    [],
+                    False,
+                    ["Find matching menu names", "Try another food direction"],
+                    dialogue_act=DialogueAct.EXPLAIN,
+                )
             assert classic and mild
             active_shellfish_allergy = "shellfish_allergy" in active_needs.dietary_rules
             spice_conflict = (
                 active_needs.max_spiciness is not None
+                and classic.spice_level is not None
                 and classic.spice_level > active_needs.max_spiciness
             )
             classic_eligible = self._menu_still_satisfies_active_constraints(
@@ -3257,7 +3303,7 @@ class ChatService:
         menus = self.repository.recommend_menus(user_text, profile, active_needs, limit=3)
         if not menus:
             return self._make_turn(
-                "I could not find a menu that satisfies all of those constraints in the synthetic "
+                "I could not find a menu that satisfies all of those constraints in the current "
                 "catalog. I will keep the constraints rather than quietly relax them. Which one "
                 "could be flexible, if any?",
                 ChatState.CLARIFICATION,
@@ -3268,7 +3314,7 @@ class ChatService:
             )
         need_summary = self._need_summary(active_needs, user_text)
         return self._make_turn(
-            f"I have enough context now: {need_summary}. These are the strongest synthetic "
+            f"I have enough context now: {need_summary}. These are the strongest current-catalog "
             "catalog matches that passed the current hard constraints. Menu-specific unknowns "
             "and cross-contact limits remain visible on each card.",
             ChatState.MENU_EXPLANATION,

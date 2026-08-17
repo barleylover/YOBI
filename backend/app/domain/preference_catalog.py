@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-PREFERENCE_CATALOG_VERSION = "preference-catalog-2026.08.12-v2"
+PREFERENCE_CATALOG_VERSION = "preference-catalog-2026.08.17-v3"
 
 SUPPORTED_LOCALES = (
     "en",
@@ -26,6 +26,12 @@ SUPPORTED_LOCALES = (
     "hi",
     "ru",
 )
+
+
+def _localized(*values: str) -> dict[str, str]:
+    if len(values) != len(SUPPORTED_LOCALES):
+        raise ValueError("PREFERENCE_LOCALIZATION_LENGTH_MISMATCH")
+    return dict(zip(SUPPORTED_LOCALES, values))
 
 PreferenceCategoryCode = Literal[
     "cuisine_origins",
@@ -66,6 +72,53 @@ _CATEGORY_OPTION_CODES: tuple[tuple[PreferenceCategoryCode, tuple[str, ...]], ..
         ("GRILLED", "BOILED", "SIMMERED", "STEAMED", "FRIED", "STIR_FRIED", "BAKED"),
     ),
 )
+
+# v3 expands the catalog without removing legacy stable codes such as WESTERN.
+# Legacy values remain parseable for old sessions, while only codes with active
+# reviewed Wiki support and useful live-catalog coverage are exposed to the UI.
+_ADDITIONAL_CATEGORY_OPTION_CODES: dict[PreferenceCategoryCode, tuple[str, ...]] = {
+    "cuisine_origins": ("JAPANESE", "ITALIAN", "AMERICAN"),
+    "food_forms": ("BOWL_POKE", "DESSERT_BAKERY", "FRIED_SNACK"),
+}
+
+_ADDITIONAL_OPTION_LABELS: dict[str, dict[str, str]] = {
+    "JAPANESE": _localized(
+        "Japanese", "일식", "日本料理", "日餐", "日式料理", "Japonesa", "Japonaise",
+        "Japanisch", "Giapponese", "Japonesa", "อาหารญี่ปุ่น", "Món Nhật", "Jepang",
+        "ياباني", "जापानी", "Японская",
+    ),
+    "ITALIAN": _localized(
+        "Italian", "이탈리안", "イタリア料理", "意大利餐", "義大利料理", "Italiana",
+        "Italienne", "Italienisch", "Italiana", "Italiana", "อาหารอิตาเลียน",
+        "Món Ý", "Italia", "إيطالي", "इटैलियन", "Итальянская",
+    ),
+    "AMERICAN": _localized(
+        "American & grill", "아메리칸·그릴", "アメリカ料理・グリル", "美式与烧烤",
+        "美式與燒烤", "Americana y parrilla", "Américaine et grillades",
+        "Amerikanisch & Grill", "Americana e grill", "Americana e grelhados",
+        "อเมริกันและกริลล์", "Món Mỹ và đồ nướng", "Amerika & panggang",
+        "أمريكي ومشويات", "अमेरिकी और ग्रिल", "Американская и гриль",
+    ),
+    "BOWL_POKE": _localized(
+        "Bowls & poke", "덮밥·포케", "丼・ポケ", "盖饭与波奇碗", "蓋飯與波奇碗",
+        "Bowls y poke", "Bols et poke", "Bowls & Poke", "Bowl e poke", "Bowls e poke",
+        "ข้าวหน้าและโปเก", "Cơm tô và poke", "Rice bowl & poke", "أطباق الأرز والبوكي",
+        "राइस बाउल और पोके", "Боулы и поке",
+    ),
+    "DESSERT_BAKERY": _localized(
+        "Bakery & dessert", "베이커리·디저트", "ベーカリー・デザート", "烘焙与甜点",
+        "烘焙與甜點", "Panadería y postre", "Boulangerie et dessert",
+        "Gebäck & Dessert", "Panetteria e dessert", "Padaria e sobremesa",
+        "เบเกอรี่และของหวาน", "Bánh và món tráng miệng", "Roti & pencuci mulut",
+        "مخبوزات وحلويات", "बेकरी और मिठाई", "Выпечка и десерт",
+    ),
+    "FRIED_SNACK": _localized(
+        "Fried snacks", "튀김·스낵", "揚げ物・スナック", "炸物小吃", "炸物小吃",
+        "Fritos y snacks", "Fritures et snacks", "Frittierte Snacks", "Fritti e snack",
+        "Fritos e petiscos", "ของทอดและของว่าง", "Đồ chiên và ăn vặt",
+        "Gorengan & camilan", "مقليات ووجبات خفيفة", "तले स्नैक्स", "Жареные закуски",
+    ),
+}
 
 # Each pack contains one localized category label followed by its option labels.
 # The positional schema is validated at import so a new stable code cannot ship
@@ -369,6 +422,9 @@ _QUERY_ALIASES: dict[str, tuple[str, ...]] = {
     "WESTERN": ("Western food", "European American food", "양식", "서양 음식"),
     "SOUTHEAST_ASIAN": ("Southeast Asian food", "Thai Vietnamese food", "동남아 음식"),
     "MEXICAN": ("Mexican food", "Mexico cuisine", "멕시칸", "멕시코 음식"),
+    "JAPANESE": ("Japanese food", "Japanese cuisine", "일식", "일본 음식"),
+    "ITALIAN": ("Italian food", "Italian cuisine", "이탈리안", "이탈리아 음식"),
+    "AMERICAN": ("American food", "American cuisine", "아메리칸", "미국 음식"),
     "SPICY": ("spicy hot chili", "매운맛", "매콤한"),
     "SWEET": ("sweet sugary", "단맛", "달콤한"),
     "SALTY": ("salty seasoned", "짠맛", "짭짤한"),
@@ -387,6 +443,9 @@ _QUERY_ALIASES: dict[str, tuple[str, ...]] = {
     "BREAD": ("bread pastry sandwich", "빵"),
     "SALAD": ("salad raw vegetables", "샐러드"),
     "GRILLED_DISH": ("grilled dish barbecue", "구이", "바비큐"),
+    "BOWL_POKE": ("rice bowl poke composed bowl", "덮밥", "포케"),
+    "DESSERT_BAKERY": ("bakery dessert pastry cake sweet", "베이커리", "디저트"),
+    "FRIED_SNACK": ("fried snack crisp side", "튀김", "스낵"),
     "HOT": ("piping hot steaming", "뜨거운 음식"),
     "WARM": ("warm food", "따뜻한 음식"),
     "ROOM_TEMPERATURE": ("room temperature", "상온 음식"),
@@ -486,6 +545,17 @@ def _build_definitions() -> tuple[PreferenceCategoryDefinition, ...]:
                     query_aliases=_QUERY_ALIASES[option_code],
                 )
             )
+        for option_code in _ADDITIONAL_CATEGORY_OPTION_CODES.get(category_code, ()):
+            labels = _ADDITIONAL_OPTION_LABELS[option_code]
+            if set(labels) != set(SUPPORTED_LOCALES):
+                raise ValueError(f"PREFERENCE_OPTION_LOCALE_MISMATCH:{option_code}")
+            options.append(
+                PreferenceOptionDefinition(
+                    code=option_code,
+                    labels=labels,
+                    query_aliases=_QUERY_ALIASES[option_code],
+                )
+            )
         definitions.append(
             PreferenceCategoryDefinition(
                 code=category_code,
@@ -501,6 +571,26 @@ PREFERENCE_OPTIONS = {
     option.code: option for category in PREFERENCE_CATEGORIES for option in category.options
 }
 ALL_PREFERENCE_CODES = frozenset(PREFERENCE_OPTIONS)
+CUISINE_ORIGIN_CODES = frozenset(
+    option.code
+    for category in PREFERENCE_CATEGORIES
+    if category.code == "cuisine_origins"
+    for option in category.options
+)
+
+
+def preference_option_is_exposable(
+    option_code: str,
+    *,
+    menu_count: int,
+    merchant_count: int,
+    document_count: int,
+) -> bool:
+    """Use a stronger evidence floor for broad cuisine promises."""
+
+    if option_code in CUISINE_ORIGIN_CODES:
+        return menu_count >= 15 and merchant_count >= 3 and document_count >= 3
+    return menu_count >= 3 and merchant_count >= 2 and document_count >= 1
 
 
 def normalize_preference_locale(value: str) -> str:
@@ -549,10 +639,18 @@ def validated_exposed_codes(
             and row.review_status in {"REVIEWED_DEMO", "VERIFIED"}
             and row.document_id
         }
+        menu_count = len(menu_ids)
+        merchant_count = len(merchant_ids)
+        document_count = len(reviewed_wiki_documents)
         if (
-            len(menu_ids) >= minimum_menu_count
-            and len(merchant_ids) >= minimum_merchant_count
-            and reviewed_wiki_documents
+            menu_count >= minimum_menu_count
+            and merchant_count >= minimum_merchant_count
+            and preference_option_is_exposable(
+                support_pair[1],
+                menu_count=menu_count,
+                merchant_count=merchant_count,
+                document_count=document_count,
+            )
         ):
             exposed.add(support_pair[1])
     return frozenset(exposed)
@@ -858,6 +956,11 @@ def validate_preference_catalog_contract() -> None:
     if set(_LABEL_PACKS) != set(SUPPORTED_LOCALES):
         raise RuntimeError("PREFERENCE_LOCALE_SET_MISMATCH")
     expected_codes = {code for _, codes in _CATEGORY_OPTION_CODES for code in codes}
+    expected_codes.update(
+        code
+        for codes in _ADDITIONAL_CATEGORY_OPTION_CODES.values()
+        for code in codes
+    )
     if set(_QUERY_ALIASES) != expected_codes:
         raise RuntimeError("PREFERENCE_QUERY_ALIAS_SET_MISMATCH")
     if len(PREFERENCE_OPTIONS) != len(expected_codes):

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event, Lock
 from types import SimpleNamespace
 from typing import Any
 
@@ -33,7 +35,7 @@ class FakeProvider:
             client_managed_continuation=True,
             server_managed_continuation=False,
             max_input_tokens=32768,
-            max_output_tokens=1200,
+            max_output_tokens=4096,
             max_tools_per_request=4,
             max_tool_calls_per_response=4,
         )
@@ -47,7 +49,7 @@ class FakeProvider:
         return self._capabilities
 
     def supports_model(self, model: str) -> bool:
-        return model == "xai.grok-4.3"
+        return model == "openai.gpt-oss-120b"
 
     def normalize_request(self, model: str, **kwargs: Any) -> dict[str, Any]:
         return {"model": model, **kwargs}
@@ -55,6 +57,40 @@ class FakeProvider:
     def create_response(self, model: str, **kwargs: Any) -> Any:
         self.calls.append({"model": model, **kwargs})
         return SimpleNamespace(output_text=json.dumps(self.output))
+
+
+class BlockingProvider(FakeProvider):
+    def __init__(self, output: dict[str, Any]) -> None:
+        super().__init__(output)
+        self.release = Event()
+        self.two_active = Event()
+        self.third_entered = Event()
+        self.lock = Lock()
+        self.active = 0
+        self.max_active = 0
+
+    def create_response(self, model: str, **kwargs: Any) -> Any:
+        with self.lock:
+            self.calls.append({"model": model, **kwargs})
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            if self.active == 2:
+                self.two_active.set()
+            if len(self.calls) == 3:
+                self.third_entered.set()
+        try:
+            if not self.release.wait(timeout=2):
+                raise RuntimeError("test provider release timed out")
+            return SimpleNamespace(output_text=json.dumps(self.output))
+        finally:
+            with self.lock:
+                self.active -= 1
+
+
+class RateLimitedProvider(FakeProvider):
+    def create_response(self, model: str, **kwargs: Any) -> Any:
+        self.calls.append({"model": model, **kwargs})
+        raise GenAIProviderError(GenAIErrorCode.RATE_LIMIT, retryable=True)
 
 
 def _criteria() -> dict[str, Any]:
@@ -115,13 +151,13 @@ def _recommendation(menu_id: str, rank: int, cuisine_id: str, flavor_id: str) ->
     }
 
 
-def test_generator_dispatches_once_without_tools_and_preserves_model_order() -> None:
+def test_generator_dispatches_once_without_tools_and_preserves_frozen_server_order() -> None:
     output = {
         "status": "RECOMMENDED",
         "criteria_summary": "Korean and spicy",
         "recommendations": [
-            _recommendation("dish-b", 1, "chunk-b-cuisine", "chunk-b-flavor"),
-            _recommendation("dish-a", 2, "chunk-a-cuisine", "chunk-a-flavor"),
+            _recommendation("dish-a", 1, "chunk-a-cuisine", "chunk-a-flavor"),
+            _recommendation("dish-b", 2, "chunk-b-cuisine", "chunk-b-flavor"),
         ],
         "unmatched_category_codes": [],
     }
@@ -138,9 +174,14 @@ def test_generator_dispatches_once_without_tools_and_preserves_model_order() -> 
         locale="English",
     )
 
-    assert [item.menu_id for item in result.recommendations] == ["dish-b", "dish-a"]
+    assert [item.menu_id for item in result.recommendations] == ["dish-a", "dish-b"]
     assert len(provider.calls) == 1
+    assert provider.calls[0]["model"] == "openai.gpt-oss-120b"
+    assert provider.calls[0]["max_output_tokens"] == 2048
     assert "tools" not in provider.calls[0]
+    instructions = str(provider.calls[0]["instructions"])
+    assert "Return the JSON immediately without analysis or preamble." in instructions
+    assert "selection_reason, and description to one concise sentence each." in instructions
     assert provider.calls[0]["text"]["format"]["strict"] is True
     request_payload = json.loads(provider.calls[0]["input"][0]["content"])
     assert request_payload["response_contract"] == provider.calls[0]["text"]["format"][
@@ -151,10 +192,12 @@ def test_generator_dispatches_once_without_tools_and_preserves_model_order() -> 
 def test_generator_supplies_json_contract_without_native_structured_output() -> None:
     provider = FakeProvider(
         {
-            "status": "NO_MATCH",
-            "criteria_summary": "No complete match",
-            "recommendations": [],
-            "unmatched_category_codes": ["flavors"],
+            "status": "RECOMMENDED",
+            "criteria_summary": "Korean and spicy",
+            "recommendations": [
+                _recommendation("dish-a", 1, "chunk-cuisine", "chunk-flavor")
+            ],
+            "unmatched_category_codes": [],
         },
         structured_output=False,
     )
@@ -230,7 +273,7 @@ def test_generator_rejects_menu_fact_used_as_wiki_evidence() -> None:
     assert len(provider.calls) == 1
 
 
-def test_generator_accepts_grounded_no_match_without_retry() -> None:
+def test_generator_rejects_model_no_match_after_server_freezes_candidates() -> None:
     provider = FakeProvider(
         {
             "status": "NO_MATCH",
@@ -242,14 +285,119 @@ def test_generator_accepts_grounded_no_match_without_retry() -> None:
     )
     generator = RecommendationGenerator(Settings(), provider=provider)
 
-    result = generator.generate(
-        criteria=_criteria(),
-        soft_profile_context={},
-        evidence_pool=[_pool_item("dish-a", "chunk-cuisine", "chunk-flavor")],
+    with pytest.raises(GenAIProviderError) as caught:
+        generator.generate(
+            criteria=_criteria(),
+            soft_profile_context={},
+            evidence_pool=[_pool_item("dish-a", "chunk-cuisine", "chunk-flavor")],
+            locale="English",
+        )
+
+    assert caught.value.code is GenAIErrorCode.GROUNDING_REJECTED
+    assert len(provider.calls) == 1
+    assert "text" not in provider.calls[0]
+
+
+def test_comparison_uses_structured_model_cap_in_one_dispatch() -> None:
+    provider = FakeProvider(
+        {
+            "summary": "Two grounded options.",
+            "items": [
+                {
+                    "menu_id": menu_id,
+                    "name": name,
+                    "key_difference": difference,
+                    "taste_texture": "Grounded taste and texture.",
+                    "ingredients_form": "Specific ingredients are unverified.",
+                    "spice_heaviness": "Spice is described by supplied evidence.",
+                    "eating_context": "Suitable context depends on the diner.",
+                    "best_for": "A diner comparing the supplied facts.",
+                    "unverified_dietary_info": "Dietary details are unverified.",
+                }
+                for menu_id, name, difference in (
+                    ("dish-a", "Choice A", "First grounded difference."),
+                    ("dish-b", "Choice B", "Second grounded difference."),
+                )
+            ],
+        }
+    )
+    generator = RecommendationGenerator(Settings(), provider=provider)
+
+    result = generator.compare(
+        evidence_items=[
+            {"menu_id": "dish-a", "name": "Choice A"},
+            {"menu_id": "dish-b", "name": "Choice B"},
+        ],
         locale="English",
     )
 
-    assert result.status.value == "NO_MATCH"
-    assert result.recommendations == []
+    assert [item.menu_id for item in result.items] == ["dish-a", "dish-b"]
     assert len(provider.calls) == 1
-    assert "text" not in provider.calls[0]
+    assert provider.calls[0]["model"] == "openai.gpt-oss-120b"
+    assert provider.calls[0]["max_output_tokens"] == 2048
+
+
+def test_structured_rate_limit_never_retries_or_dispatches_fallback_model() -> None:
+    provider = RateLimitedProvider({})
+    generator = RecommendationGenerator(
+        Settings(
+            llm_max_retries=3,
+            oci_genai_fallback_model="automatic-fallback-must-not-run",
+        ),
+        provider=provider,
+    )
+
+    with pytest.raises(GenAIProviderError) as caught:
+        generator.generate(
+            criteria=_criteria(),
+            soft_profile_context={},
+            evidence_pool=[_pool_item("dish-a", "chunk-cuisine", "chunk-flavor")],
+            locale="English",
+        )
+
+    assert caught.value.code is GenAIErrorCode.RATE_LIMIT
+    assert [call["model"] for call in provider.calls] == ["openai.gpt-oss-120b"]
+
+
+def test_structured_concurrency_setting_limits_provider_dispatches_to_two() -> None:
+    output = {
+        "status": "RECOMMENDED",
+        "criteria_summary": "Korean and spicy",
+        "recommendations": [
+            _recommendation("dish-a", 1, "chunk-cuisine", "chunk-flavor")
+        ],
+        "unmatched_category_codes": [],
+    }
+    provider = BlockingProvider(output)
+    generator = RecommendationGenerator(
+        Settings(structured_recommendation_max_concurrent_requests=2),
+        provider=provider,
+    )
+
+    def generate_once() -> list[str]:
+        result = generator.generate(
+            criteria=_criteria(),
+            soft_profile_context={},
+            evidence_pool=[_pool_item("dish-a", "chunk-cuisine", "chunk-flavor")],
+            locale="English",
+        )
+        return [item.menu_id for item in result.recommendations]
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = [executor.submit(generate_once) for _ in range(3)]
+        try:
+            assert provider.two_active.wait(timeout=1)
+            assert not provider.third_entered.wait(timeout=0.1)
+        finally:
+            provider.release.set()
+        results = [future.result(timeout=2) for future in futures]
+
+    assert results == [["dish-a"], ["dish-a"], ["dish-a"]]
+    assert provider.max_active == 2
+    assert len(provider.calls) == 3
+
+
+@pytest.mark.parametrize("value", [0, 9])
+def test_structured_concurrency_setting_rejects_out_of_bounds(value: int) -> None:
+    with pytest.raises(ValueError):
+        Settings(structured_recommendation_max_concurrent_requests=value)

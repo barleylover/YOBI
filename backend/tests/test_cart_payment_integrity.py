@@ -118,6 +118,34 @@ def test_required_options_are_server_enforced(
         )
 
 
+def test_cart_falls_back_to_korean_name_when_external_english_name_is_unknown(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    with repository._connection() as connection:
+        connection.execute(
+            "UPDATE menu SET name_en=NULL WHERE menu_id=?",
+            ("menu_001_01",),
+        )
+        expected_name = connection.execute(
+            "SELECT name_ko FROM menu WHERE menu_id=?",
+            ("menu_001_01",),
+        ).fetchone()[0]
+    profile = repository.create_profile(profile_data)
+    session = repository.create_session(profile.profile_id)
+
+    preview = repository.add_cart_item(
+        session.session_id,
+        CartItemInput(
+            menu_id="menu_001_01",
+            option_item_ids=["oi_001_01_spice_mild", "oi_001_01_size_regular"],
+        ),
+    )
+
+    assert preview.items[0].menu_name == expected_name
+    oracle_source = " ".join(inspect.getsource(OracleYobiRepository.get_cart).split())
+    assert "COALESCE(m.name_en,m.name_ko,m.menu_id) AS menu_name" in oracle_source
+
+
 def test_checkout_and_order_are_idempotent(
     repository: SQLiteYobiRepository, profile_data: ProfileCreate
 ) -> None:

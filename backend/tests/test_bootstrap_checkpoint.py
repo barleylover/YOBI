@@ -67,6 +67,9 @@ def test_runtime_environment_can_resume_and_upgrade_release_policy(
     assert 'LLM_MAX_RETRIES="1"' in persisted
     assert 'LLM_MAX_RETRIES="0"' not in persisted
     assert 'EMBEDDING_PROVIDER="deterministic"' in persisted
+    assert 'STRUCTURED_RECOMMENDATION_MODEL="openai.gpt-oss-120b"' in persisted
+    assert 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="2048"' in persisted
+    assert 'STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS="2"' in persisted
     assert 'DB_PASSWORD="synthetic-password"' in persisted
     assert stat.S_IMODE(runtime_env.stat().st_mode) == 0o600
     captured = capsys.readouterr()
@@ -80,6 +83,9 @@ def test_runtime_environment_can_resume_and_upgrade_release_policy(
         "DEMO_CONTROL_TOKEN",
         "LLM_MAX_RETRIES",
         "EMBEDDING_PROVIDER",
+        "STRUCTURED_RECOMMENDATION_MODEL",
+        "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS",
+        "STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS",
     ):
         os.environ.pop(key, None)
 
@@ -98,6 +104,33 @@ def test_retry_policy_matches_settings_and_runtime_restore() -> None:
     assert 'LLM_MAX_INPUT_TOKENS="131072"' in restore
     assert 'OCI_GENAI_MAX_OUTPUT_TOKENS="4096"' in restore
     assert 'LLM_MAX_OUTPUT_TOKENS="4096"' in restore
+    assert (
+        bootstrap.Settings.model_fields["structured_recommendation_model"].default
+        == "openai.gpt-oss-120b"
+    )
+    assert (
+        bootstrap.Settings.model_fields[
+            "structured_recommendation_max_output_tokens"
+        ].default
+        == 2048
+    )
+    assert (
+        bootstrap.Settings.model_fields[
+            "structured_recommendation_max_concurrent_requests"
+        ].default
+        == 2
+    )
+    write_source = inspect.getsource(bootstrap.write_env)
+    main_source = inspect.getsource(bootstrap.main)
+    assert "STRUCTURED_RECOMMENDATION_MODEL={quote('openai.gpt-oss-120b')}" in write_source
+    assert "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS={quote('2048')}" in write_source
+    assert "STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS={quote('2')}" in write_source
+    assert '"STRUCTURED_RECOMMENDATION_MODEL": "openai.gpt-oss-120b"' in main_source
+    assert '"STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS": "2048"' in main_source
+    assert '"STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS": "2"' in main_source
+    assert 'STRUCTURED_RECOMMENDATION_MODEL="openai.gpt-oss-120b"' in restore
+    assert 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="2048"' in restore
+    assert 'STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS="2"' in restore
 
 
 def test_grok_43_release_envelope_is_persisted() -> None:
@@ -111,6 +144,9 @@ def test_grok_43_release_envelope_is_persisted() -> None:
         "LLM_MAX_INPUT_TOKENS",
         "OCI_GENAI_MAX_OUTPUT_TOKENS",
         "LLM_MAX_OUTPUT_TOKENS",
+        "STRUCTURED_RECOMMENDATION_MODEL",
+        "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS",
+        "STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS",
     ):
         assert key in source
 
@@ -172,6 +208,9 @@ def test_runtime_environment_load_disables_interpolation_and_execution(
             "DEMO_CONTROL_TOKEN",
             "LLM_MAX_RETRIES",
             "EMBEDDING_PROVIDER",
+            "STRUCTURED_RECOMMENDATION_MODEL",
+            "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS",
+            "STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS",
         ):
             os.environ.pop(key, None)
 
@@ -190,6 +229,7 @@ def test_bootstrap_requires_every_migration_shipped_in_the_release() -> None:
     assert records["008"][0] == "008_checkout_cart_version.sql"
     assert records["009"][0] == "009_cart_confirmation_fingerprint.sql"
     assert records["010"][0] == "010_structured_hybrid_rag_recommendation.sql"
+    assert records["011"][0] == "011_external_catalog_import.sql"
     assert all(len(checksum) == 64 for _, checksum in records.values())
 
 
@@ -211,3 +251,12 @@ def test_service_checkpoint_is_written_only_after_health_and_ready() -> None:
     health_ready = source.index('checkpoint("health_ready", "complete"')
     services_complete = source.index('checkpoint("services", "complete")')
     assert health_ready < services_complete
+
+
+def test_external_bootstrap_restores_demo_address_before_catalog_verification() -> None:
+    source = inspect.getsource(bootstrap.main)
+    apply_address = source.index('"manage_demo_address.py"), "--apply"')
+    verify_address = source.index('"manage_demo_address.py"),\n                "--verify-only"')
+    verify_catalog = source.index('"catalog_mode.py"), "verify-external"')
+
+    assert apply_address < verify_address < verify_catalog

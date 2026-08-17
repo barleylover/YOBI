@@ -1,6 +1,6 @@
 # YOBI 구조화 선택 기반 Hybrid RAG 추천 전면 개편 구현계획서
 
-- 상태: **구현·Oracle/OCI 배포·공개 회귀·롤백 리허설 완료(Implementation, Oracle/OCI deployment, public regression, and rollback rehearsal complete)**
+- 상태: **2026-08-12 릴리스는 완료 기록 / 2026-08-16 외부 카탈로그·서버 순위 개정은 구현·검증 중**
 - 제품 결정 승인일: **2026-08-12 KST**
 - 기준 체크아웃: `codex/master-spec-completion` / `68ad8ef05080bf341d9ed84ed6e91f8dc20ff02a`
 - 현재 문서 상태: 제품 코드, SQLite/Oracle 저장소, additive migration `010`,
@@ -9,6 +9,11 @@
   Oracle vector query, OCI GenAI 단일 dispatch, 공개 E2E, 호환 릴리스 롤백 및
   최종 재배포를 2026-08-12 KST에 검증했다. 상세 증적은 `TEST_REPORT.md`가
   권위다.
+- 2026-08-16 대체 계약: `RECOMMENDATION_PERFORMANCE_DIAGNOSIS_AND_IMPROVEMENT_PLAN.md`
+  가 외부 카탈로그 지식 지원, migration `011`/`012`, SQL preview, 서버 소유
+  최종 순위, 설명 전용 LLM, 성능·배포 gate 범위에서 이 문서의 과거
+  “모델이 메뉴와 순서를 선택” 문구를 대체한다. 로컬 mirror builder 결과와
+  worktree 구현은 진행 증거이며 아직 Oracle/OCI 완료 증거가 아니다.
 - 적용 대상: React 프런트엔드, FastAPI 백엔드, SQLite/Oracle 저장소, 내부 음식 Wiki, 추천/RAG, 테스트, 데모 문서
 
 ## 1. 문서 권위와 대체 범위
@@ -17,7 +22,8 @@
 
 1. 자유 입력 기반 다중 턴 대화와 채팅 입력창
 2. `GREET → COLLECT_NEEDS → RECOMMEND` readiness 흐름
-3. 서버가 최종 추천 메뉴를 확정하고 LLM은 설명만 생성하는 기존 추천 경계
+3. 2026-08-12 당시의 모델 선택 경계(2026-08-16부터는 서버가 최종 메뉴를
+   확정하고 LLM은 설명만 생성)
 4. 알레르기 입력, 필터, 추천 경고, 옵션 잠금, 장바구니·주문 차단
 5. 3단계 맵기
 6. 국적·종교에서 식이 규칙을 자동 추론하는 동작
@@ -47,13 +53,13 @@
 
 | 영역 | 확정 계약 |
 |---|---|
-| 추천 진입 | 프로필·주소 확인 후 자유 채팅이 아니라 구조화된 음식 선호 선택 화면을 연다. |
-| 사용자 입력 | 음식 계통, 맛, 주재료, 음식 형태, 온도, 가격대, 식감, 조리 방식, 할랄, 비건, 맵기를 버튼·칩으로 선택한다. |
+| 추천 진입 | 소개와 언어/국가를 한 화면에서 정한 뒤, 인구통계 없는 지원 데모 주소 화면을 거쳐 구조화된 음식 선호 선택 화면을 연다. |
+| 사용자 입력 | 음식 계통, 맛, 주재료, 음식 형태, 온도, 가격대, 식감, 조리 방식을 버튼·칩으로 선택한다. 할랄·비건·맵기는 active release가 충분한 검수 coverage를 제공할 때만 활성화한다. |
 | 선택 논리 | 같은 카테고리의 복수 선택은 `OR`, 서로 다른 활성 카테고리는 `AND`, 빈 카테고리는 조건에서 제외한다. |
 | LLM 호출 전 | 선택·수정 과정에서는 생성 LLM을 호출하지 않는다. |
-| 검색 | 서버가 객관적 eligibility를 적용한 뒤 lexical + embedding hybrid search로 넓은 RAG evidence pool을 만든다. |
-| 최종 추천 권한 | 정상 성공 경로에서는 생성 LLM dispatch 한 번이 evidence pool 안에서 최종 메뉴 선택과 설명 생성을 함께 수행한다. |
-| LLM 제한 | evidence pool 밖 메뉴 생성, 객관적 eligibility 우회, 전달되지 않은 Wiki·메뉴 사실 사용을 허용하지 않는다. |
+| 검색 | 서버가 객관적 eligibility와 reviewed concept support를 SQL로 적용하고, 설명에 필요한 bounded Wiki evidence를 조회한다. |
+| 최종 추천 권한 | 서버가 versioned score·stable tie-break·diversity로 최종 최대 3개와 순서를 동결한다. |
+| LLM 제한 | 동결된 메뉴의 설명만 1회 생성한다. 메뉴 추가·삭제·교체·재정렬, eligibility 우회, 전달되지 않은 사실 사용을 허용하지 않는다. |
 | 후속 행동 | 메뉴 선택, 비슷한 메뉴, 조건 수정, 비교, Wiki 근거 보기를 버튼으로 제공한다. 추천 채팅 composer는 없다. |
 | 알레르기 | 사용자 기능 전체에서 제거한다. 기존 내부 데이터와 과거 DB 컬럼은 첫 전환에서 물리 삭제하지 않는다. |
 | 할랄 | 사용자가 직접 선택하는 유효 인증 범위 기반 hard eligibility다. 종교·국적으로 자동 활성화하지 않는다. |
@@ -63,6 +69,7 @@
 | 결과 없음 | 조건을 몰래 완화하지 않는다. 맞지 않는 조건을 보여주고 `조건 수정` 행동을 제공한다. |
 | 비슷한 메뉴 | 같은 hard eligibility와 기존 조건을 유지하고 이미 노출·거절·선택한 메뉴를 제외한 새 pool을 만든다. |
 | 데이터 노출 | 화면은 실제 서비스처럼 자연스럽게 작성한다. 내부 코드나 반복적인 “데모/합성” 배지를 노출하지 않되, 실제 인증·실주문·전국 실데이터인 것처럼 허위 표현하지 않는다. |
+| 주문 종료점 | 브라우저는 옵션·장바구니·배달·검토 후 로컬 요기요 이동 목업에서 끝난다. mock checkout/synthetic order는 backend 배포 smoke 전용이다. |
 
 현재 구현을 시작하기 위해 추가로 필요한 제품 결정은 없다. 아래의 숫자성 기본값은 설정으로 분리하며, 실제 데이터·모델 입력 한도 검증 과정에서 품질을 보존하는 범위 안에서 조정할 수 있다.
 
@@ -73,8 +80,8 @@
 - 사용자가 타이핑하지 않고도 원하는 음식의 특징을 충분히 표현한다.
 - 선택 도중 생성 LLM 호출을 없애 비용과 대화 변동성을 줄인다.
 - 내부 음식 Wiki의 자연스러운 백과사전형 설명과 embedding을 추천의 핵심 근거로 사용한다.
-- 서버의 hybrid retrieval은 넓고 근거가 풍부한 pool을 만들고, 최종 메뉴 판단은 LLM이 수행한다.
-- 정상 응답에서는 한 번 dispatch한 생성 요청이 추천 메뉴와 설명을 함께 반환한다.
+- 서버의 objective/support retrieval과 versioned ranking이 최종 메뉴·순서를 확정한다.
+- 정상 응답에서는 한 번 dispatch한 생성 요청이 동결 메뉴의 설명만 반환한다.
 - 할랄·영업·배달 등 객관적으로 판정 가능한 자격 조건은 LLM이 우회하지 못하게 한다.
 - 추천 이후의 선택·옵션·장바구니·주문은 기존 서버 권위 흐름을 유지한다.
 
@@ -82,7 +89,7 @@
 
 - 알레르기 안전 판정 또는 알레르기 관련 사용자 기능
 - 실제 요기요 가게·주문·결제 연동
-- 현재 목업 가게를 공공데이터의 실제 식당과 연결하거나 실제 인증을 받았다고 주장하는 것
+- 외부 public-web 가게/메뉴 관측값을 실제 인증·레시피·실시간 주문 연동이라고 주장하는 것
 - 모든 음식 특성을 enum이나 boolean으로 정형화하는 것
 - 맛·식감·문화적 맥락 같은 주관적 정보를 SQL hard filter로 바꾸는 것
 - LLM이 자유롭게 검색 도구를 반복 호출하는 agentic RAG
@@ -92,8 +99,12 @@
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Onboarding
-  Onboarding --> Selecting: profile/address complete
+  [*] --> WelcomeLocale
+  WelcomeLocale --> Address: 언어와 국가 선택
+  Address --> Selecting: 지원 데모 주소 확인
+  Address --> Browsing: 공통 탐색 메뉴
+  Browsing --> Selecting: 취향 추천 열기
+  Browsing --> Ordering: 순위/특집 snapshot 메뉴 선택
   Selecting --> Retrieving: 완료
   Retrieving --> Generating: eligible evidence pool exists
   Retrieving --> NoResults: eligible pool empty
@@ -104,9 +115,10 @@ stateDiagram-v2
   Results --> Selecting: 조건 수정
   SearchFallback --> Selecting: 조건 수정
   SearchFallback --> Retrieving: 다시 추천받기
-  SearchFallback --> Ordering: 검색 결과 메뉴 선택
+  SearchFallback --> Ordering: 동일 서버 추천 메뉴 선택
   NoResults --> Selecting: 조건 수정
-  Ordering --> [*]
+  Ordering --> YogiyoHandoff: 옵션·장바구니·배달·검토
+  YogiyoHandoff --> [*]
 ```
 
 ### 4.1 화면 상태
@@ -116,23 +128,27 @@ stateDiagram-v2
   - 선택 요약과 카테고리별 초기화
   - 새 현재 식사 조건은 할랄·비건 `false`, 최대 맵기 `3`으로 시작
   - 한국어 프로필은 KR, 그 외 locale은 US 참고 예시를 처음 보여주되 사용자가 전환 가능
-  - 할랄·비건 토글과 1~5 맵기, KR/US 참고 기준을 현재 식사에 맞게 수정
+  - 할랄·비건 토글과 1~5 맵기, KR/US 참고 기준은 catalog capability가
+    활성화한 경우에만 현재 식사에 맞게 수정
+  - capability가 비활성이면 이유를 표시하고 중립값(false/false/5)으로 정규화
   - 음식 선호 배열 하나 이상 또는 명시적 할랄·비건 필터가 있을 때 `완료` 활성화
 - `RETRIEVING`
-  - 객관적 eligibility와 hybrid search 수행
+  - 객관적 eligibility, reviewed support, bounded server ranking 수행
   - 생성 LLM 0회
 - `GENERATING`
   - evidence pool이 있을 때 애플리케이션 기준 생성 LLM dispatch 최대 1회
 - `RESULTS`
-  - LLM이 고른 최대 3개 메뉴를 LLM 순서 그대로 표시
+  - YOBI 응답 bubble 안에서 서버가 동결한 최대 3개 메뉴를 one-card carousel로 표시
   - 메뉴별 선택 이유, Wiki 설명, 가격·배달 정보, 할랄/비건 상태
   - `이 메뉴 선택`, `비슷한 메뉴`, `조건 수정`, `비교`, `근거 보기`
 - `ORDERING`
-  - 기존 옵션·장바구니·배달·검토·mock 결제 흐름 재사용
+  - 기존 옵션·장바구니·배달·검토를 재사용하고 로컬 요기요 이동 목업으로 종료
+  - mock checkout·synthetic order는 backend release smoke에서만 검증
 
 추천용 자유 입력창은 제거한다. 배달 요청사항처럼 거래 단계에 필요한 별도 텍스트 입력은 유지한다.
 
-개인정보 입력 화면은 할랄·비건·맵기를 받지 않는다. 추천 요청의 직접 권위는
+주소 입력 화면은 연령·종교·선호 음식·알레르기·프로필 맵기·할랄·비건을 받지
+않고 additive legacy profile용 중립값만 전송한다. 추천 요청의 직접 권위는
 사용자가 추천 선택 화면에서 확인한 `committed criteria`다. 선택 화면의 조건은
 현재 식사에만 적용하며, 초기 릴리스에는 이를 프로필 기본 설정으로 저장하는
 행동을 제공하지 않는다.
@@ -163,6 +179,8 @@ spice_reference_country: "KR" | "US"
 `draft`는 추천 선택 화면이 처음 열릴 때 최대 맵기 `3`, 할랄·비건 `false`로
 생성된다. 맵기 기본값만으로는 `완료` 조건을 충족하지 않는다. 사용자가 선택
 화면에서 할랄 또는 비건을 명시적으로 켜면 그 필터는 완료 조건에 포함된다.
+catalog capability가 비활성이면 draft의 해당 값은 중립값(할랄/비건 `false`,
+맵기 ceiling `5`)으로 정규화되고 control과 KR/US 전환을 비활성화한다.
 
 다음 명백한 충돌은 생성 호출 전에 선택 화면에서 안내하고 완료를 막는다.
 
@@ -177,9 +195,9 @@ spice_reference_country: "KR" | "US"
   - 예: `flavors=[SPICY, SAVORY]`는 매운맛 또는 고소·감칠맛 계열이다.
 - 서로 다른 비어 있지 않은 배열은 모두 고려해야 한다.
   - 예: `KOREAN AND (SPICY OR SAVORY) AND NOODLES`다.
-- 주관적 카테고리의 `AND`는 Wiki 줄글을 boolean 사실로 변환한다는 뜻이 아니다.
-  - hybrid retrieval이 카테고리별 근거를 찾아 pool에 함께 제공한다.
-  - LLM은 최종 메뉴마다 각 활성 카테고리에서 선택값 하나 이상을 뒷받침하는 근거를 반환해야 한다.
+- 주관적 카테고리의 `AND`는 임의의 Wiki 줄글을 boolean으로 추론한다는 뜻이 아니다.
+  - reviewed concept-support release가 카테고리별 근거를 명시한다.
+  - 서버는 최종 메뉴마다 모든 활성 카테고리 support와 근거가 있는지 확인한다.
 - 할랄, 확정 비건 충돌, 서비스 지역, 판매 가능, 가격, 맵기는 별도의 객관적 eligibility다.
 - 0건일 때 주관적 조건이나 hard eligibility를 자동 완화하지 않는다.
 
@@ -283,10 +301,11 @@ review_status
 - 각 chunk는 `document_id`, `concept_id`, `heading_path`, `paragraph_index`, `source_ref`, `review_status`, `knowledge_release_id`를 유지한다.
 - embedding 모델·차원·버전을 knowledge release에 고정한다.
 - 문서 embedding은 release 생성 시 미리 계산한다.
-- 사용자 선택 query text를 value code별로 중복 제거하고, Oracle은 한 번의 batch
-  embedding 요청으로 계산한다. SQLite는 request-scope map에서 deterministic
-  query vector를 한 번씩만 계산한다.
-- 생성 모델 dispatch 1회 계약과 embedding 요청은 별도다. 정상 완료 batch의 생성 응답은 하나이며, embedding은 검색 인프라로 계측·캐시한다.
+- chunk embedding은 일반 Wiki 설명 근거와 과거 검색 호환을 위해 유지한다.
+  현재 `CONCEPT_PREFERENCE_SUPPORT` eligibility와 server rank는 query embedding에
+  의존하지 않으며, vector hit가 category coverage를 만들 수 없다.
+- 생성 모델 dispatch 1회 계약과 embedding 조회는 별도다. 정상 완료 batch의 생성
+  응답은 하나이며, embedding은 설명용 bounded evidence 인프라로 계측·캐시한다.
 - 로컬 deterministic embedding 검증은 계약 테스트일 뿐 실제 Oracle/semantic 품질 증거로 사용하지 않는다.
 
 현재 `KNOWLEDGE_CHUNK.facet`은 기존 release 호환을 위해 남겨 두고, 새 compiler는
@@ -323,13 +342,13 @@ review_status
 
 종교와 국적은 할랄·비건을 자동으로 켜지 않는다. 추천 생성에 전달하는 프로필도 추천에 실제로 유용한 최소 범위로 제한한다.
 
-- soft context로 전달 가능: locale, 국가/문화권, 연령대, 저장된 선호 음식, 사용자가 선택한 KR/US 맵기 참고 기준
+- soft context로 전달 가능: preferred language/locale만
 - 명시적 조건으로 전달: 할랄·비건, 최대 맵기, committed criteria
 - 서버에서만 사용: 상세 주소, service area 내부 식별자, 인증/권한 정보
-- 추천 판단에 전달하지 않음: 종교, 알레르기 과거 값, 원문 주소, 동의·인증 메타데이터
-- soft profile context는 retrieval query와 LLM 설명의 보조 신호일 뿐이다. 사용자가 현재 식사에서 명시한 criteria와 식이 조건을 완화하거나 반대로 바꿀 수 없다.
-- soft profile query는 category coverage evidence로 계산하지 않고 낮은 가중치의
-  pool recall/동률 보조 신호로만 사용한다.
+- 추천 판단에 전달하지 않음: 국적, 연령, 저장 선호 음식, 종교, 알레르기 과거
+  값, 원문 주소, 동의·인증 메타데이터
+- 현재 server ranking에는 soft profile 가중치가 없다. 사용자 표시 언어는 설명
+  locale일 뿐 criteria, eligibility, score, category coverage를 바꾸지 않는다.
 
 ### 7.1 판정 시점과 live revalidation
 
@@ -375,41 +394,40 @@ DB result row를 변경하지 않고 생성 LLM을 호출하지 않는다.
 - `scope_type=MENU`이면 `scope_ref`는 non-null menu FK여야 한다. merchant scope에서는 menu ref를 두지 않는다.
 - 인증 유효기간은 DB와 애플리케이션 모두 UTC 기준의 닫힌 시작·열린 종료 구간으로 판정한다.
 
-## 8. Hybrid retrieval과 evidence pool
+## 8. Reviewed support, 서버 ranking과 evidence pool
 
 ### 8.1 역할 경계
 
-Hybrid retrieval 결과는 최종 추천이 아니다. LLM이 검토할 수 있는 허용된 evidence pool이다.
-
-서버는 검색 관련도 때문에 특정 3개 메뉴를 최종 추천으로 확정하지 않는다. 다만 모델 입력 한도와 비용 때문에 전체 600개 메뉴를 그대로 전달하지 않고, objective eligibility를 통과한 메뉴 중 검색 근거가 높은 넓은 pool을 구성한다.
+Reviewed concept support와 bounded evidence retrieval은 서버 소유 최종 추천의
+입력이다. LLM이 후보를 고르는 허용 목록이 아니다. 서버는 객관 조건, 동일 카테고리
+`OR`/카테고리 간 `AND`, support strength, stable tie-break와 diversity를 적용해
+최대 3개와 순서를 동결한다. 생성 모델에는 이 동결 결과와 설명 근거만 전달한다.
 
 ### 8.2 검색 단계
 
 1. `RecommendationCriteriaV2`를 canonical code 순서로 정규화한다.
-2. locale label과 중앙 query alias를 사용해 선택값별 검색 문장을 만든다.
-3. 객관적 eligibility로 런타임 메뉴 집합을 제한한다.
-4. 각 선택값에 대해 전체 eligible public passage에서 다음 독립 stable rank를 구한다.
-   - exact name/alias와 essential fact 일치
-   - Wiki prose lexical/token 일치
-   - Wiki paragraph embedding cosine similarity
-5. rank scale 차이에 덜 민감하도록 lexical/vector/essential 결과를 reciprocal-rank
-   fusion하고, 선택값마다 설정된 raw-hit 상위만 메뉴 근거로 배분한다. 0점 임의
-   passage로 category coverage를 만들지 않는다.
-6. 같은 카테고리에서는 선택값별 최고 신호를 사용하여 `OR`를 반영한다.
-7. 모든 다른 활성 카테고리에 실제 raw-hit evidence가 있는 메뉴만 normal-generation
-   pool 후보로 남기고, 근거 ID를 별도로 보존하여 `AND` 의도를 전달한다.
-8. soft profile query는 낮은 가중치로 retrieval score만 보조하며 category evidence로
-   사용하지 않는다.
-9. 메뉴별 가장 관련 있는 Wiki passage와 객관적 menu/merchant fact를 설정된 passage
-   한도 안에서 묶는다.
-10. pool을 정규화된 retrieval 순서로 제한하되, 이것을 최종 추천 순서로 사용하지 않는다.
+2. 지원 데모 주소의 service area, availability와 현재 exact capability filter를
+   bounded SQL에 적용한다.
+3. active high-confidence menu↔concept mapping과 review 완료
+   `CONCEPT_PREFERENCE_SUPPORT`로 런타임 메뉴 집합을 제한한다.
+4. 같은 카테고리에서는 선택값별 최고 support strength를 사용해 `OR`를 반영한다.
+5. 모든 다른 활성 카테고리에 reviewed support가 있는 메뉴만 남기고, 근거 ID를
+   보존하여 `AND` 의도를 서버에서 확정한다.
+6. candidate를 최대 24개로 제한하고 pre-freeze 후보에서 한 merchant가 25%를
+   초과하지 않도록 분산한다.
+7. 명시 점수, 최소 category support, reviewed evidence 수, stable ID tie-break와
+   diversity를 적용해 최종 최대 3개를 서버 순위로 동결한다.
+8. 동결 메뉴에 대해서만 설명용 public Wiki passage를 메뉴당 최대 3개 조회한다.
+   lexical/vector는 설명 근거를 bound할 수 있지만 category support나 최종 순위를
+   새로 만들지 않는다.
+9. preferred language 외 soft profile data와 rating/review/가게 광고 문구는 score `0`이다.
 
 초기 설정값은 다음과 같다.
 
 ```text
-raw_hits_per_selected_value = 20 chunks
-evidence_pool_menu_limit = 24 menus
-evidence_passage_limit_per_menu = 4 passages
+evidence_pool_menu_limit = 24 internal candidates
+candidate_merchant_share_limit = 25 percent
+evidence_passage_limit_per_menu = 3 passages
 final_recommendation_count = 3 menus
 ```
 
@@ -436,6 +454,12 @@ menu_facts[]
 knowledge_release_id
 catalog_release_id
 recommendation_release_family_id
+server_rank
+explicit_score
+semantic_score
+min_category_support
+reviewed_evidence_count
+ranking_trace
 ```
 
 생성 입력의 `criterion_evidence`는 ID와 점수만 보존하고 같은 원문을 중복
@@ -444,11 +468,13 @@ recommendation_release_family_id
 
 가게 광고 문구와 합성 리뷰는 추천·eligibility·grounding 입력으로 사용하지 않는다.
 
-## 9. 한 번의 LLM 호출로 후보 선택과 설명 생성
+## 9. 서버 순위 동결 후 한 번의 LLM 설명 생성
 
 ### 9.1 호출 계약
 
-evidence pool이 비어 있지 않은 신규 추천 batch마다 애플리케이션이 생성 LLM 요청을 최대 한 번 dispatch한다. 정상 성공 경로에서는 그 한 요청이 후보 선택과 설명을 모두 반환한다.
+서버가 최종 메뉴를 동결한 신규 추천 batch마다 애플리케이션이 생성 LLM 요청을
+최대 한 번 dispatch한다. 정상 성공 경로에서 그 요청은 설명만 반환한다. 메뉴
+선택과 순위는 provider 호출 전에 완료되어 request ledger에 보존된다.
 
 provider가 요청을 처리했지만 응답 저장 전에 프로세스가 종료되는 경우, provider 자체 idempotency가 검증되지 않으면 실제 inference의 end-to-end exactly-once를 증명할 수 없다. 이 경우 재호출해서 중복 가능성을 만들지 않고 request를 `UNKNOWN_AFTER_DISPATCH`로 남긴다. 따라서 제품·테스트 불변식은 다음과 같다.
 
@@ -464,7 +490,10 @@ provider가 요청을 처리했지만 응답 저장 전에 프로세스가 종�
 - request dispatch 이후 timeout/network 오류가 발생해도 자동 재호출하지 않는다.
 - 동일 `request_id` 재전송은 저장된 결과 또는 진행 상태를 반환하고 새 inference를 만들지 않는다.
 - rate limit, timeout, invalid output은 추가 호출 없이 실패 경로로 전환한다.
-- 메뉴 선택, 조건 편집, 비교, Wiki 근거 열기, 옵션 변경, 장바구니, 주문에는 생성 LLM을 호출하지 않는다.
+- 메뉴 선택, 조건 편집, Wiki 근거 열기, 옵션 변경, 장바구니, 주문에는 추천 설명
+  LLM을 호출하지 않는다. 사용자가 2~3개 결과의 비교를 처음 명시적으로 열면
+  별도 comparison writer를 최대 1회 호출할 수 있고, 같은 idempotency key는 저장
+  결과를 재사용한다. 이 호출은 추천 메뉴/순위를 바꾸지 않는다.
 
 객관적 eligibility 결과가 0건이면 생성 LLM을 호출하지 않고 조건 수정 화면으로 연결한다.
 
@@ -473,13 +502,13 @@ provider가 요청을 처리했지만 응답 저장 전에 프로세스가 종�
 모델에는 다음만 전달한다.
 
 - normalized user criteria와 사용자 표시 언어
-- 허용된 soft profile context와 이것이 명시적 criteria보다 우선하지 않는다는 규칙
+- preferred language만 담은 최소 soft context
 - 각 카테고리의 `OR`/카테고리 간 `AND` 의미
 - 객관적 eligibility는 이미 적용됐다는 선언
-- 최대 24개의 `EvidencePoolItem`
-- 추천 개수와 버튼 후속 행동에 맞는 output schema
+- 서버가 동결한 최대 3개의 `EvidencePoolItem`과 순서
+- 설명과 버튼 후속 행동에 맞는 output schema
 - evidence 밖 사실·메뉴를 사용하지 말라는 grounding 규칙
-- 일치 메뉴가 없으면 억지로 선택하지 않고 `NO_MATCH`를 반환하라는 규칙
+- 메뉴를 추가·삭제·교체·재정렬하지 말라는 규칙
 
 원문 주소, 종교, 알레르기 과거 값, 내부 인증정보, 불필요한 개인정보는 전달하지 않는다.
 
@@ -487,11 +516,11 @@ provider가 요청을 처리했지만 응답 저장 전에 프로세스가 종�
 
 ```text
 RecommendationGenerationV2
-  status: "RECOMMENDED" | "NO_MATCH"
+  status: "EXPLAINED"
   criteria_summary: localized string
   recommendations[]:
     rank: 1..3
-    menu_id: evidence pool member
+    menu_id: frozen server result at the same rank
     title: localized string
     selection_reason: localized string
     description: localized string
@@ -501,19 +530,21 @@ RecommendationGenerationV2
         evidence_ids[]
     wiki_evidence_ids[]
     caution_codes[]
-  unmatched_category_codes[]
+  unmatched_category_codes[]: always empty for a frozen normal result
 ```
 
-모델이 정한 `rank`를 UI 순서로 유지한다. 서버가 검색 점수로 다시 정렬하지 않는다.
+모델이 반환한 `(rank, menu_id)`는 서버 동결 목록과 정확히 같아야 한다. UI는 서버
+순서를 유지하고 provider가 다른 순서를 반환하면 설명 응답을 거절한다.
 
-가격, 가게명, 배달시간, 인증 상태, 옵션은 모델 prose에서 권위를 갖지 않는다. 카드의 해당 필드는 모델이 고른 `menu_id`를 기준으로 서버 snapshot 데이터에서 합성한다.
+가격, 가게명, 배달시간, 인증 상태, 옵션은 모델 prose에서 권위를 갖지 않는다.
+카드의 해당 필드는 서버가 동결한 `menu_id`를 기준으로 snapshot 데이터에서 합성한다.
 
 ### 9.4 응답 검증
 
 두 번째 LLM judge 없이 현재 서버 계약이 다음을 검사한다.
 
 - strict JSON/Pydantic shape, 상태와 결과 개수, 중복 메뉴, 연속 rank
-- 추천 `menu_id`가 evidence pool에 존재함
+- 추천 `(rank, menu_id)` 목록이 frozen server candidates와 정확히 일치함
 - snapshot commit 시 선택 메뉴가 현재 merchant service area, menu availability,
   가격·맵기·할랄·비건 eligibility를 여전히 통과함
 - 각 활성 주관적 카테고리에 대해 사용자가 고른 값 하나 이상과 해당 pool
@@ -529,12 +560,14 @@ evidence reference 검사, 사용자 표면 QA를 Phase 8 품질 게이트로 �
 
 ### 9.5 실패와 fallback
 
-정상 경로에서 최종 추천 메뉴는 LLM이 결정한다. 모델 timeout, provider 오류, invalid/ungrounded output이 발생하면 서버가 이를 LLM 추천으로 가장하지 않는다.
+정상 경로에서 최종 추천 메뉴는 서버가 결정한다. 모델 timeout, provider 오류,
+invalid/ungrounded output이 발생해도 메뉴와 순위를 바꾸지 않는다.
 
-- hybrid retrieval 상위 메뉴를 `조건에 가까운 검색 결과`로 표시한다.
+- 동결된 서버 순위 메뉴를 `설명을 불러오지 못한 추천 결과`로 표시한다.
 - 설명은 전달된 Wiki 문단을 사용한 결정론적 요약만 제공한다.
-- snapshot은 `SEARCH_FALLBACK`으로 저장하고 `RECOMMENDED`나 `model_selected_order`로 기록하지 않는다.
-- 검색 결과 메뉴는 사용자가 선택해 주문할 수 있지만, `추천 설명을 불러오지 못해 조건에 가까운 메뉴를 보여드려요.`처럼 LLM 추천 결과가 아님을 자연스럽게 알린다.
+- snapshot은 설명 fallback 상태를 기록하되 frozen candidates와 ranking trace를 보존한다.
+- 사용자는 같은 서버 추천 메뉴를 선택해 주문할 수 있지만, 설명은 provider
+  생성이 아닌 fallback임을 자연스럽게 알린다.
 - `조건 수정`과 사용자가 명시적으로 누르는 `다시 추천받기` 버튼을 제공한다.
 - `다시 추천받기`는 새로운 사용자 동작과 새 request ID이므로 새 생성 호출 1회를 허용한다.
 
@@ -639,14 +672,46 @@ UNKNOWN
 
 ```text
 GET  /api/v1/recommendation/preferences/catalog
+POST /api/v1/sessions/{session_id}/structured-recommendations/preview
 PUT  /api/v1/sessions/{session_id}/recommendation-criteria
 POST /api/v1/sessions/{session_id}/recommendations
 GET  /api/v1/sessions/{session_id}/recommendation-requests/{request_id}
+POST /api/v1/sessions/{session_id}/recommendation-comparisons
+GET  /api/v1/sessions/{session_id}/food-rankings
+GET  /api/v1/sessions/{session_id}/featured/kpop-demon-hunters
 GET  /api/v1/sessions/{session_id}/conversation
 POST /api/v1/sessions/{session_id}/events
 ```
 
-`GET preference-catalog`은 `catalog_version`, `knowledge_release_id`, locale별 label, option code, category order, KR/US spice reference와 HTTP `ETag`를 반환한다. 로딩 실패 시 선택 화면 대신 재시도 상태를 보여준다. draft가 참조한 code가 새 release에서 사라졌다면 서버는 `PREFERENCE_CATALOG_CHANGED`를 반환하고, UI는 새 catalog를 받은 뒤 사라진 선택을 표시·해제하여 사용자가 다시 완료하도록 한다. 이 경로에서는 생성 LLM을 호출하지 않는다.
+`GET preference-catalog`은 `catalog_version`, `knowledge_release_id`, locale별 label,
+option code, category order, KR/US spice reference, support/ranking identity와 HTTP
+`ETag`를 반환한다. 할랄·비건·맵기는 `enabled`와 `disabled_reason` capability를
+함께 반환한다. 비활성은 coverage 부족이지 메뉴의 positive/negative 판정이 아니며,
+UI는 control을 비활성화하고 stale draft를 중립값으로 정리한다. 로딩 실패 시
+선택 화면 대신 재시도 상태를 보여준다. draft가 참조한 code가 새 release에서
+사라졌다면 서버는 `PREFERENCE_CATALOG_CHANGED`를 반환하고, UI는 새 catalog를
+받은 뒤 사라진 선택을 표시·해제하여 사용자가 다시 완료하도록 한다. 이 경로에서는
+생성 LLM을 호출하지 않는다.
+
+`POST structured-recommendations/preview`는 동일 criteria body로 객관 SQL/support
+count만 계산하는 read-only API다. `eligible_menu_count`,
+`eligible_merchant_count`, `zero_reason_codes`, release/support/ranking identity와
+`timing_ms`만 반환하며 session state, vector/Wiki retrieval, LLM을 건드리지 않는다.
+
+`POST recommendation-comparisons`는 완료된 2~3개 추천의 `snapshot_id`, 추천
+`request_id`, `idempotency_key`를 받아 frozen menu IDs만 비교한다. 신규 key는 별도
+comparison writer 최대 1회, 실패는 동일 메뉴 결정론 fallback, replay는 cache를
+사용한다. 이 endpoint는 추천 순위나 session state를 바꾸지 않는다.
+
+`GET food-rankings`는 확인된 데모 service area/availability를 적용한다. 외부
+catalog의 review 순위는 source menu review count를 쓰고 order/popularity는 source
+menu/merchant review count에서 만든 명시적 demo proxy다. source count가 모두 없는
+합성 fixture row만 stable ID-derived fallback을 쓴다. `demo_basis`를 항상 표시하며
+실시간 요기요 전체 순위가 아니다.
+`GET featured/kpop-demon-hunters`는 Gimbap, Gukbap, Hotteok, Seolleongtang, Eomuk의
+general Wiki concept를 현재 주문 가능한 mapped menu에 연결한다. 두 browse endpoint는
+선택 권한용 snapshot을 만들지만 추천 생성 LLM을 호출하지 않고, Wiki를 특정 가게
+레시피나 식이 사실로 승격하지 않는다.
 
 `POST recommendations` 요청:
 
@@ -693,10 +758,12 @@ mode: INITIAL | SIMILAR | RETRY
 
 카드에는 `이 메뉴 선택`과 `Wiki 근거 보기`를 둔다. 결과 하단 action bar에는
 `비슷한 메뉴 보기`, `조건 수정`, `현재 메뉴 비교`를 둔다. `SIMILAR`는 현재
-batch를 새 결과로 교체하지만 서버의 `shown` 이력은 누적한다. 현재 UI의 비교와
-Wiki 펼치기는 이미 받은 snapshot/server facts를 브라우저에서 표시하므로 별도
-`COMPARE_MENUS` event나 생성 LLM을 호출하지 않는다. v1 호환 API는 기존 compare
-event를 계속 받을 수 있다.
+batch를 새 결과로 교체하지만 서버의 `shown` 이력은 누적한다. Wiki 펼치기는 이미
+받은 payload를 표시한다. 비교는 snapshot/request/idempotency key를 요구하는 전용
+endpoint로 frozen 2~3개만 비교하며, 신규 key는 별도 bounded comparison 생성 최대
+1회, 실패 시 동일 메뉴 결정론 fallback, replay 시 cache를 사용한다. 어느 경우에도
+`COMPARE_MENUS` event를 쓰거나 메뉴를 교체·재정렬하지 않는다. v1 호환 API는 기존
+compare event를 계속 받을 수 있다.
 
 ### 12.3 snapshot과 idempotency
 
@@ -711,7 +778,9 @@ embedding_model/version
 evidence_pool menu/passage/fact IDs
 generation_dispatch_count
 generation_status
-model-selected menu order
+frozen server menu order
+ranking_trace + ranking_policy_version
+support_manifest_sha256 + finalized_at
 grounding validation result
 shown/rejected/selected IDs
 state_version
@@ -719,14 +788,14 @@ state_version
 
 위 목록 중 현재 DB에 직접 저장되는 권위는 criteria/hash, release family,
 직렬화된 pool, dispatch/status/result/order, snapshot grounding JSON, state/history다.
-generation provider/model/prompt version과 soft-profile hash를 별도 audit column으로
+generation provider/model/prompt version과 presentation-locale hash를 별도 audit column으로
 저장하는 것은 아직 구현되지 않았다. 모델 identity는 runtime configuration/log
 gate로 확인하고 Phase 8 증거에 정확한 provider/model/prompt 계약을 기록한다.
 
 현재 `request_hash`는 session/profile identity, criteria hash/version, mode,
 expected state version, locale을 포함한다. release family와 eligibility 시각은 request
 row 예약 시 별도로 고정되고 evidence pool 자체가 dispatch 전에 저장된다. 같은
-`request_id`와 hash의 replay는 그 저장 상태/snapshot을 반환한다. soft profile,
+`request_id`와 hash의 replay는 그 저장 상태/snapshot을 반환한다. profile identity,
 주소/service area, 또는 `SIMILAR` exclusion history를 바꾼 뒤에는 state를 먼저
 갱신하고 새 request ID를 사용한다. 현재 hash가 mutable profile/address/history
 내용 자체를 모두 다시 hash한다고 과장하지 않는다.
@@ -738,7 +807,8 @@ row 예약 시 별도로 고정되고 evidence pool 자체가 dispatch 전에 �
 2. 최초 등록 요청만 generation owner가 된다.
 3. 같은 ID·같은 hash의 동시 요청은 기존 상태 또는 완료 결과를 반환한다.
 4. 같은 ID를 다른 hash에 재사용하면 `409`로 거절한다.
-5. owner가 objective eligibility와 evidence pool을 계산한다. 빈 pool은 dispatch 없이
+5. owner가 objective eligibility, reviewed support, server rank와 explanation
+   evidence를 계산하고 final candidates를 동결한다. 빈 결과는 dispatch 없이
    `NO_RESULTS`로 완료한다.
 6. provider 요청 직전에 compare-and-set으로 evidence pool 저장, `DISPATCHED`,
    dispatch count `1`, dispatch timestamp를 한 transaction에서 commit한다.
@@ -757,7 +827,9 @@ row 예약 시 별도로 고정되고 evidence pool 자체가 dispatch 전에 �
 
 ## 13. DB와 release 변경
 
-기존 적용 마이그레이션을 수정하지 않고 `database/migrations/010_structured_hybrid_rag_recommendation.sql`을 추가한다.
+기존 적용 마이그레이션을 수정하지 않는다. `010`은 2026-08-12 구조화 추천,
+`011`은 외부 카탈로그 provenance, `012`는 concept preference support와 서버
+ranking을 additive하게 추가한다.
 
 ### 13.1 `010` 범위
 
@@ -792,9 +864,18 @@ cosine similarity를 결합하며 stable chunk/menu ID로 동률을 해소한다
 - Wiki prose와 essential fact를 새 knowledge release로 컴파일한다.
 - 선택지별 retrieval alias와 locale label을 versioned preference catalog로 시드한다.
 - 알레르기 테이블·컬럼은 보존하지만 v2 runtime dependency와 readiness count에서 제외한다.
-- deploy/readiness의 migration ledger `001~009` 하드코딩을 `001~010`으로 갱신한다.
+- deploy/readiness의 migration ledger 기대값을 `001~012`로 갱신한다.
 
-### 13.3 release family 원자성
+### 13.3 `011`/`012` 범위
+
+- 외부 public-web catalog import와 source/classification provenance
+- `CONCEPT_PREFERENCE_SUPPORT` reviewed support manifest
+- release-family의 support/ranking policy version과 digest
+- request/snapshot의 frozen candidates, ranking trace, finalization metadata
+- objective/support lookup, catalog exclusion, request-policy index
+- raw SQL/row ID를 노출하지 않는 read-only preview count
+
+### 13.4 release family 원자성
 
 서로 호환되는 지식·메뉴·검색 콘텐츠를 하나의 immutable family로 묶는다.
 
@@ -808,6 +889,9 @@ RECOMMENDATION_RELEASE_FAMILY
   certification_release_id
   embedding_model
   embedding_version
+  support_manifest_sha256
+  ranking_policy_version
+  ranking_policy_sha256
   status: LOADING | READY | ACTIVE | RETIRED
 
 RECOMMENDATION_RUNTIME_STATE
@@ -839,19 +923,19 @@ release table/manifest FK로 검증하는 운영 활성화 게이트는 아직 �
 | `domain/models.py` | v2 profile/criteria/recommendation DTO, 5단계 맵기, 알레르기 공개 계약 제거 |
 | `domain/dialogue.py` | 자유 발화 중심 상태 의존 축소, criteria/snapshot/event 계약 추가 |
 | `services/dialogue_engine.py` | 신규 UI 경로에서 사용 중단 후 v1 호환 종료 시 제거 |
-| `services/chat_service.py` | criteria 저장, eligibility, retrieval, one-call generation, snapshot commit 중심 서비스로 분리 |
-| 신규 recommendation service | objective eligibility, evidence pool builder, generation orchestrator, validator 구성 |
-| `db/repository.py` | SQLite/Oracle 공통 criteria·eligibility·evidence pool 계약 |
-| `sqlite_repository.py` | eligibility와 lexical/vector evidence 조회, v2 snapshot/idempotency |
-| `oracle_repository.py` | 같은 계약과 Oracle Vector Search 구현 |
+| `services/chat_service.py` | criteria 저장과 기존 대화/주문 호환 경계 유지 |
+| 신규 recommendation service | objective eligibility, server ranking/freeze, explanation orchestrator, validator 구성 |
+| `db/repository.py` | SQLite/Oracle 공통 criteria·preview·support·ranked evidence 계약 |
+| `sqlite_repository.py` | eligibility/support/ranking/evidence 조회와 v2 snapshot/idempotency |
+| `oracle_repository.py` | 같은 계약과 bounded Oracle SQL/Vector evidence 구현 |
 | `knowledge/authoring.py` | 필수 9 facet 완화, 최소 essential schema, paragraph chunk 컴파일 |
 | `knowledge/catalog_seed.py` | menu-concept mapping, essential facts, preference catalog 연결 |
 | `genai/agent_loop.py` | 추천 v2에서 사용하지 않음. v1 종료 후 제거 범위 검토 |
-| 신규 `RecommendationGenerator` | 도구 없는 단일 structured-output 호출 |
-| `genai/prompts.py` | evidence pool 내 선택·설명, NO_MATCH, one-call prompt |
-| `genai/response_contract.py` | model-selected recommendations와 category별 evidence 계약 |
-| grounding validator | pool membership, eligibility, evidence reference, category coverage, rank, internal ID leak 검증. 일반 자연어 entailment는 현재 결정론 validator 범위가 아니며 provider 평가 게이트로 남김 |
-| `main.py` | preference catalog, criteria, recommendation endpoint와 deprecation 표시 |
+| 신규 `RecommendationGenerator` | frozen candidates를 설명하는 도구 없는 단일 structured-output 호출 |
+| `genai/prompts.py` | frozen order 설명, grounding, one-call prompt |
+| `genai/response_contract.py` | frozen-order echo와 category별 evidence 계약 |
+| grounding validator | exact frozen order, eligibility, evidence reference, category coverage, internal ID leak 검증. 일반 자연어 entailment는 provider 평가 gate로 남김 |
+| `main.py` | preference catalog, read-only preview, criteria, recommendation endpoint와 deprecation 표시 |
 
 DB별로 최종 추천 알고리즘을 복제하지 않는다. eligibility와 evidence pool 규칙은 공통 도메인 계약으로 두고, 저장소는 각 DB의 조회·vector 기능만 구현한다.
 
@@ -860,19 +944,21 @@ DB별로 최종 추천 알고리즘을 복제하지 않는다. eligibility와 ev
 | 파일/영역 | 주요 변경 |
 |---|---|
 | `types.ts` | `RecommendationCriteriaV2`, preference catalog, generation result, 5단계 타입 |
-| `lib/api.ts` | text/SSE 추천 대신 criteria 저장과 recommendation API |
+| `lib/api.ts` | text/SSE 추천 대신 criteria, preview, recommendation, comparison, ranking, feature API |
 | `stores/session.ts` | `draftCriteria`, `committedCriteria`, criteria version, 추천 phase 보존 |
 | `stores/session.ts` locale 초기화 | 한국어 프로필은 KR, 그 외는 US 참고 기준과 `3/5`로 새 draft를 만들고 선택 화면에서 변경 가능 |
-| `OnboardingPage.tsx` | 알레르기·심각도·기존 맵기 입력 제거; 할랄·비건·5단계 맵기는 추천 선택 화면으로 이동 |
+| `WelcomePage.tsx` | 소개와 16개 언어/국가 선택 통합, RTL 방향 적용 |
+| `OnboardingPage.tsx` | 인구통계·알레르기·기존 맵기 제거; 중립 profile과 지원 demo address/consent만 처리 |
 | 신규 `PreferenceSelector.tsx` | 카테고리별 chip, 선택 요약, 초기화, 완료 |
 | 신규 `SpiceReferenceScale.tsx` | KR/US 5단계 참고 예시 |
-| `ChatPage.tsx` | composer/SSE/free-text 제거, 선택→생성→결과 상태 머신 |
+| `ChatPage.tsx` | composer/SSE/free-text 제거, 선택→생성→chat-bubble/one-card 결과 상태 머신 |
+| `PostAddressNavigation.tsx` | 공통 메뉴, source-first demo 음식 순위, K-POP Demon Hunters 5-food feature dialog |
+| `HandoffPage.tsx` | cart 요약과 로컬 요기요 이동 목업; 외부 이동·checkout/order 생성 없음 |
 | `ChatRoomMenu.tsx` | 신규 구조화 화면에서 제거 |
 | `PresetCollectionCard.tsx` | 과거 conversation 읽기 호환용으로만 유지하며 신규 추천 진입에 노출하지 않음 |
 | `RichCard.tsx` | 과거 card 읽기 호환, 알레르기 공개 표시 제거, 맵기 `/5` |
 | `EvidenceBadge.tsx` | 일반 `VERIFIED`와 할랄 certification UI를 분리하여 인증처럼 오인되는 재사용 방지 |
-| `OrderFlowPanel.tsx` | 알레르기 잠금·checkout 차단 제거, 비건 확인 문구와 할랄 scope 일관성 |
-| `WelcomePage.tsx` | 자유 대화·위험 회피 중심 소개를 터치 선택·Wiki 추천 소개로 변경 |
+| `OrderFlowPanel.tsx` | 알레르기 잠금·checkout 차단 제거, 옵션·장바구니·배달·검토 후 handoff 연결 |
 | i18n | 구조화 선택, 결과 버튼, 5단계, 자연스러운 할랄·비건 문구 |
 | styles | 다중 선택 chip, category accordion, sticky 완료, 결과 action bar |
 
@@ -900,7 +986,11 @@ DB별로 최종 추천 알고리즘을 복제하지 않는다. eligibility와 ev
 - “전국 할랄 인증 데이터 확보”, “실제 주문 완료” 같은 허위 문구
 - Wiki 일반 지식을 특정 가게의 실제 레시피라고 단정
 
-대신 환영 화면 하단이나 서비스 정보 영역 한 곳에 `가게와 주문 정보는 체험을 위해 구성되어 있습니다.`와 같은 조용한 공통 안내를 둔다. 내부 API와 데이터에는 provenance를 계속 보존하고, 발표·README·운영 문서에서는 합성 데이터와 공공데이터 참고 경계를 정확히 설명한다.
+대신 환영 화면 하단이나 서비스 정보 영역 한 곳에 실제 주문/결제가 없다는 조용한
+공통 안내를 둔다. 내부 API와 데이터에는 provenance를 계속 보존하고, 발표·README·
+운영 문서에서는 `YOGIYO_PUBLIC_WEB` merchant/menu/price/option 관측값과
+`SYNTHETIC_WIKI` 일반 지식, `YOBI_DERIVED_DEMO_MAPPING`, ranking proxy, demo 주소,
+mock 주문 경계를 정확히 설명한다.
 
 ## 17. 테스트와 검증 게이트
 
@@ -912,15 +1002,16 @@ DB별로 최종 추천 알고리즘을 복제하지 않는다. eligibility와 ev
 - 가격 경계, 맵기 `1..5`, 빈 pool
 - 결과 0건에서 자동 조건 완화 없음
 
-### 17.2 Wiki와 retrieval
+### 17.2 Wiki, support와 evidence
 
 - 필수 front matter 최소 계약과 자유 prose authoring
 - 주관적 문장을 boolean fact로 승격하지 않음
 - knowledge release의 문서·chunk·embedding 완전성
-- exact/lexical/vector 신호가 실제로 모두 pool 생성에 참여함
-- query embedding batch/cache와 release 호환성
+- 모든 노출 option에 active reviewed concept support와 evidence chunk가 있음
+- external 15,085개 메뉴가 high mapping 또는 명시적 미매핑 사유로 전부 분류됨
+- vector/lexical evidence가 support나 server rank를 새로 만들지 않음
 - 가게 문구·리뷰 변경이 pool과 LLM context에 영향을 주지 않음
-- 대표 KR/EN 질의 golden set에서 relevant pool recall
+- 대표 criteria golden set에서 eligible membership/count/frozen rank 일치
 
 ### 17.3 eligibility
 
@@ -929,45 +1020,58 @@ DB별로 최종 추천 알고리즘을 복제하지 않는다. eligibility와 ev
 - 국적·종교가 필터를 자동으로 켜지 않음
 - 비건 `CONFLICT` 제외, `POSSIBLE_WITH_CHECKS` 경고, `UNKNOWN` 제외
 - 서비스 지역·판매 상태·기본가격·최대 맵기
-- 고정 vector fixture에서 SQLite/Oracle의 같은 hybrid score·tie-break·pool membership
-- 실제 embedding 환경별 동일 objective eligibility와 golden-set recall
+- SQLite/Oracle의 같은 objective/support membership, count, score, tie-break, diversity
+- capability가 false일 때 UI/preview/recommendation에서 같은 중립값·unsupported reason
 
 ### 17.4 LLM과 grounding
 
 - 선택·수정 중 생성 provider 호출 `0`
 - evidence pool이 있는 신규 batch의 애플리케이션 generation dispatch `1`
-- 한 호출이 최종 menu IDs와 설명을 함께 반환
+- 서버가 provider 전에 최종 menu IDs/order를 동결하고 한 호출은 설명만 반환
 - tool call·continuation·자동 model fallback `0`
 - idempotent replay 추가 호출 `0`
-- 추천 menu가 모두 evidence pool 소속
-- fake provider가 retrieval 1위가 아닌 pool 항목을 선택해도 서버가 이를 다시 정렬하지 않음
+- 응답 menu/order가 frozen candidates와 정확히 일치
+- fake provider의 메뉴 교체·재정렬을 서버가 거절
 - 모든 활성 카테고리에 pool 내 evidence reference 존재
 - pool 밖 menu/claim/passage와 internal ID leak 거절
 - 할랄·비건 상태는 model prose가 아니라 server-owned field로 표시하고, 생성 설명의
   근거 초과 표현은 live provider 평가에서 검수한다. 현재 구조 validator가 임의
   자연어 문장의 entailment를 완전히 판정한다고 주장하지 않는다.
-- invalid/timeout에서 추가 호출 없이 검색 결과 fallback
+- invalid/timeout/provider `NO_MATCH`에서 추가 호출 없이 동일 frozen menu fallback
 - `SIMILAR`는 같은 조건과 exclusion set을 유지하고 신규 batch당 최대 1회
+- 명시적 비교는 신규 idempotency key당 comparison writer 최대 1회, replay 0회,
+  failure에서 동일 메뉴 결정론 fallback이며 rank를 변경하지 않음
 
-정확히 동일한 메뉴 ID를 모든 생성 실행에서 강제하는 것은 acceptance 기준이 아니다. 대신 pool 소속, eligibility, 선택 조건별 근거, 단일 호출, 설명 grounding을 불변 조건으로 삼는다.
+동일한 DB/release/criteria에서 provider를 바꿔도 frozen menu ID와 순서는 같아야
+한다. 자연어 설명의 표현 차이는 허용하되 eligibility, ranking trace, 근거,
+단일 호출, grounding은 불변 조건이다.
 
 ### 17.5 프런트와 주문 회귀
 
-- 온보딩→조건 선택→완료→결과→비슷한 메뉴→수정→선택→주문
+- 소개+언어/국가→고정 데모 주소→조건 선택→완료→chat bubble/one-card carousel
+  결과→비슷한 메뉴→수정→선택→옵션→장바구니→배달·검토→요기요 이동 목업
+- 공통 navigation의 음식 순위 demo basis와 5-food feature, snapshot-backed 선택
 - 추천 textarea와 알레르기 입력·경고가 없음
+- 연령·종교·선호 음식 입력이 없고 할랄·비건·맵기 capability 비활성 이유가 보임
 - 모바일·데스크톱, 현재 지원 locale 전체의 label 완전성, 한국어·영어와 대표 RTL locale 집중 E2E, KR/US 맵기 전환
 - reload 후 draft/committed criteria와 snapshot 복구
 - state version 충돌·중복 완료 요청 복구
-- 메뉴 옵션, 장바구니, checkout version, 결제 실패 복구, 주문 완료 회귀
+- 브라우저에는 내부 mock 결제 성공·주문 완료를 노출하지 않는다. 메뉴 옵션·장바구니
+  이후의 checkout version, 결제 실패 복구, synthetic 주문 완료는 backend API와
+  배포 smoke로만 회귀한다.
 - 자연스러운 공통 체험 안내가 보이되 카드마다 데모 배지가 반복되지 않음
 
 ### 17.6 배포
 
 - fresh SQLite와 기존 SQLite upgrade
-- Oracle migration ledger `001~010`, checksum, readiness count
+- Oracle migration ledger `001~012`, checksum, source/recommendation readiness count
 - 새 catalog/Wiki/certification/embedding release exact verification
-- 실제 Oracle Vector Search가 query 결과에 참여함
+- 실제 Oracle objective/support/ranking query plan, bounded candidate 수와 latency
 - 실제 provider 정상 성공 경로에서 generation dispatch 1회와 grounded result 확인
+- active 추천의 동적 menu/options를 이용한 backend cart→고정 주소→mock
+  checkout→synthetic order 및 profile cascade cleanup
+- 전역 failure mode를 바꾸지 않는 격리된 Oracle `force_genai_timeout`에서 같은 frozen
+  menu IDs/order, 결정적 설명, dispatch 1회 확인
 - `/healthz`, `/readyz`, 인증 없는 보호 endpoint `403`
 - 공개 모바일/데스크톱 primary flow
 - 기존 cart/payment/order와 rollback
@@ -992,40 +1096,43 @@ DB별로 최종 추천 알고리즘을 복제하지 않는다. eligibility와 ev
 
 완료 게이트: 노출되는 모든 선택지에 실제 메뉴·가게·Wiki 근거가 있고 빈 장식 옵션이 없다.
 
-### Phase 2 — additive DB와 seed
+### Phase 2 — additive DB와 release data
 
-- `010_structured_hybrid_rag_recommendation.sql`
+- `010_structured_hybrid_rag_recommendation.sql`, `011_external_catalog_import.sql`,
+  `012_concept_preference_support_and_server_ranking.sql`
 - SQLite schema parity
-- 1~5 menu spice 재검수·시드
-- 할랄 certification scope와 provenance seed
+- 합성 fixture의 1~5 spice·certification scope/provenance 유지
+- external source의 미제공 spice/ingredient/certification은 발명하지 않고 capability 비활성
 - criteria/evidence/generation snapshot 저장 구조
 - 알레르기 runtime 비활성화
 
 완료 게이트: fresh/upgrade SQLite와 Oracle migration/seed가 동일 objective 계약을 만족한다.
 
-### Phase 3 — objective eligibility와 hybrid retrieval
+### Phase 3 — objective eligibility, support와 서버 ranking
 
 - 공통 eligibility service
-- 선택값별 lexical/vector/essential retrieval
-- group OR, category coverage, pool 구성
-- query embedding batch/cache와 release binding
-- evidence bundle과 retrieval trace
+- 선택값별 reviewed concept support와 bounded evidence retrieval
+- group OR, category AND, preview count, deterministic score/diversity/freeze
+- bounded explanation evidence와 release binding
+- evidence bundle, support manifest와 ranking trace
 
-완료 게이트: SQLite/Oracle fixture membership과 대표 질의 pool recall이 통과하고 서버는 아직 최종 3개를 추천하지 않는다.
+완료 게이트: SQLite/Oracle membership·count·rank parity와 대표 질의 recall이
+통과하고 서버가 provider 전에 최종 최대 3개를 확정한다.
 
-### Phase 4 — one-call RAG generation
+### Phase 4 — one-call explanation generation
 
 - 도구 없는 `RecommendationGenerator`
 - structured output prompt/contract
-- pool membership·eligibility·grounding validator
+- exact frozen order·eligibility·grounding validator
 - snapshot/idempotency/cache
-- NO_MATCH와 검색 결과 fallback
+- provider `NO_MATCH`/invalid/timeout에서 동일 frozen-result explanation fallback
 
 완료 게이트: provider spy와 실제 provider 정상 성공 경로에서 신규 batch dispatch 1회, replay 추가 dispatch 0회, pool 밖 추천 0건이며 응답 유실 시 자동 재dispatch하지 않는다.
 
 ### Phase 5 — v2 API와 상태 전이
 
-- preference catalog, criteria, recommendations endpoint
+- preference catalog/capability, preview, criteria, recommendations endpoint
+- idempotent comparison, demo food-ranking, 5-food feature endpoint
 - INITIAL/SIMILAR/RETRY와 event
 - state version, request ID, conversation hydration
 - legacy message/SSE deprecation
@@ -1034,20 +1141,22 @@ DB별로 최종 추천 알고리즘을 복제하지 않는다. eligibility와 ev
 
 ### Phase 6 — 프런트엔드 전환
 
-- 개인정보 입력에서 알레르기·맵기 제거, 추천 선택 화면에 할랄·비건·5단계 제공
+- 소개+16 locale/country 통합, 인구통계 없는 고정 demo address 화면
+- 추천 선택 화면에 capability-aware 할랄·비건·5단계 제공
 - `PreferenceSelector`, `SpiceReferenceScale`
 - 채팅 composer 제거와 화면 상태 머신
-- LLM 순서의 결과 카드와 버튼 후속 행동
-- 기존 주문 패널 연결
+- 서버 순위의 chat-bubble/one-card 결과와 버튼 후속 행동
+- 공통 navigation, demo ranking/feature dialog, 기존 주문 패널과 handoff 연결
 - 자연스러운 copy와 공통 체험 안내
 
-완료 게이트: 사용자 타이핑 없이 추천·유사 메뉴·수정·선택을 거쳐 주문까지 완료한다.
+완료 게이트: 사용자 타이핑 없이 추천·유사 메뉴·수정·선택을 거쳐 옵션/cart와
+로컬 요기요 handoff까지 완료하고, 외부 이동·결제·주문 완료를 노출하지 않는다.
 
 ### Phase 7 — 회귀, 문서, 로컬 전체 검증
 
 - 자유 대화/readiness transcript를 criteria/evidence/one-call fixture로 대체
 - 알레르기 제품 acceptance 제거
-- 주문·결제·보안 회귀 유지
+- 주문·결제·보안은 backend smoke/회귀로 유지하고 public handoff 경계 검증
 - README, Architecture, API, Data Model, RAG, Demo Runbook, UI Direction 갱신
 - lint/type/unit/targeted E2E/full relevant suite
 
@@ -1055,10 +1164,10 @@ DB별로 최종 추천 알고리즘을 복제하지 않는다. eligibility와 ev
 
 ### Phase 8 — Oracle/OCI/Public 전환
 
-- Oracle `010`, seed, active knowledge/catalog/embedding release
-- readiness와 실제 Vector Search 검증
+- Oracle `001~012`, active external knowledge/support/ranking release
+- source/recommendation readiness, actual Oracle query plan과 성능 검증
 - 실제 생성 provider one-call smoke
-- public primary flow와 주문 회귀
+- public welcome→handoff E2E와 별도 backend mock-order 회귀
 - release marker와 rollback 점검
 
 완료 게이트: 활성 release ID, migration ledger, 모델·embedding 경계, 공개 E2E와 rollback 증거가 기록된다.
@@ -1070,7 +1179,7 @@ DB별로 최종 추천 알고리즘을 복제하지 않는다. eligibility와 ev
 - 프런트는 v2만 사용하되 서버는 과거 conversation read compatibility를 유지한다.
 - knowledge/catalog/certification/preference 데이터를 동일 release family로 묶는다.
 - 코드 rollback 시 호환되는 이전 active release pointer로 함께 되돌릴 수 있어야 한다.
-- 적용된 `010`을 삭제하거나 역으로 편집하지 않는다. rollback은 코드와 active pointer 전환으로 수행한다.
+- 적용된 `010`~`012`를 삭제하거나 역으로 편집하지 않는다. rollback은 코드와 active pointer 전환으로 수행한다.
 - v2가 안정화된 다음 릴리스에서 `/messages*`, `DialogueEngine`, AgentLoop 추천 경로, 알레르기 public runtime의 물리 제거 범위를 다시 점검한다.
 
 ## 20. 관측 지표
@@ -1094,16 +1203,24 @@ DB별로 최종 추천 알고리즘을 복제하지 않는다. eligibility와 ev
 
 다음 조건을 모두 만족해야 전면 개편이 완료된 것으로 본다.
 
-1. 프로필 이후 추천 입력창 없이 구조화 선택 화면이 열린다.
+1. 소개+언어/국가 → 인구통계 없는 지원 데모 주소 이후 추천 입력창 없이 구조화
+   선택 화면이 열린다.
 2. 알레르기 사용자 기능과 안전 보장 문구가 전체 사용자 흐름에서 사라진다.
-3. 할랄·비건만 식이 선택지로 제공되고 확정된 의미대로 동작한다.
-4. 모든 맵기 값과 UI가 1~5이며 KR/US 참고 예시를 전환할 수 있다.
+3. 할랄·비건만 식이 선택지로 제공되고, 검수 coverage가 없으면 이유와 함께
+   비활성화된다.
+4. 지원될 때 모든 맵기 값과 UI가 1~5이며 KR/US 참고 예시를 전환할 수 있고,
+   미지원 release에서는 control 전체가 명시적으로 비활성화된다.
 5. Wiki는 최소 essential fact만 구조화하고 주관적 설명은 자연스러운 줄글과 embedding으로 유지된다.
-6. objective eligibility 이후 lexical + embedding hybrid search가 실제 evidence pool을 만든다.
-7. 정상 신규 batch에서 한 번의 generation dispatch가 pool 안 최종 메뉴와 설명을 함께 반환하고, batch당 자동 재dispatch가 없다.
-8. 서버는 모델이 고른 순서를 보존하고, pool 밖 메뉴와 eligibility 위반을 차단한다.
-9. 선택·수정·메뉴 선택·주문에는 생성 LLM 호출이 없다.
+6. objective eligibility와 reviewed support 이후 서버가 bounded 후보, diversity,
+   ranking trace와 설명용 evidence pool을 만든다.
+7. 정상 신규 batch에서 서버가 최종 메뉴·순서를 동결하고 한 번의 generation dispatch가 설명만 반환하며, 자동 재dispatch가 없다.
+8. 서버는 provider의 메뉴 교체·재정렬과 eligibility 위반을 차단한다.
+9. 선택·수정·메뉴 선택·주문에는 추천 설명 LLM 호출이 없다. 명시적 비교는 별도
+   idempotent comparison call 최대 1회를 허용하며 추천 순위를 바꾸지 않는다.
 10. retry/idempotency, snapshot, state version, SQLite/Oracle parity가 유지된다.
-11. 기존 주소·옵션·장바구니·mock 결제·주문 흐름이 회귀하지 않는다.
-12. 화면은 자연스러운 제품 문구를 사용하면서 실제 인증·실데이터·실주문으로 오인시키는 주장을 하지 않는다.
+11. 브라우저는 옵션·장바구니·배달·검토 후 요기요 이동 목업에서 끝나며, 기존
+   mock 결제·주문은 backend smoke에서 회귀하지 않는다.
+12. 화면은 자연스러운 제품 문구를 사용하면서 external public-web 관측값,
+    synthetic general Wiki/mapping/proxy, demo 주소, mock 주문의 경계를 숨기거나
+    실제 인증·실시간 연동·실주문으로 오인시키지 않는다.
 13. 로컬, Oracle, OCI GenAI, Public 증거를 각각 검증하고 문서화한다.

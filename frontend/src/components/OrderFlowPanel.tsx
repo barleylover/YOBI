@@ -6,7 +6,8 @@ import { useSessionStore } from "../stores/session";
 import type { CartPreview, DietaryFiltersV2, MenuSummary, OptionGroup } from "../types";
 import { RichCard } from "./RichCard";
 import { useI18n } from "../lib/i18n";
-import { menuName } from "../lib/locale";
+import { asSupportedLanguage, menuName } from "../lib/locale";
+import { getProductCopy } from "../lib/productI18n";
 import { getRecommendationCopy } from "../lib/recommendationI18n";
 
 interface Props {
@@ -30,6 +31,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
   const setCartQuantity = useSessionStore((state) => state.setCartQuantity);
   const cartQuantity = useSessionStore((state) => state.cartQuantity);
   const { copy, dynamicCopy, journeyCopy, language } = useI18n();
+  const productCopy = getProductCopy(asSupportedLanguage(language));
   const recommendationCopy = getRecommendationCopy(language);
   const [activeMenu, setActiveMenu] = useState(menu);
   const [phase, setPhase] = useState<Phase>("options");
@@ -63,6 +65,8 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
           setCart(restoredCart);
           setCartQuantity(restoredCart.items.reduce((total, item) => total + item.quantity, 0));
           setPhase(restoredCart.missing_slots.includes("delivery_preferences") ? "delivery" : "review");
+        } else if (result.length === 0) {
+          setPhase("note");
         }
         restoreCartOnMount.current = false;
       })
@@ -161,13 +165,12 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
     }
   }
 
-  async function proceedToPayment() {
+  async function proceedToHandoff() {
     setBusy(true);
     try {
       const confirmed = await api.confirmCart(sessionId);
       syncCart(confirmed);
-      const checkout = await api.createCheckout(sessionId, confirmed.cart_id, confirmed.version);
-      navigate(`/pay/${checkout.checkout_id}`);
+      navigate("/handoff");
     } catch (cause) {
       setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
     } finally {
@@ -194,7 +197,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
     try {
       const preview = await api.deleteCartItem(sessionId, cartItemId);
       syncCart(preview);
-      if (preview.items.length === 0) setPhase("options");
+      if (preview.items.length === 0) setPhase(groups.length ? "options" : "note");
     } catch (cause) {
       setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
     } finally {
@@ -336,7 +339,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
             <h5>{copy.readyCheckout}</h5>
             <div className={!cart.missing_slots.includes("minimum_order_amount") ? "readiness-pass" : "readiness-fail"}><Check size={16} /><span><strong>{journeyCopy.restaurantMinimum}</strong><small>{cart.minimum_order_amount ? `₩${cart.subtotal.toLocaleString()} / ₩${cart.minimum_order_amount.toLocaleString()}${cart.minimum_order_shortfall ? ` · ${journeyCopy.add} ₩${cart.minimum_order_shortfall.toLocaleString()}` : ` · ${journeyCopy.met}`}` : journeyCopy.noMinimum}</small></span></div>
           </section>
-          <button className="primary-button full large" onClick={proceedToPayment} disabled={busy || !cart.ready_to_checkout}>{copy.proceedPayment} <ChevronRight size={18} /></button>
+          <button className="primary-button full large" onClick={proceedToHandoff} disabled={busy || !cart.ready_to_checkout}>{productCopy.handoff.cta} <ChevronRight size={18} /></button>
           {!cart.ready_to_checkout && <p className="checkout-action">{journeyCopy.completeRequirements}</p>}
         </div>
       )}

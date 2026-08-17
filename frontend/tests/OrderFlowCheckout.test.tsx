@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { OrderFlowPanel } from "../src/components/OrderFlowPanel";
@@ -77,18 +77,19 @@ const cart: CartPreview = {
   confirmed: false,
 };
 
-describe("OrderFlowPanel checkout contract", () => {
+describe("OrderFlowPanel Yogiyo handoff contract", () => {
   beforeAll(() => {
     HTMLElement.prototype.scrollIntoView = vi.fn();
   });
 
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
     sessionStorage.clear();
     useSessionStore.getState().clear();
   });
 
-  it("creates checkout with the cart id and version returned by confirmation", async () => {
+  it("confirms the cart and routes to the truthful handoff without creating a payment checkout", async () => {
     useSessionStore.setState({
       profile,
       session,
@@ -100,13 +101,7 @@ describe("OrderFlowPanel checkout contract", () => {
     vi.spyOn(api, "getCart").mockResolvedValue(cart);
     const confirmed = { ...cart, version: 9, confirmed: true };
     const confirmCart = vi.spyOn(api, "confirmCart").mockResolvedValue(confirmed);
-    const createCheckout = vi.spyOn(api, "createCheckout").mockResolvedValue({
-      checkout_id: "checkout_1",
-      status: "PENDING",
-      amount: confirmed.total_price,
-      payment_method: "international_card",
-      payment_url: "/pay/checkout_1",
-    });
+    const createCheckout = vi.spyOn(api, "createCheckout");
 
     render(
       <MemoryRouter initialEntries={["/chat"]}>
@@ -119,20 +114,87 @@ describe("OrderFlowPanel checkout contract", () => {
               onClose={() => undefined}
             />
           )} />
-          <Route path="/pay/:checkoutId" element={<div>Mock payment page</div>} />
+          <Route path="/handoff" element={<div>Yogiyo handoff page</div>} />
         </Routes>
       </MemoryRouter>,
     );
 
     await screen.findByTestId("cart-review");
-    fireEvent.click(screen.getByRole("button", { name: /Proceed to payment/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Yogiyo" }));
 
     await waitFor(() => expect(confirmCart).toHaveBeenCalledWith(session.session_id));
-    await waitFor(() => expect(createCheckout).toHaveBeenCalledWith(
+    expect(createCheckout).not.toHaveBeenCalled();
+    await screen.findByText("Yogiyo handoff page");
+  });
+
+  it("skips an empty option list and keeps the selected menu, server price, cart, and handoff contracts", async () => {
+    useSessionStore.setState({
+      profile,
+      session,
+      addressRefId: "address_checkout_test",
+      addressSummary: "Synthetic hotel",
+      cartQuantity: 0,
+    });
+    vi.spyOn(api, "getOptions").mockResolvedValue([]);
+    const serverCart: CartPreview = {
+      ...cart,
+      version: 2,
+      items: [{
+        ...cart.items[0],
+        menu_id: menu.menu_id,
+        menu_name: "Server-selected external gimbap",
+        menu_name_ko: "서버 선택 외부 김밥",
+        unit_price: 12_345,
+        line_total: 12_345,
+      }],
+      subtotal: 12_345,
+      delivery_fee: 3_210,
+      total_price: 15_555,
+      missing_slots: ["delivery_preferences"],
+      ready_to_checkout: false,
+    };
+    const addCartItem = vi.spyOn(api, "addCartItem").mockResolvedValue(serverCart);
+    const deliveredCart = { ...serverCart, version: 3, missing_slots: [], ready_to_checkout: true };
+    const updateDelivery = vi.spyOn(api, "updateDelivery").mockResolvedValue(deliveredCart);
+    const confirmCart = vi.spyOn(api, "confirmCart").mockResolvedValue({ ...deliveredCart, version: 4, confirmed: true });
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <Routes>
+          <Route path="/chat" element={(
+            <OrderFlowPanel
+              sessionId={session.session_id}
+              menu={menu}
+              addressRefId="address_checkout_test"
+              onClose={() => undefined}
+            />
+          )} />
+          <Route path="/handoff" element={<div>Yogiyo no-option handoff</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const note = await screen.findByRole("textbox");
+    fireEvent.change(note, { target: { value: "Please pack the sauce separately." } });
+    fireEvent.click(screen.getByRole("button", { name: "Add to cart" }));
+    await waitFor(() => expect(addCartItem).toHaveBeenCalledWith(
       session.session_id,
-      confirmed.cart_id,
-      confirmed.version,
+      menu.menu_id,
+      [],
+      "Please pack the sauce separately.",
     ));
-    await screen.findByText("Mock payment page");
+    expect(screen.queryByTestId(/option-group-/)).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("button", { name: "No, continue to delivery" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm delivery details" }));
+    await waitFor(() => expect(updateDelivery).toHaveBeenCalledWith(session.session_id, "address_checkout_test"));
+    const review = await screen.findByTestId("cart-review");
+    expect(review).toHaveTextContent("Server-selected external gimbap");
+    expect(review).toHaveTextContent("₩12,345");
+    expect(review).toHaveTextContent("₩15,555");
+
+    fireEvent.click(screen.getByRole("button", { name: "Yogiyo" }));
+    await waitFor(() => expect(confirmCart).toHaveBeenCalledWith(session.session_id));
+    await screen.findByText("Yogiyo no-option handoff");
   });
 });

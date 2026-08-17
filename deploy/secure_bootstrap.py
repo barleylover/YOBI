@@ -24,6 +24,13 @@ RUNTIME_OCI_INPUT_POLICY = 'OCI_GENAI_MAX_INPUT_TOKENS="131072"'
 RUNTIME_LLM_INPUT_POLICY = 'LLM_MAX_INPUT_TOKENS="131072"'
 RUNTIME_OCI_OUTPUT_POLICY = 'OCI_GENAI_MAX_OUTPUT_TOKENS="4096"'
 RUNTIME_LLM_OUTPUT_POLICY = 'LLM_MAX_OUTPUT_TOKENS="4096"'
+RUNTIME_STRUCTURED_MODEL_POLICY = (
+    'STRUCTURED_RECOMMENDATION_MODEL="openai.gpt-oss-120b"'
+)
+RUNTIME_STRUCTURED_OUTPUT_POLICY = 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="2048"'
+RUNTIME_STRUCTURED_CONCURRENCY_POLICY = (
+    'STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS="2"'
+)
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "backend"))
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -88,6 +95,9 @@ def write_env(dsn: str, app_password: str, api_key: str, control_token: str) -> 
         f"OCI_GENAI_API_KEY={quote(api_key)}",
         f"OCI_GENAI_MODEL={quote('xai.grok-4.3')}",
         f"OCI_GENAI_FALLBACK_MODEL={quote('openai.gpt-oss-120b')}",
+        f"STRUCTURED_RECOMMENDATION_MODEL={quote('openai.gpt-oss-120b')}",
+        f"STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS={quote('2048')}",
+        f"STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS={quote('2')}",
         f"OCI_GENAI_MAX_INPUT_TOKENS={quote('131072')}",
         f"OCI_GENAI_MAX_OUTPUT_TOKENS={quote('4096')}",
         f"OCI_EMBED_MODEL={quote('cohere.embed-v4.0')}",
@@ -164,7 +174,7 @@ def checkpoint_status(step: str) -> str | None:
 
 
 def persist_runtime_release_policy(path: Path = RUNTIME_ENV) -> bool:
-    """Atomically pin non-secret retry and embedding policies for this release."""
+    """Atomically pin the non-secret runtime policies for this release."""
     if path.is_symlink():
         raise SystemExit("Runtime environment must be a regular file, not a symlink")
     text = path.read_text(encoding="utf-8")
@@ -177,6 +187,15 @@ def persist_runtime_release_policy(path: Path = RUNTIME_ENV) -> bool:
         ("LLM_MAX_INPUT_TOKENS", RUNTIME_LLM_INPUT_POLICY),
         ("OCI_GENAI_MAX_OUTPUT_TOKENS", RUNTIME_OCI_OUTPUT_POLICY),
         ("LLM_MAX_OUTPUT_TOKENS", RUNTIME_LLM_OUTPUT_POLICY),
+        ("STRUCTURED_RECOMMENDATION_MODEL", RUNTIME_STRUCTURED_MODEL_POLICY),
+        (
+            "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS",
+            RUNTIME_STRUCTURED_OUTPUT_POLICY,
+        ),
+        (
+            "STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS",
+            RUNTIME_STRUCTURED_CONCURRENCY_POLICY,
+        ),
     ):
         matches = list(re.finditer(rf"(?m)^[ \t]*{key}[ \t]*=.*$", updated))
         if len(matches) > 1:
@@ -317,6 +336,9 @@ def main() -> None:
                 "DB_PASSWORD": app_password,
                 "OCI_GENAI_API_KEY": api_key,
                 "OCI_GENAI_FALLBACK_MODEL": "openai.gpt-oss-120b",
+                "STRUCTURED_RECOMMENDATION_MODEL": "openai.gpt-oss-120b",
+                "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS": "2048",
+                "STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS": "2",
                 "EMBEDDING_PROVIDER": "deterministic",
                 "LLM_MAX_RETRIES": "1",
             }
@@ -382,17 +404,44 @@ def main() -> None:
     else:
         print("Fallback-model smoke checkpoint already complete; skipped duplicate API calls.")
 
-    if not checkpoint_complete("seed"):
+    catalog_mode = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "catalog_mode.py"), "get-mode"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if catalog_mode == "external":
+        subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "manage_demo_address.py"), "--apply"],
+            check=True,
+        )
+        subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "manage_demo_address.py"),
+                "--verify-only",
+            ],
+            check=True,
+        )
+        subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "catalog_mode.py"), "verify-external"],
+            check=True,
+        )
+        checkpoint("seed", "complete")
+        print("Active external catalog verified; synthetic seed was skipped.")
+    elif catalog_mode == "synthetic" and not checkpoint_complete("seed"):
         subprocess.run(
             [sys.executable, str(ROOT / "scripts" / "seed_demo.py"), "--upsert"], check=True
         )
         checkpoint("seed", "complete")
-    else:
+    elif catalog_mode == "synthetic":
         subprocess.run(
             [sys.executable, str(ROOT / "scripts" / "seed_demo.py"), "--verify-only"],
             check=True,
         )
         print("Seed checkpoint already complete; integrity verification passed.")
+    else:
+        raise RuntimeError(f"UNSUPPORTED_CATALOG_MODE:{catalog_mode}")
 
     if not checkpoint_complete("deterministic_fallback_smoke"):
         subprocess.run(

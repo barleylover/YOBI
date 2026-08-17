@@ -2,20 +2,29 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import sqlite3
 from collections import defaultdict
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from time import monotonic
 from typing import Any, cast
 from uuid import uuid4
 
+from app.db.browse_rankings import food_ranking_sql
+from app.db.concept_query import build_concept_candidate_query, build_concept_preview_query
+from app.db.demo_address import demo_address_status
 from app.db.message_ordering import order_conversation_messages
 from app.db.schema_sqlite import SCHEMA_SQL
 from app.db.seed_data import CATALOG_VERSION, build_seed
 from app.domain.address import normalize_address_text
+from app.domain.concept_ranking import (
+    RANKING_POLICY_SHA256,
+    RANKING_POLICY_VERSION,
+    ConceptRankCandidate,
+    rank_concept_candidates,
+)
 from app.domain.dialogue import (
     ConstraintStrictness,
     ConversationEventInput,
@@ -23,6 +32,8 @@ from app.domain.dialogue import (
     ConversationEventType,
     DialogueAct,
     MealNeedState,
+    RecommendationCandidate,
+    RecommendationResult,
     RecommendationSnapshot,
 )
 from app.domain.dietary import apply_profile_constraints, known_allergen_conflicts
@@ -62,6 +73,7 @@ from app.domain.preference_catalog import (
     PREFERENCE_CATEGORIES,
     localized_preference_catalog,
     localized_spice_references,
+    preference_option_is_exposable,
     preference_query_aliases,
 )
 from app.domain.recommendation import (
@@ -73,11 +85,17 @@ from app.domain.structured_recommendation import (
     CriterionEvidence,
     EvidencePoolItem,
     EvidenceReference,
+    FeaturedMenuCollection,
+    FeaturedMenuEntry,
+    FoodRankingCollection,
+    FoodRankingEntry,
+    FoodRankingSort,
     LiveRecommendationMenuState,
     RecommendationCriteriaCommit,
     RecommendationCriteriaRecord,
     RecommendationCriteriaV2,
     RecommendationMode,
+    RecommendationPreviewV2,
     RecommendationReleaseFamily,
     RecommendationRequestInput,
     RecommendationRequestRecord,
@@ -87,6 +105,13 @@ from app.knowledge.catalog_seed import (
     KNOWLEDGE_CATALOG_VERSION,
     KNOWLEDGE_RELEASE_ID,
     build_knowledge_catalog_seed,
+)
+from app.knowledge.preference_support import (
+    REVIEWED_CUISINE_ORIGIN_CODES,
+    SUPPORT_MANIFEST_FIELDS,
+    build_synthetic_support_rows,
+    preference_alias_matches,
+    support_manifest_sha256,
 )
 from app.knowledge.resolver import (
     VEGAN_INGREDIENTS,
@@ -143,6 +168,19 @@ EXPECTED_RUNTIME_COUNTS = {
     "menu_dietary_attribute": 1217,
     "option_dietary_conflict": 1,
 }
+EXTERNAL_CATALOG_COUNT_TABLES = (
+    "catalog_source_payload",
+    "menu",
+    "menu_option_group",
+    "menu_option_item",
+    "menu_source_detail",
+    "menu_source_section",
+    "menu_source_section_item",
+    "merchant",
+    "merchant_source_detail",
+    "option_group_source_detail",
+    "source_option",
+)
 UPGRADE_RETAINED_RUNTIME_COUNT_KEYS = frozenset(
     {"allergen", "dietary_attribute", "ingredient", "menu_allergen"}
 )
@@ -160,15 +198,20 @@ def _runtime_counts_compatible(counts: dict[str, int]) -> bool:
 SPICE_REFERENCE_VERSION = f"{PREFERENCE_CATALOG_VERSION}-spice"
 CERTIFICATION_RELEASE_ID = "synthetic-halal-certifications-v1"
 RECOMMENDATION_RELEASE_FAMILY_PREFIX = "structured-rag-v1"
-REVIEWED_CUISINE_ORIGIN_CODES = frozenset({"KOREAN", "CHINESE"})
-
-
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def _id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex}"
+
+
+def _catalog_text(value: object, fallback: object = "") -> str:
+    return str(value) if value not in (None, "") else str(fallback or "")
+
+
+def _optional_int(value: object) -> int | None:
+    return None if value is None else int(cast(Any, value))
 
 
 def _cart_fingerprint(cart_id: str, cart_version: int, total: int) -> str:
@@ -179,6 +222,10 @@ class SQLiteYobiRepository:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.embedding_provider = DeterministicEmbeddingProvider()
+        self._recommendation_retrieval_metrics: dict[str, dict[str, Any]] = {}
+
+    def get_recommendation_retrieval_metrics(self, session_id: str) -> dict[str, Any]:
+        return dict(self._recommendation_retrieval_metrics.get(session_id, {}))
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
@@ -207,11 +254,67 @@ class SQLiteYobiRepository:
             }
             if "service_area_id" not in merchant_columns:
                 connection.execute("ALTER TABLE merchant ADD COLUMN service_area_id TEXT")
+            for column, definition in (
+                ("catalog_import_id", "TEXT"),
+                ("data_origin", "TEXT"),
+                ("source_platform", "TEXT"),
+                ("source_merchant_id", "TEXT"),
+                ("source_collected_at", "TEXT"),
+            ):
+                if column not in merchant_columns:
+                    connection.execute(f"ALTER TABLE merchant ADD COLUMN {column} {definition}")
             menu_columns = {
                 row["name"] for row in connection.execute("PRAGMA table_info(menu)").fetchall()
             }
             if "category_id" not in menu_columns:
                 connection.execute("ALTER TABLE menu ADD COLUMN category_id TEXT")
+            for column, definition in (
+                ("catalog_import_id", "TEXT"),
+                ("data_origin", "TEXT"),
+                ("source_platform", "TEXT"),
+                ("source_menu_id", "TEXT"),
+                ("source_section_id", "TEXT"),
+                ("name_en_status", "TEXT"),
+                ("cultural_description_status", "TEXT"),
+                ("serves_status", "TEXT"),
+                ("spice_status", "TEXT"),
+                ("dietary_data_status", "TEXT"),
+            ):
+                if column not in menu_columns:
+                    connection.execute(f"ALTER TABLE menu ADD COLUMN {column} {definition}")
+            group_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(menu_option_group)").fetchall()
+            }
+            for column, definition in (
+                ("catalog_import_id", "TEXT"),
+                ("source_option_group_id", "TEXT"),
+                ("normalization_code", "TEXT"),
+            ):
+                if column not in group_columns:
+                    connection.execute(
+                        f"ALTER TABLE menu_option_group ADD COLUMN {column} {definition}"
+                    )
+            item_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(menu_option_item)").fetchall()
+            }
+            for column, definition in (
+                ("catalog_import_id", "TEXT"),
+                ("source_option_item_key", "TEXT"),
+            ):
+                if column not in item_columns:
+                    connection.execute(
+                        f"ALTER TABLE menu_option_item ADD COLUMN {column} {definition}"
+                    )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_merchant_catalog_import "
+                "ON merchant(catalog_import_id,data_origin)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_menu_catalog_import "
+                "ON menu(catalog_import_id,merchant_id,availability)"
+            )
             address_place_columns = {
                 row["name"]
                 for row in connection.execute("PRAGMA table_info(address_place)").fetchall()
@@ -281,11 +384,24 @@ class SQLiteYobiRepository:
                 ("generation_status", "TEXT"),
                 ("generation_call_count", "INTEGER NOT NULL DEFAULT 0"),
                 ("grounding_validation_json", "TEXT"),
+                ("ranking_trace_json", "TEXT"),
+                ("ranking_policy_version", "TEXT"),
+                ("support_manifest_sha256", "TEXT"),
             ):
                 if column not in snapshot_columns:
                     connection.execute(
                         f"ALTER TABLE recommendation_snapshot ADD COLUMN {column} {definition}"
                     )
+            self._upgrade_structured_server_rank(connection)
+            external_catalog = connection.execute(
+                """
+                SELECT catalog_import_id FROM catalog_import_batch
+                WHERE status='ACTIVE' AND data_origin='YOGIYO_PUBLIC_WEB'
+                ORDER BY completed_at DESC LIMIT 1
+                """
+            ).fetchone()
+            if external_catalog is not None:
+                return
             existing = connection.execute("SELECT COUNT(*) FROM merchant").fetchone()[0]
             seed = build_seed()
             if existing:
@@ -364,6 +480,59 @@ class SQLiteYobiRepository:
             raise RuntimeError("SQLITE_SPICE_UPGRADE_FOREIGN_KEY_VIOLATION")
 
     @staticmethod
+    def _upgrade_structured_server_rank(connection: sqlite3.Connection) -> None:
+        zero_hash = "0" * 64
+        family_columns = {
+            str(row["name"])
+            for row in connection.execute(
+                "PRAGMA table_info(recommendation_release_family)"
+            ).fetchall()
+        }
+        for column, definition in (
+            ("support_manifest_sha256", f"TEXT NOT NULL DEFAULT '{zero_hash}'"),
+            ("ranking_policy_version", "TEXT NOT NULL DEFAULT 'legacy-llm-rank-v2'"),
+            ("ranking_policy_sha256", f"TEXT NOT NULL DEFAULT '{zero_hash}'"),
+        ):
+            if column not in family_columns:
+                connection.execute(
+                    f"ALTER TABLE recommendation_release_family ADD COLUMN {column} {definition}"
+                )
+
+        request_columns = {
+            str(row["name"])
+            for row in connection.execute(
+                "PRAGMA table_info(structured_recommendation_request)"
+            ).fetchall()
+        }
+        for column, definition in (
+            ("final_candidates_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("ranking_trace_json", "TEXT NOT NULL DEFAULT '{}'"),
+            ("ranking_policy_version", "TEXT NOT NULL DEFAULT 'legacy-llm-rank-v2'"),
+            ("support_manifest_sha256", f"TEXT NOT NULL DEFAULT '{zero_hash}'"),
+            ("finalized_at", "TEXT"),
+        ):
+            if column not in request_columns:
+                connection.execute(
+                    f"ALTER TABLE structured_recommendation_request ADD COLUMN {column} {definition}"
+                )
+        for statement in (
+            "CREATE INDEX IF NOT EXISTS idx_concept_pref_lookup ON "
+            "concept_preference_support(knowledge_release_id,category_code,option_code,"
+            "support_status,concept_id)",
+            "CREATE INDEX IF NOT EXISTS idx_concept_pref_concept ON "
+            "concept_preference_support(knowledge_release_id,concept_id,support_status)",
+            "CREATE INDEX IF NOT EXISTS idx_menu_concept_high ON "
+            "menu_concept_map(release_id,mapping_status,confidence_band,concept_id,menu_id)",
+            "CREATE INDEX IF NOT EXISTS idx_menu_recommend_filter ON "
+            "menu(availability,price,merchant_id,menu_id)",
+            "CREATE INDEX IF NOT EXISTS idx_menu_source_restrict ON "
+            "menu_source_detail(liquor,is_adult,verified_adult,soldout,menu_id)",
+            "CREATE INDEX IF NOT EXISTS idx_rec_request_policy ON "
+            "structured_recommendation_request(session_id,ranking_policy_version,status,created_at)",
+        ):
+            connection.execute(statement)
+
+    @staticmethod
     def _upgrade_structured_request_pin(connection: sqlite3.Connection) -> None:
         columns = {
             str(row["name"])
@@ -413,18 +582,44 @@ class SQLiteYobiRepository:
         if active is None:
             return
         knowledge_release_id = str(active["release_id"])
+        now = _now()
+        support_manifest_sha256 = cls._ensure_synthetic_concept_support(
+            connection,
+            knowledge_release_id=knowledge_release_id,
+            updated_at=now,
+        )
+        family_identity = {
+            "knowledge_release_id": knowledge_release_id,
+            "catalog_release_id": CATALOG_VERSION,
+            "preference_catalog_version": PREFERENCE_CATALOG_VERSION,
+            "spice_reference_version": SPICE_REFERENCE_VERSION,
+            "certification_release_id": CERTIFICATION_RELEASE_ID,
+            "embedding_model": str(active["embedding_model"]),
+            "embedding_version": str(active["embedding_version"]),
+            "support_manifest_sha256": support_manifest_sha256,
+            "ranking_policy_version": RANKING_POLICY_VERSION,
+            "ranking_policy_sha256": RANKING_POLICY_SHA256,
+        }
         family_seed = (
             f"{RECOMMENDATION_RELEASE_FAMILY_PREFIX}:"
-            f"{hashlib.sha256(knowledge_release_id.encode()).hexdigest()[:16]}"
+            f"{hashlib.sha256(json.dumps(family_identity, sort_keys=True, separators=(',', ':')).encode()).hexdigest()[:24]}"
         )
-        now = _now()
+        connection.execute(
+            """
+            UPDATE recommendation_release_family SET status='READY'
+            WHERE status='ACTIVE' AND release_family_id<>?
+            """,
+            (family_seed,),
+        )
         connection.execute(
             """
             INSERT INTO recommendation_release_family(
               release_family_id,knowledge_release_id,catalog_release_id,
               preference_catalog_version,spice_reference_version,
-              certification_release_id,embedding_model,embedding_version,status,activated_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?)
+              certification_release_id,embedding_model,embedding_version,
+              support_manifest_sha256,ranking_policy_version,ranking_policy_sha256,
+              status,activated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(release_family_id) DO UPDATE SET
               status='ACTIVE',activated_at=excluded.activated_at
             """,
@@ -437,6 +632,9 @@ class SQLiteYobiRepository:
                 CERTIFICATION_RELEASE_ID,
                 str(active["embedding_model"]),
                 str(active["embedding_version"]),
+                support_manifest_sha256,
+                RANKING_POLICY_VERSION,
+                RANKING_POLICY_SHA256,
                 "ACTIVE",
                 now,
             ),
@@ -556,36 +754,88 @@ class SQLiteYobiRepository:
             ],
         )
 
+    @classmethod
+    def _ensure_synthetic_concept_support(
+        cls,
+        connection: sqlite3.Connection,
+        *,
+        knowledge_release_id: str,
+        updated_at: str,
+    ) -> str:
+        release = connection.execute(
+            "SELECT is_synthetic FROM knowledge_release WHERE release_id=?",
+            (knowledge_release_id,),
+        ).fetchone()
+        if release is None or not bool(release["is_synthetic"]):
+            raise RuntimeError("SYNTHETIC_SUPPORT_RELEASE_REQUIRED")
+        chunks = connection.execute(
+            """
+            SELECT mapping.concept_id,closure.depth,chunk.chunk_id,
+                   chunk.document_id,chunk.content
+            FROM menu_concept_map mapping
+            JOIN dish_concept_closure closure
+              ON closure.release_id=mapping.release_id
+             AND closure.descendant_concept_id=mapping.concept_id
+             AND closure.inherit_claims=1
+            JOIN knowledge_chunk chunk
+              ON chunk.release_id=closure.release_id
+             AND chunk.concept_id=closure.ancestor_concept_id
+            JOIN knowledge_document document
+              ON document.release_id=chunk.release_id
+             AND document.document_id=chunk.document_id
+            WHERE mapping.release_id=?
+              AND mapping.mapping_status='MAPPED'
+              AND mapping.confidence_band='high'
+              AND document.source_type='SYNTHETIC_WIKI'
+              AND document.review_status='REVIEWED_DEMO'
+              AND lower(chunk.facet)<>'safety'
+              AND (
+                json_extract(chunk.metadata_json,'$.recommendation_visibility')='PUBLIC_RAG'
+                OR json_extract(chunk.metadata_json,'$.recommendation_visibility') IS NULL
+              )
+            GROUP BY mapping.concept_id,closure.depth,chunk.chunk_id,
+                     chunk.document_id,chunk.content
+            ORDER BY mapping.concept_id,closure.depth,chunk.chunk_id
+            """,
+            (knowledge_release_id,),
+        ).fetchall()
+        support_rows = build_synthetic_support_rows(
+            knowledge_release_id=knowledge_release_id,
+            reviewed_chunks=[dict(chunk) for chunk in chunks],
+            updated_at=updated_at,
+        )
+        manifest_sha256 = support_manifest_sha256(support_rows)
+        if not support_rows:
+            raise RuntimeError("SYNTHETIC_CONCEPT_SUPPORT_EMPTY")
+        connection.executemany(
+            """
+            INSERT INTO concept_preference_support(
+              knowledge_release_id,concept_id,category_code,option_code,
+              support_status,support_strength,evidence_chunk_id,provenance_type,
+              source_ref,review_status,support_method_version,is_synthetic,updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(knowledge_release_id,concept_id,category_code,option_code)
+            DO UPDATE SET
+              support_status=excluded.support_status,
+              support_strength=excluded.support_strength,
+              evidence_chunk_id=excluded.evidence_chunk_id,
+              provenance_type=excluded.provenance_type,
+              source_ref=excluded.source_ref,
+              review_status=excluded.review_status,
+              support_method_version=excluded.support_method_version,
+              is_synthetic=excluded.is_synthetic,
+              updated_at=excluded.updated_at
+            """,
+            [
+                tuple(row[column] for column in (*SUPPORT_MANIFEST_FIELDS, "updated_at"))
+                for row in support_rows
+            ],
+        )
+        return manifest_sha256
+
     @staticmethod
     def _preference_alias_matches(text: str, aliases: tuple[str, ...]) -> bool:
-        ignored = {
-            "and",
-            "cuisine",
-            "dish",
-            "flavor",
-            "food",
-            "method",
-            "or",
-            "served",
-            "temperature",
-            "the",
-            "to",
-            "with",
-            "won",
-        }
-        for alias in aliases:
-            words = [
-                word
-                for word in re.sub(r"[^a-z0-9가-힣]+", " ", alias.lower()).split()
-                if word not in ignored
-                and (len(word) >= 3 or any("가" <= character <= "힣" for character in word))
-            ]
-            if not words:
-                continue
-            required_matches = 1 if len(words) == 1 else 2
-            if sum(word in text for word in words) >= required_matches:
-                return True
-        return False
+        return preference_alias_matches(text, aliases)
 
     @classmethod
     def _preference_support_metrics(
@@ -663,9 +913,12 @@ class SQLiteYobiRepository:
             option.code
             for category in PREFERENCE_CATEGORIES
             for option in category.options
-            if metrics.get(option.code, (0, 0, 0))[0] >= 3
-            and metrics.get(option.code, (0, 0, 0))[1] >= 2
-            and metrics.get(option.code, (0, 0, 0))[2] >= 1
+            if preference_option_is_exposable(
+                option.code,
+                menu_count=metrics.get(option.code, (0, 0, 0))[0],
+                merchant_count=metrics.get(option.code, (0, 0, 0))[1],
+                document_count=metrics.get(option.code, (0, 0, 0))[2],
+            )
             and (category.code != "cuisine_origins" or option.code in REVIEWED_CUISINE_ORIGIN_CODES)
         }
         return frozenset(supported)
@@ -1351,6 +1604,7 @@ class SQLiteYobiRepository:
         *,
         duplicate: bool = False,
     ) -> RecommendationRequestRecord:
+        columns = set(row.keys())
         return RecommendationRequestRecord(
             request_id=str(row["request_id"]),
             session_id=str(row["session_id"]),
@@ -1365,6 +1619,31 @@ class SQLiteYobiRepository:
             evidence_pool_json=json.loads(str(row["evidence_pool_json"] or "[]")),
             result_json=(
                 json.loads(str(row["result_json"])) if row["result_json"] is not None else None
+            ),
+            final_candidates_json=(
+                json.loads(str(row["final_candidates_json"] or "[]"))
+                if "final_candidates_json" in columns
+                else []
+            ),
+            ranking_trace_json=(
+                json.loads(str(row["ranking_trace_json"] or "{}"))
+                if "ranking_trace_json" in columns
+                else {}
+            ),
+            ranking_policy_version=(
+                str(row["ranking_policy_version"])
+                if "ranking_policy_version" in columns and row["ranking_policy_version"]
+                else "legacy-llm-rank-v2"
+            ),
+            support_manifest_sha256=(
+                str(row["support_manifest_sha256"])
+                if "support_manifest_sha256" in columns and row["support_manifest_sha256"]
+                else "0" * 64
+            ),
+            finalized_at=(
+                datetime.fromisoformat(str(row["finalized_at"]))
+                if "finalized_at" in columns and row["finalized_at"]
+                else None
             ),
             dispatch_count=int(row["dispatch_count"]),
             failure_code=str(row["failure_code"]) if row["failure_code"] else None,
@@ -1575,7 +1854,8 @@ class SQLiteYobiRepository:
             created_at = _now()
             pinned_family = connection.execute(
                 """
-                SELECT family.release_family_id
+                SELECT family.release_family_id,family.ranking_policy_version,
+                       family.support_manifest_sha256
                 FROM recommendation_runtime_state state
                 JOIN recommendation_release_family family
                   ON family.release_family_id=state.active_release_family_id
@@ -1593,9 +1873,11 @@ class SQLiteYobiRepository:
                 INSERT INTO structured_recommendation_request(
                   session_id,request_id,request_hash,criteria_version,mode,status,state_version,
                   recommendation_release_family_id,eligibility_as_of,snapshot_id,
-                  evidence_pool_json,result_json,dispatch_count,failure_code,
+                  evidence_pool_json,result_json,final_candidates_json,ranking_trace_json,
+                  ranking_policy_version,support_manifest_sha256,finalized_at,
+                  dispatch_count,failure_code,
                   created_at,dispatched_at,completed_at
-                ) VALUES (?,?,?,?,?,'CREATED',?,?,?,NULL,'[]',NULL,0,NULL,?,NULL,NULL)
+                ) VALUES (?,?,?,?,?,'CREATED',?,?,?,NULL,'[]',NULL,'[]','{}',?,?,NULL,0,NULL,?,NULL,NULL)
                 """,
                 (
                     session_id,
@@ -1606,6 +1888,8 @@ class SQLiteYobiRepository:
                     current_state_version,
                     str(pinned_family["release_family_id"]),
                     eligibility_as_of,
+                    str(pinned_family["ranking_policy_version"]),
+                    str(pinned_family["support_manifest_sha256"]),
                     created_at,
                 ),
             )
@@ -1634,6 +1918,30 @@ class SQLiteYobiRepository:
             sort_keys=True,
             separators=(",", ":"),
         )
+        final_candidates = [
+            {
+                "rank": item.server_rank or rank,
+                "menu_id": item.menu.menu_id,
+                "merchant_id": item.menu.merchant_id,
+                "concept_id": item.knowledge_concept_id,
+            }
+            for rank, item in enumerate(evidence_pool[:3], start=1)
+        ]
+        serialized_final = json.dumps(
+            final_candidates, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        serialized_trace = json.dumps(
+            {
+                "ranking_policy_version": (
+                    evidence_pool[0].ranking_trace.get("ranking_policy_version")
+                    or RANKING_POLICY_VERSION
+                ),
+                "candidates": [item.ranking_trace for item in evidence_pool[:3]],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -1653,10 +1961,19 @@ class SQLiteYobiRepository:
             updated = connection.execute(
                 """
                 UPDATE structured_recommendation_request
-                SET status='DISPATCHED',evidence_pool_json=?,dispatch_count=1,dispatched_at=?
+                SET status='DISPATCHED',evidence_pool_json=?,final_candidates_json=?,
+                    ranking_trace_json=?,finalized_at=?,dispatch_count=1,dispatched_at=?
                 WHERE session_id=? AND request_id=? AND status='CREATED' AND dispatch_count=0
                 """,
-                (serialized, dispatched_at, session_id, request_id),
+                (
+                    serialized,
+                    serialized_final,
+                    serialized_trace,
+                    dispatched_at,
+                    dispatched_at,
+                    session_id,
+                    request_id,
+                ),
             )
             if updated.rowcount != 1:
                 raise RuntimeError("RECOMMENDATION_DISPATCH_CONFLICT")
@@ -1967,8 +2284,9 @@ class SQLiteYobiRepository:
                       meal_need_state_json,result_json,cards_json,structured_request_id,
                       criteria_version,criteria_json,criteria_hash,
                       recommendation_release_family_id,evidence_pool_json,
-                      generation_status,generation_call_count,grounding_validation_json,created_at
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                      generation_status,generation_call_count,grounding_validation_json,
+                      ranking_trace_json,ranking_policy_version,support_manifest_sha256,created_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         snapshot.snapshot_id,
@@ -1987,6 +2305,9 @@ class SQLiteYobiRepository:
                         status.value,
                         int(row["dispatch_count"]),
                         json.dumps({"validated": True}, separators=(",", ":")),
+                        str(row["ranking_trace_json"]),
+                        str(row["ranking_policy_version"]),
+                        str(row["support_manifest_sha256"]),
                         snapshot.created_at.isoformat(),
                     ),
                 )
@@ -2036,6 +2357,82 @@ class SQLiteYobiRepository:
                 (session_id, request_id),
             ).fetchone()
         return self._request_record_from_row(row) if row else None
+
+    def get_recommendation_comparison(
+        self,
+        session_id: str,
+        recommendation_request_id: str,
+        comparison_request_id: str,
+    ) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT result_json FROM structured_recommendation_request
+                WHERE session_id=? AND request_id=?
+                """,
+                (session_id, recommendation_request_id),
+            ).fetchone()
+        if row is None or not row["result_json"]:
+            return None
+        result = json.loads(str(row["result_json"]))
+        cache = result.get("comparison_cache", {})
+        cached = cache.get("canonical") if isinstance(cache, dict) else None
+        if not isinstance(cached, dict) and isinstance(cache, dict):
+            cached = next(
+                (value for _key, value in sorted(cache.items()) if isinstance(value, dict)),
+                None,
+            )
+        return dict(cached) if isinstance(cached, dict) else None
+
+    def save_recommendation_comparison(
+        self,
+        session_id: str,
+        recommendation_request_id: str,
+        comparison_request_id: str,
+        payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT result_json,status FROM structured_recommendation_request
+                WHERE session_id=? AND request_id=?
+                """,
+                (session_id, recommendation_request_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError("RECOMMENDATION_REQUEST_NOT_FOUND")
+            if str(row["status"]) not in {"COMPLETED", "SEARCH_FALLBACK"}:
+                raise ValueError("RECOMMENDATION_COMPARISON_NOT_AVAILABLE")
+            result = json.loads(str(row["result_json"] or "{}"))
+            cache = result.setdefault("comparison_cache", {})
+            if not isinstance(cache, dict):
+                raise ValueError("RECOMMENDATION_COMPARISON_CACHE_INVALID")
+            existing = cache.get("canonical")
+            if not isinstance(existing, dict):
+                existing = next(
+                    (
+                        value
+                        for _key, value in sorted(cache.items())
+                        if isinstance(value, dict)
+                    ),
+                    None,
+                )
+            if isinstance(existing, dict):
+                return dict(existing), True
+            cache["canonical"] = payload
+            connection.execute(
+                """
+                UPDATE structured_recommendation_request SET result_json=?
+                WHERE session_id=? AND request_id=?
+                """,
+                (
+                    json.dumps(result, ensure_ascii=False, sort_keys=True),
+                    session_id,
+                    recommendation_request_id,
+                ),
+            )
+        return dict(payload), False
 
     def get_latest_recommendation_request(
         self,
@@ -2275,11 +2672,16 @@ class SQLiteYobiRepository:
             parameters.extend(unique_ids)
         rows = connection.execute(
             f"""
-            SELECT menu.*,merchant.name_en AS merchant_name,merchant.delivery_fee,
-                   merchant.eta_min,merchant.eta_max,merchant.service_area_id
+            SELECT menu.menu_id,menu.merchant_id,menu.name_en,menu.name_ko,
+                   menu.category,menu.description,menu.cultural_description,menu.price,
+                   menu.spice_level,menu.serves_min,menu.serves_max,menu.is_synthetic,
+                   COALESCE(merchant.name_en,merchant.name_ko) AS merchant_name,
+                   merchant.delivery_fee,merchant.eta_min,merchant.eta_max,
+                   merchant.service_area_id
             FROM menu
             JOIN merchant ON merchant.merchant_id=menu.merchant_id
-            WHERE menu.availability='AVAILABLE' AND menu.spice_level<=?
+            WHERE menu.availability='AVAILABLE'
+              AND (menu.spice_level IS NULL OR menu.spice_level<=?)
               {menu_clause}
             """,
             parameters,
@@ -2472,6 +2874,21 @@ class SQLiteYobiRepository:
             ).fetchone()
             if family is None:
                 raise RuntimeError("RECOMMENDATION_RELEASE_NOT_READY")
+            if str(family["ranking_policy_version"]) == RANKING_POLICY_VERSION:
+                concept_pool = self._build_concept_ranked_pool(
+                    connection,
+                    session_id=session_id,
+                    criteria=criteria,
+                    mode=mode,
+                    limit=limit,
+                    family=family,
+                    eligibility_as_of=eligibility_as_of,
+                    passages_per_menu=passages_per_menu,
+                )
+                metrics = self._recommendation_retrieval_metrics.get(session_id)
+                if metrics is not None:
+                    metrics["query_count"] = int(metrics.get("query_count", 0)) + 1
+                return concept_pool
             candidate_rows, certifications, vegan = self._structured_objective_candidates(
                 connection,
                 session_id,
@@ -2496,17 +2913,6 @@ class SQLiteYobiRepository:
                     )
             if not subjective_groups:
                 query_aliases_by_code["__fallback__"] = FALLBACK_RECOMMENDATION_QUERY_ALIASES
-            soft_profile_aliases = tuple(
-                value
-                for value in (
-                    profile.nationality.strip(),
-                    profile.age_band.strip(),
-                    *(favorite.strip() for favorite in profile.favorite_foods),
-                )
-                if value
-            )
-            if soft_profile_aliases:
-                query_aliases_by_code["__profile_soft__"] = soft_profile_aliases
             query_values = [
                 (code, " ".join(aliases)) for code, aliases in query_aliases_by_code.items()
             ]
@@ -2646,13 +3052,19 @@ class SQLiteYobiRepository:
                         evidence_type="MENU_FACT",
                         content=f"Current base price: KRW {int(row['price']):,}.",
                     ),
+                    *vegan_facts,
+                ]
+                menu_facts.append(
                     EvidenceReference(
                         evidence_id=f"fact_{menu_id}_spice",
                         evidence_type="MENU_FACT",
-                        content=f"Reviewed spice level: {int(row['spice_level'])} of 5.",
-                    ),
-                    *vegan_facts,
-                ]
+                        content=(
+                            f"Reviewed spice level: {int(row['spice_level'])} of 5."
+                            if row["spice_level"] is not None
+                            else "The source did not provide a reviewed spice level."
+                        ),
+                    )
+                )
                 if certification:
                     menu_facts.append(
                         EvidenceReference(
@@ -2720,6 +3132,477 @@ class SQLiteYobiRepository:
             key=lambda item: (-item.retrieval_score, item.menu.price, item.menu.menu_id),
         )[:limit]
 
+    @staticmethod
+    def _structured_session_filters(
+        connection: sqlite3.Connection,
+        session_id: str,
+        *,
+        exclude_history: bool,
+    ) -> tuple[str | None, set[str]]:
+        session_row = connection.execute(
+            "SELECT meal_need_state_json FROM chat_session WHERE session_id=?",
+            (session_id,),
+        ).fetchone()
+        if session_row is None:
+            raise KeyError("SESSION_NOT_FOUND")
+        need_state = MealNeedState.model_validate_json(
+            str(session_row["meal_need_state_json"] or "{}")
+        )
+        confirmed_area = connection.execute(
+            """
+            SELECT address.service_area_id
+            FROM cart
+            JOIN address_ref address ON address.address_ref_id=cart.address_ref_id
+            JOIN service_area area ON area.service_area_id=address.service_area_id
+            WHERE cart.session_id=? AND address.confirmed=1 AND area.active=1
+            """,
+            (session_id,),
+        ).fetchone()
+        service_area_id = (
+            str(confirmed_area["service_area_id"])
+            if confirmed_area is not None and confirmed_area["service_area_id"]
+            else need_state.service_area_id
+        )
+        excluded = set()
+        if exclude_history:
+            excluded.update(need_state.shown_menu_ids)
+            excluded.update(need_state.rejected_menu_ids)
+            if need_state.selected_menu_id:
+                excluded.add(need_state.selected_menu_id)
+        return service_area_id, excluded
+
+    @staticmethod
+    def _concept_support_rows(
+        connection: sqlite3.Connection,
+        *,
+        release_id: str,
+        menu_ids: list[str],
+        criteria: RecommendationCriteriaV2,
+    ) -> list[sqlite3.Row]:
+        if not menu_ids or not criteria.subjective_groups():
+            return []
+        selected = [
+            (category, option)
+            for category, options in criteria.subjective_groups().items()
+            for option in options
+        ]
+        selected_predicates = " OR ".join(
+            "(support.category_code=? AND support.option_code=?)" for _ in selected
+        )
+        placeholders = ",".join("?" for _ in menu_ids)
+        parameters: list[Any] = [release_id, *menu_ids]
+        for category, option in selected:
+            parameters.extend((category, option))
+        return connection.execute(
+            f"""
+            SELECT mapping.menu_id,support.category_code,support.option_code,
+                   support.support_strength,support.evidence_chunk_id,
+                   support.review_status,chunk.content,chunk.facet
+            FROM menu_concept_map mapping
+            JOIN concept_preference_support support
+              ON support.knowledge_release_id=mapping.release_id
+             AND support.concept_id=mapping.concept_id
+             AND support.support_status='SUPPORTED'
+            JOIN knowledge_chunk chunk
+              ON chunk.release_id=support.knowledge_release_id
+             AND chunk.chunk_id=support.evidence_chunk_id
+            WHERE mapping.release_id=? AND mapping.mapping_status='MAPPED'
+              AND mapping.confidence_band='high'
+              AND mapping.menu_id IN ({placeholders})
+              AND ({selected_predicates})
+            ORDER BY mapping.menu_id,support.category_code,
+                     support.support_strength DESC,support.option_code,
+                     support.evidence_chunk_id
+            """,
+            parameters,
+        ).fetchall()
+
+    @staticmethod
+    def _final_concept_wiki_rows(
+        connection: sqlite3.Connection,
+        *,
+        release_id: str,
+        menu_ids: list[str],
+        passages_per_menu: int,
+    ) -> dict[str, list[sqlite3.Row]]:
+        if not menu_ids:
+            return {}
+        placeholders = ",".join("?" for _ in menu_ids)
+        rows = connection.execute(
+            f"""
+            SELECT * FROM (
+              SELECT mapping.menu_id,chunk.chunk_id,chunk.content,chunk.facet,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY mapping.menu_id
+                       ORDER BY closure.depth,chunk.chunk_id
+                     ) AS passage_rank
+              FROM menu_concept_map mapping
+              JOIN dish_concept_closure closure
+                ON closure.release_id=mapping.release_id
+               AND closure.descendant_concept_id=mapping.concept_id
+               AND closure.inherit_claims=1
+              JOIN knowledge_chunk chunk
+                ON chunk.release_id=closure.release_id
+               AND chunk.concept_id=closure.ancestor_concept_id
+              JOIN knowledge_document document
+                ON document.release_id=chunk.release_id
+               AND document.document_id=chunk.document_id
+              WHERE mapping.release_id=? AND mapping.mapping_status='MAPPED'
+                AND mapping.confidence_band='high'
+                AND mapping.menu_id IN ({placeholders})
+                AND document.source_type='SYNTHETIC_WIKI'
+                AND document.review_status='REVIEWED_DEMO'
+                AND lower(chunk.facet)<>'safety'
+                AND (
+                  json_extract(chunk.metadata_json,'$.recommendation_visibility')='PUBLIC_RAG'
+                  OR json_extract(chunk.metadata_json,'$.recommendation_visibility') IS NULL
+                )
+            ) WHERE passage_rank<=?
+            ORDER BY menu_id,passage_rank
+            """,
+            (release_id, *menu_ids, passages_per_menu),
+        ).fetchall()
+        grouped: dict[str, list[sqlite3.Row]] = defaultdict(list)
+        for row in rows:
+            grouped[str(row["menu_id"])].append(row)
+        return grouped
+
+    def _build_concept_ranked_pool(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        session_id: str,
+        criteria: RecommendationCriteriaV2,
+        mode: RecommendationMode,
+        limit: int,
+        family: sqlite3.Row,
+        eligibility_as_of: datetime,
+        passages_per_menu: int,
+    ) -> list[EvidencePoolItem]:
+        pipeline_started = monotonic()
+        query_count = 0
+        session_filter_started = monotonic()
+        service_area_id, excluded = self._structured_session_filters(
+            connection,
+            session_id,
+            exclude_history=mode in {RecommendationMode.SIMILAR, RecommendationMode.RETRY},
+        )
+        query_count += 2
+        session_filter_ms = int((monotonic() - session_filter_started) * 1000)
+        candidate_query = build_concept_candidate_query(
+            dialect="sqlite",
+            criteria=criteria,
+            knowledge_release_id=str(family["knowledge_release_id"]),
+            certification_release_id=str(family["certification_release_id"]),
+            service_area_id=service_area_id,
+            excluded_menu_ids=excluded,
+            eligibility_as_of=eligibility_as_of.isoformat(),
+            candidate_limit=max(3, limit),
+        )
+        objective_started = monotonic()
+        candidate_rows = connection.execute(
+            candidate_query.sql, candidate_query.parameters
+        ).fetchall()
+        query_count += 1
+        objective_sql_ms = int((monotonic() - objective_started) * 1000)
+        if not candidate_rows:
+            self._recommendation_retrieval_metrics[session_id] = {
+                "session_filter_ms": session_filter_ms,
+                "objective_sql_ms": objective_sql_ms,
+                "support_lookup_ms": 0,
+                "scoring_rerank_ms": 0,
+                "evidence_ms": 0,
+                "query_count": query_count,
+                "selected_category_count": len(criteria.subjective_groups()),
+                "fetched_candidate_count": 0,
+                "candidate_merchant_count": 0,
+                "candidate_concept_count": 0,
+                "support_row_count": 0,
+                "wiki_row_count": 0,
+                "pipeline_ms": int((monotonic() - pipeline_started) * 1000),
+            }
+            return []
+        candidate_by_id = {str(row["menu_id"]): row for row in candidate_rows}
+        support_started = monotonic()
+        support_rows = self._concept_support_rows(
+            connection,
+            release_id=str(family["knowledge_release_id"]),
+            menu_ids=list(candidate_by_id),
+            criteria=criteria,
+        )
+        if criteria.subjective_groups():
+            query_count += 1
+        support_lookup_ms = int((monotonic() - support_started) * 1000)
+        supports_by_menu: dict[str, dict[str, tuple[float, sqlite3.Row]]] = defaultdict(dict)
+        for support in support_rows:
+            menu_id = str(support["menu_id"])
+            category = str(support["category_code"])
+            current = supports_by_menu[menu_id].get(category)
+            strength = float(support["support_strength"])
+            if current is None or strength > current[0]:
+                supports_by_menu[menu_id][category] = (strength, support)
+        rank_inputs = []
+        for row in candidate_rows:
+            menu_id = str(row["menu_id"])
+            category_supports = {
+                category: strength
+                for category, (strength, _support) in supports_by_menu.get(menu_id, {}).items()
+            }
+            if not category_supports:
+                category_supports = {"__objective__": 1.0}
+            rank_inputs.append(
+                ConceptRankCandidate(
+                    menu_id=menu_id,
+                    merchant_id=str(row["merchant_id"]),
+                    concept_id=str(row["concept_id"]),
+                    category_supports=category_supports,
+                    reviewed_evidence_count=int(row["reviewed_evidence_count"]),
+                )
+            )
+        scoring_started = monotonic()
+        decisions = rank_concept_candidates(
+            rank_inputs,
+            has_soft_profile=False,
+            limit=min(3, limit),
+        )
+        scoring_rerank_ms = int((monotonic() - scoring_started) * 1000)
+        evidence_started = monotonic()
+        wiki_by_menu = self._final_concept_wiki_rows(
+            connection,
+            release_id=str(family["knowledge_release_id"]),
+            menu_ids=[decision.menu_id for decision in decisions],
+            passages_per_menu=passages_per_menu,
+        )
+        if decisions:
+            query_count += 1
+        pool: list[EvidencePoolItem] = []
+        for decision in decisions:
+            row = candidate_by_id[decision.menu_id]
+            wiki_passages = [
+                EvidenceReference(
+                    evidence_id=str(chunk["chunk_id"]),
+                    evidence_type="WIKI_PASSAGE",
+                    content=str(chunk["content"]),
+                )
+                for chunk in wiki_by_menu.get(decision.menu_id, [])
+            ]
+            if not wiki_passages:
+                continue
+            criterion_evidence = []
+            for category, (_strength, support) in sorted(
+                supports_by_menu.get(decision.menu_id, {}).items()
+            ):
+                criterion_evidence.append(
+                    CriterionEvidence(
+                        category_code=cast(Any, category),
+                        selected_value_code=str(support["option_code"]),
+                        evidence=[
+                            EvidenceReference(
+                                evidence_id=str(support["evidence_chunk_id"]),
+                                evidence_type="WIKI_PASSAGE",
+                                content=str(support["content"]),
+                                score=round(float(support["support_strength"]), 6),
+                            )
+                        ],
+                    )
+                )
+            facts = [
+                EvidenceReference(
+                    evidence_id=f"fact_{decision.menu_id}_price",
+                    evidence_type="MENU_FACT",
+                    content=f"Current base price: KRW {int(row['price']):,}.",
+                ),
+                EvidenceReference(
+                    evidence_id=f"fact_{decision.menu_id}_spice",
+                    evidence_type="MENU_FACT",
+                    content=(
+                        f"Reviewed spice level: {int(row['spice_level'])} of 5."
+                        if row["spice_level"] is not None
+                        else "The source did not provide a reviewed spice level."
+                    ),
+                ),
+            ]
+            trace = {
+                **decision.trace_payload(),
+                "qualified_candidate_count": len(candidate_rows),
+                "support_manifest_sha256": str(family["support_manifest_sha256"]),
+            }
+            menu = self._menu_summary(
+                row,
+                [f"Matches selected {item.category_code.replace('_', ' ')}" for item in criterion_evidence]
+                or ["Matches the selected objective filters"],
+                [],
+                EvidenceStatus.UNKNOWN,
+                decision.score,
+            ).model_copy(
+                update={
+                    "evidence_ids": [fact.evidence_id for fact in facts],
+                    "grounded_claim_ids": [fact.evidence_id for fact in facts],
+                    "grounded_passage_ids": [passage.evidence_id for passage in wiki_passages],
+                }
+            )
+            pool.append(
+                EvidencePoolItem(
+                    menu=menu,
+                    knowledge_concept_id=decision.concept_id,
+                    criterion_evidence=criterion_evidence,
+                    wiki_passages=wiki_passages,
+                    menu_facts=facts,
+                    halal_certified=(True if criteria.dietary_filters.halal_certified_only else None),
+                    vegan_status=("LIKELY_FIT" if criteria.dietary_filters.vegan else "UNKNOWN"),
+                    retrieval_score=decision.score,
+                    server_rank=decision.rank,
+                    explicit_score=decision.explicit_score,
+                    semantic_score=decision.semantic_score,
+                    min_category_support=decision.min_category_support,
+                    reviewed_evidence_count=decision.reviewed_evidence_count,
+                    ranking_trace=trace,
+                    knowledge_release_id=str(family["knowledge_release_id"]),
+                    catalog_release_id=str(family["catalog_release_id"]),
+                    recommendation_release_family_id=str(family["release_family_id"]),
+                )
+            )
+        evidence_ms = int((monotonic() - evidence_started) * 1000)
+        self._recommendation_retrieval_metrics[session_id] = {
+            "session_filter_ms": session_filter_ms,
+            "objective_sql_ms": objective_sql_ms,
+            "support_lookup_ms": support_lookup_ms,
+            "scoring_rerank_ms": scoring_rerank_ms,
+            "evidence_ms": evidence_ms,
+            "query_count": query_count,
+            "selected_category_count": len(criteria.subjective_groups()),
+            "fetched_candidate_count": len(candidate_rows),
+            "candidate_merchant_count": len(
+                {str(row["merchant_id"]) for row in candidate_rows}
+            ),
+            "candidate_concept_count": len(
+                {str(row["concept_id"]) for row in candidate_rows}
+            ),
+            "support_row_count": len(support_rows),
+            "wiki_row_count": sum(len(rows) for rows in wiki_by_menu.values()),
+            "pipeline_ms": int((monotonic() - pipeline_started) * 1000),
+        }
+        return pool
+
+    def preview_recommendation(
+        self,
+        session_id: str,
+        criteria: RecommendationCriteriaV2,
+        *,
+        release_family_id: str | None = None,
+        exclude_history: bool = False,
+    ) -> RecommendationPreviewV2:
+        started = monotonic()
+        with self._connection() as connection:
+            if release_family_id is None:
+                family = connection.execute(
+                    """
+                    SELECT family.* FROM recommendation_runtime_state state
+                    JOIN recommendation_release_family family
+                      ON family.release_family_id=state.active_release_family_id
+                    WHERE state.state_key='ACTIVE' AND family.status='ACTIVE'
+                    """
+                ).fetchone()
+            else:
+                family = connection.execute(
+                    "SELECT * FROM recommendation_release_family WHERE release_family_id=?",
+                    (release_family_id,),
+                ).fetchone()
+            if family is None:
+                raise RuntimeError("RECOMMENDATION_RELEASE_NOT_READY")
+            unsupported_reasons: list[str] = []
+            release_id = str(family["knowledge_release_id"])
+            if criteria.dietary_filters.halal_certified_only:
+                halal_menus = len(
+                    self._valid_halal_certifications_in_connection(
+                        connection,
+                        release_family_id=str(family["release_family_id"]),
+                        instant=_now(),
+                    )
+                )
+                if halal_menus < 3:
+                    unsupported_reasons.append("HALAL_CERTIFICATION_UNAVAILABLE")
+            if criteria.dietary_filters.vegan:
+                vegan_capability = connection.execute(
+                    """
+                    SELECT COUNT(DISTINCT menu.menu_id) vegan_menus,
+                           COUNT(DISTINCT menu.merchant_id) vegan_merchants
+                    FROM menu_concept_map mapping
+                    JOIN menu ON menu.menu_id=mapping.menu_id
+                      AND menu.availability='AVAILABLE'
+                    JOIN menu_dietary_attribute relation
+                      ON relation.menu_id=menu.menu_id
+                     AND upper(relation.status)='VERIFIED'
+                    JOIN dietary_attribute attribute
+                      ON attribute.attribute_id=relation.attribute_id
+                     AND lower(attribute.code) IN ('vegan_option','vegan_possible')
+                    WHERE mapping.release_id=? AND mapping.mapping_status='MAPPED'
+                      AND mapping.confidence_band='high'
+                    """,
+                    (release_id,),
+                ).fetchone()
+                if not (
+                    vegan_capability
+                    and int(vegan_capability["vegan_menus"] or 0) >= 3
+                    and int(vegan_capability["vegan_merchants"] or 0) >= 2
+                ):
+                    unsupported_reasons.append("VEGAN_EVIDENCE_UNAVAILABLE")
+            if criteria.max_spice_level < 5:
+                spice_capability = connection.execute(
+                    """
+                    SELECT COUNT(DISTINCT menu.menu_id) spice_menus,
+                           COUNT(DISTINCT menu.merchant_id) spice_merchants
+                    FROM menu_concept_map mapping
+                    JOIN menu ON menu.menu_id=mapping.menu_id
+                      AND menu.availability='AVAILABLE'
+                    WHERE mapping.release_id=? AND mapping.mapping_status='MAPPED'
+                      AND mapping.confidence_band='high'
+                      AND menu.spice_status IN ('REVIEWED','VERIFIED')
+                      AND menu.spice_level IS NOT NULL
+                    """,
+                    (release_id,),
+                ).fetchone()
+                if not (
+                    spice_capability
+                    and int(spice_capability["spice_menus"] or 0) >= 3
+                    and int(spice_capability["spice_merchants"] or 0) >= 2
+                ):
+                    unsupported_reasons.append("SPICE_LEVEL_UNAVAILABLE")
+            service_area_id, excluded = self._structured_session_filters(
+                connection, session_id, exclude_history=exclude_history
+            )
+            if unsupported_reasons:
+                menu_count = 0
+                merchant_count = 0
+                reasons = unsupported_reasons
+            else:
+                candidate_query = build_concept_candidate_query(
+                    dialect="sqlite",
+                    criteria=criteria,
+                    knowledge_release_id=str(family["knowledge_release_id"]),
+                    certification_release_id=str(family["certification_release_id"]),
+                    service_area_id=service_area_id,
+                    excluded_menu_ids=excluded,
+                    eligibility_as_of=_now(),
+                    candidate_limit=None,
+                )
+                preview_query = build_concept_preview_query(candidate_query)
+                counts = connection.execute(
+                    preview_query.sql, preview_query.parameters
+                ).fetchone()
+                menu_count = int(counts["eligible_menu_count"] if counts else 0)
+                merchant_count = int(counts["eligible_merchant_count"] if counts else 0)
+                reasons = ["NO_SUPPORTED_CONCEPT_COMBINATION"] if menu_count == 0 else []
+        return RecommendationPreviewV2(
+            eligible_menu_count=menu_count,
+            eligible_merchant_count=merchant_count,
+            zero_reason_codes=reasons,
+            release_id=str(family["release_family_id"]),
+            support_manifest_sha256=str(family["support_manifest_sha256"]),
+            ranking_policy_version=str(family["ranking_policy_version"]),
+            timing_ms=max(0, int((monotonic() - started) * 1000)),
+        )
+
     def get_active_recommendation_release_family(
         self,
     ) -> RecommendationReleaseFamily | None:
@@ -2743,6 +3626,9 @@ class SQLiteYobiRepository:
             certification_release_id=str(row["certification_release_id"]),
             embedding_model=str(row["embedding_model"]),
             embedding_version=str(row["embedding_version"]),
+            support_manifest_sha256=str(row["support_manifest_sha256"]),
+            ranking_policy_version=str(row["ranking_policy_version"]),
+            ranking_policy_sha256=str(row["ranking_policy_sha256"]),
             status=cast(Any, str(row["status"])),
             activated_at=(
                 datetime.fromisoformat(str(row["activated_at"])) if row["activated_at"] else None
@@ -2807,11 +3693,661 @@ class SQLiteYobiRepository:
                 """,
                 (family.preference_catalog_version,),
             ).fetchall()
-        exposed_codes = frozenset(str(row["option_code"]) for row in rows)
+            metrics_rows = connection.execute(
+                """
+                SELECT support.option_code,
+                       COUNT(DISTINCT mapping.menu_id) AS menu_count,
+                       COUNT(DISTINCT menu.merchant_id) AS merchant_count,
+                       COUNT(DISTINCT document.document_id) AS document_count
+                FROM concept_preference_support support
+                JOIN menu_concept_map mapping
+                  ON mapping.release_id=support.knowledge_release_id
+                 AND mapping.concept_id=support.concept_id
+                 AND mapping.mapping_status='MAPPED'
+                 AND mapping.confidence_band='high'
+                JOIN menu ON menu.menu_id=mapping.menu_id AND menu.availability='AVAILABLE'
+                LEFT JOIN menu_source_detail source_detail ON source_detail.menu_id=menu.menu_id
+                JOIN knowledge_chunk chunk
+                  ON chunk.release_id=support.knowledge_release_id
+                 AND chunk.chunk_id=support.evidence_chunk_id
+                JOIN knowledge_document document
+                  ON document.release_id=chunk.release_id
+                 AND document.document_id=chunk.document_id
+                WHERE support.knowledge_release_id=? AND support.support_status='SUPPORTED'
+                  AND support.review_status IN ('REVIEWED_DEMO','VERIFIED')
+                  AND document.review_status IN ('REVIEWED_DEMO','VERIFIED')
+                  AND menu.price>0 AND COALESCE(source_detail.liquor,0)=0
+                  AND COALESCE(source_detail.is_adult,0)=0
+                  AND COALESCE(source_detail.verified_adult,0)=0
+                  AND COALESCE(source_detail.soldout,0)=0
+                GROUP BY support.option_code
+                """,
+                (family.knowledge_release_id,),
+            ).fetchall()
+            metrics = {
+                str(row["option_code"]): (
+                    int(row["menu_count"]),
+                    int(row["merchant_count"]),
+                    int(row["document_count"]),
+                )
+                for row in metrics_rows
+            }
+            price_metric_rows = connection.execute(
+                """
+                SELECT CASE
+                         WHEN menu.price<10000 THEN 'UNDER_10000'
+                         WHEN menu.price<20000 THEN 'FROM_10000_TO_19999'
+                         WHEN menu.price<30000 THEN 'FROM_20000_TO_29999'
+                         ELSE 'OVER_30000'
+                       END option_code,
+                       COUNT(DISTINCT menu.menu_id) menu_count,
+                       COUNT(DISTINCT menu.merchant_id) merchant_count,
+                       COUNT(DISTINCT document.document_id) document_count
+                FROM menu_concept_map mapping
+                JOIN menu ON menu.menu_id=mapping.menu_id AND menu.availability='AVAILABLE'
+                LEFT JOIN menu_source_detail source_detail ON source_detail.menu_id=menu.menu_id
+                JOIN knowledge_document document
+                  ON document.release_id=mapping.release_id
+                 AND document.concept_id=mapping.concept_id
+                 AND document.review_status IN ('REVIEWED_DEMO','VERIFIED')
+                WHERE mapping.release_id=? AND mapping.mapping_status='MAPPED'
+                  AND mapping.confidence_band='high' AND menu.price>0
+                  AND COALESCE(source_detail.liquor,0)=0
+                  AND COALESCE(source_detail.is_adult,0)=0
+                  AND COALESCE(source_detail.verified_adult,0)=0
+                  AND COALESCE(source_detail.soldout,0)=0
+                GROUP BY CASE
+                           WHEN menu.price<10000 THEN 'UNDER_10000'
+                           WHEN menu.price<20000 THEN 'FROM_10000_TO_19999'
+                           WHEN menu.price<30000 THEN 'FROM_20000_TO_29999'
+                           ELSE 'OVER_30000'
+                         END
+                """,
+                (family.knowledge_release_id,),
+            ).fetchall()
+            metrics.update(
+                {
+                    str(row["option_code"]): (
+                        int(row["menu_count"]),
+                        int(row["merchant_count"]),
+                        int(row["document_count"]),
+                    )
+                    for row in price_metric_rows
+                }
+            )
+            capability_rows = connection.execute(
+                """
+                SELECT
+                  COUNT(DISTINCT CASE WHEN menu.spice_status IN ('REVIEWED','VERIFIED')
+                    AND menu.spice_level IS NOT NULL THEN menu.menu_id END) spice_menus,
+                  COUNT(DISTINCT CASE WHEN menu.spice_status IN ('REVIEWED','VERIFIED')
+                    AND menu.spice_level IS NOT NULL THEN menu.merchant_id END) spice_merchants,
+                  COUNT(DISTINCT CASE WHEN EXISTS (
+                    SELECT 1 FROM menu_dietary_attribute relation
+                    JOIN dietary_attribute attribute
+                      ON attribute.attribute_id=relation.attribute_id
+                    WHERE relation.menu_id=menu.menu_id
+                      AND lower(attribute.code) IN ('vegan_option','vegan_possible')
+                      AND upper(relation.status)='VERIFIED'
+                  ) THEN menu.menu_id END) vegan_menus,
+                  COUNT(DISTINCT CASE WHEN EXISTS (
+                    SELECT 1 FROM menu_dietary_attribute relation
+                    JOIN dietary_attribute attribute
+                      ON attribute.attribute_id=relation.attribute_id
+                    WHERE relation.menu_id=menu.menu_id
+                      AND lower(attribute.code) IN ('vegan_option','vegan_possible')
+                      AND upper(relation.status)='VERIFIED'
+                  ) THEN menu.merchant_id END) vegan_merchants
+                FROM menu_concept_map mapping
+                JOIN menu ON menu.menu_id=mapping.menu_id AND menu.availability='AVAILABLE'
+                WHERE mapping.release_id=? AND mapping.mapping_status='MAPPED'
+                  AND mapping.confidence_band='high'
+                """,
+                (family.knowledge_release_id,),
+            ).fetchone()
+            halal_menus = len(self._valid_halal_certifications_in_connection(
+                connection,
+                release_family_id=family.release_family_id,
+                instant=_now(),
+            ))
+        active_codes = frozenset(str(row["option_code"]) for row in rows)
+        exposed_codes = (
+            frozenset(
+                code
+                for code in active_codes
+                if preference_option_is_exposable(
+                    code,
+                    menu_count=metrics.get(code, (0, 0, 0))[0],
+                    merchant_count=metrics.get(code, (0, 0, 0))[1],
+                    document_count=metrics.get(code, (0, 0, 0))[2],
+                )
+            )
+            if family.ranking_policy_version == RANKING_POLICY_VERSION
+            else active_codes
+        )
         payload = localized_preference_catalog(locale, exposed_codes=exposed_codes)
+        group_by_category = {
+            "cuisine_origins": "core",
+            "main_ingredients": "core",
+            "food_forms": "core",
+            "flavors": "additional",
+            "textures": "additional",
+            "cooking_methods": "additional",
+            "temperatures": "additional",
+            "price_bands": "exact",
+        }
+        for category in cast(list[dict[str, Any]], payload["categories"]):
+            category["group"] = group_by_category[str(category["code"])]
+            for option in cast(list[dict[str, Any]], category["options"]):
+                menu_count, merchant_count, document_count = metrics.get(
+                    str(option["code"]), (0, 0, 0)
+                )
+                option.update(
+                    {
+                        "eligible_menu_count": menu_count,
+                        "eligible_merchant_count": merchant_count,
+                        "reviewed_document_count": document_count,
+                    }
+                )
+        spice_enabled = bool(
+            capability_rows
+            and int(capability_rows["spice_menus"] or 0) >= 3
+            and int(capability_rows["spice_merchants"] or 0) >= 2
+        )
+        vegan_enabled = bool(
+            capability_rows
+            and int(capability_rows["vegan_menus"] or 0) >= 3
+            and int(capability_rows["vegan_merchants"] or 0) >= 2
+        )
+        payload["capabilities"] = {
+            "halal_certified_only": {
+                "enabled": halal_menus >= 3,
+                "disabled_reason": None
+                if halal_menus >= 3
+                else "No verifiable formal certification coverage is available.",
+            },
+            "vegan": {
+                "enabled": vegan_enabled,
+                "disabled_reason": None
+                if vegan_enabled
+                else "Reviewed menu-level ingredient coverage is unavailable.",
+            },
+            "max_spice_level": {
+                "enabled": spice_enabled,
+                "disabled_reason": None
+                if spice_enabled
+                else "Reviewed menu-level spice values are unavailable.",
+            },
+        }
         payload["spice_reference_version"] = family.spice_reference_version
         payload["knowledge_release_id"] = family.knowledge_release_id
+        payload["support_manifest_sha256"] = family.support_manifest_sha256
+        payload["ranking_policy_version"] = family.ranking_policy_version
         return dict(payload)
+
+    def _save_browse_snapshot(
+        self,
+        session_id: str,
+        menus: list[MenuSummary],
+        *,
+        query_summary: str,
+    ) -> str:
+        session = self.get_session(session_id)
+        if session is None:
+            raise KeyError("SESSION_NOT_FOUND")
+        snapshot_id = _id("snapshot_browse")
+        assistant_message_id = _id("msg_a_browse")
+        need_state = session.meal_need_state.model_copy(deep=True)
+        need_state.shown_menu_ids = list(
+            dict.fromkeys([*need_state.shown_menu_ids, *(menu.menu_id for menu in menus)])
+        )
+        result = RecommendationResult(
+            snapshot_id=snapshot_id,
+            candidates=[
+                RecommendationCandidate(
+                    menu_id=menu.menu_id,
+                    merchant_id=menu.merchant_id,
+                    rank=index,
+                    score=round(max(0.0, 1.0 - (index - 1) * 0.01), 6),
+                    match_reasons=list(menu.match_reasons),
+                    risk_hints=list(menu.risk_hints),
+                    evidence_ids=list(menu.evidence_ids),
+                    claim_ids=list(menu.grounded_claim_ids),
+                    passage_ids=list(menu.grounded_passage_ids),
+                )
+                for index, menu in enumerate(menus, start=1)
+            ],
+            query_summary=query_summary,
+            grounded_claim_ids=list(
+                dict.fromkeys(
+                    claim for menu in menus for claim in menu.grounded_claim_ids
+                )
+            ),
+            grounded_passage_ids=list(
+                dict.fromkeys(
+                    passage for menu in menus for passage in menu.grounded_passage_ids
+                )
+            ),
+            synthetic_data=all(menu.is_synthetic for menu in menus),
+        )
+        cards = [
+            {"type": "browse_menu", "data": {"menu": menu.model_dump(mode="json")}}
+            for menu in menus
+        ]
+        created_at = _now()
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO chat_message(
+                  message_id,session_id,role,content,message_type,safe_metadata_json,created_at
+                ) VALUES (?,?,'assistant','Browse collection authorization snapshot.',
+                          'browse_snapshot_audit',?,?)
+                """,
+                (
+                    assistant_message_id,
+                    session_id,
+                    json.dumps({"non_user_visible": True}, separators=(",", ":")),
+                    created_at,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO recommendation_snapshot(
+                  snapshot_id,session_id,assistant_message_id,state_version,
+                  meal_need_state_json,result_json,cards_json,generation_status,created_at
+                ) VALUES (?,?,?,?,?,?,?,'BROWSE',?)
+                """,
+                (
+                    snapshot_id,
+                    session_id,
+                    assistant_message_id,
+                    session.state_version,
+                    need_state.model_dump_json(),
+                    result.model_dump_json(),
+                    json.dumps(cards, ensure_ascii=False),
+                    created_at,
+                ),
+            )
+        return snapshot_id
+
+    @staticmethod
+    def _browse_exact_filter_sql(
+        connection: sqlite3.Connection,
+        session_id: str,
+    ) -> tuple[str, dict[str, Any]]:
+        row = connection.execute(
+            """
+            SELECT criteria_json FROM session_recommendation_criteria
+            WHERE session_id=? ORDER BY criteria_version DESC LIMIT 1
+            """,
+            (session_id,),
+        ).fetchone()
+        if row is None:
+            return "", {}
+        criteria = RecommendationCriteriaV2.model_validate_json(str(row["criteria_json"]))
+        conditions: list[str] = []
+        parameters: dict[str, Any] = {}
+        price_conditions = [
+            {
+                "UNDER_10000": "menu.price<10000",
+                "FROM_10000_TO_19999": "menu.price BETWEEN 10000 AND 19999",
+                "FROM_20000_TO_29999": "menu.price BETWEEN 20000 AND 29999",
+                "OVER_30000": "menu.price>=30000",
+            }[band]
+            for band in criteria.price_bands
+        ]
+        if price_conditions:
+            conditions.append("(" + " OR ".join(price_conditions) + ")")
+        if criteria.max_spice_level < 5:
+            parameters["browse_max_spice_level"] = criteria.max_spice_level
+            conditions.extend(
+                [
+                    "menu.spice_status IN ('REVIEWED','VERIFIED')",
+                    "menu.spice_level<=:browse_max_spice_level",
+                ]
+            )
+        if criteria.dietary_filters.halal_certified_only:
+            parameters["browse_eligibility_as_of"] = _now()
+            conditions.append(
+                """EXISTS (
+                  SELECT 1 FROM merchant_certification certification
+                  WHERE certification.certification_release_id=family.certification_release_id
+                    AND certification.merchant_id=menu.merchant_id
+                    AND certification.certification_type='HALAL'
+                    AND certification.status='ACTIVE'
+                    AND certification.valid_from<=:browse_eligibility_as_of
+                    AND (certification.valid_to IS NULL
+                         OR certification.valid_to>=:browse_eligibility_as_of)
+                    AND (certification.scope_type='MERCHANT'
+                         OR (certification.scope_type='MENU'
+                             AND certification.scope_ref=menu.menu_id))
+                )"""
+            )
+        if criteria.dietary_filters.vegan:
+            conditions.append(
+                """EXISTS (
+                  SELECT 1 FROM menu_dietary_attribute relation
+                  JOIN dietary_attribute attribute
+                    ON attribute.attribute_id=relation.attribute_id
+                  WHERE relation.menu_id=menu.menu_id
+                    AND lower(attribute.code) IN ('vegan_option','vegan_possible')
+                    AND upper(relation.status)='VERIFIED'
+                )"""
+            )
+        return (" AND " + " AND ".join(conditions) if conditions else ""), parameters
+
+    def list_food_rankings(
+        self,
+        session_id: str,
+        sort: FoodRankingSort,
+        limit: int,
+    ) -> FoodRankingCollection:
+        bounded_limit = max(1, min(20, limit))
+        order_expression = {
+            "review_count": "ranking_review_count",
+            "order_count": "ranking_order_count",
+            "korean_popularity": "ranking_korean_popularity",
+        }[sort]
+        ranking_sql = food_ranking_sql(
+            "sqlite",
+            menu_id="menu.menu_id",
+            is_synthetic="menu.is_synthetic",
+            menu_review_count="source.review_count",
+            merchant_review_count="merchant_source.review_count",
+        )
+        with self._connection() as connection:
+            service_area_id, _excluded = self._structured_session_filters(
+                connection, session_id, exclude_history=False
+            )
+            exact_clause, parameters = self._browse_exact_filter_sql(connection, session_id)
+            area_clause = ""
+            if service_area_id:
+                area_clause = "AND merchant.service_area_id=:browse_service_area_id"
+                parameters["browse_service_area_id"] = service_area_id
+            rows = connection.execute(
+                f"""
+                SELECT menu.menu_id,menu.merchant_id,
+                       COALESCE(merchant.name_en,merchant.name_ko) merchant_name,
+                       menu.name_en,menu.name_ko,menu.category,menu.description,
+                       menu.cultural_description,menu.price,
+                       COALESCE(merchant.delivery_fee,0) delivery_fee,
+                       COALESCE(merchant.eta_min,0) eta_min,
+                       COALESCE(merchant.eta_max,0) eta_max,
+                       menu.spice_level,menu.serves_min,menu.serves_max,menu.is_synthetic,
+                       COALESCE(source.review_count,0) source_menu_review_count,
+                       COALESCE(merchant_source.review_count,0) source_merchant_review_count,
+                       {ranking_sql.review_count} ranking_review_count,
+                       {ranking_sql.order_count} ranking_order_count,
+                       {ranking_sql.korean_popularity} ranking_korean_popularity,
+                       {ranking_sql.basis} ranking_metric_basis,
+                       mapping.concept_id,
+                       (SELECT chunk.content FROM knowledge_chunk chunk
+                        JOIN knowledge_document document
+                          ON document.release_id=chunk.release_id
+                         AND document.document_id=chunk.document_id
+                        WHERE chunk.release_id=mapping.release_id
+                          AND chunk.concept_id=mapping.concept_id
+                          AND document.source_type='SYNTHETIC_WIKI'
+                          AND document.review_status='REVIEWED_DEMO'
+                          AND lower(chunk.facet)<>'safety'
+                          AND (
+                            json_extract(chunk.metadata_json,
+                                         '$.recommendation_visibility')='PUBLIC_RAG'
+                            OR json_extract(chunk.metadata_json,
+                                            '$.recommendation_visibility') IS NULL
+                          )
+                        ORDER BY chunk.chunk_id LIMIT 1) concept_description
+                FROM recommendation_runtime_state state
+                JOIN recommendation_release_family family
+                  ON family.release_family_id=state.active_release_family_id
+                 AND family.status='ACTIVE'
+                JOIN menu_concept_map mapping
+                  ON mapping.release_id=family.knowledge_release_id
+                 AND mapping.mapping_status='MAPPED' AND mapping.confidence_band='high'
+                JOIN menu ON menu.menu_id=mapping.menu_id AND menu.availability='AVAILABLE'
+                JOIN merchant ON merchant.merchant_id=menu.merchant_id
+                LEFT JOIN menu_source_detail source ON source.menu_id=menu.menu_id
+                LEFT JOIN merchant_source_detail merchant_source
+                  ON merchant_source.merchant_id=menu.merchant_id
+                WHERE state.state_key='ACTIVE' AND menu.price>0
+                  AND COALESCE(source.liquor,0)=0 AND COALESCE(source.is_adult,0)=0
+                  AND COALESCE(source.verified_adult,0)=0 AND COALESCE(source.soldout,0)=0
+                  {area_clause}
+                  {exact_clause}
+                ORDER BY {order_expression} DESC,menu.merchant_id,menu.menu_id
+                LIMIT 500
+                """,
+                parameters,
+            ).fetchall()
+            session_row = connection.execute(
+                """
+                SELECT session.meal_need_state_json,profile.dietary_rules_json,
+                       profile.religion_selection,profile.allergy_severity
+                FROM chat_session session JOIN user_profile profile
+                  ON profile.profile_id=session.profile_id
+                WHERE session.session_id=?
+                """,
+                (session_id,),
+            ).fetchone()
+            if session_row is None:
+                raise KeyError("SESSION_NOT_FOUND")
+            need_state = apply_profile_constraints(
+                MealNeedState.model_validate_json(str(session_row["meal_need_state_json"] or "{}")),
+                list(json.loads(str(session_row["dietary_rules_json"] or "[]"))),
+                str(session_row["religion_selection"]),
+            )
+            eligible_rows = [
+                row
+                for row in rows
+                if not self._menu_hard_constraint_conflicts(
+                    connection,
+                    str(row["menu_id"]),
+                    need_state,
+                    str(session_row["allergy_severity"]),
+                )[0]
+            ][:bounded_limit]
+        items: list[FoodRankingEntry] = []
+        menus: list[MenuSummary] = []
+        for position, row in enumerate(eligible_rows, start=1):
+            metric_value = {
+                "review_count": int(row["ranking_review_count"] or 0),
+                "order_count": int(row["ranking_order_count"] or 0),
+                "korean_popularity": int(row["ranking_korean_popularity"] or 0),
+            }[sort]
+            if str(row["ranking_metric_basis"]) == "DETERMINISTIC_SYNTHETIC_FALLBACK":
+                metric_label = {
+                    "review_count": "Deterministic demo review score",
+                    "order_count": "Deterministic demo order score",
+                    "korean_popularity": "Deterministic demo Korean-popularity score",
+                }[sort]
+            else:
+                metric_label = {
+                    "review_count": "Source menu review count",
+                    "order_count": "Deterministic demo order proxy",
+                    "korean_popularity": "Deterministic demo Korean-popularity proxy",
+                }[sort]
+            menu = self._menu_summary(
+                row,
+                ["Available mapped menu in the current demo delivery area"],
+                ["Ranking is a demo view, not a live platform-wide ranking"],
+                EvidenceStatus.UNKNOWN,
+                1.0,
+            )
+            if row["concept_description"]:
+                menu = menu.model_copy(
+                    update={
+                        "cultural_description": (
+                            "General food reference: " + str(row["concept_description"])
+                        )
+                    }
+                )
+            menus.append(menu)
+            items.append(
+                FoodRankingEntry(
+                    position=position,
+                    metric_label=metric_label,
+                    metric_value=metric_value,
+                    menu=menu,
+                )
+            )
+        snapshot_id = self._save_browse_snapshot(
+            session_id, menus, query_summary=f"Deterministic demo food ranking: {sort}"
+        )
+        return FoodRankingCollection(
+            snapshot_id=snapshot_id,
+            demo_basis=(
+                "YOBI demo only. Provided source counts take priority. Synthetic menus with "
+                "no source counts use stable menu-ID-derived demo scores so sort controls "
+                "remain demonstrable. No value is a live Yogiyo-wide statistic."
+            ),
+            sort=sort,
+            items=items,
+        )
+
+    def list_kpop_demon_hunters_feature(
+        self,
+        session_id: str,
+    ) -> FeaturedMenuCollection:
+        feature_names = ("Gimbap", "Gukbap", "Hotteok", "Seolleongtang", "Eomuk")
+        with self._connection() as connection:
+            service_area_id, _excluded = self._structured_session_filters(
+                connection, session_id, exclude_history=False
+            )
+            feature_keys = [f"browse_feature_{index}" for index in range(len(feature_names))]
+            placeholders = ",".join(":" + key for key in feature_keys)
+            exact_clause, parameters = self._browse_exact_filter_sql(connection, session_id)
+            parameters.update(dict(zip(feature_keys, feature_names)))
+            area_clause = ""
+            if service_area_id:
+                area_clause = "AND merchant.service_area_id=:browse_service_area_id"
+                parameters["browse_service_area_id"] = service_area_id
+            candidate_rows = connection.execute(
+                f"""
+                SELECT * FROM (
+                  SELECT menu.menu_id,menu.merchant_id,
+                         COALESCE(merchant.name_en,merchant.name_ko) merchant_name,
+                         menu.name_en,menu.name_ko,menu.category,menu.description,
+                         menu.cultural_description,menu.price,
+                         COALESCE(merchant.delivery_fee,0) delivery_fee,
+                         COALESCE(merchant.eta_min,0) eta_min,
+                         COALESCE(merchant.eta_max,0) eta_max,
+                         menu.spice_level,menu.serves_min,menu.serves_max,menu.is_synthetic,
+                         concept.canonical_name_en dish_name,
+                         (SELECT chunk.content FROM knowledge_chunk chunk
+                          JOIN knowledge_document document
+                            ON document.release_id=chunk.release_id
+                           AND document.document_id=chunk.document_id
+                          WHERE chunk.release_id=mapping.release_id
+                            AND chunk.concept_id=mapping.concept_id
+                            AND document.source_type='SYNTHETIC_WIKI'
+                            AND document.review_status='REVIEWED_DEMO'
+                            AND lower(chunk.facet)<>'safety'
+                            AND (
+                              json_extract(chunk.metadata_json,
+                                           '$.recommendation_visibility')='PUBLIC_RAG'
+                              OR json_extract(chunk.metadata_json,
+                                              '$.recommendation_visibility') IS NULL
+                            )
+                          ORDER BY chunk.chunk_id LIMIT 1) concept_description,
+                         ROW_NUMBER() OVER (
+                           PARTITION BY concept.canonical_name_en
+                           ORDER BY COALESCE(source.review_count,0) DESC,
+                                    menu.merchant_id,menu.menu_id
+                         ) concept_rank
+                  FROM recommendation_runtime_state state
+                  JOIN recommendation_release_family family
+                    ON family.release_family_id=state.active_release_family_id
+                   AND family.status='ACTIVE'
+                  JOIN menu_concept_map mapping
+                    ON mapping.release_id=family.knowledge_release_id
+                   AND mapping.mapping_status='MAPPED' AND mapping.confidence_band='high'
+                  JOIN dish_concept concept
+                    ON concept.release_id=mapping.release_id
+                   AND concept.concept_id=mapping.concept_id
+                  JOIN menu ON menu.menu_id=mapping.menu_id AND menu.availability='AVAILABLE'
+                  JOIN merchant ON merchant.merchant_id=menu.merchant_id
+                  LEFT JOIN menu_source_detail source ON source.menu_id=menu.menu_id
+                  WHERE state.state_key='ACTIVE' AND menu.price>0
+                    AND concept.canonical_name_en IN ({placeholders})
+                    AND COALESCE(source.liquor,0)=0 AND COALESCE(source.is_adult,0)=0
+                    AND COALESCE(source.verified_adult,0)=0 AND COALESCE(source.soldout,0)=0
+                    {area_clause}
+                    {exact_clause}
+                ) WHERE concept_rank<=20
+                ORDER BY CASE dish_name
+                  WHEN 'Gimbap' THEN 1 WHEN 'Gukbap' THEN 2 WHEN 'Hotteok' THEN 3
+                  WHEN 'Seolleongtang' THEN 4 WHEN 'Eomuk' THEN 5 ELSE 6 END,concept_rank
+                """,
+                parameters,
+            ).fetchall()
+            session_row = connection.execute(
+                """
+                SELECT session.meal_need_state_json,profile.dietary_rules_json,
+                       profile.religion_selection,profile.allergy_severity
+                FROM chat_session session JOIN user_profile profile
+                  ON profile.profile_id=session.profile_id
+                WHERE session.session_id=?
+                """,
+                (session_id,),
+            ).fetchone()
+            if session_row is None:
+                raise KeyError("SESSION_NOT_FOUND")
+            need_state = apply_profile_constraints(
+                MealNeedState.model_validate_json(str(session_row["meal_need_state_json"] or "{}")),
+                list(json.loads(str(session_row["dietary_rules_json"] or "[]"))),
+                str(session_row["religion_selection"]),
+            )
+            rows: list[sqlite3.Row] = []
+            seen_dishes: set[str] = set()
+            for row in candidate_rows:
+                dish_name = str(row["dish_name"])
+                if dish_name in seen_dishes:
+                    continue
+                if self._menu_hard_constraint_conflicts(
+                    connection,
+                    str(row["menu_id"]),
+                    need_state,
+                    str(session_row["allergy_severity"]),
+                )[0]:
+                    continue
+                seen_dishes.add(dish_name)
+                rows.append(row)
+        menus = [
+            self._menu_summary(
+                row,
+                ["Mapped to a food in the K-pop Demon Hunters demo feature"],
+                ["General food knowledge does not verify this restaurant's recipe"],
+                EvidenceStatus.UNKNOWN,
+                1.0,
+            ).model_copy(
+                update={
+                    "cultural_description": (
+                        "General food reference: " + str(row["concept_description"])
+                        if row["concept_description"]
+                        else ""
+                    )
+                }
+            )
+            for row in rows
+        ]
+        snapshot_id = self._save_browse_snapshot(
+            session_id, menus, query_summary="K-pop Demon Hunters mapped food feature"
+        )
+        return FeaturedMenuCollection(
+            snapshot_id=snapshot_id,
+            items=[
+                FeaturedMenuEntry(
+                    dish_name=str(row["dish_name"]),
+                    description=(
+                        str(row["concept_description"])
+                        if row["concept_description"]
+                        else "No reviewed general food description is available."
+                    ),
+                    menu=menu,
+                )
+                for row, menu in zip(rows, menus)
+            ],
+        )
 
     @staticmethod
     def _menu_from_cards(cards: list[dict[str, Any]], menu_id: str) -> dict[str, Any] | None:
@@ -2842,19 +4378,19 @@ class SQLiteYobiRepository:
             **(existing or {}),
             "menu_id": str(row["menu_id"]),
             "merchant_id": str(row["merchant_id"]),
-            "merchant_name": str(row["merchant_name"]),
-            "name_en": str(row["name_en"]),
+            "merchant_name": _catalog_text(row["merchant_name"]),
+            "name_en": _catalog_text(row["name_en"], row["name_ko"]),
             "name_ko": str(row["name_ko"]),
             "category": str(row["category"]),
-            "description": str(row["description"]),
-            "cultural_description": str(row["cultural_description"]),
+            "description": _catalog_text(row["description"]),
+            "cultural_description": _catalog_text(row["cultural_description"]),
             "price": int(row["price"]),
             "delivery_fee": int(row["delivery_fee"]),
             "eta_min": int(row["eta_min"]),
             "eta_max": int(row["eta_max"]),
-            "spice_level": int(row["spice_level"]),
-            "serves_min": int(row["serves_min"]),
-            "serves_max": int(row["serves_max"]),
+            "spice_level": _optional_int(row["spice_level"]),
+            "serves_min": _optional_int(row["serves_min"]),
+            "serves_max": _optional_int(row["serves_max"]),
         }
 
     def apply_conversation_event(
@@ -3155,9 +4691,10 @@ class SQLiteYobiRepository:
         with self._connection() as connection:
             rows = connection.execute(
                 """
-                SELECT m.*, r.name_en AS merchant_name, r.delivery_fee, r.eta_min, r.eta_max
+                SELECT m.*, COALESCE(r.name_en,r.name_ko) AS merchant_name, r.delivery_fee, r.eta_min, r.eta_max
                 FROM menu m JOIN merchant r ON r.merchant_id = m.merchant_id
-                WHERE m.availability = 'AVAILABLE' AND m.price <= ? AND m.spice_level <= ?
+                WHERE m.availability = 'AVAILABLE' AND m.price <= ?
+                  AND (m.spice_level IS NULL OR m.spice_level <= ?)
                 """,
                 (budget, max(spice, 1)),
             ).fetchall()
@@ -3197,8 +4734,15 @@ class SQLiteYobiRepository:
                     delivery_fee=int(row["delivery_fee"]),
                     eta_max=int(row["eta_max"]),
                 )
-                reasons = [f"Matches your spice tolerance (level {row['spice_level']} of 3)"]
-                risks: list[str] = []
+                spice_level = _optional_int(row["spice_level"])
+                reasons = (
+                    [f"Matches your spice tolerance (level {spice_level} of 5)"]
+                    if spice_level is not None
+                    else ["Spice level was not provided by the source"]
+                )
+                risks: list[str] = (
+                    ["Confirm spice level with the merchant"] if spice_level is None else []
+                )
                 status = EvidenceStatus.UNKNOWN
                 if "shellfish_sauce_absent" in dietary_tags:
                     status = EvidenceStatus.VERIFIED
@@ -3368,31 +4912,36 @@ class SQLiteYobiRepository:
         return MenuSummary(
             menu_id=row["menu_id"],
             merchant_id=row["merchant_id"],
-            merchant_name=row["merchant_name"],
-            name_en=row["name_en"],
+            merchant_name=_catalog_text(row["merchant_name"]),
+            name_en=_catalog_text(row["name_en"], row["name_ko"]),
             name_ko=row["name_ko"],
             category=row["category"],
-            description=row["description"],
-            cultural_description=row["cultural_description"],
+            description=_catalog_text(row["description"]),
+            cultural_description=_catalog_text(row["cultural_description"]),
             price=row["price"],
             delivery_fee=row["delivery_fee"],
             eta_min=row["eta_min"],
             eta_max=row["eta_max"],
-            spice_level=row["spice_level"],
-            serves_min=row["serves_min"],
-            serves_max=row["serves_max"],
-            dietary_summary="Synthetic evidence; see evidence details before ordering.",
+            spice_level=_optional_int(row["spice_level"]),
+            serves_min=_optional_int(row["serves_min"]),
+            serves_max=_optional_int(row["serves_max"]),
+            dietary_summary=(
+                "Synthetic evidence; see evidence details before ordering."
+                if bool(row["is_synthetic"])
+                else "Dietary details were not provided by the source; confirm with the merchant."
+            ),
             evidence_status=status,
             match_reasons=reasons,
             risk_hints=risks,
             semantic_score=round(max(0.0, min(1.0, score)), 4),
+            is_synthetic=bool(row["is_synthetic"]),
         )
 
     def get_menu(self, menu_id: str, profile: Profile) -> MenuSummary | None:
         with self._connection() as connection:
             row = connection.execute(
                 """
-                SELECT m.*, r.name_en AS merchant_name, r.delivery_fee, r.eta_min, r.eta_max
+                SELECT m.*, COALESCE(r.name_en,r.name_ko) AS merchant_name, r.delivery_fee, r.eta_min, r.eta_max
                 FROM menu m JOIN merchant r ON r.merchant_id = m.merchant_id
                 WHERE m.menu_id = ?
                 """,
@@ -3407,10 +4956,19 @@ class SQLiteYobiRepository:
         tags = set(json.loads(row["dietary_tags_json"]))
         if "shellfish_sauce_absent" in tags:
             status = EvidenceStatus.VERIFIED
+        external_source = not bool(row["is_synthetic"])
         menu = self._menu_summary(
             row,
-            ["Selected menu from the synthetic catalog"],
-            ["Cross-contamination is not verified"],
+            [
+                "Selected menu from the provided Yogiyo source catalog"
+                if external_source
+                else "Selected menu from the synthetic catalog"
+            ],
+            [
+                "Ingredients, dietary suitability, and cross-contamination were not provided"
+                if external_source
+                else "Cross-contamination is not verified"
+            ],
             status,
             1.0,
         )
@@ -3456,10 +5014,11 @@ class SQLiteYobiRepository:
         with self._connection() as connection:
             rows = connection.execute(
                 """
-                SELECT m.*, r.name_en AS merchant_name, r.delivery_fee, r.eta_min, r.eta_max,
+                SELECT m.*, COALESCE(r.name_en,r.name_ko) AS merchant_name, r.delivery_fee, r.eta_min, r.eta_max,
                        r.service_area_id AS merchant_service_area_id
                 FROM menu m JOIN merchant r ON r.merchant_id=m.merchant_id
-                WHERE m.merchant_id=? AND m.availability='AVAILABLE' AND m.spice_level<=?
+                WHERE m.merchant_id=? AND m.availability='AVAILABLE'
+                  AND (m.spice_level IS NULL OR m.spice_level<=?)
                 ORDER BY m.price, m.menu_id
                 """,
                 (merchant_id, safety_state.max_spiciness),
@@ -3875,7 +5434,11 @@ class SQLiteYobiRepository:
         conflicts: list[str] = []
         if state.budget_krw is not None and int(menu["price"]) > state.budget_krw:
             conflicts.append("menu:over_budget")
-        if state.max_spiciness is not None and int(menu["spice_level"]) > state.max_spiciness:
+        if (
+            state.max_spiciness is not None
+            and menu["spice_level"] is not None
+            and int(menu["spice_level"]) > state.max_spiciness
+        ):
             conflicts.append("menu:too_spicy")
         if menu_id in state.rejected_menu_ids:
             conflicts.append("menu:rejected")
@@ -4180,7 +5743,7 @@ class SQLiteYobiRepository:
         with self._connection() as connection:
             rows = connection.execute(
                 """
-                SELECT m.*, r.name_en AS merchant_name, r.delivery_fee, r.eta_min,
+                SELECT m.*, COALESCE(r.name_en,r.name_ko) AS merchant_name, r.delivery_fee, r.eta_min,
                        r.eta_max, r.flavor_profile, r.packaging_signal,
                        r.service_area_id AS merchant_service_area_id
                 FROM menu m JOIN merchant r ON r.merchant_id = m.merchant_id
@@ -4238,7 +5801,13 @@ class SQLiteYobiRepository:
                     price=menu.price,
                     delivery_fee=menu.delivery_fee,
                     eta=f"{row['eta_min']}-{row['eta_max']} min",
-                    portion=("One-person portion" if menu.serves_max == 1 else "Shareable portion"),
+                    portion=(
+                        "Portion information not provided"
+                        if menu.serves_max is None
+                        else "One-person portion"
+                        if menu.serves_max == 1
+                        else "Shareable portion"
+                    ),
                     flavor=row["flavor_profile"],
                     packaging_signal=row["packaging_signal"],
                     dietary_status=menu.evidence_status,
@@ -4356,18 +5925,18 @@ class SQLiteYobiRepository:
                 result.append(
                     OptionGroup(
                         option_group_id=group["option_group_id"],
-                        name_en=group["name_en"],
+                        name_en=_catalog_text(group["name_en"], group["name_ko"]),
                         name_ko=group["name_ko"],
-                        description=group["description"],
+                        description=_catalog_text(group["description"]),
                         required=bool(group["required"]),
                         min_select=group["min_select"],
                         max_select=group["max_select"],
                         items=[
                             OptionItem(
                                 option_item_id=item["option_item_id"],
-                                name_en=item["name_en"],
+                                name_en=_catalog_text(item["name_en"], item["name_ko"]),
                                 name_ko=item["name_ko"],
-                                description=item["description"],
+                                description=_catalog_text(item["description"]),
                                 price_delta=item["price_delta"],
                                 available=item["availability"] == "AVAILABLE",
                                 dietary_conflict=item["dietary_conflict"],
@@ -4560,7 +6129,7 @@ class SQLiteYobiRepository:
             options.append(
                 {
                     "option_item_id": option["option_item_id"],
-                    "name_en": option["name_en"],
+                    "name_en": _catalog_text(option["name_en"], option["name_ko"]),
                     "name_ko": option["name_ko"],
                     "price_delta": int(option["price_delta"]),
                 }
@@ -4640,7 +6209,12 @@ class SQLiteYobiRepository:
                     menu["merchant_id"],
                     item.quantity,
                     menu["price"],
-                    json.dumps({"name_en": menu["name_en"], "price": menu["price"]}),
+                    json.dumps(
+                        {
+                            "name_en": _catalog_text(menu["name_en"], menu["name_ko"]),
+                            "price": menu["price"],
+                        }
+                    ),
                     json.dumps(options),
                     line_total,
                     item.user_note,
@@ -4689,7 +6263,12 @@ class SQLiteYobiRepository:
                 (
                     replacement.quantity,
                     int(menu["price"]),
-                    json.dumps({"name_en": menu["name_en"], "price": int(menu["price"])}),
+                    json.dumps(
+                        {
+                            "name_en": _catalog_text(menu["name_en"], menu["name_ko"]),
+                            "price": int(menu["price"]),
+                        }
+                    ),
                     json.dumps(options),
                     line_total,
                     replacement.user_note,
@@ -4749,7 +6328,11 @@ class SQLiteYobiRepository:
                 ).fetchone()
             rows = connection.execute(
                 """
-                SELECT ci.*, m.name_en AS menu_name, m.name_ko AS menu_name_ko, m.allergen_tags_json FROM cart_item ci
+                SELECT ci.*,
+                       COALESCE(m.name_en,m.name_ko,m.menu_id) AS menu_name,
+                       COALESCE(m.name_ko,m.name_en,m.menu_id) AS menu_name_ko,
+                       m.allergen_tags_json
+                FROM cart_item ci
                 JOIN menu m ON m.menu_id = ci.menu_id WHERE ci.cart_id = ? ORDER BY ci.created_at
                 """,
                 (cart["cart_id"],),
@@ -4911,8 +6494,10 @@ class SQLiteYobiRepository:
                             "review the updated total before checkout."
                         )
                         dietary_conflicts.append(warning)
-                    if current_menu is None or int(current_menu["spice_level"]) > (
-                        structured_criteria.max_spice_level
+                    if current_menu is None or (
+                        current_menu["spice_level"] is not None
+                        and int(current_menu["spice_level"])
+                        > structured_criteria.max_spice_level
                     ):
                         warning = f"Remove {menu_name} to continue; its spice level no longer matches your selection."
                         dietary_conflicts.append(warning)
@@ -5171,7 +6756,10 @@ class SQLiteYobiRepository:
                 raise ValueError("CART_SERVICE_AREA_MISMATCH")
             merchant_ids.add(menu["merchant_id"])
             if structured_criteria is not None:
-                if int(menu["spice_level"]) > structured_criteria.max_spice_level:
+                if (
+                    menu["spice_level"] is not None
+                    and int(menu["spice_level"]) > structured_criteria.max_spice_level
+                ):
                     raise ValueError("CART_MENU_NO_LONGER_ELIGIBLE")
                 if (
                     structured_criteria.dietary_filters.halal_certified_only
@@ -5222,7 +6810,7 @@ class SQLiteYobiRepository:
                 current_options.append(
                     {
                         "option_item_id": option["option_item_id"],
-                        "name_en": option["name_en"],
+                        "name_en": _catalog_text(option["name_en"], option["name_ko"]),
                         "name_ko": option["name_ko"],
                         "price_delta": int(option["price_delta"]),
                     }
@@ -5255,7 +6843,12 @@ class SQLiteYobiRepository:
 
             unit_price = int(menu["price"])
             line_total = (unit_price + option_total) * int(line["quantity"])
-            menu_snapshot = json.dumps({"name_en": menu["name_en"], "price": unit_price})
+            menu_snapshot = json.dumps(
+                {
+                    "name_en": _catalog_text(menu["name_en"], menu["name_ko"]),
+                    "price": unit_price,
+                }
+            )
             option_snapshot = json.dumps(current_options)
             line_changed = (
                 int(line["unit_price"]) != unit_price
@@ -5688,6 +7281,255 @@ class SQLiteYobiRepository:
                 )
             ).fetchall()
             counts = {str(row["table_name"]): int(row["row_count"]) for row in count_rows}
+            external = connection.execute(
+                """
+                SELECT * FROM catalog_import_batch
+                WHERE status='ACTIVE' AND data_origin='YOGIYO_PUBLIC_WEB'
+                ORDER BY completed_at DESC LIMIT 1
+                """
+            ).fetchone()
+            if external is not None:
+                expected_external = {
+                    str(key): int(value)
+                    for key, value in json.loads(str(external["expected_counts_json"])).items()
+                }
+                if set(expected_external) != set(EXTERNAL_CATALOG_COUNT_TABLES):
+                    expected_external = {}
+                actual_external = {
+                    table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                    for table in EXTERNAL_CATALOG_COUNT_TABLES
+                }
+                declared_external = {
+                    str(key): int(value)
+                    for key, value in json.loads(str(external["actual_counts_json"])).items()
+                }
+                invalid_required_options = int(
+                    connection.execute(
+                        """
+                        SELECT COUNT(*) FROM menu_option_group groups
+                        WHERE groups.min_select<0 OR groups.max_select<groups.min_select
+                          OR (groups.required=1 AND groups.min_select<1)
+                          OR (SELECT COUNT(*) FROM menu_option_item item
+                              WHERE item.option_group_id=groups.option_group_id
+                                AND item.availability='AVAILABLE') < groups.min_select
+                        """
+                    ).fetchone()[0]
+                )
+                missing_semantics = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM menu WHERE TRIM(COALESCE(semantic_text,''))=''"
+                    ).fetchone()[0]
+                )
+                unknown_fields_preserved = int(
+                    connection.execute(
+                        """
+                        SELECT COUNT(*) FROM menu
+                        WHERE name_en IS NULL AND serves_min IS NULL AND serves_max IS NULL
+                          AND spice_level IS NULL AND name_en_status='NOT_PROVIDED'
+                          AND serves_status='NOT_PROVIDED' AND spice_status='NOT_PROVIDED'
+                        """
+                    ).fetchone()[0]
+                )
+                source_release = connection.execute(
+                    """
+                    SELECT release.* FROM knowledge_runtime_state state
+                    JOIN knowledge_release release ON release.release_id=state.active_release_id
+                    WHERE state.state_key='ACTIVE'
+                    """
+                ).fetchone()
+                active_family_row = connection.execute(
+                        """
+                        SELECT family.* FROM recommendation_runtime_state state
+                        JOIN recommendation_release_family family
+                          ON family.release_family_id=state.active_release_family_id
+                        WHERE state.state_key='ACTIVE' AND family.status='ACTIVE'
+                          AND family.catalog_release_id=?
+                        """,
+                        (str(external["catalog_release_id"]),),
+                    ).fetchone()
+                release_id = str(source_release["release_id"]) if source_release else ""
+                classification_row = connection.execute(
+                    """
+                    SELECT
+                      SUM(CASE WHEN mapping_status='MAPPED' AND confidence_band='high'
+                        THEN 1 ELSE 0 END) mapped_high,
+                      SUM(CASE WHEN mapping_status='UNMAPPED' THEN 1 ELSE 0 END) unmapped,
+                      SUM(CASE WHEN mapping_status='UNMAPPED'
+                        AND TRIM(COALESCE(unmapped_reason,''))='' THEN 1 ELSE 0 END) blank_reasons,
+                      COUNT(*) classified
+                    FROM menu_concept_map WHERE release_id=?
+                    """,
+                    (release_id,),
+                ).fetchone()
+                mapped_count = int(classification_row["mapped_high"] or 0)
+                unmapped_count = int(classification_row["unmapped"] or 0)
+                blank_unmapped_reasons = int(classification_row["blank_reasons"] or 0)
+                classified_count = int(classification_row["classified"] or 0)
+                reviewed_knowledge = connection.execute(
+                    """
+                    SELECT
+                      (SELECT COUNT(*) FROM knowledge_document
+                       WHERE release_id=? AND source_type='SYNTHETIC_WIKI'
+                         AND review_status='REVIEWED_DEMO' AND is_synthetic=1) documents,
+                      (SELECT COUNT(*) FROM knowledge_chunk
+                       WHERE release_id=? AND is_synthetic=1) chunks,
+                      (SELECT COUNT(*) FROM concept_preference_support
+                       WHERE knowledge_release_id=? AND support_status='SUPPORTED'
+                         AND evidence_chunk_id IS NOT NULL
+                         AND provenance_type='SYNTHETIC_WIKI'
+                         AND review_status='REVIEWED_DEMO') supports,
+                      (SELECT COUNT(*) FROM menu_concept_map
+                       WHERE release_id=? AND mapping_status='MAPPED'
+                         AND (confidence_band<>'high'
+                           OR source_type<>'YOBI_DERIVED_DEMO_MAPPING')) invalid_mappings
+                    """,
+                    (release_id, release_id, release_id, release_id),
+                ).fetchone()
+                synthetic_core = int(
+                    connection.execute(
+                        """
+                        SELECT (SELECT COUNT(*) FROM merchant WHERE is_synthetic<>0)
+                             + (SELECT COUNT(*) FROM menu WHERE is_synthetic<>0)
+                        """
+                    ).fetchone()[0]
+                )
+                source_fact_rows = sum(
+                    int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                    for table in (
+                        "menu_ingredient",
+                        "menu_allergen",
+                        "menu_dietary_attribute",
+                        "merchant_certification",
+                    )
+                )
+                address_status = demo_address_status(connection.cursor())
+                source_integrity_checks = {
+                    "external_counts_exact": bool(
+                        expected_external
+                        and expected_external == declared_external == actual_external
+                    ),
+                    "external_provenance_exact": int(
+                        connection.execute(
+                            """
+                            SELECT COUNT(*) FROM menu
+                            WHERE data_origin='YOGIYO_PUBLIC_WEB' AND is_synthetic=0
+                            """
+                        ).fetchone()[0]
+                    )
+                    == actual_external["menu"]
+                    and synthetic_core == 0,
+                    "unknown_fields_preserved_as_null": unknown_fields_preserved
+                    == actual_external["menu"],
+                    "menu_semantics_complete": missing_semantics == 0,
+                    "required_options_valid": invalid_required_options == 0,
+                    "source_release_catalog_compatible": bool(
+                        source_release
+                        and source_release["status"] == "READY"
+                        and source_release["catalog_version"]
+                        == external["catalog_release_id"]
+                    ),
+                    "single_demo_address_ready": address_status["ready"] is True,
+                    "package_hashes_present": all(
+                        len(str(external[column])) == 64
+                        for column in (
+                            "source_zip_sha256",
+                            "source_xlsx_sha256",
+                            "source_summary_sha256",
+                            "package_sha256",
+                            "selection_manifest_sha256",
+                        )
+                    ),
+                }
+                recommendation_checks = {
+                    "recommendation_family_active": active_family_row is not None,
+                    "classification_coverage_complete": classified_count
+                    == actual_external["menu"],
+                    "high_confidence_mapping_present": mapped_count > 0,
+                    "unmapped_reasons_complete": blank_unmapped_reasons == 0,
+                    "reviewed_wiki_documents_present": bool(
+                        reviewed_knowledge and int(reviewed_knowledge["documents"] or 0) > 0
+                    ),
+                    "reviewed_wiki_chunks_present": bool(
+                        reviewed_knowledge and int(reviewed_knowledge["chunks"] or 0) > 0
+                    ),
+                    "reviewed_preference_support_present": bool(
+                        reviewed_knowledge and int(reviewed_knowledge["supports"] or 0) > 0
+                    ),
+                    "mapping_provenance_exact": bool(
+                        reviewed_knowledge
+                        and int(reviewed_knowledge["invalid_mappings"] or 0) == 0
+                    ),
+                    "source_specific_facts_not_invented": source_fact_rows == 0,
+                    "support_manifest_valid": bool(
+                        active_family_row
+                        and len(str(active_family_row["support_manifest_sha256"] or "")) == 64
+                        and str(active_family_row["support_manifest_sha256"]) != "0" * 64
+                    ),
+                    "ranking_policy_active": bool(
+                        active_family_row
+                        and str(active_family_row["ranking_policy_version"])
+                        == RANKING_POLICY_VERSION
+                        and len(str(active_family_row["ranking_policy_sha256"] or "")) == 64
+                        and str(active_family_row["ranking_policy_sha256"]) != "0" * 64
+                    ),
+                }
+                external_checks = {**source_integrity_checks, **recommendation_checks}
+                source_release_counts = (
+                    json.loads(str(source_release["actual_counts_json"]))
+                    if source_release
+                    else {}
+                )
+                return {
+                    "backend": "sqlite",
+                    "catalog_mode": "EXTERNAL_SOURCE",
+                    "data_origin": str(external["data_origin"]),
+                    "catalog_import_id": str(external["catalog_import_id"]),
+                    "catalog_version": str(external["catalog_release_id"]),
+                    "knowledge_catalog_version": (
+                        str(source_release["catalog_version"]) if source_release else None
+                    ),
+                    "counts": counts,
+                    "external_counts": actual_external,
+                    "demo_address": address_status,
+                    "source_integrity_ready": all(source_integrity_checks.values()),
+                    "recommendation_ready": all(recommendation_checks.values()),
+                    "canonical_ready": all(source_integrity_checks.values()),
+                    "last_seed_time": connection.execute(
+                        "SELECT MAX(updated_at) FROM menu"
+                    ).fetchone()[0],
+                    "knowledge_ready": all(recommendation_checks.values()),
+                    "vector_ready": missing_semantics == 0,
+                    "menu_vector_strategy": "deterministic_on_read",
+                    "readiness_checks": external_checks,
+                    "knowledge_expected_counts": source_release_counts,
+                    "knowledge_actual_counts": source_release_counts,
+                    "knowledge_supplemental_counts": {
+                        "mapped_menus": mapped_count,
+                        "unmapped_menus": unmapped_count,
+                        "source_fact_rows": source_fact_rows,
+                    },
+                    "knowledge_release_id": (
+                        str(source_release["release_id"]) if source_release else None
+                    ),
+                    "knowledge_embedding_model": (
+                        str(source_release["embedding_model"]) if source_release else None
+                    ),
+                    "knowledge_embedding_dimension": (
+                        int(source_release["embedding_dimension"])
+                        if source_release
+                        else None
+                    ),
+                    "knowledge_embedding_version": (
+                        str(source_release["embedding_version"])
+                        if source_release
+                        else None
+                    ),
+                    "source_limitations": [
+                        "NO_REVIEWED_INGREDIENT_DATA",
+                        "NO_FORMAL_CERTIFICATION_DATA",
+                        "SPICE_AND_SERVES_NOT_PROVIDED",
+                    ],
+                }
             canonical = connection.execute(
                 "SELECT COUNT(*) FROM menu WHERE menu_id IN ('menu_001_01','menu_002_01','menu_003_01')"
             ).fetchone()[0]

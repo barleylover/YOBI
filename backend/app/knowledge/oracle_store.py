@@ -85,12 +85,16 @@ def _activate_release(
 def load_oracle_release(
     connection: oracledb.Connection,
     compiled: CompiledKnowledgeRelease,
+    *,
+    activate: bool = True,
 ) -> None:
-    """Load and activate an immutable release inside the caller-owned transaction.
+    """Load an immutable release inside the caller-owned transaction.
 
     The function never commits. A savepoint removes its own partial work on failure while
     preserving any earlier work in the outer seed transaction. Existing releases are reusable
-    only when their manifest is identical and their status is already ``READY``.
+    only when their manifest is identical and their status is already ``READY``. Callers that
+    stage and independently verify a release can pass ``activate=False`` and move the runtime
+    pointer in a later transaction.
     """
 
     cursor = connection.cursor()
@@ -114,7 +118,8 @@ def load_oracle_release(
             if status != "READY":
                 raise RuntimeError("KNOWLEDGE_RELEASE_INCOMPLETE")
             _validate_release_contents(cursor, compiled)
-            _activate_release(cursor, compiled.release_id, now)
+            if activate:
+                _activate_release(cursor, compiled.release_id, now)
             return
 
         cursor.execute(
@@ -161,7 +166,8 @@ def load_oracle_release(
             completed_at=now,
             release_id=compiled.release_id,
         )
-        _activate_release(cursor, compiled.release_id, now)
+        if activate:
+            _activate_release(cursor, compiled.release_id, now)
     except BaseException:
         cursor.execute("ROLLBACK TO yobi_knowledge_release_load")
         raise

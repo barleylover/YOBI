@@ -21,9 +21,11 @@ from app.domain.structured_recommendation import (
     EvidencePoolItem,
     EvidenceReference,
     LiveRecommendationMenuState,
+    RecommendationComparisonRequest,
     RecommendationCriteriaCommit,
     RecommendationCriteriaRecord,
     RecommendationCriteriaV2,
+    RecommendationMode,
     RecommendationRequestInput,
     RecommendationRequestRecord,
     RecommendationRequestStatus,
@@ -63,7 +65,7 @@ class FakeProvider:
         return self._capabilities
 
     def supports_model(self, model: str) -> bool:
-        return model == "xai.grok-4.3"
+        return model == "openai.gpt-oss-120b"
 
     def normalize_request(self, model: str, **kwargs: Any) -> dict[str, Any]:
         return {"model": model, **kwargs}
@@ -71,6 +73,12 @@ class FakeProvider:
     def create_response(self, model: str, **kwargs: Any) -> Any:
         self.calls.append({"model": model, **kwargs})
         return SimpleNamespace(output_text=json.dumps(self.output))
+
+
+class FailingProvider(FakeProvider):
+    def create_response(self, model: str, **kwargs: Any) -> Any:
+        self.calls.append({"model": model, **kwargs})
+        raise TimeoutError("provider timeout")
 
 
 class FakeRecommendationRepository:
@@ -93,6 +101,27 @@ class FakeRecommendationRepository:
         self.live_states: dict[str, LiveRecommendationMenuState] | None = None
         self.session = _session()
         self.profile = _profile()
+        self.comparison_cache: dict[str, Any] | None = None
+        self.preview_zero_reasons: list[str] = []
+
+    def preview_recommendation(
+        self,
+        session_id: str,
+        criteria: RecommendationCriteriaV2,
+    ) -> Any:
+        del criteria
+        assert session_id == self.session.session_id
+        return SimpleNamespace(
+            eligible_menu_count=len(self.evidence_pool),
+            eligible_merchant_count=len(
+                {item.menu.merchant_id for item in self.evidence_pool}
+            ),
+            zero_reason_codes=list(self.preview_zero_reasons),
+            release_id="knowledge-demo-v1",
+            support_manifest_sha256="a" * 64,
+            ranking_policy_version="yobi-concept-rank-v1",
+            timing_ms=0,
+        )
 
     def get_session(self, session_id: str) -> Session | None:
         return self.session if session_id == self.session.session_id else None
@@ -223,6 +252,32 @@ class FakeRecommendationRepository:
     ) -> RecommendationRequestRecord | None:
         record = self.requests.get(request_id)
         return record if record and record.session_id == session_id else None
+
+    def get_recommendation_comparison(
+        self,
+        session_id: str,
+        recommendation_request_id: str,
+        comparison_request_id: str,
+    ) -> dict[str, Any] | None:
+        del comparison_request_id
+        assert session_id == self.session.session_id
+        assert recommendation_request_id in self.requests
+        return dict(self.comparison_cache) if self.comparison_cache else None
+
+    def save_recommendation_comparison(
+        self,
+        session_id: str,
+        recommendation_request_id: str,
+        comparison_request_id: str,
+        payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        del comparison_request_id
+        assert session_id == self.session.session_id
+        assert recommendation_request_id in self.requests
+        if self.comparison_cache is not None:
+            return dict(self.comparison_cache), True
+        self.comparison_cache = dict(payload)
+        return dict(payload), False
 
     def get_live_recommendation_menu_states(
         self,
@@ -419,12 +474,15 @@ def _service(
     )
 
 
-def _request(request_id: str = "recommendation-request-0001") -> RecommendationRequestInput:
+def _request(
+    request_id: str = "recommendation-request-0001",
+    mode: RecommendationMode = RecommendationMode.INITIAL,
+) -> RecommendationRequestInput:
     return RecommendationRequestInput(
         request_id=request_id,
         expected_state_version=1,
         criteria_version=1,
-        mode="INITIAL",
+        mode=mode,
     )
 
 
@@ -446,6 +504,98 @@ def test_criteria_commit_does_not_dispatch_generation() -> None:
     assert provider.calls == []
 
 
+def test_unsupported_control_is_visible_in_preview_and_commit_returns_422() -> None:
+    repository = FakeRecommendationRepository(_criteria())
+    repository.preview_zero_reasons = ["SPICE_LEVEL_UNAVAILABLE"]
+    provider = FakeProvider(_recommended_output(["menu-a"]))
+    service = _service(repository, provider)
+    app.dependency_overrides[get_repository] = lambda: repository
+    app.dependency_overrides[get_structured_recommendation_service] = lambda: service
+    client = TestClient(app)
+    try:
+        preview = client.post(
+            "/api/v1/sessions/session-structured/structured-recommendations/preview",
+            json=_criteria().model_dump(mode="json"),
+        )
+        committed = client.put(
+            "/api/v1/sessions/session-structured/recommendation-criteria",
+            json={
+                "criteria": _criteria().model_dump(mode="json"),
+                "catalog_version": "preference-catalog-v1",
+                "expected_state_version": 0,
+                "request_id": "criteria-unsupported-0001",
+            },
+        )
+    finally:
+        client.close()
+        app.dependency_overrides.clear()
+
+    assert preview.status_code == 200
+    assert preview.json()["eligible_menu_count"] == 0
+    assert preview.json()["zero_reason_codes"] == ["SPICE_LEVEL_UNAVAILABLE"]
+    assert committed.status_code == 422
+    assert committed.json()["detail"]["code"] == "SPICE_LEVEL_UNAVAILABLE"
+    assert repository.saved_criteria_count == 0
+
+
+def test_preference_preview_and_commit_emit_privacy_safe_selection_events(
+    monkeypatch: Any,
+) -> None:
+    repository = FakeRecommendationRepository(_criteria())
+    provider = FakeProvider(_recommended_output(["menu-a"]))
+    service = _service(repository, provider)
+    events: list[dict[str, Any]] = []
+
+    def capture_event(_logger: Any, **fields: Any) -> None:
+        events.append(fields)
+
+    monkeypatch.setattr(
+        "app.services.structured_recommendation.log_event",
+        capture_event,
+    )
+    empty = RecommendationCriteriaV2(max_spice_level=5)
+    korean = RecommendationCriteriaV2(cuisine_origins=["KOREAN"], max_spice_level=5)
+    korean_spicy = RecommendationCriteriaV2(
+        cuisine_origins=["KOREAN"],
+        flavors=["SPICY"],
+        max_spice_level=5,
+    )
+    service.preview(_session(), empty)
+    repository.evidence_pool = [_pool_item("menu-a", score=0.90)]
+    service.preview(_session(), korean)
+    service.preview(_session(), empty)
+    service.preview(_session(), korean_spicy)
+    service.preview(_session(), korean)
+    service.commit_criteria(
+        _session(),
+        RecommendationCriteriaCommit(
+            criteria=korean,
+            catalog_version="preference-catalog-v1",
+            expected_state_version=0,
+            request_id="criteria-analytics-0001",
+        ),
+    )
+
+    previews = [event for event in events if event["event"] == "recommendation_preference_preview"]
+    committed = next(
+        event for event in events if event["event"] == "recommendation_preference_committed"
+    )
+    assert [event["action"] for event in previews] == [
+        "no_change",
+        "add",
+        "reset",
+        "add",
+        "remove",
+    ]
+    assert previews[0]["zero_result"] is True
+    assert previews[-1]["selected_category_count"] == 1
+    assert committed["selected_category_count"] == 1
+    assert committed["selection_elapsed_ms"] is not None
+    serialized = json.dumps(events)
+    assert _session().session_id not in serialized
+    assert "session_id_hash" in serialized
+
+
 def test_empty_evidence_pool_returns_no_match_without_generation() -> None:
     repository = FakeRecommendationRepository(_criteria())
     provider = FakeProvider(_recommended_output(["menu-a"]))
@@ -455,12 +605,28 @@ def test_empty_evidence_pool_returns_no_match_without_generation() -> None:
 
     assert result.status == "NO_MATCH"
     assert result.recommendations == []
+    assert result.failure_code is None
     assert repository.completed_statuses == [RecommendationRequestStatus.NO_RESULTS]
     assert repository.pool_limits == (20, 4)
     assert provider.calls == []
 
 
-def test_one_dispatch_preserves_model_order_instead_of_retrieval_order() -> None:
+def test_empty_history_excluding_request_persists_canonical_exhausted_code() -> None:
+    for mode in (RecommendationMode.SIMILAR, RecommendationMode.RETRY):
+        repository = FakeRecommendationRepository(_criteria())
+        provider = FakeProvider(_recommended_output(["menu-a"]))
+        service = _service(repository, provider)
+        request = _request(f"recommendation-{mode.value.lower()}-0001", mode)
+
+        result = service.request_recommendation(_session(), _profile(), request)
+
+        assert result.status == "NO_MATCH"
+        assert result.failure_code == "EXHAUSTED"
+        assert repository.requests[request.request_id].failure_code == "EXHAUSTED"
+        assert provider.calls == []
+
+
+def test_model_reorder_is_rejected_and_fallback_preserves_server_order() -> None:
     repository = FakeRecommendationRepository(_criteria())
     repository.evidence_pool = [
         _pool_item("menu-a", score=0.99),
@@ -472,14 +638,14 @@ def test_one_dispatch_preserves_model_order_instead_of_retrieval_order() -> None
     result = service.request_recommendation(_session(), _profile(), _request())
 
     assert len(provider.calls) == 1
-    assert result.status == "RECOMMENDED"
+    assert result.status == "SEARCH_FALLBACK"
     assert [item.menu.menu_id for item in result.recommendations] == [
-        "menu-b",
         "menu-a",
+        "menu-b",
     ]
     stored = repository.requests["recommendation-request-0001"]
     assert stored.dispatch_count == 1
-    assert stored.status is RecommendationRequestStatus.COMPLETED
+    assert stored.status is RecommendationRequestStatus.SEARCH_FALLBACK
 
 
 def test_same_request_replay_does_not_dispatch_again() -> None:
@@ -568,6 +734,272 @@ def test_invalid_provider_output_falls_back_without_second_dispatch() -> None:
     assert repository.completed_statuses == [RecommendationRequestStatus.SEARCH_FALLBACK]
 
 
+def test_provider_failure_keeps_the_same_frozen_top_three_and_order() -> None:
+    repository = FakeRecommendationRepository(_criteria())
+    repository.evidence_pool = [
+        _pool_item("menu-a", score=0.99),
+        _pool_item("menu-b", score=0.98),
+        _pool_item("menu-c", score=0.97),
+        _pool_item("menu-d", score=0.96),
+    ]
+    provider = FailingProvider(_recommended_output(["menu-a", "menu-b", "menu-c"]))
+    service = _service(repository, provider)
+
+    result = service.request_recommendation(_session(), _profile(), _request())
+
+    assert len(provider.calls) == 1
+    assert result.status == "SEARCH_FALLBACK"
+    assert [item.menu.menu_id for item in result.recommendations] == [
+        "menu-a",
+        "menu-b",
+        "menu-c",
+    ]
+    assert result.failure_code == "PROVIDER_UNAVAILABLE"
+    assert all(
+        item.matched_criteria
+        == [
+            {
+                "category_code": "cuisine_origins",
+                "selected_value_codes": ["KOREAN"],
+                "evidence_ids": [
+                    f"evidence-cuisine-{item.menu.menu_id.rsplit('-', maxsplit=1)[-1]}"
+                ],
+            },
+            {
+                "category_code": "flavors",
+                "selected_value_codes": ["SPICY"],
+                "evidence_ids": [
+                    f"evidence-flavor-{item.menu.menu_id.rsplit('-', maxsplit=1)[-1]}"
+                ],
+            },
+        ]
+        for item in result.recommendations
+    )
+
+
+def test_comparison_is_cached_once_per_snapshot_across_idempotency_keys() -> None:
+    repository = FakeRecommendationRepository(_criteria())
+    repository.evidence_pool = [
+        _pool_item("menu-a", score=0.90),
+        _pool_item("menu-b", score=0.80),
+    ]
+    provider = FakeProvider(_recommended_output(["menu-a", "menu-b"]))
+    service = _service(repository, provider)
+    batch = service.request_recommendation(_session(), _profile(), _request())
+    assert batch.snapshot_id is not None
+    provider.output = {
+        "summary": "A grounded comparison.",
+        "items": [
+            {
+                "menu_id": menu_id,
+                "name": "Untrusted model name",
+                "key_difference": "A current menu fact differs.",
+                "taste_texture": "A reviewed general passage is summarized.",
+                "ingredients_form": "Restaurant ingredients are not verified.",
+                "spice_heaviness": "The server spice value is used.",
+                "eating_context": "The server serving range is used.",
+                "best_for": "Choose according to the grounded card.",
+                "unverified_dietary_info": "Untrusted model dietary prose.",
+            }
+            for menu_id in ("menu-a", "menu-b")
+        ],
+    }
+    first = service.compare_recommendations(
+        _session(),
+        _profile(),
+        RecommendationComparisonRequest(
+            snapshot_id=batch.snapshot_id,
+            request_id=_request().request_id,
+            idempotency_key="comparison-key-one",
+        ),
+    )
+    replay = service.compare_recommendations(
+        _session(),
+        _profile(),
+        RecommendationComparisonRequest(
+            snapshot_id=batch.snapshot_id,
+            request_id=_request().request_id,
+            idempotency_key="comparison-key-two",
+        ),
+    )
+
+    assert len(provider.calls) == 2  # one recommendation call and one comparison call
+    assert replay == first
+    assert [item.name for item in first.items] == ["Dish A", "Dish B"]
+    assert all(
+        item.unverified_dietary_info
+        == (
+            "Restaurant ingredients, certification, and cross-contact are unverified "
+            "unless shown in current server facts."
+        )
+        for item in first.items
+    )
+
+
+def test_invalid_comparison_output_falls_back_with_same_ids_names_and_order() -> None:
+    repository = FakeRecommendationRepository(_criteria())
+    repository.evidence_pool = [
+        _pool_item("menu-a", score=0.90),
+        _pool_item("menu-b", score=0.80),
+    ]
+    provider = FakeProvider(_recommended_output(["menu-a", "menu-b"]))
+    service = _service(repository, provider)
+    batch = service.request_recommendation(_session(), _profile(), _request())
+    assert batch.snapshot_id is not None
+    provider.output = {
+        "summary": "The model tried to reorder the frozen batch.",
+        "items": [
+            {
+                "menu_id": menu_id,
+                "name": "Invented name",
+                "key_difference": "Difference",
+                "taste_texture": "Taste",
+                "ingredients_form": "Ingredients",
+                "spice_heaviness": "Spice",
+                "eating_context": "Context",
+                "best_for": "Best for",
+                "unverified_dietary_info": "Unverified",
+            }
+            for menu_id in ("menu-b", "menu-a")
+        ],
+    }
+
+    comparison = service.compare_recommendations(
+        _session(),
+        _profile(),
+        RecommendationComparisonRequest(
+            snapshot_id=batch.snapshot_id,
+            request_id=_request().request_id,
+            idempotency_key="comparison-invalid-0001",
+        ),
+    )
+
+    assert len(provider.calls) == 2
+    assert comparison.generated_by == "DETERMINISTIC_FALLBACK"
+    assert [item.menu_id for item in comparison.items] == ["menu-a", "menu-b"]
+    assert [item.name for item in comparison.items] == ["Dish A", "Dish B"]
+
+
+def test_korean_and_arabic_fallbacks_use_human_localized_copy() -> None:
+    expected = {
+        "한국어": {
+            "selection": "선택한 선호 조건에 가장 가까운 서버 정렬 결과입니다.",
+            "summary": "현재 메뉴 정보와 검토된 일반 음식 자료만으로 비교했습니다. 추천 순서는 그대로입니다.",
+            "warning": (
+                "현재 서버 정보에 명시되지 않은 식당별 재료, 인증, 교차접촉 가능성은 "
+                "확인되지 않았습니다."
+            ),
+        },
+        "العربية": {
+            "selection": "النتيجة المرتبة من الخادم الأقرب إلى تفضيلاتك المحددة.",
+            "summary": (
+                "تمت المقارنة باستخدام بيانات القائمة الحالية ومراجع الطعام العامة التي تمت "
+                "مراجعتها. لم يتغير ترتيب التوصيات."
+            ),
+            "warning": (
+                "لم يتم التحقق من مكونات المطعم أو الشهادة أو التلامس المتبادل ما لم تظهر في "
+                "بيانات الخادم الحالية."
+            ),
+        },
+    }
+    for index, language in enumerate(("한국어", "العربية"), start=1):
+        profile = _profile().model_copy(update={"preferred_language": language})
+        repository = FakeRecommendationRepository(_criteria())
+        repository.evidence_pool = [
+            _pool_item("menu-a", score=0.90),
+            _pool_item("menu-b", score=0.80),
+        ]
+        provider = FailingProvider(_recommended_output(["menu-a", "menu-b"]))
+        service = _service(repository, provider)
+        request = _request(f"recommendation-localized-fallback-{index:04d}")
+
+        batch = service.request_recommendation(_session(), profile, request)
+
+        assert batch.status == "SEARCH_FALLBACK"
+        assert all(
+            item.selection_reason == expected[language]["selection"]
+            for item in batch.recommendations
+        )
+        assert batch.snapshot_id is not None
+        comparison = service.compare_recommendations(
+            _session(),
+            profile,
+            RecommendationComparisonRequest(
+                snapshot_id=batch.snapshot_id,
+                request_id=request.request_id,
+                idempotency_key=f"comparison-localized-fallback-{index:04d}",
+            ),
+        )
+        assert comparison.generated_by == "DETERMINISTIC_FALLBACK"
+        assert comparison.summary == expected[language]["summary"]
+        assert all(
+            item.unverified_dietary_info == expected[language]["warning"]
+            for item in comparison.items
+        )
+        localized_fields = [
+            comparison.summary,
+            *[
+                value
+                for item in comparison.items
+                for value in (
+                    item.key_difference,
+                    item.ingredients_form,
+                    item.spice_heaviness,
+                    item.eating_context,
+                    item.best_for,
+                    item.unverified_dietary_info,
+                )
+            ],
+        ]
+        assert all("=" not in value for value in localized_fields)
+        assert all("unverified" not in value.lower() for value in localized_fields)
+        if language == "한국어":
+            assert [item.name for item in comparison.items] == ["메뉴 A", "메뉴 B"]
+
+        normal_repository = FakeRecommendationRepository(_criteria())
+        normal_repository.evidence_pool = list(repository.evidence_pool)
+        normal_provider = FakeProvider(_recommended_output(["menu-a", "menu-b"]))
+        normal_service = _service(normal_repository, normal_provider)
+        normal_request = _request(f"recommendation-localized-normal-{index:04d}")
+        normal_batch = normal_service.request_recommendation(
+            _session(), profile, normal_request
+        )
+        assert normal_batch.snapshot_id is not None
+        normal_provider.output = {
+            "summary": "Locale-specific provider summary.",
+            "items": [
+                {
+                    "menu_id": menu_id,
+                    "name": "Provider name",
+                    "key_difference": "Provider comparison",
+                    "taste_texture": "Provider comparison",
+                    "ingredients_form": "Provider comparison",
+                    "spice_heaviness": "Provider comparison",
+                    "eating_context": "Provider comparison",
+                    "best_for": "Provider comparison",
+                    "unverified_dietary_info": "Provider warning",
+                }
+                for menu_id in ("menu-a", "menu-b")
+            ],
+        }
+        normal_comparison = normal_service.compare_recommendations(
+            _session(),
+            profile,
+            RecommendationComparisonRequest(
+                snapshot_id=normal_batch.snapshot_id,
+                request_id=normal_request.request_id,
+                idempotency_key=f"comparison-localized-normal-{index:04d}",
+            ),
+        )
+        assert normal_comparison.generated_by == "LLM"
+        assert all(
+            item.unverified_dietary_info == expected[language]["warning"]
+            for item in normal_comparison.items
+        )
+        if language == "한국어":
+            assert [item.name for item in normal_comparison.items] == ["메뉴 A", "메뉴 B"]
+
+
 def test_generation_soft_profile_context_excludes_sensitive_legacy_fields() -> None:
     repository = FakeRecommendationRepository(_criteria())
     repository.evidence_pool = [_pool_item("menu-a", score=0.90)]
@@ -580,14 +1012,14 @@ def test_generation_soft_profile_context_excludes_sensitive_legacy_fields() -> N
     generation_input = json.loads(provider.calls[0]["input"][0]["content"])
     assert generation_input["soft_profile_context"] == {
         "preferred_language": "English",
-        "nationality": "United States",
-        "age_band": "25-34",
-        "favorite_foods": ["bibimbap"],
     }
     serialized_context = json.dumps(generation_input["soft_profile_context"])
     assert "dietary_rules" not in serialized_context
     assert "religion" not in serialized_context
     assert "allergy" not in serialized_context
+    assert "nationality" not in serialized_context
+    assert "age_band" not in serialized_context
+    assert "favorite_foods" not in serialized_context
     assert len(generation_input["evidence_pool"][0]["wiki_passages"]) <= 4
     criterion_payload = generation_input["evidence_pool"][0]["criterion_evidence"]
     assert all(

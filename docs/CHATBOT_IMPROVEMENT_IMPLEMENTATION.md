@@ -5,11 +5,11 @@
 > release evidence. It is not the current product contract. See
 > [`STRUCTURED_RECOMMENDATION_IMPLEMENTATION_PLAN.md`](STRUCTURED_RECOMMENDATION_IMPLEMENTATION_PLAN.md)
 > and [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md). The current UI uses
-> structured selection, objective eligibility, a broad lexical+embedding evidence
-> pool, one generation dispatch that both selects and explains final menus, and
-> button-only follow-up. Public allergy filtering and the three-level spice scale are
-> removed from that path. Historical Oracle/OCI/Public results below do not prove the
-> 2026-08-12 revision.
+> structured selection, concept-support-first eligibility, a server-frozen top three,
+> one explanation-only generation dispatch, and button-only follow-up. The LLM cannot
+> add, remove, or reorder menus. Public allergy filtering and the three-level spice
+> scale are removed from that path. Historical Oracle/OCI/Public results below do not
+> prove the current revision.
 >
 > **Reading rule:** every occurrence of “current”, “현재”, “연결됨”, or “PASS” below
 > refers to the dated 2026-08-09/11 checkpoint named in that section, not to the

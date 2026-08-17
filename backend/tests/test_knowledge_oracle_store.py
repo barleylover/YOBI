@@ -53,6 +53,21 @@ def test_oracle_loader_does_not_commit_and_activates_only_after_validation() -> 
     assert ready_index < active_index
 
 
+def test_oracle_loader_can_stage_ready_release_without_runtime_activation() -> None:
+    compiled = _empty_release()
+    connection = MagicMock()
+    cursor = connection.cursor.return_value
+    cursor.fetchone.side_effect = [None, *((0,) for _ in range(7))]
+
+    load_oracle_release(connection, compiled, activate=False)
+
+    sql = _sql_calls(cursor)
+    connection.commit.assert_not_called()
+    connection.rollback.assert_not_called()
+    assert any("SET status='READY'" in statement for statement in sql)
+    assert not any("MERGE INTO knowledge_runtime_state" in statement for statement in sql)
+
+
 def test_oracle_loader_rejects_manifest_collision_without_touching_active_release() -> None:
     compiled = _empty_release()
     connection = MagicMock()

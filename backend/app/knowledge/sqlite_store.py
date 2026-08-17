@@ -35,11 +35,18 @@ def _insert_rows(connection: sqlite3.Connection, table: str, rows: list[dict[str
     )
 
 
-def load_sqlite_release(connection: sqlite3.Connection, compiled: CompiledKnowledgeRelease) -> None:
-    """Load one immutable release and activate it after validation.
+def load_sqlite_release(
+    connection: sqlite3.Connection,
+    compiled: CompiledKnowledgeRelease,
+    *,
+    activate: bool = True,
+) -> None:
+    """Load one immutable release and optionally activate it after validation.
 
     The same source-derived ID may be reused idempotently only when its manifest is identical.
     This preserves local SQLite compatibility without replacing release-scoped rows in place.
+    Staged release builders pass ``activate=False`` and update runtime pointers only after an
+    independent release-scoped verification.
     """
 
     now = _now()
@@ -58,16 +65,17 @@ def load_sqlite_release(connection: sqlite3.Connection, compiled: CompiledKnowle
             if status != "READY":
                 raise RuntimeError("KNOWLEDGE_RELEASE_INCOMPLETE")
             _validate_sqlite_release(connection, compiled)
-            connection.execute(
-                """
-                INSERT INTO knowledge_runtime_state(state_key,active_release_id,updated_at)
-                VALUES ('ACTIVE',?,?)
-                ON CONFLICT(state_key) DO UPDATE SET
-                  active_release_id=excluded.active_release_id,
-                  updated_at=excluded.updated_at
-                """,
-                (compiled.release_id, now),
-            )
+            if activate:
+                connection.execute(
+                    """
+                    INSERT INTO knowledge_runtime_state(state_key,active_release_id,updated_at)
+                    VALUES ('ACTIVE',?,?)
+                    ON CONFLICT(state_key) DO UPDATE SET
+                      active_release_id=excluded.active_release_id,
+                      updated_at=excluded.updated_at
+                    """,
+                    (compiled.release_id, now),
+                )
             return
 
         connection.execute(
@@ -106,16 +114,17 @@ def load_sqlite_release(connection: sqlite3.Connection, compiled: CompiledKnowle
             """,
             (json.dumps(actual, sort_keys=True), now, compiled.release_id),
         )
-        connection.execute(
-            """
-            INSERT INTO knowledge_runtime_state(state_key,active_release_id,updated_at)
-            VALUES ('ACTIVE',?,?)
-            ON CONFLICT(state_key) DO UPDATE SET
-              active_release_id=excluded.active_release_id,
-              updated_at=excluded.updated_at
-            """,
-            (compiled.release_id, now),
-        )
+        if activate:
+            connection.execute(
+                """
+                INSERT INTO knowledge_runtime_state(state_key,active_release_id,updated_at)
+                VALUES ('ACTIVE',?,?)
+                ON CONFLICT(state_key) DO UPDATE SET
+                  active_release_id=excluded.active_release_id,
+                  updated_at=excluded.updated_at
+                """,
+                (compiled.release_id, now),
+            )
 
 
 def _validate_sqlite_release(

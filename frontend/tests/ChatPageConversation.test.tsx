@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ChatPage } from "../src/routes/ChatPage";
@@ -90,16 +90,27 @@ const catalog: PreferenceCatalog = {
   categories: [
     {
       code: "cuisine_origins",
+      group: "core",
       label: "Cuisine",
-      options: [{ code: "KOREAN", label: "Korean" }, { code: "CHINESE", label: "Chinese" }],
+      options: [
+        { code: "KOREAN", label: "Korean" },
+        { code: "CHINESE", label: "Chinese" },
+        { code: "JAPANESE", label: "Japanese" },
+        { code: "ITALIAN", label: "Italian" },
+        { code: "AMERICAN", label: "American & grill" },
+        { code: "SOUTHEAST_ASIAN", label: "Southeast Asian" },
+        { code: "MEXICAN", label: "Mexican" },
+      ],
     },
     {
       code: "flavors",
+      group: "additional",
       label: "Flavor",
       options: [{ code: "SWEET", label: "Sweet" }, { code: "SALTY", label: "Salty" }],
     },
     {
       code: "main_ingredients",
+      group: "core",
       label: "Main ingredient",
       options: [{ code: "PORK", label: "Pork" }, { code: "VEGETABLE", label: "Vegetables" }],
     },
@@ -142,6 +153,16 @@ const batch: RecommendationBatchV2 = {
   unmatched_category_codes: [],
 };
 
+const preview = {
+  eligible_menu_count: 8,
+  eligible_merchant_count: 4,
+  zero_reason_codes: [],
+  release_id: "release-v2-test",
+  support_manifest_sha256: "support-v2-test",
+  ranking_policy_version: "ranking-v2-test",
+  timing_ms: 4,
+};
+
 function conversation(overrides: Partial<ConversationView> = {}): ConversationView {
   return {
     session_id: session.session_id,
@@ -170,6 +191,7 @@ describe("ChatPage structured recommendation contract", () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
     sessionStorage.clear();
     useSessionStore.getState().clear();
@@ -189,6 +211,7 @@ describe("ChatPage structured recommendation contract", () => {
       pendingRecommendation: null,
       latestRecommendation: null,
     });
+    vi.spyOn(api, "previewRecommendation").mockResolvedValue(preview);
   }
 
   it("uses chips instead of free text and submits the catalog-bound v2 criteria before recommending", async () => {
@@ -206,9 +229,16 @@ describe("ChatPage structured recommendation contract", () => {
     renderPage();
 
     expect(await screen.findByRole("heading", { name: "What sounds good?" })).toBeInTheDocument();
+    expect(screen.getByTestId("assistant-preference-prompt")).toHaveTextContent("What sounds good?");
+    for (const cuisine of ["Japanese", "Italian", "American & grill", "Southeast Asian", "Mexican"]) {
+      expect(screen.getByRole("button", { name: cuisine })).toBeInTheDocument();
+    }
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Korean" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Korean" })).toHaveAttribute("aria-pressed", "true"));
+    expect(screen.getAllByText("8 menus from 4 restaurants currently fit")).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Sweet" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Sweet" })).toHaveAttribute("aria-pressed", "true"));
     fireEvent.click(screen.getByRole("button", { name: /Show my recommendations/ }));
 
     await waitFor(() => expect(putCriteria).toHaveBeenCalledWith(
@@ -221,9 +251,12 @@ describe("ChatPage structured recommendation contract", () => {
     await waitFor(() => expect(createRecommendation).toHaveBeenCalledWith(
       session.session_id,
       expect.objectContaining({ criteria_version: 1, expected_state_version: 1, mode: "INITIAL" }),
+      expect.any(AbortSignal),
     ));
     expect(await screen.findByText("An easy Korean meal")).toBeInTheDocument();
-  });
+    expect(screen.getByTestId("user-preference-message")).toHaveTextContent("Korean");
+    expect(screen.getByTestId("user-preference-message")).toHaveTextContent("Sweet");
+  }, 10_000);
 
   it("blocks an explicit vegan or halal ingredient conflict before any API mutation", async () => {
     prepareStore();
@@ -234,9 +267,10 @@ describe("ChatPage structured recommendation contract", () => {
     renderPage();
     await screen.findByRole("heading", { name: "What sounds good?" });
     fireEvent.click(screen.getByRole("button", { name: "Pork" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Pork" })).toHaveAttribute("aria-pressed", "true"));
     fireEvent.click(screen.getByRole("checkbox", { name: /Only show halal-certified restaurants/ }));
 
-    expect(screen.getByRole("alert")).toHaveTextContent("conflicts with the halal or vegan filter");
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("conflicts with the halal or vegan filter"));
     expect(screen.getByRole("button", { name: /Show my recommendations/ })).toBeDisabled();
     expect(putCriteria).not.toHaveBeenCalled();
   });
@@ -288,6 +322,35 @@ describe("ChatPage structured recommendation contract", () => {
     await waitFor(() => expect(useSessionStore.getState().draftCriteria.cuisine_origins).toEqual([]));
   });
 
+  it("neutralizes unavailable capability controls so they never become hidden filters", async () => {
+    prepareStore();
+    useSessionStore.getState().setDraftCriteria({
+      ...emptyCriteria(profile),
+      dietary_filters: { halal_certified_only: true, vegan: true },
+      max_spice_level: 2,
+    });
+    vi.spyOn(api, "getPreferenceCatalog").mockResolvedValue({
+      catalog: {
+        ...catalog,
+        capabilities: {
+          halal_certified_only: { enabled: false, reason: "No certification coverage" },
+          vegan: { enabled: false, reason: "No ingredient coverage" },
+          max_spice_level: { enabled: false, reason: "No spice coverage" },
+        },
+      },
+      etag: '"catalog-v2-test"',
+      notModified: false,
+    });
+    vi.spyOn(api, "getConversation").mockResolvedValue(conversation());
+
+    renderPage();
+    await screen.findByRole("heading", { name: "What sounds good?" });
+    await waitFor(() => expect(useSessionStore.getState().draftCriteria).toMatchObject({
+      dietary_filters: { halal_certified_only: false, vegan: false },
+      max_spice_level: 5,
+    }));
+  });
+
   it("restores a v2 result and selects a menu only through the existing event contract", async () => {
     prepareStore();
     vi.spyOn(api, "getPreferenceCatalog").mockResolvedValue({ catalog, etag: '"catalog-v2-test"', notModified: false });
@@ -312,6 +375,10 @@ describe("ChatPage structured recommendation contract", () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Choose this menu" }));
 
+    expect(document.querySelector(".rank-bar")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Compare/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Edit choices/ })).toBeInTheDocument();
+
     await waitFor(() => expect(postEvent).toHaveBeenCalledWith(
       session.session_id,
       expect.objectContaining({
@@ -322,6 +389,7 @@ describe("ChatPage structured recommendation contract", () => {
       }),
     ));
     await waitFor(() => expect(screen.getByTestId("order-flow")).toBeInTheDocument());
+    expect(screen.getByTestId("selected-menu-message")).toHaveTextContent("Wiki gimbap");
   });
 
   it("does not revive a stale v2 selection from the legacy snapshot", async () => {

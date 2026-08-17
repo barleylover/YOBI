@@ -129,6 +129,31 @@ describe("versioned mutation API", () => {
     );
   });
 
+  it("previews the exact criteria through the server-owned structured endpoint", async () => {
+    const criteria = { ...emptyCriteria(), cuisine_origins: ["KOREAN"] };
+    const preview = {
+      eligible_menu_count: 8,
+      eligible_merchant_count: 4,
+      zero_reason_codes: [],
+      release_id: "release-v2",
+      support_manifest_sha256: "support-v2",
+      ranking_policy_version: "ranking-v2",
+      timing_ms: 3,
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValue(preview),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.previewRecommendation("session_1", criteria, "catalog-v2")).resolves.toEqual(preview);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/sessions/session_1/structured-recommendations/preview",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(criteria) }),
+    );
+  });
+
   it("polls a recommendation request with GET instead of redispatching it", async () => {
     const response = { request_id: "recommendation-1", status: "PENDING" };
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: vi.fn().mockResolvedValue(response) });

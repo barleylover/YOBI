@@ -115,6 +115,8 @@ export type PreferenceCategoryCode =
   | "textures"
   | "cooking_methods";
 
+export type PreferenceCategoryGroup = "core" | "additional" | "exact";
+
 export interface PreferenceCatalogOption {
   code: string;
   label: string;
@@ -123,6 +125,7 @@ export interface PreferenceCatalogOption {
 
 export interface PreferenceCatalogCategory {
   code: PreferenceCategoryCode;
+  group: PreferenceCategoryGroup;
   label: string;
   description?: string | null;
   options: PreferenceCatalogOption[];
@@ -148,6 +151,22 @@ export interface PreferenceCatalog {
   locale: string;
   categories: PreferenceCatalogCategory[];
   spice_references: SpiceReferenceGroup[];
+  capabilities?: {
+    halal_certified_only?: { enabled: boolean; reason?: string | null };
+    vegan?: { enabled: boolean; reason?: string | null };
+    max_spice_level?: { enabled: boolean; reason?: string | null };
+  };
+}
+
+export interface RecommendationPreviewV2 {
+  eligible_menu_count: number;
+  eligible_merchant_count: number;
+  zero_reason_codes: string[];
+  release_id: string;
+  support_manifest_sha256: string;
+  ranking_policy_version: string;
+  timing_ms: number;
+  unsupported_controls?: string[];
 }
 
 export type RecommendationMode = "INITIAL" | "SIMILAR" | "RETRY";
@@ -207,6 +226,26 @@ export interface RecommendationBatchV2 {
   failure_code?: string | null;
 }
 
+export interface RecommendationComparisonItemV2 {
+  menu_id: string;
+  name: string;
+  key_difference: string;
+  taste_texture: string;
+  ingredients_form: string;
+  spice_heaviness: string;
+  eating_context: string;
+  best_for: string;
+  unverified_dietary_info: string;
+}
+
+export interface RecommendationComparisonV2 {
+  snapshot_id: string;
+  request_id: string;
+  summary: string;
+  items: RecommendationComparisonItemV2[];
+  generated_by: "LLM" | "DETERMINISTIC_FALLBACK";
+}
+
 export interface CriteriaCommitResult {
   session_id: string;
   criteria?: RecommendationCriteriaV2;
@@ -249,9 +288,9 @@ export interface MenuSummary {
   delivery_fee: number;
   eta_min: number;
   eta_max: number;
-  spice_level: number;
-  serves_min: number;
-  serves_max: number;
+  spice_level: number | null;
+  serves_min: number | null;
+  serves_max: number | null;
   dietary_summary: string;
   evidence_status: EvidenceStatus;
   match_reasons: string[];
@@ -261,6 +300,34 @@ export interface MenuSummary {
   grounded_passage_ids: string[];
   is_synthetic: boolean;
   semantic_score?: number;
+  image_url?: string | null;
+}
+
+export type FoodRankingSort = "review_count" | "order_count" | "korean_popularity";
+
+export interface FoodRankingEntry {
+  position: number;
+  metric_label: string;
+  metric_value: number;
+  menu: MenuSummary;
+}
+
+export interface FoodRankingCollection {
+  snapshot_id: string;
+  demo_basis: string;
+  sort: FoodRankingSort;
+  items: FoodRankingEntry[];
+}
+
+export interface FeaturedMenuEntry {
+  dish_name: string;
+  description: string;
+  menu: MenuSummary;
+}
+
+export interface FeaturedMenuCollection {
+  snapshot_id: string;
+  items: FeaturedMenuEntry[];
 }
 
 export interface CategoryRecommendation {

@@ -6,26 +6,58 @@ import type {
   ConversationEventResult,
   ConversationView,
   CriteriaCommitResult,
+  FeaturedMenuCollection,
+  FoodRankingCollection,
+  FoodRankingSort,
   OptionGroup,
   Profile,
   PreferenceCatalog,
+  RecommendationComparisonV2,
   RecommendationCriteriaV2,
   RecommendationBatchV2,
+  RecommendationPreviewV2,
   RecommendationRequestV2,
   Session,
 } from "../types";
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
-  });
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({ detail: { code: "REQUEST_FAILED" } }));
-    throw new Error(payload.detail?.code ?? `HTTP_${response.status}`);
+interface RequestOptions {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+
+async function request<T>(path: string, init?: RequestInit, options: RequestOptions = {}): Promise<T> {
+  const controller = new AbortController();
+  const timeoutMs = options.timeoutMs ?? 15_000;
+  let timedOut = false;
+  const relayAbort = () => controller.abort(options.signal?.reason);
+  if (options.signal?.aborted) relayAbort();
+  else options.signal?.addEventListener("abort", relayAbort, { once: true });
+  const timeout = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    const response = await fetch(path, {
+      ...init,
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json", ...init?.headers },
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({ detail: { code: "REQUEST_FAILED" } }));
+      throw new Error(payload.detail?.code ?? `HTTP_${response.status}`);
+    }
+    if (response.status === 204) return undefined as T;
+    return response.json() as Promise<T>;
+  } catch (cause) {
+    if (controller.signal.aborted || (cause instanceof DOMException && cause.name === "AbortError")) {
+      throw new Error(timedOut ? "REQUEST_TIMEOUT" : "REQUEST_ABORTED");
+    }
+    throw cause;
+  } finally {
+    window.clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", relayAbort);
   }
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
 }
 
 function clientRequestId(prefix: string) {
@@ -78,6 +110,10 @@ const ACTIONABLE_ERRORS: Record<string, string> = {
   RECOMMENDATION_CRITERIA_INVALID: "Review the selected food preferences and try again.",
   RECOMMENDATION_IN_PROGRESS: "YOBI is still preparing this recommendation.",
   RECOMMENDATION_FAILED: "YOBI could not finish this recommendation. Your selections are still saved.",
+  REQUEST_TIMEOUT: "This is taking longer than expected. YOBI will check the same request instead of starting another one.",
+  REQUEST_ABORTED: "The request was stopped safely. Your saved choices did not change.",
+  RECOMMENDATION_PREVIEW_UNAVAILABLE: "The live combination preview is temporarily unavailable.",
+  RECOMMENDATION_COMPARISON_FAILED: "YOBI could not compare these menus. The recommendation itself has not changed.",
 };
 
 export function actionableError(cause: unknown, fallback: string) {
@@ -134,14 +170,45 @@ export const api = {
       request_id: requestId,
     }),
   }),
-  createRecommendation: (sessionId: string, input: RecommendationRequestV2) =>
+  previewRecommendation: (
+    sessionId: string,
+    criteria: RecommendationCriteriaV2,
+    _catalogVersion: string,
+    signal?: AbortSignal,
+  ) => request<RecommendationPreviewV2>(`/api/v1/sessions/${sessionId}/structured-recommendations/preview`, {
+    method: "POST",
+    body: JSON.stringify(criteria),
+  }, { timeoutMs: 3_000, signal }),
+  createRecommendation: (sessionId: string, input: RecommendationRequestV2, signal?: AbortSignal) =>
     request<RecommendationBatchV2>(`/api/v1/sessions/${sessionId}/recommendations`, {
       method: "POST",
       body: JSON.stringify(input),
-    }),
-  getRecommendationRequest: (sessionId: string, requestId: string) =>
+    }, { timeoutMs: 15_000, signal }),
+  getRecommendationRequest: (sessionId: string, requestId: string, signal?: AbortSignal) =>
     request<RecommendationBatchV2>(
       `/api/v1/sessions/${sessionId}/recommendation-requests/${encodeURIComponent(requestId)}`,
+      undefined,
+      { timeoutMs: 8_000, signal },
+    ),
+  compareRecommendations: (
+    sessionId: string,
+    input: { snapshot_id: string; request_id: string; idempotency_key: string },
+    signal?: AbortSignal,
+  ) => request<RecommendationComparisonV2>(`/api/v1/sessions/${sessionId}/recommendation-comparisons`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  }, { timeoutMs: 15_000, signal }),
+  getFoodRankings: (sessionId: string, sort: FoodRankingSort, signal?: AbortSignal) =>
+    request<FoodRankingCollection>(
+      `/api/v1/sessions/${sessionId}/food-rankings?sort=${encodeURIComponent(sort)}&limit=20`,
+      undefined,
+      { timeoutMs: 8_000, signal },
+    ),
+  getKpopDemonHuntersFeature: (sessionId: string, signal?: AbortSignal) =>
+    request<FeaturedMenuCollection>(
+      `/api/v1/sessions/${sessionId}/featured/kpop-demon-hunters`,
+      undefined,
+      { timeoutMs: 8_000, signal },
     ),
   getConversation: (sessionId: string) =>
     request<ConversationView>(`/api/v1/sessions/${sessionId}/conversation`),
@@ -155,7 +222,11 @@ export const api = {
     request<import("../types").MenuSummary[]>(
       `/api/v1/sessions/${sessionId}/merchants/${merchantId}/menus?exclude=${encodeURIComponent(excludedMenuIds.join(","))}`,
     ),
-  getCart: (sessionId: string) => request<CartPreview>(`/api/v1/sessions/${sessionId}/cart`),
+  getCart: (sessionId: string, signal?: AbortSignal) => request<CartPreview>(
+    `/api/v1/sessions/${sessionId}/cart`,
+    undefined,
+    { timeoutMs: 8_000, signal },
+  ),
   addCartItem: (
     sessionId: string,
     menuId: string,

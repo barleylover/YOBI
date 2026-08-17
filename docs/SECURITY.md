@@ -1,13 +1,23 @@
 # Security and truth boundaries
 
 - No real Yogiyo API, restaurant, courier, card processor, or hotel service is called.
-- All restaurants, menus, reviews, hotels, payments, and orders are synthetic.
+- Merchant, menu, price, option, and available source-count fields may come from an
+  immutable `YOGIYO_PUBLIC_WEB` import. This is a public-web snapshot, not a live API,
+  order channel, restaurant recipe, or safety authority. General Wiki documents,
+  menu-name mappings, ranking proxies, address fixtures, payments, and orders remain
+  explicitly synthetic/derived/mock.
 - The public structured flow does not accept allergy criteria or make allergy-safety
   claims. Retained legacy `UNKNOWN` data is never positive evidence.
 - Nationality is never converted into religious or dietary assumptions.
+- Halal, vegan, and five-level spice controls fail unavailable when the active release
+  lacks minimum reviewed coverage. Unknown source fields are never promoted to formal
+  certification, vegan safety, or verified spice values.
 - The browser cannot submit authoritative prices or option deltas; the server rebuilds
   totals from current database rows.
 - Checkout idempotency prevents duplicate mock orders and reuse across carts.
+- The public browser stops at a local Yogiyo-handoff mock; it does not navigate to
+  Yogiyo, call an external URL/API, create a checkout, or show payment/order success.
+  Mock checkout/order APIs are backend-only integrity and regression surfaces.
 - Raw booking images are validated in memory and discarded after address candidates.
 - Production demo controls require a separate token.
 
@@ -44,20 +54,23 @@ roots and current/target trees are real-path checked, owned `root:yobi`, and str
 of group/world write permission, so the unprivileged service can read but cannot
 rewrite executable code or rollback metadata.
 
-Knowledge-pointer changes use the `YOBI_APP` account, bound SQL, `READY` validation,
-an expected-current guard, commit, and readback. Deploy/rollback failure restores the
-previous pointer before restarting the previous application, including an explicit
-no-active state. A new-contract target without trusted release state fails closed.
-This describes the existing knowledge pointer only. The structured-v2 recommendation-
-family pointer and independent catalog/certification manifests are not yet captured by
-that release-state contract; atomic activation and rollback for them remain a Phase 8
-deployment gate.
+Knowledge and recommendation-family pointer changes use the `YOBI_APP` account, bound
+SQL, `READY` validation, an expected-current guard, commit, and readback. External data
+is staged and query-plan/manifest checked before both pointers are activated. Release
+state records current/previous knowledge and recommendation-family identities;
+deploy/rollback failure restores both before restarting the previous application,
+including an explicit no-active state. A new-contract target without trusted release
+state fails closed. Independent catalog/certification foreign-key manifests remain
+schema limitations, so source-integrity and active-family digest checks are still
+required; successful source code alone is not activation evidence.
 Historical v1 targets without that contract may skip pointer switching solely for
 current additive-schema compatibility; future incompatible global configuration or
 base-catalog changes require a separate snapshot/restore contract.
 
-The permitted public surface is Nginx TCP 80 only. Uvicorn binds loopback. Deployment
-scripts do not change SSH rules. Even a temporary current-source `/32` TCP 22 rule is
-a separate approval item and, if approved, must be removed by exact rule identity with
-the final SSH-rule count verified as zero. The deployment adds no load balancer, VM,
-ECPU, dedicated cluster, or other paid infrastructure.
+The permitted public surface is Nginx TCP 80 only. Uvicorn binds loopback. The guarded
+deployment wrapper requires a zero-rule TCP 22 baseline, adds one current-source `/32`
+SSH rule for the approved deployment command, and removes that exact rule from its
+`EXIT` trap. It then independently verifies TCP 22 returned to zero and the TCP 80
+rule count is unchanged. Running deployment/rollback outside that wrapper is not the
+documented path. The deployment adds no load balancer, VM, ECPU, dedicated cluster, or
+other paid infrastructure.

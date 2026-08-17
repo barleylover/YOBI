@@ -2,31 +2,70 @@
 
 요기요 해커톤 팀 프로젝트입니다.
 
-YOBI is an evidence-grounded AI food concierge and mock ordering agent for foreign tourists in Korea. The primary demo is a mobile web flow from onboarding to menu discovery, dietary evidence, merchant comparison, options, hotel address confirmation, mock payment, and mock order completion.
+YOBI is an evidence-grounded food concierge for foreign tourists in Korea. The
+primary mobile-web flow combines the welcome and locale choice, confirms a supported
+demo delivery address, guides users through button-based preferences, presents
+server-ranked menus in a chat-style one-card carousel, then continues through options,
+cart review, and an explicit Yogiyo-handoff mock. The browser does not expose mock
+payment or synthetic-order completion.
 
-All catalog, review, hotel, payment, and order data in this repository is synthetic demo data. YOBI does not call a real Yogiyo API and never processes a real payment.
+The deployed menu/merchant catalog is a versioned import of public Yogiyo web
+catalog fields; it is not a live Yogiyo API integration. Reviews, the demo hotel,
+payments, and orders remain synthetic/mock, and YOBI never processes a real payment.
+The current browser flow ends at an explicit Yogiyo handoff mock; it does not call a
+Yogiyo URL/API or show an internal payment-success/order-complete screen. Synthetic
+checkout and order APIs remain backend-only release integrity checks.
 
 ## Current status
 
 The repository contains the original mobile ordering MVP plus a structured
-recommendation runtime. Users choose meal preferences before recommendation; the
-server applies objective eligibility and builds a broad hybrid Wiki evidence pool,
-then one bounded generation request is instructed to select and explain menus from
-that pool. The server enforces final menu/evidence-reference membership; semantic
-faithfulness of generated prose remains a model-quality evaluation boundary.
+recommendation runtime. Users choose meal preferences before recommendation. In the
+2026-08-16 worktree contract the server applies objective eligibility, reviewed
+concept support, deterministic scoring and diversity, then freezes the final menu
+order. One bounded generation request may explain only those frozen menus; it cannot
+select, replace, or reorder them. Semantic faithfulness of generated prose remains a
+model-quality evaluation boundary.
 The Wiki keeps objective facts structured while using prose passages for subjective
 food descriptions. Reviews remain display-only synthetic data with recommendation
 and safety weight `0`.
 
-The structured flow has no free-text recommendation composer. Its only dietary
-controls are halal certification and vegan guidance: halal is an active,
-scope-verified certification filter; vegan recommendations may carry a check-before-
-ordering warning. Allergy input is not part of the new public recommendation path.
-All catalog, certification, and merchant data remains synthetic demo data.
+The structured flow has no free-text recommendation composer or demographic profile
+questions. Halal certification, vegan guidance, and the five-level spice ceiling are
+catalog-published capabilities, not unconditional promises: a control is disabled with
+a visible reason when the active release lacks enough reviewed menu-level coverage.
+Allergy input is not part of the public recommendation path. Formal certification,
+reviewed menu-level ingredient, and reviewed menu-level spice data are unavailable in
+the current external source, so those controls are unavailable rather than inferred.
+General food Wiki material and derived menu-name-to-concept mappings are explicitly
+labelled reviewed synthetic support, never merchant recipe facts.
 
-The structured revision is live as OCI release
-`20260812T141008Z-8418f92b7e37`; Git source alone is still not evidence for a future
-release.
+After address confirmation, a common navigation control also exposes a clearly
+labelled demo ranking view and a K-POP Demon Hunters food feature. Rankings use source
+menu/merchant review counts for the external catalog and deterministic ID-derived
+values only for synthetic fixture menus with no source counts; they are never described
+as live Yogiyo-wide statistics. The feature maps five
+general food concepts to currently available menus and does not treat general Wiki
+prose as a restaurant recipe.
+
+The 2026-08-17 final application `20260816T201131Z-29fbc2f9fd32` is publicly active
+and healthy. It serves the Oracle external catalog (200 merchants, 15,085 menus),
+migration `012`, 198 reviewed general-food Wiki concepts/documents, 1,551 chunks,
+3,922 high-confidence menu mappings, and 1,499 reviewed preference-support rows.
+Compared with the previous family, 1,967 additional menus are now mapped. The public
+selector exposes Korean, Chinese, Southeast Asian, Mexican, Japanese, Italian, and
+American & grill cuisine choices.
+
+The operator-approved expanded-cuisine validation made exactly five provider calls:
+Japanese, American, Southeast Asian, and Mexican returned normal grounded results;
+Italian returned the same server-frozen three menus through the safety fallback after
+its generated response failed the strict contract. Review found that the fallback had
+dropped already available selected-cuisine evidence. That deterministic serialization
+was fixed and verified on expanded SQLite and live Oracle without another provider
+call. The final deploy itself made zero provider calls and passed query-plan, source,
+fallback, evidence-binding, public API/browser, and network-cleanup gates. Five samples
+do not support a percentile claim. See the
+[expansion evidence](docs/evidence/KNOWLEDGE_EXPANSION_20260817.md) for the exact
+quality boundary. Git source alone is never deployment evidence.
 The [structured-recommendation plan](docs/STRUCTURED_RECOMMENDATION_IMPLEMENTATION_PLAN.md)
 is the current product and implementation authority,
 [implementation status](docs/IMPLEMENTATION_STATUS.md) summarizes what is connected,
@@ -57,9 +96,10 @@ port without stopping the existing process and prints the actual URLs.
 
 The local launcher explicitly uses a deterministic SQLite demo database, fixture
 address extraction, deterministic embeddings, and no OCI credentials. The structured
-flow therefore exercises its labelled saved-search fallback locally. The normal
-model-selected result path was separately verified against the deployed OCI provider;
-local startup does not reproduce that external call. See the
+flow therefore exercises its labelled deterministic server-ranked fallback locally. The normal
+provider-authored explanation path is a separate OCI gate; local startup does not
+reproduce that external call, but final menu IDs/order remain server-owned in both
+paths. See the
 [demo runbook](docs/DEMO_RUNBOOK.md) for the exact new-UI walkthrough and
 focused regression checklist.
 
@@ -73,6 +113,31 @@ make prewarm
 make smoke
 make e2e
 ```
+
+The recommendation performance harness has two honest modes. A reduced run is useful
+for functional iteration and intentionally makes no P95/P90 claim; the release gate
+uses the documented warm 100 **per positive repository scenario**, process-cold 20,
+full provider-path 30, and three-way concurrency samples. It reports each scenario
+separately as well as the aggregate:
+
+```bash
+.venv/bin/python scripts/recommendation_performance_smoke.py \
+  --repository-only --warm-samples 3 --cold-samples 2
+
+.venv/bin/python scripts/recommendation_performance_smoke.py \
+  --base-url http://127.0.0.1 --release-gate
+```
+
+The external deployment's `structured` release gate first runs
+`scripts/structured_recommendation_smoke.py`: it discovers an active supported
+preference and recommendation, dynamically selects that menu and its required
+available options, and verifies cart→fixed demo address→mock checkout→synthetic order
+plus cascade cleanup without a hard-coded demo menu ID. It then runs
+`scripts/structured_fallback_smoke.py` against the Oracle runtime with an isolated
+process-local forced timeout, proving the same frozen menu order, deterministic
+fallback explanation, one dispatch, and cleanup without changing the public failure
+mode. These backend checks do not change the Yogiyo-handoff UI boundary or imply a
+real payment/order.
 
 `make test`, `make build`, and the current Playwright suite cover the working-tree
 source contracts. `make evaluate`, `make prewarm`, and `make smoke` still exercise

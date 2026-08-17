@@ -1,10 +1,13 @@
 # YOBI test and deployment evidence ledger
 
+- Final deployment: 2026-08-17 KST — application
+  `20260816T201131Z-29fbc2f9fd32` active with reviewed expansion-five marker
 - Structured-recommendation deployment verification: 2026-08-12 KST
 - Historical public baseline verification: 2026-08-08 KST
 - Chatbot-improvement worktree checkpoint: 2026-08-09 KST
 - Wiki-centric local worktree checkpoint: 2026-08-11 KST
-- Current flow authority: `docs/STRUCTURED_RECOMMENDATION_IMPLEMENTATION_PLAN.md`
+- Current recommendation recovery authority: `docs/RECOMMENDATION_PERFORMANCE_DIAGNOSIS_AND_IMPROVEMENT_PLAN.md`
+- Structured UI/product authority: `docs/STRUCTURED_RECOMMENDATION_IMPLEMENTATION_PLAN.md`
 - Historical master spec: `YOBI_FINAL_MVP_CODEX_MASTER_PROMPT.md`
 - Historical chatbot goal: `YOBI_CHATBOT_IMPROVEMENT_CODEX_GOAL.md`
 - Improvement branch: `codex/master-spec-completion`
@@ -13,8 +16,207 @@
 - Structured-recommendation deployed release: `20260812T141008Z-8418f92b7e37`
 - Recorded rollback predecessor: `20260812T135513Z-8f91a6c7120a`
 - Public address: resolved from OCI at runtime; not stored in Git
-- Evidence boundary: the first section below is the authority for the 2026-08-12
-  structured flow. Later sections are historical evidence for their named releases.
+- Evidence boundary: the 2026-08-17 section is current deployment evidence. Named
+  2026-08-16 and 2026-08-12 sections are retained as historical evidence only.
+
+## 2026-08-17 final deployment — expanded Wiki and reviewed five-call acceptance
+
+### Final release identity and data
+
+| Check | Result |
+|---|---|
+| Application | `20260816T201131Z-29fbc2f9fd32`; archive SHA-256 `29fbc2f9fd325e7c4e15c88a5abde9c8c12b7f5bdfb394fa50a5de244757fa25` |
+| Oracle ledger | Exact migrations `001`–`012` |
+| Knowledge | `external-knowledge-0ffd2f53ba2e2539ee9c5a27`; 198 concepts/documents, 154 relations, 430 closure, 345 claims, 1,551 chunks |
+| Recommendation family | `external-recommendation-0ffd2f53ba2e2539ee9c5a27-71a41f074c-5515c9c687` |
+| Support/ranking | 1,499 support rows; support manifest `71a41f074cb7fa0693b2d92009bcdf708ac0a335a08802171c5f1a408066d5f4`; ranking policy SHA unchanged at `5515c9c6877641a111e29ba418890b166b84374101877005749257eae826e191` |
+| Mapping | 3,922 high-confidence mappings (+1,967); 4,673 concept-not-authored; 420 ambiguous; 4,217 non-food/promotion; 1,853 unsupported composite; total 15,085 |
+| Preference catalog | `preference-catalog-2026.08.17-v3`; seven public cuisine options |
+
+### Exactly five live provider observations
+
+The expanded release made exactly five provider calls: Japanese PASS (6,469.304 ms),
+Italian strict FAIL/safe fallback (6,405.549 ms), American PASS (6,179.516 ms),
+Southeast Asian PASS (6,407.546 ms), and Mexican PASS (6,542.866 ms). Every request
+returned three menus from three merchants. Median was 6,407.546 ms and maximum was
+6,542.866 ms; no percentile claim is made.
+
+The Italian server pool and Wiki support were valid, but the generated response did
+not satisfy the strict contract and the deterministic fallback emitted an empty
+`matched_criteria`. The fallback serializer was corrected to preserve selected option
+codes and reviewed evidence IDs from the frozen server pool. Focused service tests,
+the expanded SQLite mirror, and the final live Oracle `ITALIAN` fallback all passed
+with three results, stable order, and selected-cuisine evidence on every result.
+These remediation checks and the final deploy made **zero additional provider calls**.
+
+Machine evidence:
+[`deploy/evidence/recommendation_quality_expansion_five_20260817.json`](../deploy/evidence/recommendation_quality_expansion_five_20260817.json), SHA-256
+`59a442314d6c22b5fe301d02e829e662f4b661e05dbe3f5af83e2dad0eeaa501`.
+
+### Final validation partitions
+
+| Partition | Result | Evidence |
+|---|---:|---|
+| `LOCAL` | **PASS** | Final focused scope 85/85; Ruff; MyPy 86 sources; Python 3.9 AST 87 files; Bash syntax and diff check. Existing final frontend evidence remains Vitest 47/47, ESLint, 1,805-module build, Playwright 24 pass/36 intentional skips/0 fail. |
+| `ORACLE-OCI` | **PASS** | Staged and active query plans, source-integrity checks, 3,922 mappings, 1,499 supports, Italian zero-provider fallback, reviewed-five evidence binding, health/readiness. |
+| `PUBLIC API` | **PASS** | Root, health, readiness, QR, and preference catalog HTTP 200; protected demo status HTTP 403. Readiness returned 198 documents, 1,551 chunks, and 3,922 mapped menus. |
+| `PUBLIC BROWSER` | **PASS** | Welcome+locale, fixed address, and expanded selector rendered; seven cuisine buttons present; document width 1,280 equals client width 1,280; no recommendation submitted. Test profile/session deleted with 204/404 cleanup evidence. |
+| `NETWORK` | **PASS** | Temporary Bastion path removed; TCP 22=0, TCP 80 unchanged, temporary Bastion/LB/NLB absent. |
+
+The strict live observation is truthfully 4 normal results plus 1 safety fallback,
+followed by a deterministic zero-provider fix. It is not recorded as 5/5 normal LLM
+generation. Full details are in
+[`evidence/KNOWLEDGE_EXPANSION_20260817.md`](evidence/KNOWLEDGE_EXPANSION_20260817.md).
+
+## Historical 2026-08-16 final deployment — five-case quality acceptance
+
+This section records only evidence actually obtained for the external-catalog
+worktree and OCI attempts. Migration `012` and the external
+knowledge/recommendation data family are active. By explicit operator choice the
+paced 30-request/concurrency-3 performance gate was superseded by the user's explicit
+five-case quality acceptance. All five strict cases passed and application
+`20260816T034237Z-e9417303ad55` was final at that checkpoint; it is superseded by the
+2026-08-17 expanded release above.
+
+Evidence in this section is partitioned strictly as `LOCAL`, `ORACLE-OCI`,
+`PUBLIC API`, and `PUBLIC BROWSER`. A PASS in one partition never closes another.
+
+### LOCAL
+
+| Command/check | Result | Boundary |
+|---|---:|---|
+| `make test` | **PASS** | Ruff; MyPy 83 files; backend Pytest 478/478 in 1,026.07s; frontend Vitest 47/47; ESLint. Warnings: two Starlette deprecations and Vitest localStorage only. |
+| `make build` | **PASS** | 1,805 modules, JS 631.19 kB / gzip 210.20 kB; bundle-size warning only. |
+| `make evaluate` | **PASS** | 100 queries, all recorded violations/failures 0; chatbot acceptance 369 assertions, failures 0. |
+| Playwright matrix | **PASS** | 24 pass, 36 intentional skips, 0 fail across iPhone, Pixel, 1366px and 1920px profiles. |
+| Local in-app browser | **PASS** | Desktop/mobile/Arabic RTL plus fixed address, chat carousel/card, navigation, KDH/ranking, options/cart/review/handoff. Not public-browser evidence. |
+| Python 3.9 AST | **PASS** | 129 source files, parse failures 0. |
+| Post-cache-exclusion archive target | **PASS** | 34 tests; archive contract 353 members and 3,630,171 bytes. |
+| Provisional transport/deploy regression | **PASS** | 79 focused tests; Ruff, Bash syntax and diff check passed. Archive was streamed in bounded SSH chunks, and marker write/success-branch regressions were fixed before the successful attempt. |
+
+### ORACLE-OCI
+
+| Check | Result | Boundary |
+|---|---:|---|
+| Active catalog/import | **PASS** | `yogiyo-public-web:20260814:yobi-diverse-merchant-selection-v2:8a9d54b7230a`; import `yogiyo_20260814_8a9d54b7230ad6c8`. |
+| Active knowledge/family | **PASS** | `external-knowledge-fe97d5a7bf7205681f75aeb5`; `external-recommendation-fe97d5a7bf7205681f75aeb5-78909a764a-5515c9c687`. |
+| Active support/ranking | **PASS** | Support manifest `78909a764a01935850f615cd5f35bc8095e16455ea8fcc8611bb3dcebb94111`; ranking hash `5515c9c6877641a111e29ba418890b166b84374101877005749257eae826e191`. |
+| Isolated structured-model probe | **PASS** | GPT-OSS 120b, cap 2,048, 6,663.421 ms, 2,077 response bytes, frozen order preserved. Caps 1,024/1,536 failed grounding and were rejected. |
+| Isolated bounded-concurrency probe | **PASS** | Three successes under provider semaphore 2: 8,701.317 / 10,123.580 / 14,957.480 ms; 14,960.069 ms wall time. Historical capacity evidence, separate from the operator-approved quality-five acceptance. |
+| Final recommendation quality | **PASS** | Exactly five requests: 5/5 valid, median 7,336.520 ms, max 7,860.266 ms, three menus/three merchants and 12 evidence passages in every case; no percentile claim. |
+
+### PUBLIC API
+
+| Check | Observed result | Boundary |
+|---|---:|---|
+| Provisional health/readiness/root/demo QR | HTTP 200 | Active `20260816T034237Z-e9417303ad55` |
+| Protected demo status without token | HTTP 403 | Active provisional application |
+| Source/recommendation readiness | both `true` | Active external data family on the provisional application |
+| Final release public API | **PASS** | Health/readiness/root/demo QR 200, protected route 403, Oracle external source/recommendation readiness true |
+
+### PUBLIC BROWSER
+
+| Check | Result | Boundary |
+|---|---:|---|
+| Local UI/browser matrix | **PASS** | Recorded under LOCAL only |
+| Provisional public welcome/address | **PASS** | Combined welcome+locale rendered; `Get started!` navigated to the fixed-address screen on the active provisional release |
+| Final public UI | **PASS** | Automated browser rechecked welcome+locale/start; user independently observed recommendation results; internal criteria/evidence/order correctness is recorded by quality-five |
+
+The public UI ends at a Yogiyo handoff mock. It does not prove a real cart transfer,
+payment or order. The backend synthetic checkout/order remains deployment-smoke
+evidence only.
+
+### Initial public baseline (historical diagnostic snapshot)
+
+| Check | Observed result | Boundary |
+|---|---:|---|
+| Public health/readiness/demo QR | HTTP 200 | Pre-recovery public release only |
+| Protected demo status without token | HTTP 403 | Existing public release only |
+| Catalog mode | `EXTERNAL_SOURCE`, `YOGIYO_PUBLIC_WEB` | Public-web import, not a live Yogiyo API |
+| External counts | 200 merchants; 15,085 menus; 31,293 option groups; 208,513 option items | Existing public Oracle readiness payload |
+| Active recommendation knowledge | 0 concepts, relations, closure rows, claims, documents, chunks, and mappings; 15,085 `UNMAPPED` | Critical baseline gap; legacy readiness was insufficient |
+| NSG | TCP 22 ingress `0`; existing TCP 80 ingress `1` | Read-only query; no rule changed |
+
+### Detailed local-mirror and focused-test history
+
+| Command/check | Result | What it proves |
+|---|---:|---|
+| External knowledge builder apply + verify on the 15,085-menu SQLite mirror | **PASS** | 114 concepts/documents, 1,299 chunks, 1,955 high mappings, 15,085/15,085 classifications, 1,073 support rows, zero invented source-specific fact rows; local mirror only |
+| Staged builder + deploy safety + failure-injection targeted suite | **PASS — 40 tests in 6.85s** | Migration `012`/staged CLI/order text contract; stage pointer invariance; atomic data-pointer activation rollback; post-symlink three-pointer restoration model; exact ready gates; forbidden archive members |
+| Current combined release/deploy/seed/performance/structured-smoke target | **PASS — 77 tests, 1 Starlette deprecation warning, in 43.45s** | Includes exact `001`–`012`, staged pointer/activation and failure injection, archive rejection, seed manifest parity, honest per-scenario performance reporting, dynamic required-option selection, and fresh-SQLite normal HTTP order plus isolated `force_genai_timeout` fallback runs. This is source/SQLite/fake-normal-provider proof, not live Oracle/provider/public proof. |
+| Executable structured normal-order/fallback target | **PASS — 3 tests, 1 Starlette deprecation warning, in 30.44s** | A grounded fake normal provider drove the actual HTTP smoke through dynamic recommendation/menu/options/cart/fixed-address/delivery/confirm/mock-success/`CONFIRMED` order and verified profile-graph cleanup; a separate real SQLite service run preserved frozen top-three order and dispatch `1` under isolated timeout. Deploy ordering records `structured` only after both scripts. Live Oracle/OCI remains pending. |
+| Whole-source MyPy (`backend/app backend/evaluation scripts`) | **PASS — 83 source files** | Includes the staged builder and both structured smoke scripts after locale-aware fallback signature synchronization; static typing only, no Oracle/provider execution. |
+| Synthetic SQLite/Oracle seed support-manifest parity target | **PASS — 31 tests in 10.83s** | Shared reviewed `SYNTHETIC_WIKI`/public-chunk support compiler, cited-evidence checks, exact manifest and ranking v1 identity, Oracle wrapper wiring, transaction/FK regressions; no live Oracle execution |
+| Seed parity plus performance-harness reporting target | **PASS — 33 tests in 9.55s** | The preceding 31 seed checks plus reduced-sample no-percentile behavior and per-scenario gates that can fail even when an aggregate passes |
+| Earlier focused bootstrap/catalog/knowledge/recommendation-release/migration/release-state checkpoint (10 test files) | **PASS — 69 tests in 37.95s** | Recorded before the final staged-deploy ordering edits. Useful as an integration checkpoint, but not current proof for files changed afterward and not Oracle/live-service proof. |
+| `python -m py_compile` for five edited release scripts, the deploy gate helper, and three targeted test modules | **PASS** | Current Python syntax for the staged release/deploy verification scope |
+| Ruff on the same release/deploy target | **PASS** | Current focused release-tool and targeted-test lint only |
+| `bash -n` on deploy, guarded-ingress, remote-rollback, and release-rehearsal scripts | **PASS** | Shell parse only; no archive upload, OCI mutation, or rollback execution |
+| Sanitized deployment preflight | **PASS — read-only** | Required local CLIs/build/knowledge/env example/key, 12 migrations ending in `012`, and release helper executables present; configured OCI profile had two subscribed regions, one running target, TCP 22 `0`, TCP 80 `1`; public baseline health/readiness/shell `200`, protected route `403`. No candidate upload or OCI mutation. |
+| Active-family `--verify-only` on the staged-release SQLite mirror | **PASS** | The staged builder output has an active family with matching support/ranking digests, 15,085 classifications, 1,955 high-confidence mappings, 1,073 support rows, and all release-scoped integrity checks true; local mirror only |
+| Staged query-plan gate on the 15,085-menu SQLite mirror | **PASS** | Aggregate-only output: 1,762 eligible menus/160 merchants, bound 24, 28 plan operators, 10 index accesses, four expected core indexes used; `menu.*` absent and all shape checks true. SQLite has no row estimates; actual Oracle `EXPLAIN PLAN` remains pending. |
+| Transitional per-scenario reduced repository smoke (`warm=1` each, `cold=1`) | **INCONCLUSIVE by design; exit 0** | Parity failures 0. Preview/retrieval wall time was single 52.985/300.370 ms, multi-category AND 57.078/305.432 ms, and price-only 1,212.697/1,434.990 ms; NO_MATCH was 18.970 ms and process-cold single was 52.580/300.088 ms. This isolated the then-current price-only objective-SQL outlier before the exact-only fix. Cardinalities were single 1,192/149, multi 830/132, price 800/129, NO_MATCH 0/0; positive final candidates/merchants/chunks were 3/3/9. Sample count 1, therefore no percentile claim. |
+| Pre-optimization formal repository performance gate (`warm=100` aggregate, `process-cold=20`) on the same SQLite mirror | **FAIL — exit 1** | Preview parity failures 0. Warm preview median/P95/max was 78.084/1,453.197/2,485.401 ms, so P95 exceeded the 500 ms gate. Warm retrieval P95 1,679.755 ms, NO_MATCH P95 37.952 ms, and process-cold retrieval P95 1,428.923 ms passed their 2 s/2 s/3 s limits. This run exposed the eager capability scan and aggregate-only scenario reporting; the optimized per-scenario retest is required. Cold means a new process with DB cache unspecified; no OCI/provider path was run. |
+| Fixed-source formal per-scenario repository gate (`warm=100` each; 300 aggregate, `process-cold=20`) | **PASS — exit 0** | Aggregate preview median/P95/max 121.790/397.019/1,111.366 ms; retrieval 594.017/1,643.525/3,522.458 ms; NO_MATCH 41.814/145.925/375.443 ms; parity failures 0. Single preview/retrieval P95 was 427.795/1,498.342 ms, multi-category AND 383.992/1,696.977 ms, and price-only 393.983/1,643.525 ms, so every individual 500 ms/2 s gate passed. Process-cold preview/retrieval P95 was 91.406/378.589 ms with DB cache unspecified. SQLite mirror only; no OCI/provider path. |
+
+The fixed-source formal repository command was:
+
+```bash
+DEMO_DB_BACKEND=sqlite SQLITE_PATH=/tmp/yobi-concept-test-subagent.db \
+  .venv/bin/python scripts/recommendation_performance_smoke.py \
+  --repository-only --warm-samples 100 --cold-samples 20 \
+  --full-samples 1 --concurrency 1
+```
+
+Its sanitized positive-scenario JSON represented these independent samples (all
+times milliseconds; `median/P95/max`):
+
+| Scenario | Preview | Retrieval | Eligible menus/merchants | Final menus/merchants/chunks |
+|---|---:|---:|---:|---:|
+| single | 112.320 / 427.795 / 1,082.372 | 539.048 / 1,498.342 / 2,171.569 | 1,192 / 149 | 3 / 3 / 9 |
+| multi-category AND | 129.538 / 383.992 / 697.709 | 547.925 / 1,696.977 / 2,545.410 | 830 / 132 | 3 / 3 / 9 |
+| price-only | 122.924 / 393.983 / 1,111.366 | 682.478 / 1,643.525 / 3,522.458 | 800 / 129 | 3 / 3 / 9 |
+| NO_MATCH | 41.814 / 145.925 / 375.443 | not run | 0 / 0 | 0 / 0 / 0 |
+
+The aggregate warm count is 300 because each positive scenario has 100 samples;
+the process-cold aggregate has 20 independent Python processes and is labelled
+`process-cold/db-cache-unspecified`. No raw SQL, row IDs, release IDs, DSN, or
+provider response is present in this evidence.
+
+### OCI candidate and recovery chronology
+
+These are historical failures of this release effort. Their partial gate passes do
+not count as final rehearsal evidence.
+
+| Candidate application ID | Observed stop | Recovery evidence |
+|---|---|---|
+| `20260815T231001Z-b32f68c7353f` | Staged Oracle plan rejected a covering index as insufficient table-access proof | No ready marker; old app health 200 and temporary readiness 503; exact temporary SSH rule removed |
+| `20260815T231426Z-64ea3e65938c` | Plan/source/structured normal+fallback passed; performance failed with `DPY-4008` invalid bind | No ready marker; this application/data checkpoint became the verified recovery, public health/readiness 200; exact temporary SSH rule removed |
+| `20260815T232437Z-50c1721d66b5` | Bind fixed; plan/source/structured passed; performance stopped at `PERFORMANCE_NORMAL_RECOMMENDATION_REQUIRED` after a provider rate-limit sample | Automatic rollback restored `20260815T231426Z-64ea3e65938c`; no ready marker; exact temporary SSH rule removed |
+| `20260816T031853Z-e469d49d03b0` | Provisional plan/source/structured passed; non-portable marker write failed | Automatic rollback restored recovery; temporary LB/flow-log resources removed; TCP 22=0 |
+| `20260816T032847Z-2d9eab12f72a` | Provisional plan/source/structured passed; inverted marker-success branch returned failure | Automatic rollback restored recovery; temporary LB/flow-log resources removed; TCP 22=0 |
+| `20260816T034237Z-e9417303ad55` | **ACTIVE PROVISIONAL** — plan/source/structured normal+fallback passed; performance explicitly deferred | Ready+provisional markers written; public API and welcome→address browser checks passed; temporary resources absent; TCP 22=0/TCP 80=1 |
+
+After these attempts the Oracle bind contract was fixed by binding
+`selected_category_count` only when subjective selections exist. The structured
+provider policy was then fixed at GPT-OSS 120b, one dispatch, no automatic retry or
+model fallback, output cap 2,048 and provider concurrency 2. The release harness now
+counts exactly 30 normal requests, reuses the scenario session, spaces starts by 65
+seconds outside measured latency and runs an independent barrier concurrency-3 gate.
+
+### Historical required final evidence (closed for that checkpoint)
+
+| Gate | Current status | Required result before `PASS` |
+|---|---:|---|
+| Full backend/frontend/unit/E2E regression | `PASS — LOCAL` | `make test`, build, evaluation, Playwright and browser evidence are recorded above |
+| Local recommendation performance | `PASS — SQLite mirror only` | Fixed-source warm 100 per positive scenario and process-cold 20 passed aggregate and individual preview/retrieval/NO_MATCH gates with parity failures 0; Oracle plan and OCI full-path proof remain separate |
+| Oracle apply/release verification | `PASS — ORACLE-OCI data checkpoint` | Migration `012`, non-empty active knowledge/support/ranking family and recovery pointers are recorded; final post-redeploy readback remains below |
+| OCI recommendation quality | **PASS — 5/5** | English/Korean single, multi-AND, price-only and repeat stability passed; no percentile claim from five samples |
+| Standard deploy/backend smoke | **PASS** | Plan/source/structured normal+fallback passed on the active release; quality-five evidence was then bound to its final marker |
+| Rollback safety | **PASS** | Earlier failed candidates repeatedly restored the verified predecessor; the user approved concise promotion rather than another artificial rollback/redeploy cycle |
+| Final active application | **PASS** | `20260816T034237Z-e9417303ad55`; active knowledge/recommendation identities unchanged and ready |
+| Final public browser | **PASS** | Final welcome+locale/start UI rechecked; user observed recommendation results; five-case HTTP gate covers the internal recommendation contract |
+| Final network state | **PASS** | TCP 22 `0`, TCP 80 unchanged at `1`, temporary LB count restored |
 
 ## 2026-08-12 structured recommendation — deployed verification
 

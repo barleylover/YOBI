@@ -182,6 +182,11 @@ class RecommendationRequestRecord(BaseModel):
     snapshot_id: str | None = None
     evidence_pool_json: list[dict[str, Any]] = Field(default_factory=list)
     result_json: dict[str, Any] | None = None
+    final_candidates_json: list[dict[str, Any]] = Field(default_factory=list)
+    ranking_trace_json: dict[str, Any] = Field(default_factory=dict)
+    ranking_policy_version: str = "legacy-llm-rank-v2"
+    support_manifest_sha256: str = "0" * 64
+    finalized_at: datetime | None = None
     dispatch_count: int = Field(default=0, ge=0, le=1)
     failure_code: str | None = None
     created_at: datetime
@@ -222,6 +227,9 @@ class RecommendationReleaseFamily(BaseModel):
     certification_release_id: str
     embedding_model: str
     embedding_version: str
+    support_manifest_sha256: str = "0" * 64
+    ranking_policy_version: str = "legacy-llm-rank-v2"
+    ranking_policy_sha256: str = "0" * 64
     status: Literal["LOADING", "READY", "ACTIVE", "RETIRED"]
     activated_at: datetime | None = None
 
@@ -255,6 +263,12 @@ class EvidencePoolItem(BaseModel):
     vegan_status: VeganEvidenceStatus | None = None
     vegan_warning: str | None = None
     retrieval_score: float = 0.0
+    server_rank: int | None = Field(default=None, ge=1, le=5)
+    explicit_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    semantic_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    min_category_support: float = Field(default=0.0, ge=0.0, le=1.0)
+    reviewed_evidence_count: int = Field(default=0, ge=0)
+    ranking_trace: dict[str, Any] = Field(default_factory=dict)
     knowledge_release_id: str
     catalog_release_id: str
     recommendation_release_family_id: str
@@ -286,7 +300,84 @@ class EvidencePoolItem(BaseModel):
             "knowledge_release_id": self.knowledge_release_id,
             "catalog_release_id": self.catalog_release_id,
             "recommendation_release_family_id": self.recommendation_release_family_id,
+            "server_rank": self.server_rank,
+            "ranking_trace": self.ranking_trace,
         }
+
+
+class RecommendationPreviewV2(BaseModel):
+    eligible_menu_count: int = Field(ge=0)
+    eligible_merchant_count: int = Field(ge=0)
+    zero_reason_codes: list[str] = Field(default_factory=list)
+    release_id: str
+    support_manifest_sha256: str
+    ranking_policy_version: str
+    timing_ms: int = Field(ge=0)
+
+
+class RecommendationComparisonRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    snapshot_id: str = Field(min_length=1, max_length=160)
+    request_id: str = Field(
+        min_length=8,
+        max_length=100,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    idempotency_key: str = Field(
+        min_length=8,
+        max_length=160,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+
+
+class RecommendationComparisonItemV2(BaseModel):
+    menu_id: str
+    name: str
+    key_difference: str
+    taste_texture: str
+    ingredients_form: str
+    spice_heaviness: str
+    eating_context: str
+    best_for: str
+    unverified_dietary_info: str
+
+
+class RecommendationComparisonV2(BaseModel):
+    snapshot_id: str
+    request_id: str
+    summary: str
+    items: list[RecommendationComparisonItemV2] = Field(min_length=2, max_length=3)
+    generated_by: Literal["LLM", "DETERMINISTIC_FALLBACK"]
+
+
+FoodRankingSort = Literal["review_count", "order_count", "korean_popularity"]
+
+
+class FoodRankingEntry(BaseModel):
+    position: int = Field(ge=1, le=20)
+    metric_label: str
+    metric_value: int = Field(ge=0)
+    menu: MenuSummary
+
+
+class FoodRankingCollection(BaseModel):
+    snapshot_id: str
+    demo_basis: str
+    sort: FoodRankingSort
+    items: list[FoodRankingEntry] = Field(max_length=20)
+
+
+class FeaturedMenuEntry(BaseModel):
+    dish_name: str
+    description: str
+    menu: MenuSummary
+
+
+class FeaturedMenuCollection(BaseModel):
+    snapshot_id: str
+    items: list[FeaturedMenuEntry]
+    evidence_ids: list[str] = Field(default_factory=list)
 
 
 class LiveRecommendationMenuState(BaseModel):

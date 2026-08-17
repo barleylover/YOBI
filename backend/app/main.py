@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from io import BytesIO
@@ -16,6 +17,7 @@ from fastapi import (
     File,
     Header,
     HTTPException,
+    Query,
     Request,
     Response,
     UploadFile,
@@ -28,6 +30,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging, log_event, safe_session_hash
+from app.db.demo_address import DEMO_ADDRESS_PLACE_ID
 from app.db.repository import YobiRepository
 from app.dependencies import (
     get_chat_service,
@@ -53,9 +56,16 @@ from app.domain.models import (
     UserMessage,
 )
 from app.domain.structured_recommendation import (
+    FeaturedMenuCollection,
+    FoodRankingCollection,
+    FoodRankingSort,
     RecommendationBatchV2,
+    RecommendationComparisonRequest,
+    RecommendationComparisonV2,
     RecommendationCriteriaCommit,
     RecommendationCriteriaCommitResult,
+    RecommendationCriteriaV2,
+    RecommendationPreviewV2,
     RecommendationRequestInput,
 )
 from app.genai.providers import genai_configuration_errors
@@ -63,6 +73,39 @@ from app.services.address_ocr import AddressCandidateTokenCodec, choose_address_
 from app.services.chat_service import ChatService
 from app.services.demo_control import DemoControl, FailureMode
 from app.services.structured_recommendation import StructuredRecommendationService
+
+_RELEASE_ID_PATTERN = re.compile(r"^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$")
+_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_GIT_COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _release_metadata() -> dict[str, Any]:
+    manifest_path = Path.cwd() / ".yobi-release-manifest"
+    if not manifest_path.is_file() or manifest_path.is_symlink():
+        return {"managed": False}
+    try:
+        values = dict(
+            line.split("=", 1)
+            for line in manifest_path.read_text(encoding="utf-8").splitlines()
+            if "=" in line
+        )
+    except (OSError, ValueError):
+        return {"managed": False}
+    release_id = values.get("release_id", "")
+    archive_sha256 = values.get("archive_sha256", "")
+    source_git_commit = values.get("source_git_commit", "")
+    if not (
+        _RELEASE_ID_PATTERN.fullmatch(release_id)
+        and _SHA256_PATTERN.fullmatch(archive_sha256)
+        and _GIT_COMMIT_PATTERN.fullmatch(source_git_commit)
+    ):
+        return {"managed": False}
+    return {
+        "managed": True,
+        "release_id": release_id,
+        "archive_sha256": archive_sha256,
+        "source_git_commit": source_git_commit,
+    }
 
 
 @asynccontextmanager
@@ -210,7 +253,18 @@ def readyz(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "DB_NOT_READY"},
         ) from exc
-    if db.get("canonical_ready") is not True or db.get("knowledge_ready") is not True:
+    external_ready = (
+        db.get("source_integrity_ready") is True
+        and db.get("recommendation_ready") is True
+    )
+    normal_ready = (
+        db.get("canonical_ready") is True and db.get("knowledge_ready") is True
+    )
+    if not (
+        external_ready
+        if db.get("catalog_mode") == "EXTERNAL_SOURCE"
+        else normal_ready
+    ):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "CATALOG_NOT_READY"},
@@ -230,6 +284,7 @@ def readyz(
         )
     return {
         "status": "ready",
+        "release": _release_metadata(),
         "database": db,
         "genai_required": genai_required,
         "genai": {
@@ -356,6 +411,12 @@ def _structured_recommendation_http_error(exc: Exception) -> HTTPException:
         "HALAL_PORK_CRITERIA_CONFLICT",
         "VEGAN_ANIMAL_INGREDIENT_CRITERIA_CONFLICT",
         "INVALID_RECOMMENDATION_REQUEST_HASH",
+        "HALAL_CERTIFICATION_UNAVAILABLE",
+        "VEGAN_EVIDENCE_UNAVAILABLE",
+        "SPICE_LEVEL_UNAVAILABLE",
+        "RECOMMENDATION_COMPARISON_NOT_AVAILABLE",
+        "RECOMMENDATION_COMPARISON_REQUIRES_TWO_MENUS",
+        "RECOMMENDATION_SNAPSHOT_REQUEST_MISMATCH",
     }:
         return HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -383,14 +444,40 @@ def get_recommendation_preference_catalog(
         payload = repository.get_preference_catalog(locale)
     except Exception as exc:
         raise _structured_recommendation_http_error(exc) from exc
-    version = str(payload.get("catalog_version", ""))
-    etag = f'"{version}"'
+    etag_seed = ":".join(
+        (
+            str(payload.get("catalog_version", "")),
+            str(payload.get("knowledge_release_id", "")),
+            str(payload.get("support_manifest_sha256", "")),
+            str(payload.get("ranking_policy_version", "")),
+        )
+    )
+    etag = f'"{hashlib.sha256(etag_seed.encode()).hexdigest()}"'
     response.headers["ETag"] = etag
     response.headers["Cache-Control"] = "private, max-age=300"
     if if_none_match == etag:
         response.status_code = status.HTTP_304_NOT_MODIFIED
         return None
     return payload
+
+
+@app.post(
+    "/api/v1/sessions/{session_id}/structured-recommendations/preview",
+    response_model=RecommendationPreviewV2,
+)
+def preview_structured_recommendation(
+    session_id: str,
+    criteria: RecommendationCriteriaV2,
+    repository: YobiRepository = Depends(get_repository),
+    recommendation_service: StructuredRecommendationService = Depends(
+        get_structured_recommendation_service
+    ),
+) -> RecommendationPreviewV2:
+    session = _require_session(repository, session_id)
+    try:
+        return recommendation_service.preview(session, criteria)
+    except Exception as exc:
+        raise _structured_recommendation_http_error(exc) from exc
 
 
 @app.put(
@@ -456,6 +543,57 @@ def get_structured_recommendation_request(
     if result is None:
         raise _not_found("RECOMMENDATION_REQUEST_NOT_FOUND")
     return result
+
+
+@app.post(
+    "/api/v1/sessions/{session_id}/recommendation-comparisons",
+    response_model=RecommendationComparisonV2,
+)
+def post_recommendation_comparison(
+    session_id: str,
+    data: RecommendationComparisonRequest,
+    repository: YobiRepository = Depends(get_repository),
+    recommendation_service: StructuredRecommendationService = Depends(
+        get_structured_recommendation_service
+    ),
+) -> RecommendationComparisonV2:
+    session, profile = _resolve_session_profile(repository, session_id)
+    try:
+        return recommendation_service.compare_recommendations(session, profile, data)
+    except Exception as exc:
+        raise _structured_recommendation_http_error(exc) from exc
+
+
+@app.get(
+    "/api/v1/sessions/{session_id}/food-rankings",
+    response_model=FoodRankingCollection,
+)
+def get_food_rankings(
+    session_id: str,
+    sort: FoodRankingSort = "review_count",
+    limit: int = Query(default=20, ge=1, le=20),
+    repository: YobiRepository = Depends(get_repository),
+) -> FoodRankingCollection:
+    _require_session(repository, session_id)
+    try:
+        return repository.list_food_rankings(session_id, sort, limit)
+    except Exception as exc:
+        raise _structured_recommendation_http_error(exc) from exc
+
+
+@app.get(
+    "/api/v1/sessions/{session_id}/featured/kpop-demon-hunters",
+    response_model=FeaturedMenuCollection,
+)
+def get_kpop_demon_hunters_feature(
+    session_id: str,
+    repository: YobiRepository = Depends(get_repository),
+) -> FeaturedMenuCollection:
+    _require_session(repository, session_id)
+    try:
+        return repository.list_kpop_demon_hunters_feature(session_id)
+    except Exception as exc:
+        raise _structured_recommendation_http_error(exc) from exc
 
 
 @app.post("/api/v1/sessions/{session_id}/messages")
@@ -752,12 +890,18 @@ async def upload_address(
         )
         for candidate in candidates
     ]
-    low_confidence = not candidates or candidates[0].confidence < 0.8
+    fixed_demo_candidate = bool(candidates and candidates[0].place_id == DEMO_ADDRESS_PLACE_ID)
+    low_confidence = not candidates or (
+        not fixed_demo_candidate and candidates[0].confidence < 0.8
+    )
     return AddressUploadResult(
         candidates=views,
         low_confidence=low_confidence,
         notice=(
-            "The synthetic booking image matched a grounded address candidate. Confirm the address."
+            "Demo only: this booking image uses the prepared YOBI Myeongdong delivery address. "
+            "Confirm it to continue."
+            if fixed_demo_candidate
+            else "The booking image matched a grounded address candidate. Confirm the address."
             if not low_confidence
             else "OCR confidence is low. Review the candidate or enter the address manually."
         ),
@@ -785,12 +929,18 @@ def resolve_address_text(
         )
         for candidate in candidates
     ]
-    low_confidence = not candidates or candidates[0].confidence < 0.8
+    fixed_demo_candidate = bool(candidates and candidates[0].place_id == DEMO_ADDRESS_PLACE_ID)
+    low_confidence = not candidates or (
+        not fixed_demo_candidate and candidates[0].confidence < 0.8
+    )
     return AddressUploadResult(
         candidates=views,
         low_confidence=low_confidence,
         notice=(
-            "We found a synthetic place candidate. Confirm the full road address."
+            "Demo only: address search uses the prepared YOBI Myeongdong delivery address. "
+            "Confirm it to continue."
+            if fixed_demo_candidate
+            else "We found a demo place candidate. Confirm the full road address."
             if not low_confidence
             else "No confident place match was found. Enter or edit the address manually."
         ),

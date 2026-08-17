@@ -11,6 +11,12 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.db.sqlite_repository import SQLiteYobiRepository  # noqa: E402
+from app.domain.concept_ranking import (  # noqa: E402
+    RANKING_POLICY_SHA256,
+    RANKING_POLICY_VERSION,
+    ConceptRankCandidate,
+    rank_concept_candidates,
+)
 from app.domain.dialogue import MealNeedState  # noqa: E402
 from app.domain.models import ProfileCreate  # noqa: E402
 
@@ -24,6 +30,86 @@ DISTRIBUTION = {
     "prompt_injection": 5,
     "ambiguous_out_of_scope": 5,
 }
+
+# This is a legacy semantic-hash safety evaluation only.  The current UI does not
+# accept free-text ranking input; structured button criteria and the server-owned
+# concept rank fixture below are the recommendation authority.  Keep these sets
+# query-specific so this smoke checks plausible noodle/broth categories without
+# pretending that an unspecified protein must deterministically rank first.
+CATEGORY_GOLDEN_CASES = (
+    (
+        "Something warm and mild after walking in the rain, no pork, under 15000 won",
+        frozenset({"Chicken kalguksu", "Kalguksu"}),
+    ),
+    (
+        "Comforting chicken noodle soup for one, gentle and savory, no pork",
+        frozenset({"Chicken kalguksu"}),
+    ),
+    (
+        "A warm Korean broth with thick noodles and very little spice",
+        frozenset({"Chicken kalguksu", "Kalguksu", "Janchi guksu"}),
+    ),
+    (
+        "Rainy-night comfort food like soto ayam but under 15000 won",
+        frozenset({"Chicken kalguksu", "Kalguksu"}),
+    ),
+)
+
+SERVER_RANK_GOLDEN_PATH = (
+    Path(__file__).resolve().parent / "fixtures" / "server_rank_golden_summary.json"
+)
+
+
+def server_rank_golden_failures(path: Path = SERVER_RANK_GOLDEN_PATH) -> int:
+    """Execute the authoritative server-rank fixture, including identity and diversity."""
+
+    fixture = json.loads(path.read_text(encoding="utf-8"))
+    policy = fixture.get("server_policy", {})
+    failures = int(policy.get("version") != RANKING_POLICY_VERSION)
+    failures += int(policy.get("sha256") != RANKING_POLICY_SHA256)
+    failures += int(policy.get("hard_constraint_accuracy_required") != 1.0)
+    failures += int(policy.get("frozen_result_limit") != 3)
+    failures += int(fixture.get("baseline_boundary", {}).get("old_path_outcome") != "NO_MATCH")
+
+    for case in fixture.get("golden_cases", []):
+        decisions = rank_concept_candidates(
+            [
+                ConceptRankCandidate(
+                    menu_id=item["menu_id"],
+                    merchant_id=item["merchant_id"],
+                    concept_id=item["concept_id"],
+                    category_supports=item["supports"],
+                    reviewed_evidence_count=item["reviewed_evidence_count"],
+                )
+                for item in case.get("candidates", [])
+            ],
+            has_soft_profile=False,
+            limit=int(policy.get("frozen_result_limit", 3)),
+        )
+        failures += int(
+            [decision.menu_id for decision in decisions] != case.get("expected_order")
+        )
+        failures += int(
+            len({decision.merchant_id for decision in decisions})
+            != case.get("expected_distinct_merchants")
+        )
+        failures += int(
+            len({decision.concept_id for decision in decisions})
+            != case.get("expected_distinct_concepts")
+        )
+        failures += int(
+            [decision.rank for decision in decisions]
+            != list(range(1, len(decisions) + 1))
+        )
+    faults = fixture.get("llm_fault_matrix", [])
+    failures += int(
+        {item.get("fault") for item in faults}
+        != {"permuted_ids", "timeout_or_provider_failure", "invalid_or_ungrounded_output"}
+    )
+    failures += int(
+        not faults or not all(item.get("expected_server_ids_unchanged") is True for item in faults)
+    )
+    return failures
 
 
 def main() -> None:
@@ -56,15 +142,12 @@ def main() -> None:
         option_mismatches = 0
         recommendation_contract_failures = 0
 
-        category_queries = [
-            "Something warm and mild after walking in the rain, no pork, under 15000 won",
-            "Comforting chicken noodle soup for one, gentle and savory, no pork",
-            "A warm Korean broth with thick noodles and very little spice",
-            "Rainy-night comfort food like soto ayam but under 15000 won",
-        ]
         for index in range(DISTRIBUTION["category_recommendation"]):
+            query, allowed_categories = CATEGORY_GOLDEN_CASES[
+                index % len(CATEGORY_GOLDEN_CASES)
+            ]
             menus = repository.search_menus(
-                f"{category_queries[index % len(category_queries)]} case {index}",
+                f"{query} case {index}",
                 general,
                 15000,
                 1,
@@ -72,9 +155,14 @@ def main() -> None:
                 limit=3,
             )
             executed["category_recommendation"] += 1
-            constraint_violations += sum(menu.price > 15000 or menu.spice_level > 1 for menu in menus)
+            constraint_violations += sum(
+                menu.price > 15000
+                or menu.spice_level is None
+                or menu.spice_level > 1
+                for menu in menus
+            )
             canonical_top3_failures += int(
-                not any(menu.category == "Chicken kalguksu" for menu in menus)
+                not menus or any(menu.category not in allowed_categories for menu in menus)
             )
 
         allergy_queries = [
@@ -170,6 +258,7 @@ def main() -> None:
             constraint_violations += sum(
                 int(
                     menu.price > 15000
+                    or menu.spice_level is None
                     or menu.spice_level > 1
                     or not menu.is_synthetic
                     or not any("shellfish" in reason.lower() for reason in menu.match_reasons)
@@ -181,7 +270,9 @@ def main() -> None:
         for query in ambiguous_queries:
             menus = repository.search_menus(query, general, None, 1, [], limit=3)
             executed["ambiguous_out_of_scope"] += 1
-            constraint_violations += sum(menu.spice_level > 1 for menu in menus)
+            constraint_violations += sum(
+                menu.spice_level is None or menu.spice_level > 1 for menu in menus
+            )
 
         cold_results = repository.recommend_menus(
             "cold refreshing noodles",
@@ -229,16 +320,21 @@ def main() -> None:
         recommendation_contract_failures += int(
             not party_results
             or any(
-                menu.price * ((4 + menu.serves_max - 1) // menu.serves_max) > 40_000
+                menu.serves_max is None
+                or menu.price * ((4 + menu.serves_max - 1) // menu.serves_max) > 40_000
                 for menu in party_results
             )
         )
 
+        rank_golden_failures = server_rank_golden_failures()
         report = {
             "query_count": sum(executed.values()),
             "distribution": dict(executed),
             "constraint_violations": constraint_violations,
             "canonical_top3_failures": canonical_top3_failures,
+            "server_rank_golden_failures": rank_golden_failures,
+            "server_rank_policy_version": RANKING_POLICY_VERSION,
+            "server_rank_policy_sha256": RANKING_POLICY_SHA256,
             "evidence_coverage_failures": evidence_coverage_failures,
             "unsafe_reassurance_count": unsafe_reassurance,
             "price_mismatches": price_mismatches,
@@ -256,6 +352,7 @@ def main() -> None:
                 for key in (
                     "constraint_violations",
                     "canonical_top3_failures",
+                    "server_rank_golden_failures",
                     "evidence_coverage_failures",
                     "unsafe_reassurance_count",
                     "price_mismatches",

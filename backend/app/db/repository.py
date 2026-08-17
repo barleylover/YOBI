@@ -32,11 +32,15 @@ from app.domain.models import (
 )
 from app.domain.structured_recommendation import (
     EvidencePoolItem,
+    FeaturedMenuCollection,
+    FoodRankingCollection,
+    FoodRankingSort,
     LiveRecommendationMenuState,
     RecommendationCriteriaCommit,
     RecommendationCriteriaRecord,
     RecommendationCriteriaV2,
     RecommendationMode,
+    RecommendationPreviewV2,
     RecommendationReleaseFamily,
     RecommendationRequestInput,
     RecommendationRequestRecord,
@@ -175,6 +179,32 @@ class YobiRepository(Protocol):
         passages_per_menu: int,
     ) -> list[EvidencePoolItem]: ...
 
+    def get_recommendation_retrieval_metrics(self, session_id: str) -> dict[str, Any]: ...
+
+    def preview_recommendation(
+        self,
+        session_id: str,
+        criteria: RecommendationCriteriaV2,
+        *,
+        release_family_id: str | None = None,
+        exclude_history: bool = False,
+    ) -> RecommendationPreviewV2: ...
+
+    def save_recommendation_comparison(
+        self,
+        session_id: str,
+        recommendation_request_id: str,
+        comparison_request_id: str,
+        payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool]: ...
+
+    def get_recommendation_comparison(
+        self,
+        session_id: str,
+        recommendation_request_id: str,
+        comparison_request_id: str,
+    ) -> dict[str, Any] | None: ...
+
     def get_active_recommendation_release_family(
         self,
     ) -> RecommendationReleaseFamily | None: ...
@@ -186,6 +216,18 @@ class YobiRepository(Protocol):
     ) -> set[str]: ...
 
     def get_preference_catalog(self, locale: str) -> dict[str, Any]: ...
+
+    def list_food_rankings(
+        self,
+        session_id: str,
+        sort: FoodRankingSort,
+        limit: int,
+    ) -> FoodRankingCollection: ...
+
+    def list_kpop_demon_hunters_feature(
+        self,
+        session_id: str,
+    ) -> FeaturedMenuCollection: ...
 
     def apply_conversation_event(
         self, session_id: str, event: ConversationEventInput

@@ -1,0 +1,117 @@
+{
+  "schema_version": "1",
+  "gate": "recommendation-quality-five-reviewed",
+  "status": "REVIEWED_FIX_ACCEPTED",
+  "requested": 5,
+  "executed": 5,
+  "provider_dispatch_count": 5,
+  "normal_recommended_count": 4,
+  "safe_fallback_count": 1,
+  "additional_provider_dispatch_count_after_review": 0,
+  "observed_at_utc": "2026-08-16T19:54:05Z",
+  "cases": [
+    {
+      "error_codes": [],
+      "evidence_count": 10,
+      "language": "ko",
+      "latency_ms": 6469.304,
+      "matched_group_count_min": 1,
+      "menu_order_sha256": "ee4ffba3cf946028469824db10603d48c8b608e5ad6cad26397304c6c7678c0c",
+      "merchant_count": 3,
+      "name": "expanded_japanese",
+      "required_group_count": 1,
+      "result_count": 3,
+      "selected_cuisine_codes": ["JAPANESE"],
+      "status": "PASS"
+    },
+    {
+      "error_codes": [
+        "FAILURE_CODE_PRESENT",
+        "SELECTED_CRITERION_EVIDENCE_MISSING",
+        "STATUS_NOT_RECOMMENDED"
+      ],
+      "evidence_count": 6,
+      "language": "en",
+      "latency_ms": 6405.549,
+      "matched_group_count_min": 0,
+      "menu_order_sha256": "6a7ff27c74d643bfb819a3763f299a6658e6e3315be55adc37fd0a4c666ba688",
+      "merchant_count": 3,
+      "name": "expanded_italian",
+      "required_group_count": 1,
+      "result_count": 3,
+      "selected_cuisine_codes": ["ITALIAN"],
+      "status": "FAIL"
+    },
+    {
+      "error_codes": [],
+      "evidence_count": 9,
+      "language": "en",
+      "latency_ms": 6179.516,
+      "matched_group_count_min": 1,
+      "menu_order_sha256": "161eab83c9e83d3e12242df6e04aa7091822d0f88b7b4cca881dfd3553483310",
+      "merchant_count": 3,
+      "name": "expanded_american",
+      "required_group_count": 1,
+      "result_count": 3,
+      "selected_cuisine_codes": ["AMERICAN"],
+      "status": "PASS"
+    },
+    {
+      "error_codes": [],
+      "evidence_count": 3,
+      "language": "ko",
+      "latency_ms": 6407.546,
+      "matched_group_count_min": 1,
+      "menu_order_sha256": "4690dc7965a2c3e49fc87c5a9db62d4583f4ad404d7968e91cb41057696d1af0",
+      "merchant_count": 3,
+      "name": "expanded_southeast_asian",
+      "required_group_count": 1,
+      "result_count": 3,
+      "selected_cuisine_codes": ["SOUTHEAST_ASIAN"],
+      "status": "PASS"
+    },
+    {
+      "error_codes": [],
+      "evidence_count": 9,
+      "language": "en",
+      "latency_ms": 6542.866,
+      "matched_group_count_min": 1,
+      "menu_order_sha256": "4f053fb08e4b4508275a9d54c0c3774974124bdb38f8a54890b89cb2db64009a",
+      "merchant_count": 3,
+      "name": "expanded_mexican",
+      "required_group_count": 1,
+      "result_count": 3,
+      "selected_cuisine_codes": ["MEXICAN"],
+      "status": "PASS"
+    }
+  ],
+  "latency_ms": {
+    "max": 6542.866,
+    "median": 6407.546,
+    "percentile_claim": "not_made_for_five_samples"
+  },
+  "release": {
+    "application_candidate_release_id": "20260816T194828Z-db4961f9e34c",
+    "catalog_version": "preference-catalog-2026.08.17-v3",
+    "knowledge_release_id": "external-knowledge-0ffd2f53ba2e2539ee9c5a27",
+    "recommendation_release_family_id": "external-recommendation-0ffd2f53ba2e2539ee9c5a27-71a41f074c-5515c9c687",
+    "support_manifest_sha256": "71a41f074cb7fa0693b2d92009bcdf708ac0a335a08802171c5f1a408066d5f4"
+  },
+  "review": {
+    "accepted_failure_case": "expanded_italian",
+    "issue_code": "DETERMINISTIC_FALLBACK_DROPPED_MATCHED_CRITERIA",
+    "finding": "The server found and froze three supported Italian menus, but the deterministic safety fallback serialized an empty matched_criteria array after the generation response failed validation.",
+    "fix": "The fallback now groups the frozen CriterionEvidence by category and returns only the selected option codes with their reviewed evidence IDs.",
+    "fix_source_sha256": "3e2746f291cbe4a5ab865346a212a99d65954a7916557abc2cb01d05c69932c0",
+    "fix_validation": {
+      "status": "PASS",
+      "repository_backend": "sqlite-expanded-mirror",
+      "category_code": "cuisine_origins",
+      "option_code": "ITALIAN",
+      "result_count": 3,
+      "server_order_preserved": true,
+      "selected_criterion_evidence_present_for_every_result": true,
+      "actual_provider_dispatch_count": 0
+    }
+  }
+}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -23,7 +24,7 @@ from app.genai.providers import (
     genai_configuration_errors,
 )
 from app.genai.tool_registry import ToolRegistry
-from app.main import readyz
+from app.main import _release_metadata, readyz
 from app.services.chat_service import ChatService
 
 
@@ -324,6 +325,9 @@ def test_agent_rejects_provider_input_and_tool_limits_before_calling_provider(
 
 def test_required_genai_configuration_fails_closed_without_breaking_local_demo() -> None:
     assert genai_configuration_errors(Settings()) == []
+    assert Settings().structured_recommendation_model == "openai.gpt-oss-120b"
+    assert Settings().structured_recommendation_max_output_tokens == 2048
+    assert Settings().structured_recommendation_max_concurrent_requests == 2
 
     production_errors = genai_configuration_errors(Settings(app_env="production"))
     assert "API_KEY_MISSING" in production_errors
@@ -337,6 +341,28 @@ def test_required_genai_configuration_fails_closed_without_breaking_local_demo()
     )
     assert "PRIMARY_ENDPOINT_MISSING" in dedicated_errors
     assert "FALLBACK_ENDPOINT_MISSING" in dedicated_errors
+
+    missing_structured = genai_configuration_errors(
+        Settings(
+            app_env="production",
+            oci_genai_api_key="test-key",
+            structured_recommendation_model=" ",
+        )
+    )
+    assert "STRUCTURED_MODEL_MISSING" in missing_structured
+    assert "STRUCTURED_MODEL_UNAVAILABLE" not in missing_structured
+
+    unsupported_structured = genai_configuration_errors(
+        Settings(
+            app_env="production",
+            oci_genai_api_key="test-key",
+            oci_genai_serving_mode="dedicated",
+            oci_genai_endpoint_id="ocid1.generativeaiendpoint.primary",
+            oci_genai_fallback_endpoint_id="ocid1.generativeaiendpoint.fallback",
+            structured_recommendation_model="unsupported-structured-model",
+        )
+    )
+    assert "STRUCTURED_MODEL_UNAVAILABLE" in unsupported_structured
 
     assert (
         genai_configuration_errors(
@@ -381,6 +407,27 @@ def test_readyz_exposes_sanitized_genai_failure_for_production(repository: Any) 
         retryable=False,
     )
     assert ChatService._classify_fallback(capability_error).value == "PROVIDER_UNAVAILABLE"
+
+
+def test_release_metadata_exposes_only_valid_managed_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert _release_metadata() == {"managed": False}
+
+    (tmp_path / ".yobi-release-manifest").write_text(
+        "release_id=20260817T010203Z-" + "a" * 12 + "\n"
+        "archive_sha256=" + "b" * 64 + "\n"
+        "source_git_commit=" + "c" * 40 + "\n"
+        "knowledge_release_id=not-public-through-this-helper\n",
+        encoding="utf-8",
+    )
+    assert _release_metadata() == {
+        "managed": True,
+        "release_id": "20260817T010203Z-" + "a" * 12,
+        "archive_sha256": "b" * 64,
+        "source_git_commit": "c" * 40,
+    }
 
 
 def test_agent_rejects_excess_provider_tool_calls_before_any_execution(

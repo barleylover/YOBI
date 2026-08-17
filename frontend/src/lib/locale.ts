@@ -64,7 +64,8 @@ export function sortedCountries(language: SupportedLanguage) {
 }
 
 export function menuName(menu: { name_en: string; name_ko: string }, language: string) {
-  return language === "한국어" ? menu.name_ko : menu.name_en;
+  if (language === "한국어") return menu.name_ko || menu.name_en;
+  return menu.name_en || menu.name_ko;
 }
 
 export function countryName(country: string, locale: string) {

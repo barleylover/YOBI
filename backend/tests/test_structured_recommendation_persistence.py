@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Literal
 
 import pytest
@@ -9,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from app.db.sqlite_repository import SQLiteYobiRepository
 from app.dependencies import get_repository
+from app.domain.concept_ranking import RANKING_POLICY_SHA256, RANKING_POLICY_VERSION
 from app.domain.dialogue import (
     ConversationEventInput,
     ConversationEventType,
@@ -25,6 +28,7 @@ from app.domain.structured_recommendation import (
     RecommendationRequestInput,
     RecommendationRequestStatus,
 )
+from app.knowledge.preference_support import support_manifest_sha256
 from app.main import app
 from app.rag.embeddings import deterministic_embedding
 
@@ -45,6 +49,324 @@ class RecordingEmbeddingProvider:
         self.calls.append((list(texts), mode))
         prefix = "document: " if mode == "SEARCH_DOCUMENT" else "query: "
         return [deterministic_embedding(prefix + text, self.dimension) for text in texts]
+
+
+def test_synthetic_support_manifest_is_grounded_and_upgrade_backfills(
+    repository: SQLiteYobiRepository,
+) -> None:
+    family = repository.get_active_recommendation_release_family()
+    assert family is not None
+    with repository._connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT support.*,document.source_type,document.review_status document_review,
+                   chunk.facet,chunk.metadata_json
+            FROM concept_preference_support support
+            JOIN knowledge_chunk chunk
+              ON chunk.release_id=support.knowledge_release_id
+             AND chunk.chunk_id=support.evidence_chunk_id
+            JOIN knowledge_document document
+              ON document.release_id=chunk.release_id
+             AND document.document_id=chunk.document_id
+            WHERE support.knowledge_release_id=?
+            ORDER BY support.concept_id,support.category_code,support.option_code
+            """,
+            (family.knowledge_release_id,),
+        ).fetchall()
+        assert rows
+        manifest_rows = [dict(row) for row in rows]
+        assert all(row["source_type"] == "SYNTHETIC_WIKI" for row in rows)
+        assert all(row["document_review"] == "REVIEWED_DEMO" for row in rows)
+        assert all(str(row["facet"]).lower() != "safety" for row in rows)
+        assert all(row["provenance_type"] == "SYNTHETIC_WIKI" for row in rows)
+        assert all(row["support_status"] == "SUPPORTED" for row in rows)
+        assert support_manifest_sha256(manifest_rows) == family.support_manifest_sha256
+        connection.execute(
+            "DELETE FROM concept_preference_support WHERE knowledge_release_id=?",
+            (family.knowledge_release_id,),
+        )
+
+    repository.initialize()
+
+    restored = repository.get_active_recommendation_release_family()
+    assert restored is not None
+    assert restored.ranking_policy_version == RANKING_POLICY_VERSION
+    assert restored.ranking_policy_sha256 == RANKING_POLICY_SHA256
+    assert restored.support_manifest_sha256 == family.support_manifest_sha256
+    with repository._connection() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM concept_preference_support WHERE knowledge_release_id=?",
+            (restored.knowledge_release_id,),
+        ).fetchone()[0] == len(rows)
+
+
+def test_normal_preview_skips_unrequested_capability_scans(
+    repository: SQLiteYobiRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = _profile(repository)
+    session = repository.create_session(profile.profile_id)
+    statements: list[str] = []
+    original_connection = repository._connection
+
+    @contextmanager
+    def traced_connection():  # type: ignore[no-untyped-def]
+        with original_connection() as connection:
+            connection.set_trace_callback(statements.append)
+            yield connection
+
+    monkeypatch.setattr(repository, "_connection", traced_connection)
+    preview = repository.preview_recommendation(
+        session.session_id,
+        RecommendationCriteriaV2(cuisine_origins=["KOREAN"], max_spice_level=5),
+    )
+
+    sql = "\n".join(statements).lower()
+    assert preview.eligible_menu_count > 0
+    assert "join menu_dietary_attribute relation" not in sql
+    assert "from merchant_certification" not in sql
+    assert "spice_menus" not in sql
+
+
+def test_preference_catalog_etag_replays_support_manifest(repository) -> None:  # type: ignore[no-untyped-def]
+    app.dependency_overrides[get_repository] = lambda: repository
+    client = TestClient(app)
+    try:
+        first = client.get("/api/v1/recommendation/preferences/catalog?locale=en")
+        replay = client.get(
+            "/api/v1/recommendation/preferences/catalog?locale=en",
+            headers={"If-None-Match": first.headers["etag"]},
+        )
+    finally:
+        client.close()
+        app.dependency_overrides.clear()
+
+    assert first.status_code == 200
+    payload = first.json()
+    assert payload["support_manifest_sha256"] != "0" * 64
+    assert payload["ranking_policy_version"] == RANKING_POLICY_VERSION
+    expected_groups = {
+        "cuisine_origins": "core",
+        "main_ingredients": "core",
+        "food_forms": "core",
+        "flavors": "additional",
+        "textures": "additional",
+        "cooking_methods": "additional",
+        "temperatures": "additional",
+        "price_bands": "exact",
+    }
+    assert {
+        category["code"]: category["group"] for category in payload["categories"]
+    } == {
+        code: group
+        for code, group in expected_groups.items()
+        if any(category["code"] == code for category in payload["categories"])
+    }
+    assert all(
+        isinstance(option[field], int) and option[field] >= 0
+        for category in payload["categories"]
+        for option in category["options"]
+        for field in (
+            "eligible_menu_count",
+            "eligible_merchant_count",
+            "reviewed_document_count",
+        )
+    )
+    assert set(payload["capabilities"]) == {
+        "halal_certified_only",
+        "vegan",
+        "max_spice_level",
+    }
+    assert all(
+        isinstance(capability["enabled"], bool)
+        and (
+            capability["disabled_reason"] is None
+            if capability["enabled"]
+            else bool(capability["disabled_reason"])
+        )
+        for capability in payload["capabilities"].values()
+    )
+    assert replay.status_code == 304
+
+
+def test_retry_excludes_seen_menus_and_returns_empty_when_exhausted(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = _profile(repository)
+    session = repository.create_session(profile.profile_id)
+    criteria = RecommendationCriteriaV2(cuisine_origins=["KOREAN"], max_spice_level=5)
+    release_family_id, eligibility_as_of = _active_pin(repository)
+    first = repository.build_recommendation_evidence_pool(
+        session.session_id,
+        profile,
+        criteria,
+        RecommendationMode.INITIAL,
+        3,
+        release_family_id=release_family_id,
+        eligibility_as_of=eligibility_as_of,
+        raw_hits_per_value=20,
+        passages_per_menu=2,
+    )
+    assert len(first) == 3
+    state = repository.get_session(session.session_id).meal_need_state  # type: ignore[union-attr]
+    state.shown_menu_ids = [item.menu_id for item in first]
+    with repository._connection() as connection:
+        connection.execute(
+            "UPDATE chat_session SET meal_need_state_json=? WHERE session_id=?",
+            (state.model_dump_json(), session.session_id),
+        )
+
+    retry = repository.build_recommendation_evidence_pool(
+        session.session_id,
+        profile,
+        criteria,
+        RecommendationMode.RETRY,
+        3,
+        release_family_id=release_family_id,
+        eligibility_as_of=eligibility_as_of,
+        raw_hits_per_value=20,
+        passages_per_menu=2,
+    )
+
+    assert retry
+    assert {item.menu_id for item in retry}.isdisjoint(state.shown_menu_ids)
+    with repository._connection() as connection:
+        all_menu_ids = [
+            str(row["menu_id"])
+            for row in connection.execute(
+                "SELECT menu_id FROM menu WHERE availability='AVAILABLE' ORDER BY menu_id"
+            ).fetchall()
+        ]
+        state.shown_menu_ids = all_menu_ids
+        connection.execute(
+            "UPDATE chat_session SET meal_need_state_json=? WHERE session_id=?",
+            (state.model_dump_json(), session.session_id),
+        )
+    exhausted = repository.build_recommendation_evidence_pool(
+        session.session_id,
+        profile,
+        criteria,
+        RecommendationMode.RETRY,
+        3,
+        release_family_id=release_family_id,
+        eligibility_as_of=eligibility_as_of,
+        raw_hits_per_value=20,
+        passages_per_menu=2,
+    )
+    assert exhausted == []
+
+
+def test_rankings_and_featured_collections_honor_criteria_and_snapshot_selection(
+    repository: SQLiteYobiRepository,
+) -> None:
+    criteria = RecommendationCriteriaV2(
+        price_bands=["UNDER_10000"],
+        max_spice_level=5,
+    )
+    for collection_name in ("ranking", "featured"):
+        profile = _profile(repository)
+        session = repository.create_session(profile.profile_id)
+        committed = _commit(repository, session.session_id, criteria)
+        if collection_name == "ranking":
+            rankings = {
+                sort: repository.list_food_rankings(session.session_id, sort, 20)
+                for sort in ("review_count", "order_count", "korean_popularity")
+            }
+            first = rankings["review_count"]
+            replay = repository.list_food_rankings(session.session_id, "review_count", 20)
+            menus = [item.menu for item in first.items]
+            assert [item.menu.menu_id for item in first.items] == [
+                item.menu.menu_id for item in replay.items
+            ]
+            assert [item.metric_value for item in first.items] == [
+                item.metric_value for item in replay.items
+            ]
+            assert all(1 <= len(collection.items) <= 20 for collection in rankings.values())
+            assert all(
+                item.metric_value > 0
+                for collection in rankings.values()
+                for item in collection.items
+            )
+            assert len(
+                {collection.items[0].menu.menu_id for collection in rankings.values()}
+            ) == 3
+            snapshot_id = first.snapshot_id
+            assert "demo" in first.demo_basis.lower()
+        else:
+            featured = repository.list_kpop_demon_hunters_feature(session.session_id)
+            menus = [item.menu for item in featured.items]
+            snapshot_id = featured.snapshot_id
+            assert all(item.dish_name for item in featured.items)
+        assert menus
+        assert all(menu.price < 10_000 for menu in menus)
+
+        selected = repository.apply_conversation_event(
+            session.session_id,
+            ConversationEventInput(
+                event_type=ConversationEventType.SELECT_MENU,
+                snapshot_id=snapshot_id,
+                menu_id=menus[0].menu_id,
+                expected_state_version=committed.state_version,
+                idempotency_key=f"select-{collection_name}-snapshot-0001",
+            ),
+        )
+        assert selected.selected_menu_id == menus[0].menu_id
+
+
+def test_sqlite_initialize_adds_server_rank_columns_before_policy_index(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "legacy-structured-rank.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE structured_recommendation_request (
+              session_id TEXT NOT NULL,
+              request_id TEXT NOT NULL,
+              request_hash TEXT NOT NULL,
+              criteria_version INTEGER NOT NULL,
+              mode TEXT NOT NULL,
+              status TEXT NOT NULL,
+              state_version INTEGER NOT NULL,
+              recommendation_release_family_id TEXT NOT NULL,
+              eligibility_as_of TEXT NOT NULL,
+              snapshot_id TEXT,
+              evidence_pool_json TEXT NOT NULL DEFAULT '[]',
+              result_json TEXT,
+              dispatch_count INTEGER NOT NULL DEFAULT 0,
+              failure_code TEXT,
+              created_at TEXT NOT NULL,
+              dispatched_at TEXT,
+              completed_at TEXT,
+              PRIMARY KEY(session_id, request_id)
+            )
+            """
+        )
+
+    repository = SQLiteYobiRepository(database_path)
+    repository.initialize()
+
+    with repository._connection() as connection:
+        columns = {
+            str(row["name"])
+            for row in connection.execute(
+                "PRAGMA table_info(structured_recommendation_request)"
+            ).fetchall()
+        }
+        indexes = {
+            str(row["name"])
+            for row in connection.execute(
+                "PRAGMA index_list(structured_recommendation_request)"
+            ).fetchall()
+        }
+    assert {
+        "final_candidates_json",
+        "ranking_trace_json",
+        "ranking_policy_version",
+        "support_manifest_sha256",
+        "finalized_at",
+    }.issubset(columns)
+    assert "idx_rec_request_policy" in indexes
 
 
 def _profile(repository: SQLiteYobiRepository, **overrides: object):
@@ -238,7 +560,7 @@ def test_preference_catalog_exposes_only_supported_reviewed_options(
         assert wiki_document_count >= 1
 
 
-def test_evidence_pool_uses_one_embedding_batch_public_wiki_and_v2_filters(
+def test_evidence_pool_is_sql_only_public_wiki_and_v2_filters(
     repository: SQLiteYobiRepository,
 ) -> None:
     recording_provider = RecordingEmbeddingProvider()
@@ -254,7 +576,7 @@ def test_evidence_pool_uses_one_embedding_batch_public_wiki_and_v2_filters(
         cuisine_origins=["KOREAN"],
         flavors=["SPICY"],
         price_bands=["UNDER_10000"],
-        max_spice_level=1,
+        max_spice_level=5,
     )
     release_family_id, eligibility_as_of = _active_pin(repository)
     pool = repository.build_recommendation_evidence_pool(
@@ -270,15 +592,9 @@ def test_evidence_pool_uses_one_embedding_batch_public_wiki_and_v2_filters(
     )
 
     assert pool
-    assert len(recording_provider.calls) == 1
-    texts, mode = recording_provider.calls[0]
-    assert mode == "SEARCH_QUERY"
-    assert len(texts) == 3
-    assert "United States" in texts[-1]
-    assert "25-34" in texts[-1]
-    assert "creamy pasta" in texts[-1]
+    assert recording_provider.calls == []
     assert all(len(item.wiki_passages) <= 2 for item in pool)
-    assert all(item.menu.price < 10_000 and item.menu.spice_level <= 1 for item in pool)
+    assert all(item.menu.price < 10_000 for item in pool)
     assert all(
         {evidence.category_code for evidence in item.criterion_evidence}
         == {"cuisine_origins", "flavors"}
@@ -321,8 +637,18 @@ def test_evidence_pool_uses_one_embedding_batch_public_wiki_and_v2_filters(
         raw_hits_per_value=20,
         passages_per_menu=4,
     )
-    assert vegan_pool
-    assert all(item.vegan_status in {"LIKELY_FIT", "POSSIBLE_WITH_CHECKS"} for item in vegan_pool)
+    # The deterministic demo seed has only PRESENT (not VERIFIED) vegan data.
+    # A forced vegan constraint must therefore fail closed instead of upgrading
+    # unreviewed source data into a recommendation claim.
+    assert vegan_pool == []
+    vegan_preview = repository.preview_recommendation(
+        session.session_id,
+        RecommendationCriteriaV2(
+            dietary_filters={"vegan": True},
+            max_spice_level=5,
+        ),
+    )
+    assert vegan_preview.zero_reason_codes == ["VEGAN_EVIDENCE_UNAVAILABLE"]
 
     halal_pool = repository.build_recommendation_evidence_pool(
         session.session_id,

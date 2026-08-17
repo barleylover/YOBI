@@ -1,0 +1,47 @@
+{
+  "schema_version": "1",
+  "baseline_boundary": {
+    "old_active_mapping_count": 0,
+    "old_path_outcome": "NO_MATCH",
+    "comparison_status": "NOT_COMPARABLE_BECAUSE_THE_OLD_ACTIVE_RELEASE_HAD_NO_MAPPED_MENUS"
+  },
+  "server_policy": {
+    "version": "yobi-concept-rank-v1",
+    "sha256": "5515c9c6877641a111e29ba418890b166b84374101877005749257eae826e191",
+    "hard_constraint_accuracy_required": 1.0,
+    "frozen_result_limit": 3
+  },
+  "golden_cases": [
+    {
+      "case_id": "concept_first_relaxation",
+      "candidates": [
+        {"menu_id": "a", "merchant_id": "merchant-1", "concept_id": "concept-1", "supports": {"flavor": 1.0}, "reviewed_evidence_count": 2},
+        {"menu_id": "b", "merchant_id": "merchant-1", "concept_id": "concept-2", "supports": {"flavor": 0.96}, "reviewed_evidence_count": 2},
+        {"menu_id": "c", "merchant_id": "merchant-2", "concept_id": "concept-1", "supports": {"flavor": 0.99}, "reviewed_evidence_count": 2}
+      ],
+      "expected_order": ["a", "b", "c"],
+      "expected_distinct_merchants": 2,
+      "expected_distinct_concepts": 2
+    },
+    {
+      "case_id": "deterministic_tie_break",
+      "candidates": [
+        {"menu_id": "z", "merchant_id": "merchant-b", "concept_id": "concept-z", "supports": {"origin": 0.8, "flavor": 0.8}, "reviewed_evidence_count": 3},
+        {"menu_id": "b", "merchant_id": "merchant-a", "concept_id": "concept-b", "supports": {"origin": 0.8, "flavor": 0.8}, "reviewed_evidence_count": 3},
+        {"menu_id": "a", "merchant_id": "merchant-a", "concept_id": "concept-a", "supports": {"origin": 0.8, "flavor": 0.8}, "reviewed_evidence_count": 3}
+      ],
+      "expected_order": ["a", "z", "b"],
+      "expected_distinct_merchants": 2,
+      "expected_distinct_concepts": 3
+    }
+  ],
+  "llm_fault_matrix": [
+    {"fault": "permuted_ids", "expected_server_ids_unchanged": true},
+    {"fault": "timeout_or_provider_failure", "expected_server_ids_unchanged": true},
+    {"fault": "invalid_or_ungrounded_output", "expected_server_ids_unchanged": true}
+  ],
+  "latency_evidence": {
+    "scope": "DETERMINISTIC_UNIT_EVALUATION_ONLY",
+    "oci_benchmark_required_for_release_claim": true
+  }
+}

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { startStructuredSession } from "./structured-helpers";
+import { selectFirstPricePreference, startStructuredSession } from "./structured-helpers";
 
 test("selection is deterministic and calls recommendation only after completion", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "iPhone 13", "One primary mobile proof is sufficient.");
@@ -14,9 +14,10 @@ test("selection is deterministic and calls recommendation only after completion"
 
   await startStructuredSession(page);
   await expect(page.getByRole("textbox")).toHaveCount(0);
-  const visibleChips = page.locator(".preference-chip:visible");
-  await visibleChips.nth(0).click();
-  await visibleChips.nth(1).click();
+  const firstPrice = await selectFirstPricePreference(page);
+  const secondPrice = firstPrice.locator("xpath=following-sibling::button[1]");
+  await secondPrice.click();
+  await expect(secondPrice).toHaveAttribute("aria-pressed", "true");
   expect(recommendationRequests).toHaveLength(0);
   expect(legacyMessageRequests).toEqual([]);
 
@@ -36,7 +37,7 @@ test("different menus keeps committed criteria and creates one SIMILAR request",
   });
 
   await startStructuredSession(page);
-  await page.locator(".preference-chip:visible").first().click();
+  await selectFirstPricePreference(page);
   await page.getByRole("button", { name: "Show my recommendations" }).click();
   await expect(page.getByRole("button", { name: "Show different menus" })).toBeVisible();
   await page.getByRole("button", { name: "Show different menus" }).click();

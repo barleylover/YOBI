@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Settings2, ShoppingBag } from "lucide-react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { OrderFlowPanel } from "../components/OrderFlowPanel";
+import { PostAddressNavigation } from "../components/PostAddressNavigation";
 import { PreferenceSelector } from "../components/PreferenceSelector";
 import { RecommendationResults } from "../components/RecommendationResults";
 import { actionableError, api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
+import { asSupportedLanguage, menuName } from "../lib/locale";
+import { getProductCopy } from "../lib/productI18n";
 import {
   getCatalogChangedCopy,
   getRecommendationConflictCopy,
@@ -18,7 +21,9 @@ import type {
   ConversationView,
   MenuSummary,
   RecommendationBatchV2,
+  RecommendationComparisonV2,
   RecommendationMode,
+  RecommendationPreviewV2,
   RecommendationRequestV2,
   StructuredRecommendation,
 } from "../types";
@@ -72,6 +77,7 @@ export function ChatPage() {
   const setPendingRecommendation = useSessionStore((state) => state.setPendingRecommendation);
   const setLatestRecommendation = useSessionStore((state) => state.setLatestRecommendation);
   const { copy, journeyCopy, language, locale } = useI18n();
+  const productCopy = getProductCopy(asSupportedLanguage(language));
   const recommendationCopy = getRecommendationCopy(language);
   const recommendationConflictCopy = getRecommendationConflictCopy(language);
   const catalogChangedCopy = getCatalogChangedCopy(language);
@@ -79,9 +85,16 @@ export function ChatPage() {
   const [hydrating, setHydrating] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [preview, setPreview] = useState<RecommendationPreviewV2 | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewMessage, setPreviewMessage] = useState("");
   const [selectedMenu, setSelectedMenu] = useState<MenuSummary | null>(null);
   const stateVersionRef = useRef(session?.state_version ?? 0);
   const pollCountRef = useRef(0);
+  const recommendationAbortRef = useRef<AbortController | null>(null);
+  const previewAbortRef = useRef<AbortController | null>(null);
+  const previewValidationAbortRef = useRef<AbortController | null>(null);
+  const lastPreviewCriteriaRef = useRef("");
   const criteriaRequestKey = `yobi-pending-criteria-request-${sessionId}`;
 
   const applyBatch = useCallback((batch: RecommendationBatchV2) => {
@@ -138,13 +151,17 @@ export function ChatPage() {
   }, [applyConversation, sessionId]);
 
   const executeRecommendation = useCallback(async (request: RecommendationRequestV2) => {
+    recommendationAbortRef.current?.abort();
+    const controller = new AbortController();
+    recommendationAbortRef.current = controller;
     setBusy(true);
     setError("");
     setPendingRecommendation(request);
     try {
-      const batch = await api.createRecommendation(sessionId, request);
+      const batch = await api.createRecommendation(sessionId, request, controller.signal);
       applyBatch(batch);
     } catch (cause) {
+      if (cause instanceof Error && cause.message === "REQUEST_ABORTED") return;
       try {
         const conversation = await api.getConversation(sessionId);
         const recovered = conversation.active_recommendation ?? conversation.latest_recommendation;
@@ -158,7 +175,10 @@ export function ChatPage() {
         ? actionableError(cause, recommendationCopy.failedDescription)
         : recommendationCopy.failedDescription);
     } finally {
-      setBusy(false);
+      if (recommendationAbortRef.current === controller) {
+        recommendationAbortRef.current = null;
+        setBusy(false);
+      }
     }
   }, [applyBatch, applyConversation, language, recommendationCopy.failedDescription, sessionId, setPendingRecommendation, setRecommendationPhase]);
 
@@ -186,6 +206,63 @@ export function ChatPage() {
     }
   }, [applyBatch, applyConversation, language, recommendationCopy.failedDescription, sessionId, setRecommendationPhase]);
 
+  const checkCriteriaPreview = useCallback(async (
+    criteria: typeof draftCriteria,
+    blockIfZero = false,
+  ) => {
+    if (!catalog) return true;
+    // A catalog-load preview can be scheduled while a chip click is waiting
+    // for its zero-result validation. Keep the two requests independent so
+    // the background preview cannot cancel a valid user selection.
+    if (!blockIfZero && previewValidationAbortRef.current) return true;
+    if (blockIfZero) {
+      previewAbortRef.current?.abort();
+      previewValidationAbortRef.current?.abort();
+    } else {
+      previewAbortRef.current?.abort();
+    }
+    const controller = new AbortController();
+    const controllerRef = blockIfZero ? previewValidationAbortRef : previewAbortRef;
+    controllerRef.current = controller;
+    setPreviewLoading(true);
+    setPreviewMessage("");
+    try {
+      const result = await api.previewRecommendation(
+        sessionId,
+        criteria,
+        catalog.catalog_version,
+        controller.signal,
+      );
+      if (blockIfZero && result.eligible_menu_count === 0) {
+        setPreviewMessage(productCopy.recommendation.zeroCombination);
+        return false;
+      }
+      lastPreviewCriteriaRef.current = JSON.stringify(criteria);
+      setPreview(result);
+      setPreviewMessage(result.eligible_menu_count === 0
+        ? productCopy.recommendation.zeroCombination
+        : productCopy.recommendation.previewCount(result.eligible_menu_count, result.eligible_merchant_count));
+      return true;
+    } catch (cause) {
+      if (cause instanceof Error && cause.message === "REQUEST_ABORTED") return false;
+      setPreviewMessage(productCopy.recommendation.previewUnavailable);
+      return true;
+    } finally {
+      if (controllerRef.current === controller) {
+        controllerRef.current = null;
+      }
+      if (!previewAbortRef.current && !previewValidationAbortRef.current) {
+        setPreviewLoading(false);
+      }
+    }
+  }, [catalog, productCopy.recommendation, sessionId]);
+
+  useEffect(() => () => {
+    recommendationAbortRef.current?.abort();
+    previewAbortRef.current?.abort();
+    previewValidationAbortRef.current?.abort();
+  }, []);
+
   useEffect(() => {
     if (!sessionId || session?.session_id !== sessionId) return;
     let active = true;
@@ -196,6 +273,14 @@ export function ChatPage() {
       .finally(() => { if (active) setHydrating(false); });
     return () => { active = false; };
   }, [applyConversation, session?.session_id, sessionId]);
+
+  useEffect(() => {
+    if (!catalog || recommendationPhase !== "SELECTING") return;
+    const criteriaKey = JSON.stringify(draftCriteria);
+    if (criteriaKey === lastPreviewCriteriaRef.current) return;
+    const timer = window.setTimeout(() => { void checkCriteriaPreview(draftCriteria); }, 280);
+    return () => window.clearTimeout(timer);
+  }, [catalog, checkCriteriaPreview, draftCriteria, recommendationPhase]);
 
   useEffect(() => {
     if (hydrating || latestRecommendation?.status !== "PENDING" || !pendingRecommendation || busy) return;
@@ -213,6 +298,7 @@ export function ChatPage() {
 
   useEffect(() => {
     if (!catalog) return;
+    const current = useSessionStore.getState().draftCriteria;
     const optionCodes = new Map(catalog.categories.map((category) => [
       category.code,
       new Set(category.options.map((option) => option.code)),
@@ -227,19 +313,79 @@ export function ChatPage() {
       "textures",
       "cooking_methods",
     ] as const;
-    const next = { ...draftCriteria };
+    const next = { ...current, dietary_filters: { ...current.dietary_filters } };
     let changed = false;
+    let visibleSelectionChanged = false;
     for (const category of categoryKeys) {
       const validCodes = optionCodes.get(category) ?? new Set<string>();
-      const retained = draftCriteria[category].filter((code) => validCodes.has(code));
-      if (retained.length !== draftCriteria[category].length) changed = true;
+      const retained = current[category].filter((code) => validCodes.has(code));
+      if (retained.length !== current[category].length) {
+        changed = true;
+        visibleSelectionChanged = true;
+      }
       next[category] = retained;
+    }
+    if (
+      catalog.capabilities?.halal_certified_only?.enabled === false
+      && next.dietary_filters.halal_certified_only
+    ) {
+      next.dietary_filters = { ...next.dietary_filters, halal_certified_only: false };
+      changed = true;
+      visibleSelectionChanged = true;
+    }
+    if (catalog.capabilities?.vegan?.enabled === false && next.dietary_filters.vegan) {
+      next.dietary_filters = { ...next.dietary_filters, vegan: false };
+      changed = true;
+      visibleSelectionChanged = true;
+    }
+    // The v2 server contract requires a spice value. Level 5 is the neutral
+    // no-cap value, so an unavailable control must not silently filter out
+    // menus with unreviewed spice metadata.
+    if (catalog.capabilities?.max_spice_level?.enabled === false && next.max_spice_level !== 5) {
+      next.max_spice_level = 5;
+      changed = true;
     }
     if (changed) {
       setDraftCriteria(next);
-      setError(catalogChangedCopy);
+      if (visibleSelectionChanged) setError(catalogChangedCopy);
     }
   }, [catalog, catalogChangedCopy, draftCriteria, setDraftCriteria]);
+
+  const transcriptCriteria = committedCriteria ?? draftCriteria;
+  const selectedPreferenceLabels = useMemo(() => {
+    if (!catalog) return [];
+    const labels = catalog.categories.flatMap((category) => {
+      const selected = new Set(transcriptCriteria[category.code]);
+      return category.options
+        .filter((option) => selected.has(option.code))
+        .map((option) => option.label);
+    });
+    if (transcriptCriteria.dietary_filters.halal_certified_only) labels.push(recommendationCopy.halal);
+    if (transcriptCriteria.dietary_filters.vegan) labels.push(recommendationCopy.vegan);
+    return labels;
+  }, [catalog, recommendationCopy.halal, recommendationCopy.vegan, transcriptCriteria]);
+  const conversationDate = useMemo(() => new Intl.DateTimeFormat(locale, {
+    month: "short",
+    day: "numeric",
+  }).format(new Date()), [locale]);
+
+  function applyDraftCriteria(next: typeof draftCriteria) {
+    if (!catalog) {
+      setDraftCriteria(next);
+      return;
+    }
+    const normalized = {
+      ...next,
+      dietary_filters: {
+        halal_certified_only: catalog.capabilities?.halal_certified_only?.enabled === false
+          ? false
+          : next.dietary_filters.halal_certified_only,
+        vegan: catalog.capabilities?.vegan?.enabled === false ? false : next.dietary_filters.vegan,
+      },
+      max_spice_level: catalog.capabilities?.max_spice_level?.enabled === false ? 5 as const : next.max_spice_level,
+    };
+    setDraftCriteria(normalized);
+  }
 
   if (!profile || !session || session.session_id !== sessionId || !addressRefId) return <Navigate to="/" replace />;
 
@@ -327,6 +473,17 @@ export function ChatPage() {
     });
   }
 
+  async function compareRecommendations(): Promise<RecommendationComparisonV2> {
+    const snapshotId = latestRecommendation?.snapshot_id;
+    const requestId = latestRecommendation?.request_id;
+    if (!snapshotId || !requestId) throw new Error("RECOMMENDATION_SNAPSHOT_NOT_FOUND");
+    return api.compareRecommendations(sessionId, {
+      snapshot_id: snapshotId,
+      request_id: requestId,
+      idempotency_key: `comparison-${snapshotId}`,
+    });
+  }
+
   async function chooseMenu(recommendation: StructuredRecommendation) {
     const snapshotId = latestRecommendation?.snapshot_id;
     if (!snapshotId) return;
@@ -343,6 +500,27 @@ export function ChatPage() {
     } catch (cause) {
       setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
       await refreshConversation().catch(() => undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function chooseCollectionMenu(menu: MenuSummary, snapshotId: string) {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await recordConversationEvent({
+        event_type: "SELECT_MENU",
+        snapshot_id: snapshotId,
+        menu_id: menu.menu_id,
+      });
+      setSelectedMenu(result.selected_menu ?? menu);
+      setRecommendationPhase("ORDERING");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (cause) {
+      setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
+      await refreshConversation().catch(() => undefined);
+      throw cause;
     } finally {
       setBusy(false);
     }
@@ -406,25 +584,83 @@ export function ChatPage() {
           {catalogStale && catalog && <div className="catalog-stale-notice" role="status"><span>{recommendationCopy.savedCatalog}</span><button type="button" onClick={reloadCatalog}>{recommendationCopy.retry}</button></div>}
           {error && recommendationPhase !== "ERROR" && <p className="form-error" role="alert">{error}</p>}
 
+          {catalog && <div className="conversation-day-divider" aria-hidden="true"><span>{conversationDate}</span></div>}
+
+          {catalog && recommendationPhase === "SELECTING" && (
+            <div className="assistant-message-row preference-prompt-message" data-testid="assistant-preference-prompt">
+              <div className="assistant-avatar" aria-hidden="true">Y</div>
+              <div className="assistant-message-stack">
+                <strong className="assistant-name"><i /> {productCopy.recommendation.assistantName}</strong>
+                <section className="assistant-bubble preference-prompt-bubble">
+                  <p className="eyebrow">{recommendationCopy.selectorEyebrow}</p>
+                  <p className="conversation-prompt-title">{recommendationCopy.selectorTitle}</p>
+                  <p>{recommendationCopy.selectorDescription}</p>
+                </section>
+              </div>
+            </div>
+          )}
+
+          {catalog && recommendationPhase !== "SELECTING" && (
+            <section className="conversation-history" aria-label={copy.conversation}>
+              <div className="assistant-message-row compact-message">
+                <div className="assistant-avatar" aria-hidden="true">Y</div>
+                <div className="assistant-message-stack">
+                  <strong className="assistant-name"><i /> {productCopy.recommendation.assistantName}</strong>
+                  <section className="assistant-bubble compact-prompt">
+                    <p>{recommendationCopy.selectorTitle}</p>
+                  </section>
+                </div>
+              </div>
+              {selectedPreferenceLabels.length > 0 && (
+                <div className="user-message-row" data-testid="user-preference-message">
+                  <div className="user-message-stack">
+                    <strong>{copy.you}</strong>
+                    <section className="user-bubble" aria-label={recommendationCopy.selectedSummary}>
+                      {selectedPreferenceLabels.map((label, index) => <span key={`${label}-${index}`}>{label}</span>)}
+                    </section>
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
+
           {catalog && recommendationPhase === "SELECTING" && (
             <PreferenceSelector
               catalog={catalog}
               criteria={draftCriteria}
               copy={recommendationCopy}
               busy={busy}
+              previewLoading={previewLoading}
+              preview={preview}
+              previewMessage={previewMessage}
               canSubmitUnchanged={Boolean(committedCriteria)}
+              conversationMode
               conflictMessage={recommendationConflictCopy}
-              onChange={setDraftCriteria}
+              onChange={applyDraftCriteria}
+              onValidateAdd={(nextCriteria) => checkCriteriaPreview(nextCriteria, true)}
               onComplete={() => void submitCriteria()}
             />
           )}
 
           {catalog && showsLoading && (
-            <section className="recommendation-progress">
-              <span className="loading-orbit" />
-              <h1>{hydrating ? recommendationCopy.restoring : recommendationPhase === "GENERATING" ? recommendationCopy.generating : recommendationCopy.retrieving}</h1>
-              <p>{recommendationCopy.noHiddenRelaxation}</p>
-            </section>
+            <div className="assistant-message-row state-message">
+              <div className="assistant-avatar" aria-hidden="true">Y</div>
+              <div className="assistant-message-stack">
+                <strong className="assistant-name">{productCopy.recommendation.assistantName}</strong>
+                <section className="assistant-bubble recommendation-progress">
+                  <div className="chat-loading-heading">
+                    <span className="typing-indicator" aria-hidden="true"><i /><i /><i /></span>
+                    <h1>{hydrating ? recommendationCopy.restoring : recommendationPhase === "GENERATING" ? recommendationCopy.generating : recommendationCopy.retrieving}</h1>
+                  </div>
+                  <ol className="recommendation-stages" aria-label={recommendationCopy.retrieving}>
+                    <li className="active">{productCopy.recommendation.retrievingStage}</li>
+                    <li className={recommendationPhase === "GENERATING" ? "active" : ""}>{productCopy.recommendation.evidenceStage}</li>
+                    <li className={recommendationPhase === "GENERATING" ? "active" : ""}>{productCopy.recommendation.generatingStage}</li>
+                  </ol>
+                  <p>{recommendationCopy.noHiddenRelaxation}</p>
+                </section>
+              </div>
+            </div>
           )}
 
           {catalog && latestRecommendation && (recommendationPhase === "RESULTS" || recommendationPhase === "SEARCH_FALLBACK") && (
@@ -438,26 +674,75 @@ export function ChatPage() {
               onChoose={(item) => void chooseMenu(item)}
               onSimilar={() => void requestAnother("SIMILAR")}
               onEdit={editCriteria}
+              onCompare={compareRecommendations}
               onRetry={() => void requestAnother("RETRY")}
             />
           )}
 
-          {recommendationPhase === "NO_RESULTS" && <section className="recommendation-state-card"><h1>{recommendationCopy.noResultsTitle}</h1><p>{recommendationCopy.noResultsDescription}</p><button className="primary-button" onClick={editCriteria}>{recommendationCopy.editCriteria}</button></section>}
-          {recommendationPhase === "ERROR" && <section className="recommendation-state-card error"><h1>{recommendationCopy.failedTitle}</h1><p>{error || recommendationCopy.failedDescription}</p><div className="button-row"><button className="primary-button" onClick={() => pendingRecommendation ? void recoverRecommendation(pendingRecommendation) : void requestAnother("RETRY")}>{recommendationCopy.tryAgain}</button><button className="secondary-button" onClick={editCriteria}>{recommendationCopy.editCriteria}</button></div></section>}
+          {recommendationPhase === "NO_RESULTS" && (
+            <div className="assistant-message-row state-message">
+              <div className="assistant-avatar" aria-hidden="true">Y</div>
+              <div className="assistant-message-stack">
+                <strong className="assistant-name">{productCopy.recommendation.assistantName}</strong>
+                <section className="assistant-bubble recommendation-state-card">
+                  <h1>{latestRecommendation?.failure_code?.includes("EXHAUST") ? productCopy.recommendation.exhaustedTitle : recommendationCopy.noResultsTitle}</h1>
+                  <p>{latestRecommendation?.failure_code?.includes("EXHAUST") ? productCopy.recommendation.exhaustedDescription : recommendationCopy.noResultsDescription}</p>
+                  <button className="primary-button" onClick={editCriteria}>{recommendationCopy.editCriteria}</button>
+                </section>
+              </div>
+            </div>
+          )}
+          {recommendationPhase === "ERROR" && (
+            <div className="assistant-message-row state-message">
+              <div className="assistant-avatar" aria-hidden="true">Y</div>
+              <div className="assistant-message-stack">
+                <strong className="assistant-name">{productCopy.recommendation.assistantName}</strong>
+                <section className="assistant-bubble recommendation-state-card error">
+                  <h1>{recommendationCopy.failedTitle}</h1>
+                  <p>{error || recommendationCopy.failedDescription}</p>
+                  <div className="button-row"><button className="primary-button" onClick={() => pendingRecommendation ? void recoverRecommendation(pendingRecommendation) : void requestAnother("RETRY")}>{recommendationCopy.tryAgain}</button><button className="secondary-button" onClick={editCriteria}>{recommendationCopy.editCriteria}</button></div>
+                </section>
+              </div>
+            </div>
+          )}
 
           {selectedMenu && recommendationPhase === "ORDERING" && (
-            <OrderFlowPanel
-              sessionId={sessionId}
-              menu={selectedMenu}
-              addressRefId={addressRefId}
-              dietaryFilters={(committedCriteria ?? draftCriteria).dietary_filters}
-              onClose={() => { setSelectedMenu(null); setRecommendationPhase("RESULTS"); }}
-              onOptionChange={updateConversationOptions}
-            />
+            <section className="order-conversation">
+              <div className="user-message-row" data-testid="selected-menu-message">
+                <div className="user-message-stack">
+                  <strong>{copy.you}</strong>
+                  <section className="user-bubble selected-menu-bubble">{menuName(selectedMenu, language)}</section>
+                </div>
+              </div>
+              <div className="assistant-message-row order-message">
+                <div className="assistant-avatar" aria-hidden="true">Y</div>
+                <div className="assistant-message-stack">
+                  <strong className="assistant-name"><i /> {productCopy.recommendation.assistantName}</strong>
+                  <section className="assistant-bubble order-bubble">
+                    <p className="eyebrow">{copy.orderBuilder}</p>
+                    <OrderFlowPanel
+                      sessionId={sessionId}
+                      menu={selectedMenu}
+                      addressRefId={addressRefId}
+                      dietaryFilters={(committedCriteria ?? draftCriteria).dietary_filters}
+                      onClose={() => { setSelectedMenu(null); setRecommendationPhase("RESULTS"); }}
+                      onOptionChange={updateConversationOptions}
+                    />
+                  </section>
+                </div>
+              </div>
+            </section>
           )}
         </div>
         <footer className="experience-notice">{recommendationCopy.experienceNotice}</footer>
       </section>
+      <PostAddressNavigation
+        sessionId={sessionId}
+        language={language}
+        locale={locale}
+        disabled={busy}
+        onChoose={chooseCollectionMenu}
+      />
     </main>
   );
 }

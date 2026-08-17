@@ -1,19 +1,19 @@
 import { expect, test } from "@playwright/test";
-import { startStructuredSession } from "./structured-helpers";
+import { selectFirstPricePreference, startStructuredSession } from "./structured-helpers";
 
 test("structured draft survives profile editing without allergy or chat controls", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "iPhone 13", "One primary mobile proof is sufficient.");
   await startStructuredSession(page);
-  const firstChip = page.locator(".preference-chip:visible").first();
+  const firstChip = await selectFirstPricePreference(page);
   const label = (await firstChip.innerText()).trim();
-  await firstChip.click();
   await page.getByRole("button", { name: "Edit my information" }).click();
 
   await expect(page).toHaveURL(/\/profile\?edit=1/);
-  await expect(page.getByText("Current delivery address")).toBeVisible();
+  await expect(page.getByText("Current demo address")).toBeVisible();
   await expect(page.getByText(/Allerg/i)).toHaveCount(0);
+  await expect(page.getByText(/Age range|Religion|Favourite comfort foods/i)).toHaveCount(0);
   await expect(page.getByRole("radio")).toHaveCount(0);
-  await page.getByRole("button", { name: "Save changes" }).click();
+  await page.getByRole("button", { name: "Keep this address" }).click();
 
   await expect(page).toHaveURL(/\/chat\/session_/);
   await expect(page.getByRole("button", { name: label, exact: true })).toHaveAttribute("aria-pressed", "true");

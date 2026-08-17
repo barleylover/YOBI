@@ -59,6 +59,9 @@ CREATE TABLE IF NOT EXISTS recommendation_snapshot (
   generation_status TEXT,
   generation_call_count INTEGER NOT NULL DEFAULT 0 CHECK (generation_call_count BETWEEN 0 AND 1),
   grounding_validation_json TEXT,
+  ranking_trace_json TEXT,
+  ranking_policy_version TEXT,
+  support_manifest_sha256 TEXT,
   created_at TEXT NOT NULL
 );
 
@@ -75,20 +78,47 @@ CREATE TABLE IF NOT EXISTS conversation_event (
   UNIQUE(session_id, idempotency_key)
 );
 
+CREATE TABLE IF NOT EXISTS catalog_import_batch (
+  catalog_import_id TEXT PRIMARY KEY,
+  catalog_release_id TEXT UNIQUE NOT NULL,
+  data_origin TEXT NOT NULL,
+  source_platform TEXT NOT NULL,
+  source_zip_sha256 TEXT NOT NULL,
+  source_xlsx_sha256 TEXT NOT NULL,
+  source_summary_sha256 TEXT NOT NULL,
+  package_sha256 TEXT NOT NULL,
+  selection_manifest_sha256 TEXT NOT NULL,
+  selection_algorithm_version TEXT NOT NULL,
+  collection_location TEXT NOT NULL,
+  source_collected_at TEXT NOT NULL,
+  selected_merchant_count INTEGER NOT NULL,
+  expected_counts_json TEXT NOT NULL,
+  actual_counts_json TEXT NOT NULL,
+  diagnostics_json TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('LOADING','ACTIVE','FAILED','RETIRED')),
+  started_at TEXT NOT NULL,
+  completed_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS merchant (
   merchant_id TEXT PRIMARY KEY,
   service_area TEXT NOT NULL,
   service_area_id TEXT,
   name_ko TEXT NOT NULL,
-  name_en TEXT NOT NULL,
-  description TEXT NOT NULL,
+  name_en TEXT,
+  description TEXT,
   delivery_fee INTEGER NOT NULL,
   eta_min INTEGER NOT NULL,
   eta_max INTEGER NOT NULL,
   min_order_amount INTEGER NOT NULL,
-  flavor_profile TEXT NOT NULL,
-  packaging_signal TEXT NOT NULL,
-  is_synthetic INTEGER NOT NULL DEFAULT 1
+  flavor_profile TEXT,
+  packaging_signal TEXT,
+  is_synthetic INTEGER NOT NULL DEFAULT 1,
+  catalog_import_id TEXT,
+  data_origin TEXT,
+  source_platform TEXT,
+  source_merchant_id TEXT,
+  source_collected_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS menu (
@@ -97,19 +127,29 @@ CREATE TABLE IF NOT EXISTS menu (
   category TEXT NOT NULL,
   category_id TEXT,
   name_ko TEXT NOT NULL,
-  name_en TEXT NOT NULL,
-  description TEXT NOT NULL,
-  cultural_description TEXT NOT NULL,
+  name_en TEXT,
+  description TEXT,
+  cultural_description TEXT,
   price INTEGER NOT NULL CHECK (price >= 0),
-  serves_min INTEGER NOT NULL,
-  serves_max INTEGER NOT NULL,
-  spice_level INTEGER NOT NULL CHECK (spice_level BETWEEN 1 AND 5),
+  serves_min INTEGER,
+  serves_max INTEGER,
+  spice_level INTEGER CHECK (spice_level BETWEEN 1 AND 5),
   dietary_tags_json TEXT NOT NULL,
   allergen_tags_json TEXT NOT NULL,
   semantic_text TEXT NOT NULL,
   availability TEXT NOT NULL DEFAULT 'AVAILABLE',
   is_synthetic INTEGER NOT NULL DEFAULT 1,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  catalog_import_id TEXT,
+  data_origin TEXT,
+  source_platform TEXT,
+  source_menu_id TEXT,
+  source_section_id TEXT,
+  name_en_status TEXT,
+  cultural_description_status TEXT,
+  serves_status TEXT,
+  spice_status TEXT,
+  dietary_data_status TEXT
 );
 
 CREATE TABLE IF NOT EXISTS evidence (
@@ -138,25 +178,135 @@ CREATE TABLE IF NOT EXISTS review_snippet (
 CREATE TABLE IF NOT EXISTS menu_option_group (
   option_group_id TEXT PRIMARY KEY,
   menu_id TEXT NOT NULL REFERENCES menu(menu_id),
-  name_en TEXT NOT NULL,
+  name_en TEXT,
   name_ko TEXT NOT NULL,
-  description TEXT NOT NULL,
+  description TEXT,
   required INTEGER NOT NULL,
   min_select INTEGER NOT NULL,
   max_select INTEGER NOT NULL,
-  sort_order INTEGER NOT NULL
+  sort_order INTEGER NOT NULL,
+  catalog_import_id TEXT,
+  source_option_group_id TEXT,
+  normalization_code TEXT
 );
 
 CREATE TABLE IF NOT EXISTS menu_option_item (
   option_item_id TEXT PRIMARY KEY,
   option_group_id TEXT NOT NULL REFERENCES menu_option_group(option_group_id),
-  name_en TEXT NOT NULL,
+  name_en TEXT,
   name_ko TEXT NOT NULL,
-  description TEXT NOT NULL,
+  description TEXT,
   price_delta INTEGER NOT NULL CHECK (price_delta >= 0),
   availability TEXT NOT NULL DEFAULT 'AVAILABLE',
   dietary_conflict TEXT,
+  sort_order INTEGER NOT NULL,
+  catalog_import_id TEXT,
+  source_option_item_key TEXT
+);
+
+CREATE TABLE IF NOT EXISTS merchant_source_detail (
+  merchant_id TEXT PRIMARY KEY REFERENCES merchant(merchant_id),
+  catalog_import_id TEXT NOT NULL REFERENCES catalog_import_batch(catalog_import_id),
+  latitude TEXT,
+  longitude TEXT,
+  distance_m REAL,
+  vertical_type TEXT,
+  vertical_sub_type TEXT,
+  current_open_status TEXT,
+  review_average REAL,
+  review_count INTEGER,
+  review_image_count INTEGER,
+  review_reply_count INTEGER,
+  franchise_json TEXT,
+  vendor_categories_json TEXT NOT NULL,
+  tags_json TEXT NOT NULL,
+  image_json TEXT NOT NULL,
+  serving_type_json TEXT NOT NULL,
+  representative_menus_json TEXT NOT NULL,
+  operational_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS menu_source_detail (
+  menu_id TEXT PRIMARY KEY REFERENCES menu(menu_id),
+  catalog_import_id TEXT NOT NULL REFERENCES catalog_import_batch(catalog_import_id),
+  source_section_id TEXT,
+  review_count INTEGER,
+  liquor INTEGER NOT NULL,
+  is_adult INTEGER NOT NULL,
+  verified_adult INTEGER NOT NULL,
+  soldout INTEGER NOT NULL,
+  stock_amount INTEGER,
+  thumbnail_json TEXT NOT NULL,
+  badges_json TEXT NOT NULL,
+  announcement_json TEXT,
+  price_json TEXT NOT NULL,
+  point INTEGER,
+  point_promotions_json TEXT NOT NULL,
+  operational_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS menu_source_section (
+  source_section_key TEXT PRIMARY KEY,
+  catalog_import_id TEXT NOT NULL REFERENCES catalog_import_batch(catalog_import_id),
+  merchant_id TEXT NOT NULL REFERENCES merchant(merchant_id),
+  source_section_id TEXT NOT NULL,
+  section_type TEXT,
+  title TEXT,
+  description TEXT,
+  liquor INTEGER NOT NULL,
+  is_adult INTEGER NOT NULL,
+  disposable INTEGER NOT NULL,
+  additional_discounted INTEGER NOT NULL,
   sort_order INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS menu_source_section_item (
+  source_section_key TEXT NOT NULL REFERENCES menu_source_section(source_section_key),
+  menu_id TEXT NOT NULL REFERENCES menu(menu_id),
+  sort_order INTEGER NOT NULL,
+  PRIMARY KEY(source_section_key, menu_id)
+);
+
+CREATE TABLE IF NOT EXISTS source_option (
+  source_option_key TEXT PRIMARY KEY,
+  catalog_import_id TEXT NOT NULL REFERENCES catalog_import_batch(catalog_import_id),
+  merchant_id TEXT NOT NULL REFERENCES merchant(merchant_id),
+  source_option_id TEXT NOT NULL,
+  name_ko TEXT NOT NULL,
+  description TEXT,
+  origin_price INTEGER,
+  final_price INTEGER,
+  discount_percent REAL,
+  soldout INTEGER NOT NULL,
+  stock_amount INTEGER,
+  deposit_json TEXT NOT NULL,
+  reusable_packaging INTEGER NOT NULL,
+  source_json TEXT NOT NULL,
+  UNIQUE(catalog_import_id, merchant_id, source_option_id)
+);
+
+CREATE TABLE IF NOT EXISTS option_group_source_detail (
+  option_group_id TEXT PRIMARY KEY REFERENCES menu_option_group(option_group_id),
+  catalog_import_id TEXT NOT NULL REFERENCES catalog_import_batch(catalog_import_id),
+  source_option_group_id TEXT NOT NULL,
+  multiple_limit INTEGER,
+  available_quantity INTEGER NOT NULL,
+  available_multiple INTEGER NOT NULL,
+  original_min_select INTEGER NOT NULL,
+  original_max_select INTEGER NOT NULL,
+  badges_json TEXT NOT NULL,
+  tooltip_message TEXT,
+  source_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS catalog_source_payload (
+  payload_id TEXT PRIMARY KEY,
+  catalog_import_id TEXT NOT NULL REFERENCES catalog_import_batch(catalog_import_id),
+  entity_type TEXT NOT NULL CHECK (entity_type IN ('SHOP','MENU_RESPONSE')),
+  source_entity_id TEXT NOT NULL,
+  payload_sha256 TEXT NOT NULL,
+  raw_payload TEXT NOT NULL,
+  UNIQUE(catalog_import_id, entity_type, source_entity_id)
 );
 
 CREATE TABLE IF NOT EXISTS address_place (
@@ -530,8 +680,34 @@ CREATE TABLE IF NOT EXISTS recommendation_release_family (
   certification_release_id TEXT NOT NULL,
   embedding_model TEXT NOT NULL,
   embedding_version TEXT NOT NULL,
+  support_manifest_sha256 TEXT NOT NULL DEFAULT '0000000000000000000000000000000000000000000000000000000000000000',
+  ranking_policy_version TEXT NOT NULL DEFAULT 'legacy-llm-rank-v2',
+  ranking_policy_sha256 TEXT NOT NULL DEFAULT '0000000000000000000000000000000000000000000000000000000000000000',
   status TEXT NOT NULL CHECK (status IN ('LOADING','READY','ACTIVE','RETIRED')),
   activated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS concept_preference_support (
+  knowledge_release_id TEXT NOT NULL,
+  concept_id TEXT NOT NULL,
+  category_code TEXT NOT NULL,
+  option_code TEXT NOT NULL,
+  support_status TEXT NOT NULL
+    CHECK (support_status IN ('SUPPORTED','UNSUPPORTED','REVIEW_REQUIRED')),
+  support_strength REAL NOT NULL CHECK (support_strength >= 0 AND support_strength <= 1),
+  evidence_chunk_id TEXT,
+  provenance_type TEXT NOT NULL,
+  source_ref TEXT NOT NULL,
+  review_status TEXT NOT NULL,
+  support_method_version TEXT NOT NULL,
+  is_synthetic INTEGER NOT NULL DEFAULT 1 CHECK (is_synthetic IN (0,1)),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(knowledge_release_id, concept_id, category_code, option_code),
+  FOREIGN KEY(knowledge_release_id, concept_id)
+    REFERENCES dish_concept(release_id, concept_id),
+  FOREIGN KEY(knowledge_release_id, evidence_chunk_id)
+    REFERENCES knowledge_chunk(release_id, chunk_id),
+  CHECK (support_status != 'SUPPORTED' OR evidence_chunk_id IS NOT NULL)
 );
 
 CREATE TABLE IF NOT EXISTS recommendation_runtime_state (
@@ -617,6 +793,11 @@ CREATE TABLE IF NOT EXISTS structured_recommendation_request (
   snapshot_id TEXT,
   evidence_pool_json TEXT NOT NULL DEFAULT '[]',
   result_json TEXT,
+  final_candidates_json TEXT NOT NULL DEFAULT '[]',
+  ranking_trace_json TEXT NOT NULL DEFAULT '{}',
+  ranking_policy_version TEXT NOT NULL DEFAULT 'legacy-llm-rank-v2',
+  support_manifest_sha256 TEXT NOT NULL DEFAULT '0000000000000000000000000000000000000000000000000000000000000000',
+  finalized_at TEXT,
   dispatch_count INTEGER NOT NULL DEFAULT 0 CHECK (dispatch_count BETWEEN 0 AND 1),
   failure_code TEXT,
   created_at TEXT NOT NULL,
@@ -637,7 +818,6 @@ CREATE INDEX IF NOT EXISTS idx_merchant_cert_active
   );
 CREATE INDEX IF NOT EXISTS idx_preference_option_active
   ON recommendation_preference_option(catalog_version, category_code, active, display_order);
-
 CREATE INDEX IF NOT EXISTS idx_menu_category ON menu(category, availability, price);
 CREATE INDEX IF NOT EXISTS idx_menu_merchant ON menu(merchant_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_subject ON evidence(subject_id, claim_type);
@@ -645,4 +825,14 @@ CREATE INDEX IF NOT EXISTS idx_review_menu ON review_snippet(menu_id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_menu ON menu_knowledge(menu_id, knowledge_type);
 CREATE INDEX IF NOT EXISTS idx_dietary_menu ON menu_dietary_attribute(menu_id, status);
 CREATE INDEX IF NOT EXISTS idx_allergen_menu ON menu_allergen(menu_id, status);
+CREATE INDEX IF NOT EXISTS idx_catalog_batch_status
+  ON catalog_import_batch(status, completed_at);
+CREATE INDEX IF NOT EXISTS idx_source_section_merchant
+  ON menu_source_section(merchant_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_option_group_menu
+  ON menu_option_group(menu_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_option_item_group
+  ON menu_option_item(option_group_id, availability, sort_order);
+CREATE INDEX IF NOT EXISTS idx_source_option_merchant
+  ON source_option(merchant_id, source_option_id);
 """

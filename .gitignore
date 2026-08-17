@@ -12,6 +12,7 @@ __pycache__/
 backend/.coverage
 backend/htmlcov/
 backend/data/*.db
+backend/backend/data/*.db
 frontend/backend/data/*.db
 backend/data/uploads/
 frontend/node_modules/

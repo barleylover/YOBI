@@ -20,13 +20,15 @@ def test_release_archive_contains_knowledge_and_all_migrations() -> None:
     assert "008_checkout_cart_version.sql" in source
     assert "009_cart_confirmation_fingerprint.sql" in source
     assert "010_structured_hybrid_rag_recommendation.sql" in source
+    assert "011_external_catalog_import.sql" in source
+    assert "012_concept_preference_support_and_server_ranking.sql" in source
     assert "persist_runtime_release_policy" in source
     assert "actual_migration_list" in source
-    assert "Migration directory must contain exactly 001-010" in source
-    assert 'status["expected_migration_count"] == status["applied_migration_count"] == 10' in source
+    assert "Migration directory must contain exactly 001-012" in source
+    assert 'status["expected_migration_count"] == status["applied_migration_count"] == 12' in source
     assert 'status["latest_expected_migration"]' in source
     assert 'status["latest_applied_migration"]' in source
-    assert '== "010"' in source
+    assert '== "012"' in source
     assert 'raise SystemExit("MIGRATION_LEDGER_NOT_EXACT")' in source
     assert "assert status[" not in source
     runtime_import = source.index('import app.main; print("Verified Python 3.9 application imports.")')
@@ -35,6 +37,26 @@ def test_release_archive_contains_knowledge_and_all_migrations() -> None:
     active_snapshot = source.index('old_knowledge_release_id="$(run_knowledge_manager get-active)"')
     seed = source.index('"$new_release/scripts/seed_demo.py" --upsert')
     assert runtime_import < migration < exact_gate < active_snapshot < seed
+    assert '"$new_release/scripts/catalog_mode.py" get-mode' in source
+    assert '"$new_release/scripts/catalog_mode.py" verify-external' in source
+    assert '"$new_release/scripts/manage_demo_address.py" --apply' in source
+    assert '"$new_release/scripts/manage_demo_address.py" --verify-only' in source
+    assert "--stage-only" in source
+    assert "--activate-staged" in source
+    assert "--scope staged --verify" in source
+    assert "--scope active --verify" in source
+    assert "verify-external-gates" in source
+    assert "release_gate_contract.py" in source
+    assert source.index('"$new_release/scripts/manage_demo_address.py" --apply') < source.index(
+        '"$new_release/scripts/catalog_mode.py" verify-external'
+    )
+    assert source.index("--stage-only") < source.index("--scope staged --verify")
+    assert source.index("--scope staged --verify") < source.index(
+        'sudo ln -sfn "$new_release" /opt/yobi/current'
+    )
+    assert source.index('sudo ln -sfn "$new_release" /opt/yobi/current') < source.index(
+        "--activate-staged"
+    )
 
 
 def test_deploy_loads_runtime_environment_without_shell_source() -> None:
@@ -45,16 +67,53 @@ def test_deploy_loads_runtime_environment_without_shell_source() -> None:
     assert "run_with_runtime_env.py" in source
     assert 'PYTHONPATH="$new_release/backend:$new_release"' in source
     assert "structured_recommendation_smoke.py" in source
+    assert "structured_fallback_smoke.py" in source
+    assert 'readonly QUALITY_FIVE_ONLY="${YOBI_QUALITY_FIVE_ONLY:-false}"' in source
+    assert (
+        'readonly POST_QUALITY_REVIEW_DEPLOY="${YOBI_POST_QUALITY_REVIEW_DEPLOY:-false}"'
+        in source
+    )
+    assert 'if [[ "$quality_five_only" != "true" \\' in source
+    assert '&& "$post_quality_review_deploy" != "true" ]]; then' in source
+    assert "live normal generation is covered by exactly five expanded-cuisine cases" in source
+    assert "Remote quality-five deployment modes are mutually exclusive" in source
+    assert "provider calls were already observed; final deploy performs zero provider calls" in source
+    assert "--category-code cuisine_origins --option-code ITALIAN" in source
+    assert "verify-reviewed-quality-five" in source
+    assert "verify-post-review-external-gates" in source
     assert "COPYFILE_DISABLE=1 tar" in source
     assert "Release archive contains macOS metadata sidecars." in source
+    assert "--exclude='.mypy_cache' --exclude='*/.mypy_cache'" in source
+    assert "--exclude='.ruff_cache' --exclude='*/.ruff_cache'" in source
 
 
 def test_python39_deployable_modules_defer_pep604_annotations() -> None:
     offenders: list[str] = []
+    syntax_offenders: list[str] = []
+    dataclass_slots_offenders: list[str] = []
     for root in (ROOT / "backend" / "app", ROOT / "scripts", ROOT / "deploy"):
         for path in root.rglob("*.py"):
             source = path.read_text(encoding="utf-8")
+            try:
+                # ``9`` is accepted by Python 3.9 itself and asks newer runtimes
+                # to reject grammar that the OCI VM interpreter cannot parse.
+                ast.parse(source, filename=str(path), feature_version=9)
+            except SyntaxError:
+                syntax_offenders.append(str(path.relative_to(ROOT)))
             module = ast.parse(source)
+            if any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "dataclass"
+                and any(
+                    keyword.arg == "slots"
+                    and isinstance(keyword.value, ast.Constant)
+                    and keyword.value.value is True
+                    for keyword in node.keywords
+                )
+                for node in ast.walk(module)
+            ):
+                dataclass_slots_offenders.append(str(path.relative_to(ROOT)))
             deferred = any(
                 isinstance(statement, ast.ImportFrom)
                 and statement.module == "__future__"
@@ -91,6 +150,8 @@ def test_python39_deployable_modules_defer_pep604_annotations() -> None:
                 offenders.append(str(path.relative_to(ROOT)))
 
     assert offenders == []
+    assert syntax_offenders == []
+    assert dataclass_slots_offenders == []
 
 
 def test_release_identity_and_failure_restore_are_verified() -> None:
@@ -98,8 +159,25 @@ def test_release_identity_and_failure_restore_are_verified() -> None:
     rollback_source = (ROOT / "deploy" / "rollback.sh").read_text(encoding="utf-8")
 
     assert 'ARCHIVE_SHA256="$(shasum -a 256 "$archive"' in deploy_source
+    assert "Deployment requires a clean Git worktree." in deploy_source
+    assert "Deployment requires HEAD to match the pushed origin branch." in deploy_source
+    assert 'source_git_commit="$(git -C "$ROOT_DIR" rev-parse --verify HEAD)"' in deploy_source
+    assert "source_git_commit=%s" in deploy_source
     assert 'sha256sum "$remote_archive"' in deploy_source
     assert 'REMOTE_ARCHIVE="/home/${SSH_USER}/.yobi-release-${RELEASE_ID}-${ARCHIVE_NONCE}.tar.gz"' in deploy_source
+    assert 'ssh -T -p "$ssh_port"' in deploy_source
+    assert 'ARCHIVE_CHUNK_BYTES=131072' in deploy_source
+    assert 'cat >> \'$REMOTE_ARCHIVE\'' in deploy_source
+    assert "Release archive byte count verification failed" in deploy_source
+    assert "scp -q" not in deploy_source
+    provisional_marker_body = deploy_source.split(
+        "write_provisional_marker() {", 1
+    )[1].split("}\n", 1)[0]
+    assert 'install -o root -g yobi -m 0644 /dev/null "$marker_path"' in provisional_marker_body
+    assert '| tee "$marker_path" >/dev/null' in provisional_marker_body
+    assert "/dev/stdin" not in provisional_marker_body
+    assert '|| ! { [[ "$provisional_deploy" != "true" ]] \\' in deploy_source
+    assert '|| write_provisional_marker "$new_release"; } \\' in deploy_source
     assert 'remote_archive="$3"' in deploy_source
     assert 'archive_owner="$(stat -c \'%U\' "$remote_archive")"' in deploy_source
     assert "cleanup_remote_archive" in deploy_source
@@ -265,7 +343,11 @@ def test_recommendation_release_pointer_and_live_v2_smoke_are_release_gates() ->
     assert "--recommendation-release-family-id" in deploy_source
     assert "seed_demo.py\" --verify-only" in deploy_source
     assert "structured_recommendation_smoke.py" in deploy_source
+    assert "structured_fallback_smoke.py" in deploy_source
     assert deploy_source.index("structured_recommendation_smoke.py") < deploy_source.index(
+        "structured_fallback_smoke.py"
+    )
+    assert deploy_source.index("structured_fallback_smoke.py") < deploy_source.index(
         'write_ready_marker "$new_release"'
     )
 

@@ -204,19 +204,29 @@ def rerank_menu_candidates(
         if any(_matches_preference(searchable, value) for value in state.negative_preferences):
             continue
 
-        portions = ceil((state.party_size or 1) / max(menu.serves_max, 1))
-        estimated_total = menu.price * portions
-        if state.budget_krw is not None and estimated_total > state.budget_krw:
+        portions = (
+            ceil((state.party_size or 1) / max(menu.serves_max, 1))
+            if menu.serves_max is not None
+            else None
+        )
+        estimated_total = menu.price * portions if portions is not None else None
+        if (
+            state.budget_krw is not None
+            and estimated_total is not None
+            and estimated_total > state.budget_krw
+        ):
             continue
 
         structured_score, preference_reasons = _structured_preference_score(menu, state)
         reasons = list(dict.fromkeys([*menu.match_reasons, *preference_reasons]))
-        if state.party_size is not None:
+        if state.party_size is not None and portions is not None and estimated_total is not None:
             party_label = "person" if state.party_size == 1 else "people"
             reasons.append(
                 f"Plan {portions} portion{'s' if portions != 1 else ''} "
                 f"for {state.party_size} {party_label} (estimated ₩{estimated_total:,})"
             )
+        elif state.party_size is not None:
+            reasons.append("Serving size was not provided by the source; confirm quantity.")
         ranked.append(
             menu.model_copy(
                 update={

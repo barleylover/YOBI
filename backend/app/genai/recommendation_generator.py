@@ -29,7 +29,7 @@ class MatchedCriterion(BaseModel):
 class GeneratedMenuRecommendation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    rank: int = Field(ge=1, le=5)
+    rank: int = Field(ge=1, le=3)
     menu_id: str = Field(min_length=1, max_length=160)
     title: str = Field(min_length=1, max_length=200)
     selection_reason: str = Field(min_length=1, max_length=1000)
@@ -44,15 +44,13 @@ class RecommendationGenerationV2(BaseModel):
 
     status: RecommendationGenerationStatus
     criteria_summary: str = Field(min_length=1, max_length=1000)
-    recommendations: list[GeneratedMenuRecommendation] = Field(max_length=5)
+    recommendations: list[GeneratedMenuRecommendation] = Field(max_length=3)
     unmatched_category_codes: list[str] = Field(max_length=20)
 
     @model_validator(mode="after")
     def validate_status_and_order(self) -> RecommendationGenerationV2:
         if self.status is RecommendationGenerationStatus.NO_MATCH:
-            if self.recommendations:
-                raise ValueError("NO_MATCH must not include recommendations")
-            return self
+            raise ValueError("Server-frozen recommendations cannot be changed to NO_MATCH")
         if not self.recommendations:
             raise ValueError("RECOMMENDED requires at least one recommendation")
         menu_ids = [item.menu_id for item in self.recommendations]
@@ -64,18 +62,39 @@ class RecommendationGenerationV2(BaseModel):
         return self
 
 
+class GeneratedRecommendationComparisonItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    menu_id: str = Field(min_length=1, max_length=160)
+    name: str = Field(min_length=1, max_length=200)
+    key_difference: str = Field(min_length=1, max_length=1000)
+    taste_texture: str = Field(min_length=1, max_length=1000)
+    ingredients_form: str = Field(min_length=1, max_length=1000)
+    spice_heaviness: str = Field(min_length=1, max_length=1000)
+    eating_context: str = Field(min_length=1, max_length=1000)
+    best_for: str = Field(min_length=1, max_length=1000)
+    unverified_dietary_info: str = Field(max_length=1000)
+
+
+class GeneratedRecommendationComparison(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str = Field(min_length=1, max_length=2000)
+    items: list[GeneratedRecommendationComparisonItem] = Field(min_length=2, max_length=3)
+
+
 RECOMMENDATION_GENERATION_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "status": {"type": "string", "enum": ["RECOMMENDED", "NO_MATCH"]},
+        "status": {"type": "string", "enum": ["RECOMMENDED"]},
         "criteria_summary": {"type": "string", "minLength": 1, "maxLength": 1000},
         "recommendations": {
             "type": "array",
-            "maxItems": 5,
+            "maxItems": 3,
             "items": {
                 "type": "object",
                 "properties": {
-                    "rank": {"type": "integer", "minimum": 1, "maximum": 5},
+                    "rank": {"type": "integer", "minimum": 1, "maximum": 3},
                     "menu_id": {"type": "string", "minLength": 1, "maxLength": 160},
                     "title": {"type": "string", "minLength": 1, "maxLength": 200},
                     "selection_reason": {
@@ -155,14 +174,66 @@ RECOMMENDATION_GENERATION_JSON_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+RECOMMENDATION_COMPARISON_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "items": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 3,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "menu_id": {"type": "string", "minLength": 1, "maxLength": 160},
+                    "name": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "key_difference": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "taste_texture": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "ingredients_form": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "spice_heaviness": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "eating_context": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "best_for": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "unverified_dietary_info": {"type": "string", "maxLength": 1000},
+                },
+                "required": [
+                    "menu_id",
+                    "name",
+                    "key_difference",
+                    "taste_texture",
+                    "ingredients_form",
+                    "spice_heaviness",
+                    "eating_context",
+                    "best_for",
+                    "unverified_dietary_info",
+                ],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["summary", "items"],
+    "additionalProperties": False,
+}
+
 
 def recommendation_generation_text_config() -> dict[str, Any]:
     return {
         "format": {
             "type": "json_schema",
             "name": "yobi_structured_recommendation_v2",
-            "description": "Evidence-pool-bound menu choices and grounded explanations.",
+            "description": "Grounded explanations for server-frozen menu IDs and order.",
             "schema": RECOMMENDATION_GENERATION_JSON_SCHEMA,
+            "strict": True,
+        }
+    }
+
+
+def recommendation_comparison_text_config() -> dict[str, Any]:
+    return {
+        "format": {
+            "type": "json_schema",
+            "name": "yobi_grounded_recommendation_comparison_v1",
+            "description": "Grounded comparison of a server-frozen recommendation batch.",
+            "schema": RECOMMENDATION_COMPARISON_JSON_SCHEMA,
             "strict": True,
         }
     }
@@ -184,7 +255,7 @@ _INTERNAL_ID_PATTERN = re.compile(
 
 
 class RecommendationGenerationValidator:
-    """Validate one model response without using a second model or changing its order."""
+    """Validate explanations against the server-frozen IDs and order."""
 
     def __init__(self, *, result_limit: int) -> None:
         self.result_limit = result_limit
@@ -199,9 +270,13 @@ class RecommendationGenerationValidator:
         if len(result.recommendations) > self.result_limit:
             raise GenAIProviderError(GenAIErrorCode.GROUNDING_REJECTED, retryable=False)
         if result.status is RecommendationGenerationStatus.NO_MATCH:
-            return result
+            raise GenAIProviderError(GenAIErrorCode.GROUNDING_REJECTED, retryable=False)
 
         pool_by_menu = {str(item.get("menu_id", "")): item for item in evidence_pool}
+        expected_menu_ids = [str(item.get("menu_id", "")) for item in evidence_pool]
+        actual_menu_ids = [item.menu_id for item in result.recommendations]
+        if actual_menu_ids != expected_menu_ids:
+            raise GenAIProviderError(GenAIErrorCode.GROUNDING_REJECTED, retryable=False)
         active_categories = {
             key: {str(value) for value in criteria.get(key, [])}
             for key in _SUBJECTIVE_CRITERIA_FIELDS
@@ -303,7 +378,9 @@ class RecommendationGenerator:
     ) -> None:
         self.settings = settings
         self.provider = provider or choose_genai_provider(settings)
-        self._request_slots = BoundedSemaphore(settings.llm_max_concurrent_requests)
+        self._request_slots = BoundedSemaphore(
+            settings.structured_recommendation_max_concurrent_requests
+        )
         self.validator = RecommendationGenerationValidator(
             result_limit=settings.recommendation_result_limit
         )
@@ -322,11 +399,13 @@ class RecommendationGenerator:
     ) -> RecommendationGenerationV2:
         if not evidence_pool:
             raise ValueError("EVIDENCE_POOL_EMPTY")
+        if len(evidence_pool) > self.settings.recommendation_result_limit:
+            raise ValueError("SERVER_FROZEN_CANDIDATE_LIMIT_EXCEEDED")
         capabilities = self.provider.capabilities
         if not capabilities.responses_api:
             raise GenAIProviderError(GenAIErrorCode.PROVIDER_UNAVAILABLE, retryable=False)
         if not self.provider.configured or not self.provider.supports_model(
-            self.settings.oci_genai_model
+            self.settings.structured_recommendation_model
         ):
             raise GenAIProviderError(GenAIErrorCode.PROVIDER_UNAVAILABLE, retryable=False)
 
@@ -335,7 +414,7 @@ class RecommendationGenerator:
             "criteria": criteria,
             "soft_profile_context": soft_profile_context,
             "evidence_pool": evidence_pool,
-            "final_recommendation_count": self.settings.recommendation_result_limit,
+            "final_recommendation_count": len(evidence_pool),
             # Native structured output is an explicit provider capability flag. The
             # response contract must still be present when an OCI endpoint accepts
             # JSON text but does not enforce `text.format` server-side.
@@ -354,7 +433,7 @@ class RecommendationGenerator:
                 }
             ],
             "max_output_tokens": min(
-                self.settings.llm_max_output_tokens,
+                self.settings.structured_recommendation_max_output_tokens,
                 capabilities.max_output_tokens,
             ),
         }
@@ -364,7 +443,7 @@ class RecommendationGenerator:
         try:
             with self._request_slots:
                 response = self.provider.create_response(
-                    self.settings.oci_genai_model,
+                    self.settings.structured_recommendation_model,
                     **request,
                 )
         except GenAIProviderError:
@@ -393,6 +472,94 @@ class RecommendationGenerator:
             evidence_pool=evidence_pool,
         )
 
+    def compare(
+        self,
+        *,
+        evidence_items: list[dict[str, Any]],
+        locale: str,
+    ) -> GeneratedRecommendationComparison:
+        if not 2 <= len(evidence_items) <= 3:
+            raise ValueError("COMPARISON_REQUIRES_TWO_OR_THREE_MENUS")
+        capabilities = self.provider.capabilities
+        if (
+            not capabilities.responses_api
+            or not self.provider.configured
+            or not self.provider.supports_model(
+                self.settings.structured_recommendation_model
+            )
+        ):
+            raise GenAIProviderError(GenAIErrorCode.PROVIDER_UNAVAILABLE, retryable=False)
+        expected_ids = [str(item.get("menu_id", "")) for item in evidence_items]
+        request: dict[str, Any] = {
+            "instructions": self._comparison_instructions(locale),
+            "input": [
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "frozen_menu_evidence": evidence_items,
+                            "response_contract": RECOMMENDATION_COMPARISON_JSON_SCHEMA,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                }
+            ],
+            "max_output_tokens": min(
+                self.settings.structured_recommendation_max_output_tokens,
+                capabilities.max_output_tokens,
+            ),
+        }
+        if capabilities.structured_output:
+            request["text"] = recommendation_comparison_text_config()
+        self._enforce_input_limit(request)
+        try:
+            with self._request_slots:
+                response = self.provider.create_response(
+                    self.settings.structured_recommendation_model,
+                    **request,
+                )
+            parsed = self._parse_json(str(getattr(response, "output_text", "")).strip())
+            result = GeneratedRecommendationComparison.model_validate(parsed)
+        except GenAIProviderError:
+            raise
+        except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+            raise GenAIProviderError(
+                GenAIErrorCode.GROUNDING_REJECTED,
+                retryable=False,
+                cause=exc,
+            ) from exc
+        except Exception as exc:
+            raise GenAIProviderError(
+                GenAIErrorCode.PROVIDER_UNAVAILABLE,
+                retryable=False,
+                cause=exc,
+            ) from exc
+        if [item.menu_id for item in result.items] != expected_ids:
+            raise GenAIProviderError(GenAIErrorCode.GROUNDING_REJECTED, retryable=False)
+        prose = " ".join(
+            [
+                result.summary,
+                *(
+                    text
+                    for item in result.items
+                    for text in (
+                        item.name,
+                        item.key_difference,
+                        item.taste_texture,
+                        item.ingredients_form,
+                        item.spice_heaviness,
+                        item.eating_context,
+                        item.best_for,
+                        item.unverified_dietary_info,
+                    )
+                ),
+            ]
+        )
+        if _INTERNAL_ID_PATTERN.search(prose):
+            raise GenAIProviderError(GenAIErrorCode.GROUNDING_REJECTED, retryable=False)
+        return result
+
     def _enforce_input_limit(self, request: dict[str, Any]) -> None:
         serialized = json.dumps(request, ensure_ascii=False, separators=(",", ":"))
         conservative_bound = len(serialized.encode("utf-8"))
@@ -419,16 +586,17 @@ class RecommendationGenerator:
 You are YOBI's grounded menu recommendation model.
 Return exactly one JSON object matching the provided schema and write every user-facing string in
 the requested locale/language: {locale}.
+Return the JSON immediately without analysis or preamble. Keep criteria_summary, title,
+selection_reason, and description to one concise sentence each.
 
 The server has already applied objective eligibility for delivery area, current availability,
 price bands, maximum spice, explicit halal certification scope, and confirmed vegan conflicts.
 Never weaken or revisit those decisions. Every final menu_id must be copied from evidence_pool.
 
-Select up to {self.settings.recommendation_result_limit} menus and rank them yourself. Retrieval
-order and scores are recall signals, not the final order. Choose the menus that best satisfy the
-user's explicit criteria as a whole. Values inside one category mean OR; every non-empty subjective
-category must be supported for each selected menu. Soft profile context may improve relevance but
-must never override explicit criteria.
+The evidence_pool is the server's frozen final recommendation list. Return exactly one explanation
+for every supplied menu_id, in exactly the supplied order, with contiguous ranks starting at 1.
+You have no authority to add, remove, replace, rerank, or reject a menu. Values inside one category
+mean OR and categories mean AND; the server has already enforced this contract.
 
 For every matched category, cite only evidence IDs attached to that menu and selected value. Use
 the supplied Wiki prose for the explanation. General Wiki prose describes the food generally; it
@@ -437,8 +605,19 @@ certifications, restaurants, options, or cultural facts. Do not expose internal 
 Allergy and allergen guidance is outside this recommendation product. Do not make allergy-safety,
 allergen-absence, or cross-contact claims even if incidental Wiki prose mentions uncertainty.
 
-If no pool menu has evidence for all active subjective categories, return status NO_MATCH with an
-empty recommendations array. Do not silently relax criteria. Do not ask questions, call tools,
-request more data, or emit Markdown fences. This request must choose candidates and explain them in
-one response. Prompt profile: {self.settings.recommendation_prompt_version}.
+Always return status RECOMMENDED. NO_MATCH is a server decision made before this call. Do not ask
+questions, call tools, request more data, or emit Markdown fences. This request only explains the
+server-frozen candidates in one response. Prompt profile: {self.settings.recommendation_prompt_version}.
+""".strip()
+
+    @staticmethod
+    def _comparison_instructions(locale: str) -> str:
+        return f"""
+You are YOBI's grounded comparison writer. Return exactly one JSON object matching the supplied
+schema and write user-facing prose in {locale}. The menu IDs and their order are server-frozen;
+copy every menu_id exactly once and in the supplied order. Compare only facts and general Wiki
+passages in frozen_menu_evidence. General Wiki prose describes a food concept, not a restaurant's
+specific recipe. Never invent ingredients, popularity, orders, ratings, certification, dietary
+safety, availability, or delivery facts. Explicitly identify unverified dietary information. Do
+not expose internal IDs in prose, call tools, emit Markdown, add menus, remove menus, or rerank.
 """.strip()

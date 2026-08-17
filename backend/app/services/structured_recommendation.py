@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timedelta, timezone
+from threading import Lock
 from time import monotonic
 from typing import Any, Literal
 from uuid import uuid4
@@ -11,17 +12,26 @@ from uuid import uuid4
 from app.core.config import Settings
 from app.core.logging import log_event
 from app.db.repository import YobiRepository
+from app.domain.concept_ranking import RANKING_POLICY_VERSION
 from app.domain.dialogue import (
     RecommendationCandidate,
     RecommendationResult,
     RecommendationSnapshot,
 )
 from app.domain.models import Profile, Session
+from app.domain.preference_catalog import PREFERENCE_OPTIONS, normalize_preference_locale
+from app.domain.recommendation_copy import localized_recommendation_fallback_copy
 from app.domain.structured_recommendation import (
     EvidencePoolItem,
     RecommendationBatchV2,
+    RecommendationComparisonItemV2,
+    RecommendationComparisonRequest,
+    RecommendationComparisonV2,
     RecommendationCriteriaCommit,
     RecommendationCriteriaRecord,
+    RecommendationCriteriaV2,
+    RecommendationMode,
+    RecommendationPreviewV2,
     RecommendationRequestInput,
     RecommendationRequestRecord,
     RecommendationRequestStatus,
@@ -50,6 +60,8 @@ class StructuredRecommendationService:
         self.settings = settings
         self.demo_control = demo_control
         self.generator = generator or RecommendationGenerator(settings)
+        self._preference_selection_metrics: dict[str, dict[str, float | int]] = {}
+        self._comparison_locks: dict[str, Lock] = {}
 
     def commit_criteria(
         self,
@@ -58,7 +70,78 @@ class StructuredRecommendationService:
     ) -> RecommendationCriteriaRecord:
         if not commit.criteria.has_explicit_preference:
             raise ValueError("RECOMMENDATION_CRITERIA_EMPTY")
-        return self.repository.save_recommendation_criteria(session.session_id, commit)
+        preview = self.repository.preview_recommendation(
+            session.session_id,
+            commit.criteria,
+        )
+        safety_reasons = {
+            "HALAL_CERTIFICATION_UNAVAILABLE",
+            "VEGAN_EVIDENCE_UNAVAILABLE",
+            "SPICE_LEVEL_UNAVAILABLE",
+        }
+        blocked = next(
+            (reason for reason in preview.zero_reason_codes if reason in safety_reasons),
+            None,
+        )
+        if blocked is not None and preview.ranking_policy_version == RANKING_POLICY_VERSION:
+            raise ValueError(blocked)
+        record = self.repository.save_recommendation_criteria(session.session_id, commit)
+        metric = self._preference_selection_metrics.pop(session.session_id, None)
+        selected_option_count = sum(
+            len(values) for values in commit.criteria.subjective_groups().values()
+        ) + len(commit.criteria.price_bands)
+        log_event(
+            logging.getLogger("yobi"),
+            event="recommendation_preference_committed",
+            session_id_hash=hashlib.sha256(session.session_id.encode()).hexdigest(),
+            selected_category_count=len(commit.criteria.subjective_groups()),
+            selected_option_count=selected_option_count,
+            selection_elapsed_ms=(
+                int((monotonic() - float(metric["started"])) * 1000) if metric else None
+            ),
+            criteria_version=record.criteria_version,
+        )
+        return record
+
+    def preview(
+        self,
+        session: Session,
+        criteria: RecommendationCriteriaV2,
+    ) -> RecommendationPreviewV2:
+        result = self.repository.preview_recommendation(session.session_id, criteria)
+        selected_option_count = sum(
+            len(values) for values in criteria.subjective_groups().values()
+        ) + len(criteria.price_bands)
+        previous = self._preference_selection_metrics.get(session.session_id)
+        previous_count = int(previous["last_option_count"]) if previous else 0
+        action = (
+            "reset"
+            if previous_count > 0 and selected_option_count == 0
+            else (
+                "remove"
+                if selected_option_count < previous_count
+                else ("add" if selected_option_count > previous_count else "no_change")
+            )
+        )
+        self._preference_selection_metrics[session.session_id] = {
+            "started": float(previous["started"]) if previous else monotonic(),
+            "last_option_count": selected_option_count,
+        }
+        log_event(
+            logging.getLogger("yobi"),
+            event="recommendation_preference_preview",
+            session_id_hash=hashlib.sha256(session.session_id.encode()).hexdigest(),
+            action=action,
+            selected_category_count=len(criteria.subjective_groups()),
+            selected_option_count=selected_option_count,
+            zero_result=result.eligible_menu_count == 0,
+            zero_reason_codes=result.zero_reason_codes,
+            eligible_menu_count=result.eligible_menu_count,
+            eligible_merchant_count=result.eligible_merchant_count,
+            preview_timing_ms=result.timing_ms,
+            release_id=result.release_id,
+        )
+        return result
 
     def request_recommendation(
         self,
@@ -71,6 +154,7 @@ class StructuredRecommendationService:
             session.session_id,
             request.criteria_version,
         )
+        criteria_ms = int((monotonic() - started) * 1000)
         if criteria_record is None:
             raise KeyError("RECOMMENDATION_CRITERIA_NOT_FOUND")
         request_hash = self._request_hash(session, profile, criteria_record, request)
@@ -82,6 +166,7 @@ class StructuredRecommendationService:
         if record.duplicate or record.status is not RecommendationRequestStatus.CREATED:
             return self._live_batch(record)
 
+        retrieval_started = monotonic()
         evidence_pool = self.repository.build_recommendation_evidence_pool(
             session.session_id,
             profile,
@@ -93,17 +178,52 @@ class StructuredRecommendationService:
             raw_hits_per_value=self.settings.recommendation_raw_hits_per_value,
             passages_per_menu=self.settings.recommendation_passages_per_menu,
         )
+        retrieval_ms = int((monotonic() - retrieval_started) * 1000)
+        metrics_reader = getattr(
+            self.repository,
+            "get_recommendation_retrieval_metrics",
+            None,
+        )
+        retrieval_metrics = (
+            metrics_reader(session.session_id) if callable(metrics_reader) else {}
+        )
+        freeze_started = monotonic()
+        evidence_pool = self._freeze_server_candidates(evidence_pool)
+        freeze_ms = int((monotonic() - freeze_started) * 1000)
         if not evidence_pool:
+            exhausted = request.mode in {
+                RecommendationMode.SIMILAR,
+                RecommendationMode.RETRY,
+            }
+            persistence_started = monotonic()
             completed = self.repository.complete_recommendation_request(
                 session.session_id,
                 request.request_id,
                 RecommendationRequestStatus.NO_RESULTS,
                 result_json={
                     "status": "NO_MATCH",
-                    "criteria_summary": self._criteria_fallback_summary(criteria_record),
+                    "criteria_summary": self._criteria_fallback_summary(
+                        criteria_record,
+                        profile.preferred_language,
+                    ),
                     "recommendations": [],
                     "unmatched_category_codes": list(criteria_record.criteria.subjective_groups()),
                 },
+                failure_code="EXHAUSTED" if exhausted else None,
+            )
+            persistence_ms = int((monotonic() - persistence_started) * 1000)
+            self._log_terminal_timing(
+                session=session,
+                request=request,
+                record=completed,
+                criteria_ms=criteria_ms,
+                retrieval_ms=retrieval_ms,
+                retrieval_metrics=retrieval_metrics,
+                freeze_ms=freeze_ms,
+                provider_ms=0,
+                persistence_ms=persistence_ms,
+                started=started,
+                final_count=0,
             )
             return self._batch_from_record(completed)
 
@@ -116,12 +236,8 @@ class StructuredRecommendationService:
         if dispatched.status is not RecommendationRequestStatus.DISPATCHED:
             return self._batch_from_record(dispatched)
 
-        soft_profile_context = {
-            "preferred_language": profile.preferred_language,
-            "nationality": profile.nationality,
-            "age_band": profile.age_band,
-            "favorite_foods": profile.favorite_foods,
-        }
+        soft_profile_context = {"preferred_language": profile.preferred_language}
+        provider_started = monotonic()
         try:
             if self.demo_control.mode in {"force_fallback", "force_genai_timeout"}:
                 raise RuntimeError("DEMO_FORCED_RECOMMENDATION_FALLBACK")
@@ -132,19 +248,18 @@ class StructuredRecommendationService:
                 locale=profile.preferred_language,
             )
             if generated.status is RecommendationGenerationStatus.NO_MATCH:
-                result_json = generated.model_dump(mode="json")
-                status = RecommendationRequestStatus.NO_MATCH
-                snapshot = None
-            else:
-                result_json = self._validated_result_payload(generated, evidence_pool)
-                status = RecommendationRequestStatus.COMPLETED
-                snapshot = self._snapshot_for_result(
-                    session=session,
-                    request_id=request.request_id,
-                    request_state_version=dispatched.state_version,
-                    result_json=result_json,
-                    evidence_pool=evidence_pool,
-                )
+                raise ValueError("GENERATOR_NO_MATCH_NOT_AUTHORIZED")
+            result_json = self._validated_result_payload(generated, evidence_pool)
+            status = RecommendationRequestStatus.COMPLETED
+            snapshot = self._snapshot_for_result(
+                session=session,
+                request_id=request.request_id,
+                request_state_version=dispatched.state_version,
+                result_json=result_json,
+                evidence_pool=evidence_pool,
+            )
+            provider_ms = int((monotonic() - provider_started) * 1000)
+            persistence_started = monotonic()
             completed = self.repository.complete_recommendation_request(
                 session.session_id,
                 request.request_id,
@@ -152,9 +267,15 @@ class StructuredRecommendationService:
                 result_json=result_json,
                 snapshot=snapshot,
             )
+            persistence_ms = int((monotonic() - persistence_started) * 1000)
         except Exception as exc:
+            provider_ms = int((monotonic() - provider_started) * 1000)
             failure_code = self._failure_code(exc)
-            fallback_json = self._search_fallback_payload(criteria_record, evidence_pool)
+            fallback_json = self._search_fallback_payload(
+                criteria_record,
+                evidence_pool,
+                profile.preferred_language,
+            )
             fallback_snapshot = self._snapshot_for_result(
                 session=session,
                 request_id=request.request_id,
@@ -162,6 +283,7 @@ class StructuredRecommendationService:
                 result_json=fallback_json,
                 evidence_pool=evidence_pool,
             )
+            persistence_started = monotonic()
             completed = self.repository.complete_recommendation_request(
                 session.session_id,
                 request.request_id,
@@ -170,19 +292,94 @@ class StructuredRecommendationService:
                 snapshot=fallback_snapshot,
                 failure_code=failure_code,
             )
-        log_event(
-            logging.getLogger("yobi"),
-            event="structured_recommendation_completed",
-            session_id_hash=hashlib.sha256(session.session_id.encode()).hexdigest(),
-            request_id=request.request_id,
-            mode=request.mode.value,
-            eligible_pool_count=len(evidence_pool),
-            generation_dispatch_count=completed.dispatch_count,
-            generation_status=completed.status.value,
-            latency_ms=int((monotonic() - started) * 1000),
-            safe_error_code=completed.failure_code,
+            persistence_ms = int((monotonic() - persistence_started) * 1000)
+        self._log_terminal_timing(
+            session=session,
+            request=request,
+            record=completed,
+            criteria_ms=criteria_ms,
+            retrieval_ms=retrieval_ms,
+            retrieval_metrics=retrieval_metrics,
+            freeze_ms=freeze_ms,
+            provider_ms=provider_ms,
+            persistence_ms=persistence_ms,
+            started=started,
+            final_count=len(evidence_pool),
         )
         return self._live_batch(completed)
+
+    @staticmethod
+    def _freeze_server_candidates(
+        evidence_pool: list[EvidencePoolItem],
+    ) -> list[EvidencePoolItem]:
+        frozen: list[EvidencePoolItem] = []
+        for rank, item in enumerate(evidence_pool[:3], start=1):
+            trace = {
+                **item.ranking_trace,
+                "rank": rank,
+                "menu_id": item.menu.menu_id,
+                "merchant_id": item.menu.merchant_id,
+                "ranking_policy_version": item.ranking_trace.get(
+                    "ranking_policy_version", "legacy-retrieval-order-v1"
+                ),
+            }
+            frozen.append(item.model_copy(update={"server_rank": rank, "ranking_trace": trace}))
+        return frozen
+
+    @staticmethod
+    def _log_terminal_timing(
+        *,
+        session: Session,
+        request: RecommendationRequestInput,
+        record: RecommendationRequestRecord,
+        criteria_ms: int,
+        retrieval_ms: int,
+        retrieval_metrics: dict[str, Any],
+        freeze_ms: int,
+        provider_ms: int,
+        persistence_ms: int,
+        started: float,
+        final_count: int,
+    ) -> None:
+        fields: dict[str, Any] = {
+            "event": "structured_recommendation_terminal",
+            "session_id_hash": hashlib.sha256(session.session_id.encode()).hexdigest(),
+            "request_id_hash": hashlib.sha256(request.request_id.encode()).hexdigest(),
+            "mode": request.mode.value,
+            "status": record.status.value,
+            "criteria_ms": criteria_ms,
+            "retrieval_total_ms": retrieval_ms,
+            "freeze_ms": freeze_ms,
+            "provider_ms": provider_ms,
+            "persistence_ms": persistence_ms,
+            "total_ms": int((monotonic() - started) * 1000),
+            "final_count": final_count,
+            "generation_dispatch_count": record.dispatch_count,
+            "ranking_policy_version": record.ranking_policy_version,
+            "support_manifest_sha256": record.support_manifest_sha256,
+            "safe_error_code": record.failure_code,
+        }
+        # New-policy repositories expose measured SQL/support/rerank/evidence
+        # stages.  Legacy/fake repositories omit them instead of emitting
+        # misleading zero placeholders.
+        for key in (
+            "session_filter_ms",
+            "objective_sql_ms",
+            "support_lookup_ms",
+            "scoring_rerank_ms",
+            "evidence_ms",
+            "pipeline_ms",
+            "query_count",
+            "selected_category_count",
+            "fetched_candidate_count",
+            "candidate_merchant_count",
+            "candidate_concept_count",
+            "support_row_count",
+            "wiki_row_count",
+        ):
+            if key in retrieval_metrics:
+                fields[key] = retrieval_metrics[key]
+        log_event(logging.getLogger("yobi"), **fields)
 
     def get_request(
         self,
@@ -228,6 +425,183 @@ class StructuredRecommendationService:
         if record is None:
             return None
         return self._live_batch(record)
+
+    def compare_recommendations(
+        self,
+        session: Session,
+        profile: Profile,
+        request: RecommendationComparisonRequest,
+    ) -> RecommendationComparisonV2:
+        lock_key = f"{session.session_id}:{request.request_id}"
+        lock = self._comparison_locks.setdefault(lock_key, Lock())
+        with lock:
+            return self._compare_recommendations_locked(session, profile, request)
+
+    def _compare_recommendations_locked(
+        self,
+        session: Session,
+        profile: Profile,
+        request: RecommendationComparisonRequest,
+    ) -> RecommendationComparisonV2:
+        record = self.repository.get_recommendation_request(
+            session.session_id,
+            request.request_id,
+        )
+        if record is None:
+            raise KeyError("RECOMMENDATION_REQUEST_NOT_FOUND")
+        if record.snapshot_id != request.snapshot_id:
+            raise ValueError("RECOMMENDATION_SNAPSHOT_REQUEST_MISMATCH")
+        cached = self.repository.get_recommendation_comparison(
+            session.session_id,
+            request.request_id,
+            request.idempotency_key,
+        )
+        if cached is not None:
+            return RecommendationComparisonV2.model_validate(cached)
+        recommendations = list((record.result_json or {}).get("recommendations", []))
+        if not 2 <= len(recommendations) <= 3:
+            raise ValueError("RECOMMENDATION_COMPARISON_REQUIRES_TWO_MENUS")
+        copy = localized_recommendation_fallback_copy(profile.preferred_language)
+        evidence_items = [
+            self._comparison_evidence(item, profile.preferred_language)
+            for item in recommendations
+        ]
+        try:
+            if self.demo_control.mode in {"force_fallback", "force_genai_timeout"}:
+                raise RuntimeError("DEMO_FORCED_COMPARISON_FALLBACK")
+            generated = self.generator.compare(
+                evidence_items=evidence_items,
+                locale=profile.preferred_language,
+            )
+            response = RecommendationComparisonV2(
+                snapshot_id=request.snapshot_id,
+                request_id=request.request_id,
+                summary=generated.summary,
+                items=[
+                    RecommendationComparisonItemV2.model_validate(
+                        {
+                            **item.model_dump(mode="json"),
+                            "name": evidence["name"],
+                            "unverified_dietary_info": copy.dietary_warning,
+                        }
+                    )
+                    for item, evidence in zip(generated.items, evidence_items)
+                ],
+                generated_by="LLM",
+            )
+        except Exception:
+            response = self._deterministic_comparison(
+                snapshot_id=request.snapshot_id,
+                request_id=request.request_id,
+                recommendations=recommendations,
+                preferred_language=profile.preferred_language,
+            )
+        stored, _cached = self.repository.save_recommendation_comparison(
+            session.session_id,
+            request.request_id,
+            request.idempotency_key,
+            response.model_dump(mode="json"),
+        )
+        return RecommendationComparisonV2.model_validate(stored)
+
+    @staticmethod
+    def _comparison_evidence(
+        item: dict[str, Any],
+        preferred_language: str,
+    ) -> dict[str, Any]:
+        raw_menu = item.get("menu")
+        menu: dict[str, Any] = raw_menu if isinstance(raw_menu, dict) else {}
+        locale = normalize_preference_locale(preferred_language)
+        name = (
+            str(menu.get("name_ko") or menu.get("name_en") or "MENU")
+            if locale == "ko"
+            else str(menu.get("name_en") or menu.get("name_ko") or "MENU")
+        )
+        return {
+            "menu_id": str(item.get("menu_id") or menu.get("menu_id") or ""),
+            "name": name,
+            "category": str(menu.get("category") or ""),
+            "description": str(menu.get("description") or ""),
+            "cultural_description": str(menu.get("cultural_description") or ""),
+            "price_krw": menu.get("price"),
+            "spice_level": menu.get("spice_level"),
+            "serves_min": menu.get("serves_min"),
+            "serves_max": menu.get("serves_max"),
+            "dietary_summary": str(menu.get("dietary_summary") or ""),
+            "risk_hints": list(menu.get("risk_hints") or []),
+            "wiki_passages": [
+                {
+                    "content": str(passage.get("content") or ""),
+                    "evidence_type": str(passage.get("evidence_type") or "WIKI_PASSAGE"),
+                }
+                for passage in item.get("wiki_passages", [])
+                if isinstance(passage, dict)
+            ],
+        }
+
+    @staticmethod
+    def _deterministic_comparison(
+        *,
+        snapshot_id: str,
+        request_id: str,
+        recommendations: list[dict[str, Any]],
+        preferred_language: str,
+    ) -> RecommendationComparisonV2:
+        locale = normalize_preference_locale(preferred_language)
+        copy = localized_recommendation_fallback_copy(preferred_language)
+        items: list[RecommendationComparisonItemV2] = []
+        for recommendation in recommendations:
+            raw_menu = recommendation.get("menu")
+            menu: dict[str, Any] = raw_menu if isinstance(raw_menu, dict) else {}
+            menu_id = str(recommendation.get("menu_id") or menu.get("menu_id") or "")
+            name = (
+                str(menu.get("name_ko") or menu.get("name_en") or "MENU")
+                if locale == "ko"
+                else str(menu.get("name_en") or menu.get("name_ko") or "MENU")
+            )
+            passages = [
+                str(passage.get("content") or "").strip()
+                for passage in recommendation.get("wiki_passages", [])
+                if isinstance(passage, dict) and passage.get("content")
+            ]
+            spice = menu.get("spice_level")
+            serves_min = menu.get("serves_min")
+            serves_max = menu.get("serves_max")
+            eating_context = (
+                copy.serves.format(minimum=serves_min, maximum=serves_max)
+                if serves_min is not None and serves_max is not None
+                else copy.serves_unavailable
+            )
+            items.append(
+                RecommendationComparisonItemV2(
+                    menu_id=menu_id,
+                    name=name,
+                    key_difference=copy.price_difference.format(
+                        price=int(menu.get("price") or 0)
+                    ),
+                    taste_texture=(
+                        copy.general_reference.format(passage=passages[0])
+                        if passages
+                        else copy.general_reference_unavailable
+                    ),
+                    ingredients_form=copy.ingredients_unverified,
+                    spice_heaviness=(
+                        copy.spice_reviewed.format(level=int(spice))
+                        if spice is not None
+                        else copy.spice_unavailable
+                    ),
+                    eating_context=eating_context,
+                    best_for=copy.best_for,
+                    unverified_dietary_info=copy.dietary_warning,
+                )
+            )
+        return RecommendationComparisonV2(
+            snapshot_id=snapshot_id,
+            request_id=request_id,
+            summary=copy.comparison_summary,
+            items=items,
+            generated_by="DETERMINISTIC_FALLBACK",
+        )
 
     def _live_batch(self, record: RecommendationRequestRecord) -> RecommendationBatchV2:
         session_id = record.session_id
@@ -315,10 +689,33 @@ class StructuredRecommendationService:
         ).hexdigest()
 
     @staticmethod
-    def _criteria_fallback_summary(record: RecommendationCriteriaRecord) -> str:
+    def _criteria_fallback_summary(
+        record: RecommendationCriteriaRecord,
+        preferred_language: str,
+    ) -> str:
+        locale = normalize_preference_locale(preferred_language)
+        copy = localized_recommendation_fallback_copy(preferred_language)
         groups = record.criteria.subjective_groups()
-        values = ["/".join(selected) for selected in groups.values()]
-        return "; ".join(values) or "Your selected meal preferences"
+        values = [
+            "/".join(PREFERENCE_OPTIONS[code].labels[locale] for code in selected)
+            for selected in groups.values()
+        ]
+        if record.criteria.price_bands:
+            values.append(
+                "/".join(
+                    PREFERENCE_OPTIONS[code].labels[locale]
+                    for code in record.criteria.price_bands
+                )
+            )
+        if record.criteria.max_spice_level < 5:
+            values.append(
+                copy.max_spice.format(level=record.criteria.max_spice_level)
+            )
+        if record.criteria.dietary_filters.halal_certified_only:
+            values.append(copy.halal_only)
+        if record.criteria.dietary_filters.vegan:
+            values.append(copy.vegan)
+        return "; ".join(values) or copy.criteria_default
 
     def _generation_payload(self, item: EvidencePoolItem) -> dict[str, Any]:
         """Bound Wiki prose bodies while retaining criterion-to-evidence IDs."""
@@ -349,13 +746,15 @@ class StructuredRecommendationService:
         generated: Any,
         evidence_pool: list[EvidencePoolItem],
     ) -> dict[str, Any]:
-        pool_by_id = {item.menu.menu_id: item for item in evidence_pool}
+        generated_by_id = {item.menu_id: item for item in generated.recommendations}
         recommendations: list[dict[str, Any]] = []
-        for generated_item in generated.recommendations:
-            pool_item = pool_by_id[generated_item.menu_id]
+        for rank, pool_item in enumerate(evidence_pool, start=1):
+            generated_item = generated_by_id[pool_item.menu.menu_id]
             recommendations.append(
                 {
                     **generated_item.model_dump(mode="json"),
+                    "rank": rank,
+                    "menu_id": pool_item.menu.menu_id,
                     "menu": pool_item.menu.model_dump(mode="json"),
                     "wiki_passages": [
                         passage.model_dump(mode="json")
@@ -369,7 +768,7 @@ class StructuredRecommendationService:
                 }
             )
         return {
-            "status": generated.status.value,
+            "status": "RECOMMENDED",
             "criteria_summary": generated.criteria_summary,
             "recommendations": recommendations,
             "unmatched_category_codes": generated.unmatched_category_codes,
@@ -380,20 +779,45 @@ class StructuredRecommendationService:
         cls,
         criteria_record: RecommendationCriteriaRecord,
         evidence_pool: list[EvidencePoolItem],
+        preferred_language: str,
     ) -> dict[str, Any]:
+        locale = normalize_preference_locale(preferred_language)
+        copy = localized_recommendation_fallback_copy(preferred_language)
         recommendations: list[dict[str, Any]] = []
         for rank, item in enumerate(evidence_pool[:3], start=1):
             passages = item.wiki_passages[:2]
             description = " ".join(passage.content for passage in passages).strip()
+            matched_by_category: dict[str, dict[str, list[str]]] = {}
+            for criterion in item.criterion_evidence:
+                grouped = matched_by_category.setdefault(
+                    criterion.category_code,
+                    {"selected_value_codes": [], "evidence_ids": []},
+                )
+                if criterion.selected_value_code not in grouped["selected_value_codes"]:
+                    grouped["selected_value_codes"].append(criterion.selected_value_code)
+                for reference in criterion.evidence:
+                    if reference.evidence_id not in grouped["evidence_ids"]:
+                        grouped["evidence_ids"].append(reference.evidence_id)
             recommendations.append(
                 {
                     "rank": rank,
                     "menu_id": item.menu.menu_id,
                     "menu": item.menu.model_dump(mode="json"),
-                    "title": item.menu.name_en,
-                    "selection_reason": "This search result is close to your selected preferences.",
+                    "title": (
+                        item.menu.name_ko
+                        if locale == "ko" and item.menu.name_ko
+                        else item.menu.name_en
+                    ),
+                    "selection_reason": copy.search_selection_reason,
                     "description": description or item.menu.description,
-                    "matched_criteria": [],
+                    "matched_criteria": [
+                        {
+                            "category_code": category_code,
+                            "selected_value_codes": values["selected_value_codes"],
+                            "evidence_ids": values["evidence_ids"],
+                        }
+                        for category_code, values in matched_by_category.items()
+                    ],
                     "wiki_evidence_ids": [passage.evidence_id for passage in passages],
                     "wiki_passages": [passage.model_dump(mode="json") for passage in passages],
                     "caution_codes": ["GENERATION_UNAVAILABLE"],
@@ -405,7 +829,10 @@ class StructuredRecommendationService:
             )
         return {
             "status": "SEARCH_FALLBACK",
-            "criteria_summary": cls._criteria_fallback_summary(criteria_record),
+            "criteria_summary": cls._criteria_fallback_summary(
+                criteria_record,
+                preferred_language,
+            ),
             "recommendations": recommendations,
             "unmatched_category_codes": [],
         }

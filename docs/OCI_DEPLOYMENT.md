@@ -3,6 +3,218 @@
 The existing `yobi-app-01` VM and private `yobi-adb` are reused. Scripts resolve
 current identifiers and the ephemeral public IP at runtime; none are stored in Git.
 
+## 2026-08-17 expanded knowledge/UI release (final active)
+
+The concise final deployment used the guarded temporary Bastion transport and the
+standard one-way release workflow. Application `20260816T201131Z-29fbc2f9fd32`
+(UTC identifier, deployed 2026-08-17 KST) is active with archive SHA-256
+`29fbc2f9fd325e7c4e15c88a5abde9c8c12b7f5bdfb394fa50a5de244757fa25`.
+
+Current active identities and counts:
+
+- catalog `yogiyo-public-web:20260814:yobi-diverse-merchant-selection-v2:8a9d54b7230a`
+- knowledge `external-knowledge-0ffd2f53ba2e2539ee9c5a27`
+- recommendation family
+  `external-recommendation-0ffd2f53ba2e2539ee9c5a27-71a41f074c-5515c9c687`
+- support manifest
+  `71a41f074cb7fa0693b2d92009bcdf708ac0a335a08802171c5f1a408066d5f4`
+- 198 concepts/documents, 1,551 chunks, 3,922 high-confidence mapped menus,
+  1,499 reviewed preference-support rows, and exact 15,085-menu classification
+- preference catalog `preference-catalog-2026.08.17-v3`
+
+The expanded-cuisine acceptance had already executed exactly five provider calls.
+Four normal results passed; the Italian call returned three valid server-frozen menus
+through the safety fallback and exposed a missing-evidence serialization defect. That
+deterministic defect was fixed and verified in SQLite and live Oracle without another
+provider request. The final deployment therefore skipped normal generation and ran
+only staged/active Oracle plan, source integrity, an isolated Italian fallback, the
+immutable reviewed-five evidence check, and health/readiness. Its provider dispatch
+count was zero.
+
+The final standard deploy passed and wrote both reviewed quality and ready markers.
+Public root/health/readiness/QR/catalog returned 200, protected demo status returned
+403, and browser verification found all seven cuisine buttons with no horizontal
+overflow. The generated browser-smoke profile/session was deleted. Cleanup verified
+the temporary Bastion path absent, TCP 22 ingress 0, TCP 80 unchanged, and temporary
+LB/NLB counts at baseline.
+
+Detailed evidence is in
+[`evidence/KNOWLEDGE_EXPANSION_20260817.md`](evidence/KNOWLEDGE_EXPANSION_20260817.md).
+
+## Historical 2026-08-16 external recommendation release (superseded)
+
+The section below records the predecessor and earlier transport chronology. Its
+application/data IDs are not current.
+
+The initial public baseline was healthy in `EXTERNAL_SOURCE` mode with 200 merchants
+and 15,085 menus but had zero active menu-to-Wiki mappings and support rows. Migration
+`012` and the external knowledge/support/ranking data family have since been applied
+to Oracle. The operator first selected a provisional deployment, then explicitly
+replaced the former 30-request/concurrency-3 gate with focused five-case quality
+acceptance. Application
+`20260816T034237Z-e9417303ad55` is final active after query-plan,
+source-integrity, normal structured order, isolated fallback and the
+operator-approved five-case quality gate passed. The provisional marker was removed
+only after the five-case evidence was validated and a final quality marker was
+written.
+
+Current active data identities are:
+
+- catalog `yogiyo-public-web:20260814:yobi-diverse-merchant-selection-v2:8a9d54b7230a`
+- import `yogiyo_20260814_8a9d54b7230ad6c8`
+- knowledge `external-knowledge-fe97d5a7bf7205681f75aeb5`
+- recommendation family
+  `external-recommendation-fe97d5a7bf7205681f75aeb5-78909a764a-5515c9c687`
+- support manifest
+  `78909a764a01935850f615cd5f35bc8095e16455ea8fcc8611bb3dcebb94111`
+- ranking policy hash
+  `5515c9c6877641a111e29ba418890b166b84374101877005749257eae826e191`
+
+### Candidate failure and recovery history
+
+| Candidate application ID | Failed gate/cause | Recovery result |
+|---|---|---|
+| `20260815T231001Z-b32f68c7353f` | Staged Oracle plan did not accept a covering index as table proof | No ready marker; old app health 200, temporary ready 503; exact SSH rule cleanup |
+| `20260815T231426Z-64ea3e65938c` | Plan/source/structured normal+fallback passed; performance hit `DPY-4008` invalid bind | No ready marker; app/data recovery became active; public health/readiness 200; exact SSH rule cleanup |
+| `20260815T232437Z-50c1721d66b5` | Bind fixed; plan/source/structured passed; performance hit `PERFORMANCE_NORMAL_RECOMMENDATION_REQUIRED` with a provider rate-limit sample | Automatic rollback restored `20260815T231426Z-64ea3e65938c`; no ready marker; exact SSH rule cleanup |
+| `20260816T031853Z-e469d49d03b0` | Provisional three-gate sequence passed; provisional marker used an unsupported `/dev/stdin` install source | Automatic rollback restored recovery; temporary LB/flow-log resources removed; TCP 22 returned to 0 |
+| `20260816T032847Z-2d9eab12f72a` | Provisional three-gate sequence passed; inverted shell success condition treated marker success as failure | Automatic rollback restored recovery; temporary LB/flow-log resources removed; TCP 22 returned to 0 |
+| `20260816T034237Z-e9417303ad55` | **FINAL ACTIVE**; plan/source/structured normal+fallback and five-case quality passed | Final quality marker references evidence SHA-256 `868d35c331de63f4de3b600fd68e0628a3a2e26dd009f038b4a968adaad006a3`; public API/browser checked; temporary resources absent; TCP 22=0, TCP 80 unchanged=1 |
+
+The invalid bind is fixed by omitting `selected_category_count` unless subjective
+selections are present. The explanation model is now `openai.gpt-oss-120b` with one
+dispatch, no automatic retry/model fallback, output cap 2,048 and provider concurrency
+2. An isolated full-prompt probe completed in 6,663.421 ms and a three-request probe
+under the concurrency-2 semaphore completed with three successes in 14,960.069 ms.
+The user subsequently replaced the 30-request statistical benchmark with exactly five
+focused quality cases. They passed 5/5 with median 7,336.520 ms and max 7,860.266 ms;
+no percentile is claimed.
+
+### Evidence partitions and final placeholders
+
+| Partition | Current evidence | Required closure |
+|---|---|---|
+| `LOCAL` | Full test/build/evaluation, Playwright, local browser and archive contract PASS | Closed locally; see `TEST_REPORT.md` |
+| `ORACLE-OCI` | Migration/data identities and plan/source/structured/five-case quality gates PASS | Closed |
+| `PUBLIC API` | Final health/readiness/root/demo QR 200, protected route 403 | Closed |
+| `PUBLIC BROWSER` | Final combined welcome+locale/start UI passed; user observed recommendation results | Closed with internal recommendation correctness covered by the five-case HTTP gate |
+
+- final application `20260816T034237Z-e9417303ad55`
+- quality-five evidence 5/5 PASS; no statistical percentile claim
+- final network readback TCP 22=0, TCP 80=1, temporary LB count restored
+
+Before the final rehearsal, retain the recorded local source gates and rerun any gate
+whose source changed:
+
+```bash
+make test
+make build
+.venv/bin/python scripts/recommendation_performance_smoke.py --repository-only
+bash -n deploy/deploy.sh deploy/with_temporary_ssh_ingress.sh \
+  deploy/run_remote_rollback.sh deploy/release_rehearsal.sh
+```
+
+The initial read-only preflight found the required local CLIs, built frontend,
+knowledge sources, runtime example, OCI profile, SSH key, exactly 12 migrations with
+`012` last, and all release helper executables. The configured profile exposed two
+subscribed regions; target discovery found one running instance, TCP 22 count `0`,
+TCP 80 count `1`, and the existing public baseline returned health/readiness/shell
+`200` plus protected-route `403`. This remains a sanitized historical baseline; it
+does not prove the final candidate or final public browser flow.
+
+The guarded SSH VM access window below resolves (but
+never prints) the current source IPv4, adds one exact `/32` TCP 22 NSG rule, runs the
+given command, removes that exact rule ID on success/error/signal exit, and then
+independently requires TCP 22 count `0` and the original TCP 80 count unchanged. It
+fails closed if TCP 22 was already open or TCP 80 was not exactly the expected single
+rule. `YOBI_DEPLOY_SOURCE_CIDR` may be set only to an explicitly verified IPv4 `/32`;
+never use a broader CIDR.
+
+For an ordinary one-way deployment the command is
+`./deploy/with_temporary_ssh_ingress.sh ./deploy/deploy.sh`. The required final gate
+uses the rehearsal orchestrator below so candidate deploy, public checks, rollback,
+predecessor checks, a minimum two-second separation, identical-source final redeploy,
+and final public checks all occur inside one `/32` window. If a public check fails
+after activation, the orchestrator attempts to restore the verified predecessor
+before returning failure; the outer wrapper still removes SSH access and recounts the
+NSG on every exit.
+
+```bash
+./deploy/with_temporary_ssh_ingress.sh ./deploy/release_rehearsal.sh
+```
+
+Two archive transfers and a later plain SSH probe ended with the connection closed or
+timed out after roughly 75–80 seconds; each exact temporary ingress rule was removed
+and the recovery release remained active. Cache exclusions reduced the verified
+archive to 353 members and 3,630,171 bytes, so the latest failure was not attributed
+to archive size. A different transport may be used only if it runs the same remote
+gate/rollback contract and leaves equivalent sanitized evidence. Transport readiness
+and the final rehearsal remain `PENDING`; do not broaden TCP 22 ingress.
+
+The standard deploy now enforces all of these steps before its ready marker:
+
+1. build an archive containing exactly migrations `001`–`012` while rejecting
+   `.env`, key/wallet paths, `*.db`, `backend/backend`, temporary and cache paths;
+2. verify the archive checksum and exact migration ledger on the VM;
+3. in external mode run the idempotent builder with `--stage-only`; it loads and
+   release-scope verifies the deterministic `READY` knowledge/recommendation family
+   while proving both active data pointers are unchanged;
+4. run `recommendation_query_plan.py --backend oracle --scope staged --verify`, which
+   records only aggregate candidate/merchant and Oracle plan/index estimates (never
+   raw SQL, binds, release IDs, DSN, or row IDs), then verify the demo address;
+5. prepare/switch the application symlink, run `--activate-staged` to reverify and
+   move both data pointers in one transaction, verify exact pointer readback, and
+   restart the services;
+6. pass the active Oracle plan gate and `catalog_mode.py verify-external`; then run
+   `structured_recommendation_smoke.py`, which dynamically selects one active
+   externally recommended menu, validates required available options, adds/reprices
+   its cart line, applies the fixed demo address and delivery preference, confirms
+   the cart, completes a synthetic mock checkout/order, verifies one generation
+   dispatch, and cascade-deletes the temporary profile/session/cart/checkout/order;
+7. run `structured_fallback_smoke.py` against the same Oracle runtime with a private
+   process-local `DemoControl(force_genai_timeout)`. It must preserve the frozen
+   server top-three IDs/order, deterministic explanation fields, dispatch count `1`,
+   and cleanup without changing the public application's failure mode; then run
+   `recommendation_performance_smoke.py --release-gate`; and
+8. use the exact four-gate contract helper to reject any omitted/duplicate gate, then
+   write the ready marker, otherwise restore the
+   previously verified application, knowledge, and recommendation pointers.
+
+The four external gate names remain `query-plan`, `source-integrity`, `structured`,
+and `performance`. `structured` is now an umbrella gate that is recorded only after
+both the normal order smoke and isolated provider-fallback smoke succeed.
+
+The performance release gate retains the repository same-process warm 100 and
+fresh-process cold 20 (`process-cold/db-cache-unspecified`, never a claimed DB-cache
+flush). Its provider path measures exactly 30 sequential normal requests; the
+SIMILAR seed is the first timed/counted sample and the same session is reused, so no
+hidden six-request setup exists. Starts are spaced by 65 seconds outside measured
+latency, after a 65-second quiet period, and an independent barrier concurrency-3
+gate follows another quiet period. It requires 30/30 `RECOMMENDED`, valid frozen
+ranks, no fallback, and zero errors; concurrency requires three successes. It emits
+P95/P90 only when the documented sample minimum is met.
+
+`release_rehearsal.sh` verifies public health, readiness, the application shell, and
+the unauthenticated protected-route `403` after the candidate, predecessor, and final
+release. New-release checks additionally require both
+`source_integrity_ready=true` and `recommendation_ready=true`. It never prints the
+resolved public address or OCI identifiers.
+
+Run the product/browser E2E on the same final release and record the application,
+knowledge/support/ranking family, migration count, performance JSON, rollback target,
+final redeployment release, and final NSG counts without copying an IP, DSN, OCID,
+endpoint ID, credential, or raw environment line into Git. If the guarded wrapper
+reports cleanup failure, stop: do not declare success until an independent read-only
+NSG query confirms TCP 22 `0` and TCP 80 `1`.
+
+The 2026-08-16 UI authority ends the visible browser flow at the explicit Yogiyo
+handoff mock; it does not expose mock payment success or an order-complete screen.
+The backend release smoke above deliberately retains the synthetic checkout/order
+API as an integrity regression. This resolves the two document scopes without
+claiming that YOBI or Yogiyo placed a real order or transferred a cart.
+
+## Historical 2026-08-12 deployed procedure and evidence
+
 Verified 2026-08-12 deployment: structured-recommendation release
 `20260812T141008Z-8418f92b7e37` is active and its recorded rollback predecessor is
 `20260812T135513Z-8f91a6c7120a`. The exact migration ledger is `001`–`010`.

@@ -9,19 +9,119 @@ readonly SSH_KEY="${YOBI_SSH_KEY:-${HOME}/.ssh/yobi_oci_vm_ed25519}"
 readonly SSH_USER="${YOBI_SSH_USER:-opc}"
 readonly ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly RECOVERY_ALLOW_UNREADY_CURRENT="${YOBI_RECOVERY_ALLOW_UNREADY_CURRENT:-false}"
+readonly PROVISIONAL_DEPLOY="${YOBI_PROVISIONAL_DEPLOY:-false}"
+readonly QUALITY_FIVE_ONLY="${YOBI_QUALITY_FIVE_ONLY:-false}"
+readonly POST_QUALITY_REVIEW_DEPLOY="${YOBI_POST_QUALITY_REVIEW_DEPLOY:-false}"
+readonly GUARDED_SSH_HOST="${YOBI_GUARDED_SSH_HOST:-}"
+readonly GUARDED_SSH_PORT="${YOBI_GUARDED_SSH_PORT:-}"
+readonly GUARDED_SSH_KNOWN_HOSTS_FILE="${YOBI_GUARDED_SSH_KNOWN_HOSTS_FILE:-}"
+readonly GUARDED_SSH_CONTROL_PATH="${YOBI_GUARDED_SSH_CONTROL_PATH:-}"
 
 [[ "$RECOVERY_ALLOW_UNREADY_CURRENT" == "true" \
   || "$RECOVERY_ALLOW_UNREADY_CURRENT" == "false" ]] \
   || { printf 'YOBI_RECOVERY_ALLOW_UNREADY_CURRENT must be true or false.\n' >&2; exit 1; }
+[[ "$PROVISIONAL_DEPLOY" == "true" || "$PROVISIONAL_DEPLOY" == "false" ]] \
+  || { printf 'YOBI_PROVISIONAL_DEPLOY must be true or false.\n' >&2; exit 1; }
+[[ "$QUALITY_FIVE_ONLY" == "true" || "$QUALITY_FIVE_ONLY" == "false" ]] \
+  || { printf 'YOBI_QUALITY_FIVE_ONLY must be true or false.\n' >&2; exit 1; }
+[[ "$POST_QUALITY_REVIEW_DEPLOY" == "true" \
+  || "$POST_QUALITY_REVIEW_DEPLOY" == "false" ]] \
+  || { printf 'YOBI_POST_QUALITY_REVIEW_DEPLOY must be true or false.\n' >&2; exit 1; }
+[[ "$QUALITY_FIVE_ONLY" != "true" || "$PROVISIONAL_DEPLOY" != "true" ]] \
+  && [[ "$POST_QUALITY_REVIEW_DEPLOY" != "true" \
+    || "$PROVISIONAL_DEPLOY" != "true" ]] \
+  && [[ "$POST_QUALITY_REVIEW_DEPLOY" != "true" \
+    || "$QUALITY_FIVE_ONLY" != "true" ]] \
+  || { printf 'Quality-five deployment modes are mutually exclusive.\n' >&2; exit 1; }
 
-for command in oci ssh scp tar shasum; do
+for command in git oci ssh tar shasum python3; do
   command -v "$command" >/dev/null || { printf 'Missing command: %s\n' "$command" >&2; exit 1; }
 done
 [[ "$SSH_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] \
   || { printf 'SSH user is invalid.\n' >&2; exit 1; }
 [[ -f "$SSH_KEY" ]] || { printf 'SSH key not found: %s\n' "$SSH_KEY" >&2; exit 1; }
+validate_ipv4() {
+  local value="$1"
+  local first second third fourth
+  [[ "$value" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
+  IFS=. read -r first second third fourth <<<"$value"
+  for octet in "$first" "$second" "$third" "$fourth"; do
+    (( 10#$octet >= 0 && 10#$octet <= 255 )) || return 1
+  done
+}
+ssh_host_key_options=(-o StrictHostKeyChecking=accept-new)
+# macOS Bash 3.2 treats an empty-array expansion as unbound under `set -u`.
+# One harmless explicit option keeps guarded and default transports portable.
+ssh_connection_options=(-o ControlMaster=no)
+if [[ -n "$GUARDED_SSH_HOST" || -n "$GUARDED_SSH_PORT" \
+  || -n "$GUARDED_SSH_KNOWN_HOSTS_FILE" \
+  || -n "$GUARDED_SSH_CONTROL_PATH" \
+  || "${YOBI_GUARDED_BASTION_WINDOW:-}" == "1" ]]; then
+  guarded_tcp443=false
+  guarded_bastion=false
+  if [[ "${YOBI_GUARDED_SSH_WINDOW:-}" == "1" \
+    && "${YOBI_GUARDED_NLB_WINDOW:-}" == "1" \
+    && "${YOBI_GUARDED_BASTION_WINDOW:-}" != "1" \
+    && -n "$GUARDED_SSH_HOST" && "$GUARDED_SSH_PORT" == "443" \
+    && ( ( -z "$GUARDED_SSH_KNOWN_HOSTS_FILE" \
+          && -z "$GUARDED_SSH_CONTROL_PATH" ) \
+      || ( -f "$GUARDED_SSH_KNOWN_HOSTS_FILE" \
+          && ! -L "$GUARDED_SSH_KNOWN_HOSTS_FILE" \
+          && -S "$GUARDED_SSH_CONTROL_PATH" \
+          && ! -L "$GUARDED_SSH_CONTROL_PATH" ) ) ]]; then
+    guarded_tcp443=true
+  fi
+  if [[ "${YOBI_GUARDED_SSH_WINDOW:-}" == "1" \
+    && "${YOBI_GUARDED_BASTION_WINDOW:-}" == "1" \
+    && "${YOBI_GUARDED_NLB_WINDOW:-}" != "1" \
+    && "$GUARDED_SSH_HOST" == "127.0.0.1" \
+    && "$GUARDED_SSH_PORT" =~ ^[0-9]{4,5}$ \
+    && "$GUARDED_SSH_PORT" -ge 1024 && "$GUARDED_SSH_PORT" -le 65535 \
+    && -f "$GUARDED_SSH_KNOWN_HOSTS_FILE" \
+    && ! -L "$GUARDED_SSH_KNOWN_HOSTS_FILE" ]]; then
+    guarded_bastion=true
+  fi
+  [[ "$guarded_tcp443" == "true" || "$guarded_bastion" == "true" ]] \
+    || { printf 'Guarded SSH override is not an approved temporary transport.\n' >&2; exit 1; }
+  if [[ "$guarded_tcp443" == "true" ]]; then
+    validate_ipv4 "$GUARDED_SSH_HOST" \
+      || { printf 'Guarded SSH host is not a valid IPv4 address.\n' >&2; exit 1; }
+    if [[ -n "$GUARDED_SSH_CONTROL_PATH" ]]; then
+      ssh_host_key_options=(
+        -o "UserKnownHostsFile=${GUARDED_SSH_KNOWN_HOSTS_FILE}"
+        -o StrictHostKeyChecking=yes
+      )
+      ssh_connection_options=(
+        -o ControlMaster=no
+        -o "ControlPath=${GUARDED_SSH_CONTROL_PATH}"
+        -o ControlPersist=no
+      )
+    fi
+  else
+    ssh_host_key_options=(
+      -o "UserKnownHostsFile=${GUARDED_SSH_KNOWN_HOSTS_FILE}"
+      -o StrictHostKeyChecking=yes
+    )
+  fi
+  unset guarded_tcp443 guarded_bastion
+fi
 [[ -d "$ROOT_DIR/frontend/dist" ]] || { printf 'Run make build before deployment.\n' >&2; exit 1; }
 [[ -d "$ROOT_DIR/knowledge" ]] || { printf 'Knowledge authoring sources are missing.\n' >&2; exit 1; }
+readonly REQUIRED_RELEASE_TOOLS=(
+  scripts/build_external_knowledge_release.py
+  scripts/catalog_mode.py
+  scripts/manage_demo_address.py
+  scripts/recommendation_query_plan.py
+  scripts/structured_recommendation_smoke.py
+  scripts/structured_fallback_smoke.py
+  scripts/recommendation_performance_smoke.py
+  scripts/recommendation_quality_smoke.py
+  deploy/release_gate_contract.py
+)
+for release_tool in "${REQUIRED_RELEASE_TOOLS[@]}"; do
+  [[ -f "$ROOT_DIR/$release_tool" ]] \
+    || { printf 'Required release gate tool is missing: %s\n' "$release_tool" >&2; exit 1; }
+done
 readonly EXPECTED_MIGRATIONS=(
   001_core_schema.sql
   002_knowledge_and_cache.sql
@@ -33,6 +133,8 @@ readonly EXPECTED_MIGRATIONS=(
   008_checkout_cart_version.sql
   009_cart_confirmation_fingerprint.sql
   010_structured_hybrid_rag_recommendation.sql
+  011_external_catalog_import.sql
+  012_concept_preference_support_and_server_ranking.sql
 )
 for migration in "${EXPECTED_MIGRATIONS[@]}"; do
   [[ -f "$ROOT_DIR/database/migrations/$migration" ]] \
@@ -45,7 +147,21 @@ actual_migration_list="$(
   done | LC_ALL=C sort
 )"
 [[ "$actual_migration_list" == "$expected_migration_list" ]] \
-  || { printf 'Migration directory must contain exactly 001-010.\n' >&2; exit 1; }
+  || { printf 'Migration directory must contain exactly 001-012.\n' >&2; exit 1; }
+
+source_git_commit="$(git -C "$ROOT_DIR" rev-parse --verify HEAD)"
+source_git_branch="$(git -C "$ROOT_DIR" branch --show-current)"
+[[ "$source_git_commit" =~ ^[0-9a-f]{40}$ \
+  && "$source_git_branch" =~ ^[A-Za-z0-9._/-]+$ ]] \
+  || { printf 'Source Git identity is invalid.\n' >&2; exit 1; }
+[[ -z "$(git -C "$ROOT_DIR" status --porcelain=v1 --untracked-files=all)" ]] \
+  || { printf 'Deployment requires a clean Git worktree.\n' >&2; exit 1; }
+remote_source_git_commit="$(git -C "$ROOT_DIR" ls-remote --exit-code origin \
+  "refs/heads/$source_git_branch" | awk 'NR == 1 {print $1}')"
+[[ "$remote_source_git_commit" == "$source_git_commit" ]] \
+  || { printf 'Deployment requires HEAD to match the pushed origin branch.\n' >&2; exit 1; }
+readonly source_git_commit source_git_branch
+unset remote_source_git_commit
 
 compartment_id="$(oci iam compartment list --profile "$PROFILE" --region "$REGION" --all \
   --compartment-id-in-subtree true --query "data[?name=='${COMPARTMENT_NAME}' && \"lifecycle-state\"=='ACTIVE'].id | [0]" --raw-output)"
@@ -54,19 +170,47 @@ instance_id="$(oci compute instance list --profile "$PROFILE" --region "$REGION"
   --compartment-id "$compartment_id" --display-name "$INSTANCE_NAME" \
   --lifecycle-state RUNNING --query 'data[0].id' --raw-output)"
 [[ -n "$instance_id" && "$instance_id" != "null" ]] || { printf 'Running target VM not found.\n' >&2; exit 1; }
-host="$(oci compute instance list-vnics --profile "$PROFILE" --region "$REGION" \
-  --instance-id "$instance_id" --query 'data[0]."public-ip"' --raw-output)"
-[[ -n "$host" && "$host" != "null" ]] || { printf 'VM public IP is unavailable.\n' >&2; exit 1; }
+ssh_port=22
+if [[ -n "$GUARDED_SSH_HOST" ]]; then
+  host="$GUARDED_SSH_HOST"
+  ssh_port="$GUARDED_SSH_PORT"
+else
+  host="$(oci compute instance list-vnics --profile "$PROFILE" --region "$REGION" \
+    --instance-id "$instance_id" --query 'data[0]."public-ip"' --raw-output)"
+  [[ -n "$host" && "$host" != "null" ]] \
+    || { printf 'VM public IP is unavailable.\n' >&2; exit 1; }
+fi
+readonly host ssh_port
 
 archive="$(mktemp -t yobi-release.XXXXXX.tar.gz)"
 trap 'rm -f "$archive"' EXIT
 COPYFILE_DISABLE=1 tar -C "$ROOT_DIR" -czf "$archive" \
   --exclude='._*' --exclude='.DS_Store' \
+  --exclude='.env' --exclude='*/.env' \
+  --exclude='keys' --exclude='*/keys' \
+  --exclude='wallet' --exclude='*/wallet' \
+  --exclude='*.db' --exclude='*.db-*' --exclude='*.sqlite' --exclude='*.sqlite3' \
   --exclude='.venv' --exclude='frontend/node_modules' --exclude='frontend/test-results' \
-  --exclude='frontend/playwright-report' --exclude='backend/data' --exclude='tmp' \
+  --exclude='frontend/playwright-report' --exclude='backend/data' \
+  --exclude='backend/backend' --exclude='*/backend/backend' \
+  --exclude='tmp' --exclude='*/tmp' \
+  --exclude='cache' --exclude='*/cache' \
+  --exclude='.cache' --exclude='*/.cache' \
+  --exclude='__pycache__' --exclude='*/__pycache__' \
+  --exclude='.pytest_cache' --exclude='*/.pytest_cache' \
+  --exclude='.mypy_cache' --exclude='*/.mypy_cache' \
+  --exclude='.ruff_cache' --exclude='*/.ruff_cache' \
   backend frontend/dist database deploy scripts knowledge README.md Makefile .env.example
-if tar -tzf "$archive" | grep -Eq '(^|/)\._|(^|/)\.DS_Store$'; then
+archive_listing="$(tar -tzf "$archive")"
+printf '%s\n' "$archive_listing" \
+  | python3 "$ROOT_DIR/deploy/release_gate_contract.py" validate-archive
+if grep -Eq '(^|/)\._|(^|/)\.DS_Store$' <<<"$archive_listing"; then
   printf 'Release archive contains macOS metadata sidecars.\n' >&2
+  exit 1
+fi
+if grep -Eq '(^|/)(\.env|keys|wallet)(/|$)|\.(db($|-)|sqlite3?$)|(^|/)(backend/backend|tmp|cache|\.cache|__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache)(/|$)' \
+  <<<"$archive_listing"; then
+  printf 'Release archive contains a forbidden secret, database, nested backend, temporary, or cache path.\n' >&2
   exit 1
 fi
 readonly ARCHIVE_SHA256="$(shasum -a 256 "$archive" | awk '{print $1}')"
@@ -76,10 +220,49 @@ readonly RELEASE_ID="$(date -u +%Y%m%dT%H%M%SZ)-${ARCHIVE_SHA256:0:12}"
 readonly ARCHIVE_NONCE="$(printf '%s' "$archive" | shasum -a 256 | awk '{print substr($1,1,16)}')"
 readonly REMOTE_ARCHIVE="/home/${SSH_USER}/.yobi-release-${RELEASE_ID}-${ARCHIVE_NONCE}.tar.gz"
 
-scp -q -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new \
-  "$archive" "$SSH_USER@$host:$REMOTE_ARCHIVE"
-ssh -t -i "$SSH_KEY" "$SSH_USER@$host" \
-  "sudo -n bash -s -- '$RELEASE_ID' '$ARCHIVE_SHA256' '$REMOTE_ARCHIVE' '$SSH_USER' '$ARCHIVE_NONCE' '$RECOVERY_ALLOW_UNREADY_CURRENT'" <<'REMOTE'
+[[ "$REMOTE_ARCHIVE" =~ ^/home/[a-z_][a-z0-9_-]{0,31}/\.yobi-release-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-[0-9a-f]{16}\.tar\.gz$ ]] \
+  || { printf 'Remote archive path is invalid.\n' >&2; exit 1; }
+# Stream the release archive in bounded chunks over the already-authenticated
+# SSH command channel. This avoids a separate SFTP/SCP subsystem and prevents a
+# guarded transport from having to carry the whole archive in one exec channel.
+archive_bytes="$(wc -c <"$archive")"
+archive_bytes="${archive_bytes//[[:space:]]/}"
+[[ "$archive_bytes" =~ ^[1-9][0-9]*$ ]] \
+  || { printf 'Release archive size is invalid.\n' >&2; exit 1; }
+readonly ARCHIVE_CHUNK_BYTES=131072
+readonly ARCHIVE_CHUNK_COUNT=$(( (archive_bytes + ARCHIVE_CHUNK_BYTES - 1) / ARCHIVE_CHUNK_BYTES ))
+archive_ssh() {
+  ssh -T -p "$ssh_port" -i "$SSH_KEY" \
+    -o ConnectTimeout=20 \
+    -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+    "${ssh_host_key_options[@]}" \
+    "${ssh_connection_options[@]}" \
+    "$SSH_USER@$host" "$@"
+}
+archive_ssh \
+  "set -eu; umask 077; : > '$REMOTE_ARCHIVE'; chmod 600 '$REMOTE_ARCHIVE'"
+for (( chunk_index=0; chunk_index<ARCHIVE_CHUNK_COUNT; chunk_index++ )); do
+  if ! dd if="$archive" bs="$ARCHIVE_CHUNK_BYTES" skip="$chunk_index" count=1 2>/dev/null \
+    | archive_ssh "cat >> '$REMOTE_ARCHIVE'"; then
+    archive_ssh "rm -f '$REMOTE_ARCHIVE'" >/dev/null 2>&1 || true
+    printf 'Release archive chunk transfer failed.\n' >&2
+    exit 1
+  fi
+done
+if ! archive_ssh \
+  "actual=\$(wc -c < '$REMOTE_ARCHIVE'); [ \"\$actual\" -eq '$archive_bytes' ]"; then
+  archive_ssh "rm -f '$REMOTE_ARCHIVE'" >/dev/null 2>&1 || true
+  printf 'Release archive byte count verification failed.\n' >&2
+  exit 1
+fi
+unset chunk_index
+ssh -t -p "$ssh_port" -i "$SSH_KEY" \
+  -o ConnectTimeout=20 \
+  -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+  "${ssh_host_key_options[@]}" \
+  "${ssh_connection_options[@]}" \
+  "$SSH_USER@$host" \
+  "sudo -n bash -s -- '$RELEASE_ID' '$ARCHIVE_SHA256' '$REMOTE_ARCHIVE' '$SSH_USER' '$ARCHIVE_NONCE' '$RECOVERY_ALLOW_UNREADY_CURRENT' '$PROVISIONAL_DEPLOY' '$QUALITY_FIVE_ONLY' '$POST_QUALITY_REVIEW_DEPLOY' '$source_git_commit'" <<'REMOTE'
 set -euo pipefail
 [[ "${EUID}" -eq 0 ]] || { printf 'Remote deployment requires root.\n' >&2; exit 1; }
 release_id="$1"
@@ -88,14 +271,31 @@ remote_archive="$3"
 upload_user="$4"
 archive_nonce="$5"
 recovery_allow_unready_current="$6"
+provisional_deploy="$7"
+quality_five_only="$8"
+post_quality_review_deploy="$9"
+source_git_commit="${10}"
 [[ "$release_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$ \
   && "$archive_sha256" =~ ^[0-9a-f]{64}$ \
+  && "$source_git_commit" =~ ^[0-9a-f]{40}$ \
   && "$upload_user" =~ ^[a-z_][a-z0-9_-]{0,31}$ \
   && "$archive_nonce" =~ ^[0-9a-f]{16}$ \
   && ( "$recovery_allow_unready_current" == "true" \
     || "$recovery_allow_unready_current" == "false" ) \
+  && ( "$provisional_deploy" == "true" \
+    || "$provisional_deploy" == "false" ) \
+  && ( "$quality_five_only" == "true" \
+    || "$quality_five_only" == "false" ) \
+  && ( "$post_quality_review_deploy" == "true" \
+    || "$post_quality_review_deploy" == "false" ) \
   && "$remote_archive" == "/home/${upload_user}/.yobi-release-${release_id}-${archive_nonce}.tar.gz" ]] \
   || { printf 'Remote release identity is invalid.\n' >&2; exit 1; }
+[[ "$quality_five_only" != "true" || "$provisional_deploy" != "true" ]] \
+  && [[ "$post_quality_review_deploy" != "true" \
+    || "$provisional_deploy" != "true" ]] \
+  && [[ "$post_quality_review_deploy" != "true" \
+    || "$quality_five_only" != "true" ]] \
+  || { printf 'Remote quality-five deployment modes are mutually exclusive.\n' >&2; exit 1; }
 
 cleanup_remote_archive() {
   if [[ -n "$remote_archive" ]]; then
@@ -163,6 +363,36 @@ write_ready_marker() {
   install -o root -g yobi -m 0644 /dev/null "$marker_path" || return 1
   [[ -f "$marker_path" && ! -L "$marker_path" \
     && "$(stat -c '%U:%G:%a' "$marker_path")" == "root:yobi:644" ]]
+}
+
+write_provisional_marker() {
+  local release_path="$1"
+  local marker_path="$release_path/.yobi-release-provisional"
+  validate_release_path "$release_path" || return 1
+  install -o root -g yobi -m 0644 /dev/null "$marker_path" || return 1
+  printf '%s\n' 'quality-five-gate=pending' \
+    | tee "$marker_path" >/dev/null || return 1
+  [[ -f "$marker_path" && ! -L "$marker_path" \
+    && "$(stat -c '%U:%G:%a' "$marker_path")" == "root:yobi:644" \
+    && "$(cat "$marker_path")" == "quality-five-gate=pending" ]]
+}
+
+write_reviewed_quality_marker() {
+  local release_path="$1"
+  local marker_path="$release_path/.yobi-release-quality-five"
+  local evidence_path="$release_path/deploy/evidence/recommendation_quality_expansion_five_20260817.json"
+  local evidence_sha256
+  validate_release_path "$release_path" || return 1
+  [[ -f "$evidence_path" && ! -L "$evidence_path" ]] || return 1
+  evidence_sha256="$(sha256sum "$evidence_path" | awk '{print $1}')" || return 1
+  [[ "$evidence_sha256" =~ ^[0-9a-f]{64}$ ]] || return 1
+  install -o root -g yobi -m 0644 /dev/null "$marker_path" || return 1
+  printf 'release-status=FINAL\nquality-gate=recommendation-quality-five-reviewed\nsamples=5\nnormal-recommended=4\nsafe-fallback=1\nadditional-provider-dispatches=0\nevidence-sha256=%s\nfull30=operator-superseded\n' \
+    "$evidence_sha256" | tee "$marker_path" >/dev/null || return 1
+  [[ -f "$marker_path" && ! -L "$marker_path" \
+    && "$(stat -c '%U:%G:%a' "$marker_path")" == "root:yobi:644" \
+    && "$(grep -c '^samples=5$' "$marker_path")" == "1" \
+    && "$(grep -c '^additional-provider-dispatches=0$' "$marker_path")" == "1" ]]
 }
 
 new_release="/opt/yobi/releases/$release_id"
@@ -331,7 +561,8 @@ fi
   || { printf 'Release directory already exists: %s\n' "$release_id" >&2; exit 1; }
 install -d -o root -g root -m 0755 "$new_release"
 tar -xzf "$remote_archive" -C "$new_release"
-printf 'release_id=%s\narchive_sha256=%s\n' "$release_id" "$archive_sha256" \
+printf 'release_id=%s\narchive_sha256=%s\nsource_git_commit=%s\n' \
+  "$release_id" "$archive_sha256" "$source_git_commit" \
   | sudo tee "$new_release/.yobi-release-manifest" >/dev/null
 sudo env YOBI_RELEASE_ROOT="$new_release" "$new_release/deploy/install_vm.sh"
 harden_release_tree "$new_release" \
@@ -355,25 +586,66 @@ sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \
   'from deploy.secure_bootstrap import Settings, verify_database
 status = verify_database(Settings())
 if not (
-    status["expected_migration_count"] == status["applied_migration_count"] == 10
+    status["expected_migration_count"] == status["applied_migration_count"] == 12
     and status["latest_expected_migration"]
     == status["latest_applied_migration"]
-    == "010"
+    == "012"
 ):
     raise SystemExit("MIGRATION_LEDGER_NOT_EXACT")
-print("Verified exact migrations=001-010 runtime_user=YOBI_APP")'
+print("Verified exact migrations=001-012 runtime_user=YOBI_APP")'
 old_knowledge_release_id="$(run_knowledge_manager get-active)"
 old_recommendation_release_family_id="$(run_recommendation_manager get-active)"
 knowledge_restore_required=true
 recommendation_restore_required=true
-sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \
-  "$new_release/venv/bin/python" "$new_release/scripts/seed_demo.py" --upsert
-sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \
-  "$new_release/venv/bin/python" "$new_release/scripts/seed_demo.py" --verify-only
-new_knowledge_release_id="$(run_knowledge_manager get-active)"
+catalog_mode="$(sudo env PYTHONPATH="$new_release/backend:$new_release" \
+  "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
+  "$new_release/scripts/catalog_mode.py" get-mode)"
+if [[ "$catalog_mode" == "external" ]]; then
+  staged_release_json="$(sudo env PYTHONPATH="$new_release/backend:$new_release" \
+    "${runtime_env_runner[@]}" \
+    "$new_release/venv/bin/python" \
+    "$new_release/scripts/build_external_knowledge_release.py" \
+    --backend oracle --stage-only)"
+  mapfile -t staged_release_ids < <(
+    printf '%s' "$staged_release_json" | "$new_release/venv/bin/python" -c \
+      'import json,re,sys
+data=json.load(sys.stdin)
+knowledge=str(data.get("knowledge_release_id", ""))
+family=str(data.get("release_family_id", ""))
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,79}", knowledge):
+    raise SystemExit("STAGED_KNOWLEDGE_ID_INVALID")
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}", family):
+    raise SystemExit("STAGED_FAMILY_ID_INVALID")
+print(knowledge)
+print(family)'
+  )
+  [[ "${#staged_release_ids[@]}" -eq 2 ]] \
+    || { printf 'Staged release identity could not be verified.\n' >&2; exit 1; }
+  new_knowledge_release_id="${staged_release_ids[0]}"
+  new_recommendation_release_family_id="${staged_release_ids[1]}"
+  printf '%s\n' "$staged_release_json"
+  unset staged_release_json staged_release_ids
+  sudo env PYTHONPATH="$new_release/backend:$new_release" "${runtime_env_runner[@]}" \
+    "$new_release/venv/bin/python" \
+    "$new_release/scripts/recommendation_query_plan.py" \
+    --backend oracle --scope staged --verify
+  sudo env PYTHONPATH="$new_release/backend:$new_release" "${runtime_env_runner[@]}" \
+    "$new_release/venv/bin/python" "$new_release/scripts/manage_demo_address.py" --apply
+  sudo env PYTHONPATH="$new_release/backend:$new_release" "${runtime_env_runner[@]}" \
+    "$new_release/venv/bin/python" "$new_release/scripts/manage_demo_address.py" --verify-only
+elif [[ "$catalog_mode" == "synthetic" ]]; then
+  sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \
+    "$new_release/venv/bin/python" "$new_release/scripts/seed_demo.py" --upsert
+  sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \
+    "$new_release/venv/bin/python" "$new_release/scripts/seed_demo.py" --verify-only
+  new_knowledge_release_id="$(run_knowledge_manager get-active)"
+  new_recommendation_release_family_id="$(run_recommendation_manager get-active)"
+else
+  printf 'Unsupported catalog mode: %s\n' "$catalog_mode" >&2
+  exit 1
+fi
 [[ -n "$new_knowledge_release_id" ]] \
   || { printf 'Seed completed without an active knowledge release.\n' >&2; exit 1; }
-new_recommendation_release_family_id="$(run_recommendation_manager get-active)"
 [[ -n "$new_recommendation_release_family_id" ]] \
   || { printf 'Seed completed without an active recommendation release family.\n' >&2; exit 1; }
 recorded_previous_knowledge_release_id="none"
@@ -405,14 +677,108 @@ printf 'knowledge_release_id=%s\nprevious_knowledge_release_id=%s\nrecommendatio
 harden_release_tree "$new_release" \
   || { printf 'Activated release permissions are not trusted.\n' >&2; exit 1; }
 sudo ln -sfn "$new_release" /opt/yobi/current
+if [[ "$catalog_mode" == "external" ]]; then
+  sudo env PYTHONPATH="$new_release/backend:$new_release" \
+    "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
+    "$new_release/scripts/build_external_knowledge_release.py" \
+    --backend oracle --activate-staged
+  [[ "$(run_knowledge_manager get-active)" == "$new_knowledge_release_id" \
+    && "$(run_recommendation_manager get-active)" \
+      == "$new_recommendation_release_family_id" ]] \
+    || { printf 'Activated staged release pointers did not match.\n' >&2; exit 1; }
+fi
+run_release_smokes() {
+  local completed_release_gates=()
+  if [[ "$catalog_mode" == "external" ]]; then
+    sudo env PYTHONPATH="$new_release/backend:$new_release" \
+      "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
+      "$new_release/scripts/recommendation_query_plan.py" \
+      --backend oracle --scope active --verify \
+      || return 1
+    completed_release_gates+=(query-plan)
+    sudo env PYTHONPATH="$new_release/backend:$new_release" \
+      "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
+      "$new_release/scripts/catalog_mode.py" verify-external \
+      || return 1
+    completed_release_gates+=(source-integrity)
+  fi
+  if [[ "$quality_five_only" != "true" \
+    && "$post_quality_review_deploy" != "true" ]]; then
+    sudo env PYTHONPATH="$new_release/backend:$new_release" \
+      "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
+      "$new_release/scripts/structured_recommendation_smoke.py" \
+      --base-url http://127.0.0.1 \
+      || return 1
+  elif [[ "$catalog_mode" != "external" ]]; then
+    printf 'Quality-five deployment modes require the external catalog.\n' >&2
+    return 1
+  elif [[ "$post_quality_review_deploy" == "true" ]]; then
+    printf 'POST-QUALITY-REVIEW: exactly five provider calls were already observed; final deploy performs zero provider calls.\n'
+  else
+    printf 'QUALITY-FIVE-ONLY: live normal generation is covered by exactly five expanded-cuisine cases.\n'
+  fi
+  if [[ "$catalog_mode" == "external" ]]; then
+    if [[ "$post_quality_review_deploy" == "true" ]]; then
+      sudo env PYTHONPATH="$new_release/backend:$new_release" \
+        "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
+        "$new_release/scripts/structured_fallback_smoke.py" \
+        --category-code cuisine_origins --option-code ITALIAN \
+        || return 1
+    else
+      sudo env PYTHONPATH="$new_release/backend:$new_release" \
+        "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
+        "$new_release/scripts/structured_fallback_smoke.py" \
+        || return 1
+    fi
+    completed_release_gates+=(structured)
+    if [[ "$provisional_deploy" == "true" ]]; then
+      printf '%s\n' "${completed_release_gates[@]}" \
+        | "$new_release/venv/bin/python" \
+          "$new_release/deploy/release_gate_contract.py" \
+          verify-provisional-external-gates \
+        || return 1
+      printf 'PROVISIONAL: quality-five release gate deferred by explicit operator choice.\n'
+    elif [[ "$post_quality_review_deploy" == "true" ]]; then
+      "$new_release/venv/bin/python" \
+        "$new_release/deploy/release_gate_contract.py" \
+        verify-reviewed-quality-five \
+        "$new_release/deploy/evidence/recommendation_quality_expansion_five_20260817.json" \
+        --fix-source-path \
+        "$new_release/backend/app/services/structured_recommendation.py" \
+        --knowledge-release-id "$new_knowledge_release_id" \
+        --recommendation-release-family-id \
+        "$new_recommendation_release_family_id" \
+        || return 1
+      completed_release_gates+=(quality-five-reviewed)
+      printf '%s\n' "${completed_release_gates[@]}" \
+        | "$new_release/venv/bin/python" \
+          "$new_release/deploy/release_gate_contract.py" \
+          verify-post-review-external-gates \
+        || return 1
+      printf 'POST-QUALITY-REVIEW: five observations accepted after zero-call deterministic remediation verification.\n'
+    else
+      sudo env PYTHONPATH="$new_release/backend:$new_release" \
+        "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
+        "$new_release/scripts/recommendation_quality_smoke.py" \
+        --base-url http://127.0.0.1 \
+        || return 1
+      completed_release_gates+=(quality-five)
+      printf '%s\n' "${completed_release_gates[@]}" \
+        | "$new_release/venv/bin/python" \
+          "$new_release/deploy/release_gate_contract.py" verify-external-gates \
+        || return 1
+    fi
+  fi
+}
 if ! sudo systemctl daemon-reload \
   || ! sudo systemctl restart yobi-api nginx \
   || ! check_local_services \
   || [[ "$(readlink -f /opt/yobi/current 2>/dev/null || true)" != "$new_release" ]] \
-  || ! sudo env PYTHONPATH="$new_release/backend:$new_release" \
-    "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
-    "$new_release/scripts/structured_recommendation_smoke.py" \
-    --base-url http://127.0.0.1 \
+  || ! run_release_smokes \
+  || ! { [[ "$provisional_deploy" != "true" ]] \
+    || write_provisional_marker "$new_release"; } \
+  || ! { [[ "$post_quality_review_deploy" != "true" ]] \
+    || write_reviewed_quality_marker "$new_release"; } \
   || ! write_ready_marker "$new_release"; then
   if [[ "$old_release_verified" == true && -n "$old_release" ]]; then
     if ! restore_old_release; then
@@ -442,8 +808,9 @@ deployment_complete=true
 knowledge_restore_required=false
 recommendation_restore_required=false
 cleanup_remote_archive
-printf 'Activated release_id=%s archive_sha256=%s and verified health/ready.\n' \
-  "$release_id" "$archive_sha256"
+printf 'Activated release_id=%s archive_sha256=%s source_git_commit=%s and verified health/ready.\n' \
+  "$release_id" "$archive_sha256" "$source_git_commit"
 REMOTE
 
-printf 'Release %s migrated, seeded, activated, and passed local health/ready checks.\n' "$RELEASE_ID"
+printf 'Release %s from source_git_commit=%s migrated, seeded, activated, and passed local health/ready checks.\n' \
+  "$RELEASE_ID" "$source_git_commit"

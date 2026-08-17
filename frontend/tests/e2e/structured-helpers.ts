@@ -1,26 +1,38 @@
 import { expect, type Page } from "@playwright/test";
 
 export async function startStructuredSession(page: Page, korean = false) {
-  await page.goto(korean ? "/start" : "/");
+  await page.goto("/");
+  const languageSelect = page.locator(".welcome-locale select").first();
+  const countrySelect = page.locator(".welcome-locale select").nth(1);
+  await expect(languageSelect).toBeVisible();
   if (korean) {
-    await page.locator("select").first().selectOption({ label: "한국어" });
-    await page.locator("select").nth(1).selectOption({ label: "South Korea" });
+    await languageSelect.selectOption({ label: "한국어" });
+    await countrySelect.selectOption("South Korea");
+    await page.getByRole("button", { name: "시작하기" }).click();
   } else {
     await expect(page.getByRole("heading", { name: /Hi, I’m YOBI/ })).toBeVisible();
     await page.getByRole("button", { name: "Get started!" }).click();
   }
-  await page.getByRole("button", { name: "Next" }).click();
-  await page.getByRole("checkbox", { name: korean ? /합성 데모 프로필/ : /I agree/ }).check();
-  await page.getByRole("button", { name: korean ? "배달 주소 확인" : "Check delivery address" }).click();
-  await page.getByRole("button", { name: korean ? "확인하고 시작" : "Confirm & start" }).first().click();
+  await expect(page).toHaveURL(/\/profile/);
+  await page.getByRole("checkbox", { name: korean ? /중립 프로필/ : /neutral profile/ }).check();
+  await page.getByRole("button", { name: korean ? "데모 주소 찾기" : "Find the demo address" }).click();
+  await page.getByRole("button", { name: korean ? "이 주소 선택" : "Select this address" }).first().click();
   await expect(page).toHaveURL(/\/chat\/session_/);
   await expect(page.getByRole("heading", { name: korean ? "어떤 음식이 끌리세요?" : "What sounds good?" })).toBeVisible();
 }
 
-export async function selectFirstPreferenceAndRecommend(page: Page, korean = false) {
-  const firstChip = page.locator(".preference-chip:visible").first();
+export async function selectFirstPricePreference(page: Page) {
+  const priceCategory = page.locator("[data-category='price_bands']");
+  if (await priceCategory.getAttribute("open") === null) await priceCategory.locator("summary").click();
+  const firstChip = priceCategory.locator(".preference-chip:visible").first();
   await expect(firstChip).toBeVisible();
   await firstChip.click();
+  await expect(firstChip).toHaveAttribute("aria-pressed", "true");
+  return firstChip;
+}
+
+export async function selectFirstPreferenceAndRecommend(page: Page, korean = false) {
+  await selectFirstPricePreference(page);
   const responsePromise = page.waitForResponse((response) => (
     response.request().method() === "POST" && response.url().endsWith("/recommendations")
   ));

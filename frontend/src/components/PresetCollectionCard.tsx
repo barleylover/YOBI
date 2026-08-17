@@ -59,7 +59,7 @@ export function PresetCollectionCard({ card, onChooseMenu, disabled = false }: P
               <div className="preset-facts">
                 <strong>₩{entry.menu.price.toLocaleString(locale)}</strong>
                 <span><Clock3 size={14} /> {new Intl.NumberFormat(locale, { style: "unit", unit: "minute", unitDisplay: "short" }).format(entry.menu.eta_min)}–{new Intl.NumberFormat(locale, { style: "unit", unit: "minute", unitDisplay: "short" }).format(entry.menu.eta_max)}</span>
-                <span>{copy.spice} {entry.menu.spice_level}/5</span>
+                <span>{copy.spice} {entry.menu.spice_level == null ? (language === "한국어" ? "확인되지 않음" : "Not provided") : `${entry.menu.spice_level}/5`}</span>
               </div>
               <button className="primary-button full" onClick={() => onChooseMenu(entry.menu)} disabled={disabled}>{copy.chooseMenu}</button>
             </div>

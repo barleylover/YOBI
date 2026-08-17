@@ -54,8 +54,8 @@ def test_prose_compiler_emits_paragraph_and_essential_fact_chunks_only() -> None
 
     assert compiled.expected_counts == {
         "concepts": 102,
-        "relations": 100,
-        "closure": 281,
+        "relations": 99,
+        "closure": 279,
         "claims": 345,
         "documents": 102,
         "chunks": 1263,

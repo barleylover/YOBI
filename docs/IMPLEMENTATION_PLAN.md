@@ -4,10 +4,10 @@
 > implementation history. For the current recommendation experience, allergy scope,
 > five-level spice contract, Wiki authoring, RAG authority, and LLM-call boundary, use
 > [`STRUCTURED_RECOMMENDATION_IMPLEMENTATION_PLAN.md`](STRUCTURED_RECOMMENDATION_IMPLEMENTATION_PLAN.md).
-> The current flow is profile/address → structured selection → objective eligibility
-> → broad lexical+embedding evidence pool → one generation request that selects and
-> explains final pool menus → button-only follow-up. Historical free-chat and
-> server-final-candidate statements below are not current requirements.
+> The current flow is locale/address → structured selection → concept-support-first
+> eligibility → server-frozen top three → one explanation-only generation request →
+> button-only follow-up. The LLM cannot add, remove, or reorder menus. Historical
+> free-chat and model-selected-menu statements below are not current requirements.
 
 Date: 2026-08-06 KST
 Wiki-centric demo update: 2026-08-11 KST

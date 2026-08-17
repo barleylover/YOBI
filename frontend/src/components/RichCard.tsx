@@ -423,7 +423,7 @@ export function RichCard({ card, onChooseMenu, onQuickReply, disabled = false }:
               <p>{localizedCatalog ? dynamicCopy.catalogDescription : menu.description}</p>
               <div className="fact-row">
                 <span><Clock3 size={15} /> {new Intl.NumberFormat(locale, { style: "unit", unit: "minute", unitDisplay: "short" }).format(menu.eta_min)}–{new Intl.NumberFormat(locale, { style: "unit", unit: "minute", unitDisplay: "short" }).format(menu.eta_max)}</span>
-                <span>{copy.spice} {menu.spice_level} / 5</span>
+                <span>{copy.spice} {menu.spice_level == null ? (language === "한국어" ? "확인되지 않음" : "Not provided") : `${menu.spice_level} / 5`}</span>
               </div>
               <EvidenceBadge status={menu.evidence_status} />
               <details className="source-drawer">
@@ -452,7 +452,7 @@ export function RichCard({ card, onChooseMenu, onQuickReply, disabled = false }:
         <article>
           <h4>{menu ? menuName(menu, language) : explanation.category}</h4>
           <p>{localizedCatalog ? dynamicCopy.catalogDescription : explanation.cultural_analogy}</p>
-          {menu && <p><strong>{journeyCopy.portion}:</strong> {localizedCatalog ? dynamicCopy.catalogDescription : explanation.portion} · <strong>{copy.spice}:</strong> {menu.spice_level} / 5</p>}
+          {menu && <p><strong>{journeyCopy.portion}:</strong> {localizedCatalog ? dynamicCopy.catalogDescription : explanation.portion} · <strong>{copy.spice}:</strong> {menu.spice_level == null ? (language === "한국어" ? "확인되지 않음" : "Not provided") : `${menu.spice_level} / 5`}</p>}
 
           <KnowledgeSummary knowledge={explanation} language={language} />
           <details className="source-drawer"><summary>{copy.evidence}</summary><span>{ui.synthetic} · {explanation.evidence_ids.length} grounded references</span></details>

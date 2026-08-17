@@ -3,6 +3,7 @@ import type {
   PreferenceCatalogCategory,
   PreferenceCatalogOption,
   PreferenceCategoryCode,
+  PreferenceCategoryGroup,
   SpiceReferenceCountry,
   SpiceReferenceGroup,
   SpiceReferenceLevel,
@@ -23,6 +24,17 @@ const CATEGORY_CODES = new Set<PreferenceCategoryCode>([
   "textures",
   "cooking_methods",
 ]);
+
+const DEFAULT_CATEGORY_GROUP: Record<PreferenceCategoryCode, PreferenceCategoryGroup> = {
+  cuisine_origins: "core",
+  main_ingredients: "core",
+  food_forms: "core",
+  flavors: "additional",
+  textures: "additional",
+  cooking_methods: "additional",
+  temperatures: "additional",
+  price_bands: "exact",
+};
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -49,7 +61,11 @@ function normalizeCategory(value: unknown): PreferenceCatalogCategory | null {
   const values = Array.isArray(item.options) ? item.options : Array.isArray(item.values) ? item.values : [];
   const options = values.map(normalizeOption).filter((option): option is PreferenceCatalogOption => Boolean(option));
   if (!CATEGORY_CODES.has(code) || !label || !options.length) return null;
-  return { code, label, description: textValue(item.description) || null, options };
+  const rawGroup = textValue(item.group ?? item.category_group) as PreferenceCategoryGroup;
+  const group = (["core", "additional", "exact"] as const).includes(rawGroup)
+    ? rawGroup
+    : DEFAULT_CATEGORY_GROUP[code];
+  return { code, group, label, description: textValue(item.description) || null, options };
 }
 
 function normalizeSpiceLevel(value: unknown): SpiceReferenceLevel | null {
@@ -80,6 +96,16 @@ function normalizeSpiceGroup(value: unknown): SpiceReferenceGroup | null {
   return { country, label: textValue(item.label ?? item.localized_label, country), levels };
 }
 
+function normalizeCapability(value: unknown) {
+  const item = record(value);
+  if (typeof value === "boolean") return { enabled: value, reason: null };
+  if (typeof item.enabled !== "boolean") return undefined;
+  return {
+    enabled: item.enabled,
+    reason: textValue(item.reason ?? item.reason_text ?? item.disabled_reason) || null,
+  };
+}
+
 export function normalizePreferenceCatalog(value: unknown, locale: string): PreferenceCatalog {
   const payload = record(value);
   const categoryValues = Array.isArray(payload.categories)
@@ -104,6 +130,10 @@ export function normalizePreferenceCatalog(value: unknown, locale: string): Pref
     || spiceReferences.length !== 2
     || new Set(spiceReferences.map((group) => group.country)).size !== 2
   ) throw new Error("PREFERENCE_CATALOG_INVALID");
+  const rawCapabilities = record(payload.capabilities ?? payload.control_capabilities);
+  const halalCapability = normalizeCapability(rawCapabilities.halal_certified_only ?? rawCapabilities.halal);
+  const veganCapability = normalizeCapability(rawCapabilities.vegan);
+  const spiceCapability = normalizeCapability(rawCapabilities.max_spice_level ?? rawCapabilities.spice);
   return {
     schema_version: "2",
     catalog_version: textValue(
@@ -114,6 +144,11 @@ export function normalizePreferenceCatalog(value: unknown, locale: string): Pref
     locale: textValue(payload.locale, locale),
     categories,
     spice_references: spiceReferences,
+    capabilities: halalCapability || veganCapability || spiceCapability ? {
+      halal_certified_only: halalCapability,
+      vegan: veganCapability,
+      max_spice_level: spiceCapability,
+    } : undefined,
   };
 }
 

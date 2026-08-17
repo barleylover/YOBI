@@ -43,6 +43,7 @@ def test_release_discovers_conversation_and_knowledge_migrations() -> None:
     assert "008_checkout_cart_version.sql" in names
     assert "009_cart_confirmation_fingerprint.sql" in names
     assert "010_structured_hybrid_rag_recommendation.sql" in names
+    assert "011_external_catalog_import.sql" in names
 
 
 def test_conversation_migration_is_append_only_and_partial_rerun_safe() -> None:
@@ -158,6 +159,23 @@ def test_structured_hybrid_rag_migration_is_append_only_and_rerun_safe() -> None
         or "SQLCODE != -2264" in statement
         for statement in statements[1:]
     )
+
+
+def test_external_catalog_migration_is_additive_and_rerun_safe() -> None:
+    path = ROOT / "database" / "migrations" / "011_external_catalog_import.sql"
+    source = path.read_text(encoding="utf-8")
+    statements = migrate.split_statements(source)
+
+    assert "DROP TABLE" not in source.upper()
+    assert len(statements) == 39
+    assert all(
+        statement.startswith("BEGIN") and statement.endswith("END;")
+        for statement in statements
+    )
+    assert "catalog_import_batch" in source
+    assert "catalog_source_payload" in source
+    assert "REQUIRED_SINGLE_SELECT_ZERO_LIMIT" not in source
+    assert "idx_option_item_group" in source
 
 
 def test_discovery_rejects_a_missing_migration_version(tmp_path: Path) -> None:

@@ -1,18 +1,21 @@
 import { ChangeEvent, FormEvent, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Hotel, ImageUp, MapPin } from "lucide-react";
+import { ArrowLeft, ArrowRight, Building2, ImageUp, MapPin, Search } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { actionableError, api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
+import { asSupportedLanguage } from "../lib/locale";
+import { getProductCopy } from "../lib/productI18n";
 import { useSessionStore } from "../stores/session";
 import type { AddressCandidate, Profile, Session } from "../types";
 
-type AddressMode = "existing" | "hotel" | "upload" | "manual";
+type AddressMode = "search" | "upload";
 type CreatedContext = { profile: Profile; session: Session };
 
 export function OnboardingPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { profileCopy, selectionCopy, chatMenuCopy, language } = useI18n();
+  const { selectionCopy, language } = useI18n();
+  const productCopy = getProductCopy(asSupportedLanguage(language));
   const profile = useSessionStore((state) => state.profile);
   const session = useSessionStore((state) => state.session);
   const addressRefId = useSessionStore((state) => state.addressRefId);
@@ -25,17 +28,10 @@ export function OnboardingPage() {
   const editMode = query.get("edit") === "1" && Boolean(profile && session);
   const returnTo = query.get("returnTo") || (session ? `/chat/${session.session_id}` : "/");
   const candidateRef = useRef<HTMLDivElement>(null);
-  const [ageBand, setAgeBand] = useState(profile?.age_band ?? "25-34");
-  const [religion, setReligion] = useState(profile?.religion_selection ?? "Prefer not to say");
-  const [favorites, setFavorites] = useState(profile?.favorite_foods.join(", ") ?? "");
   const [consent, setConsent] = useState(profile?.consent_demo_data ?? false);
-  const [addressMode, setAddressMode] = useState<AddressMode>(editMode && addressRefId ? "existing" : "hotel");
-  const [hotelQuery, setHotelQuery] = useState("YOBI Myeongdong Hotel");
+  const [addressMode, setAddressMode] = useState<AddressMode>("search");
+  const [searchQuery, setSearchQuery] = useState("YOBI Myeongdong Hotel");
   const [addressImage, setAddressImage] = useState<File | null>(null);
-  const [manualAddress, setManualAddress] = useState({
-    hotel_name: "", road_address: "", postal_code: "", city: "Seoul",
-    delivery_hint: "Please leave it at the hotel front desk.",
-  });
   const [candidates, setCandidates] = useState<AddressCandidate[]>([]);
   const [addressNotice, setAddressNotice] = useState("");
   const [createdContext, setCreatedContext] = useState<CreatedContext | null>(null);
@@ -47,11 +43,11 @@ export function OnboardingPage() {
     const body = {
       preferred_language: language,
       nationality: country,
-      age_band: ageBand,
-      religion_selection: religion,
+      age_band: "Prefer not to say",
+      religion_selection: "Prefer not to say",
       dietary_rules: [],
       spice_tolerance: 1,
-      favorite_foods: favorites.split(",").map((value) => value.trim()).filter(Boolean),
+      favorite_foods: [],
       consent_demo_data: consent,
       remember_profile: false,
     };
@@ -70,36 +66,41 @@ export function OnboardingPage() {
     return context;
   }
 
-  function finish(addressRefId: string, summary: string, session: Session) {
-    setDeliveryAddress(addressRefId, summary);
-    navigate(editMode ? returnTo : `/chat/${session.session_id}`);
+  function finish(nextAddressRefId: string, summary: string, activeSession: Session) {
+    setDeliveryAddress(nextAddressRefId, summary);
+    navigate(editMode ? returnTo : `/chat/${activeSession.session_id}`);
   }
 
-  async function checkAddress(event: FormEvent<HTMLFormElement>) {
+  async function keepCurrentAddress() {
+    if (!addressRefId) return;
+    setLoading(true);
+    setError("");
+    try {
+      const context = await ensureContext();
+      finish(addressRefId, addressSummary, context.session);
+    } catch (cause) {
+      setError(language === "English" ? actionableError(cause, selectionCopy.addressError) : selectionCopy.addressError);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function findAddress(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setLoading(true);
     setError("");
     setCandidates([]);
     try {
       const context = await ensureContext();
-      if (addressMode === "existing") {
-        finish(addressRefId, addressSummary, context.session);
-        return;
-      }
-      if (addressMode === "manual") {
-        const result = await api.confirmManualAddress(context.session.session_id, manualAddress);
-        finish(result.address_ref_id, `${manualAddress.hotel_name} · ${manualAddress.road_address}`, context.session);
-        return;
-      }
       const result = addressMode === "upload"
         ? await api.uploadAddress(context.session.session_id, addressImage as File)
-        : await api.resolveAddress(context.session.session_id, hotelQuery);
+        : await api.resolveAddress(context.session.session_id, searchQuery || "YOBI demo address");
       setCandidates(result.candidates);
-      setAddressNotice(language === "English" ? result.notice : selectionCopy.addressDescription);
+      setAddressNotice(language === "English" ? (result.notice || productCopy.address.demoNotice) : productCopy.address.demoNotice);
       if (!result.candidates.length) setError(selectionCopy.addressNotFound);
       requestAnimationFrame(() => candidateRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }));
     } catch (cause) {
-      setError(actionableError(cause, selectionCopy.addressError));
+      setError(language === "English" ? actionableError(cause, selectionCopy.addressError) : selectionCopy.addressError);
     } finally {
       setLoading(false);
     }
@@ -113,7 +114,7 @@ export function OnboardingPage() {
       const result = await api.confirmAddress(createdContext.session.session_id, candidate);
       finish(result.address_ref_id, `${candidate.hotel_name} · ${candidate.road_address}`, createdContext.session);
     } catch (cause) {
-      setError(actionableError(cause, selectionCopy.confirmError));
+      setError(language === "English" ? actionableError(cause, selectionCopy.confirmError) : selectionCopy.confirmError);
     } finally {
       setLoading(false);
     }
@@ -122,6 +123,7 @@ export function OnboardingPage() {
   async function loadDemoBooking() {
     setLoading(true);
     setError("");
+    setCandidates([]);
     try {
       const context = await ensureContext();
       const response = await fetch("/demo-booking.png");
@@ -131,10 +133,11 @@ export function OnboardingPage() {
         new File([blob], "yobi-demo-booking.png", { type: "image/png" }),
       );
       setCandidates(result.candidates);
-      setAddressNotice(language === "English" ? result.notice : selectionCopy.addressDescription);
+      setAddressNotice(language === "English" ? (result.notice || productCopy.address.demoNotice) : productCopy.address.demoNotice);
+      if (!result.candidates.length) setError(selectionCopy.addressNotFound);
       requestAnimationFrame(() => candidateRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }));
     } catch (cause) {
-      setError(actionableError(cause, selectionCopy.demoImageError));
+      setError(language === "English" ? actionableError(cause, selectionCopy.demoImageError) : selectionCopy.demoImageError);
     } finally {
       setLoading(false);
     }
@@ -142,61 +145,112 @@ export function OnboardingPage() {
 
   function fileChanged(event: ChangeEvent<HTMLInputElement>) {
     setAddressImage(event.target.files?.[0] ?? null);
+    setCandidates([]);
   }
 
-  const addressReady = addressMode === "existing"
-    ? Boolean(addressRefId)
-    : addressMode === "hotel"
-    ? hotelQuery.trim().length >= 2
-    : addressMode === "upload"
-      ? Boolean(addressImage)
-      : Boolean(manualAddress.hotel_name.trim() && manualAddress.road_address.trim().length >= 3);
+  const addressReady = addressMode === "search" ? searchQuery.trim().length > 0 : Boolean(addressImage);
 
   return (
     <main className="onboarding-shell profile-only">
-      <form className="onboarding-card" onSubmit={checkAddress}>
+      <form className="onboarding-card simplified-address-card" onSubmit={findAddress}>
         <div className="profile-card-heading">
-          <div><div className="step-label">{profileCopy.step}</div><h2>{profileCopy.title}</h2></div>
-          <button type="button" className="text-button" onClick={() => navigate(editMode ? `/start?edit=1&returnTo=${encodeURIComponent(returnTo)}` : "/start")}><ArrowLeft size={16} /> {profileCopy.changeLocale}</button>
-        </div>
-        <div className="form-grid">
-          <label>{profileCopy.age}<select value={ageBand} onChange={(event) => setAgeBand(event.target.value)}><option>18-24</option><option>25-34</option><option>35-44</option><option>45-54</option><option>55+</option><option value="Prefer not to say">{selectionCopy.preferNot}</option></select></label>
-          <label>{profileCopy.religion}<select value={religion} onChange={(event) => setReligion(event.target.value)}><option value="Prefer not to say">{selectionCopy.preferNot}</option>{selectionCopy.religions.map((label, index) => <option value={selectionCopy.religionValues[index]} key={selectionCopy.religionValues[index]}>{label}</option>)}</select></label>
+          <div>
+            <div className="step-label">{productCopy.address.step}</div>
+            <h2>{productCopy.address.title}</h2>
+          </div>
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => navigate(editMode ? `/?edit=1&returnTo=${encodeURIComponent(returnTo)}` : "/")}
+          >
+            <ArrowLeft size={16} /> {productCopy.address.changeLocale}
+          </button>
         </div>
 
-        <label>{profileCopy.favourites}<input value={favorites} onChange={(event) => setFavorites(event.target.value)} placeholder={selectionCopy.favouritesPlaceholder} /></label>
+        <p className="address-intro">{productCopy.address.description}</p>
 
         <section className="onboarding-address" aria-labelledby="delivery-address-title">
-          <div className="address-heading"><MapPin size={19} /><div><p className="eyebrow">{profileCopy.required}</p><h3 id="delivery-address-title">{profileCopy.address}</h3></div></div>
-          <p>{selectionCopy.addressDescription}</p>
-          {addressMode === "existing" && <article className="current-address"><MapPin size={19} /><div><small>{chatMenuCopy.currentAddress}</small><strong>{addressSummary}</strong></div><button type="button" className="secondary-button" onClick={() => setAddressMode("hotel")}>{chatMenuCopy.changeAddress}</button></article>}
-          <div className="address-methods" role="tablist" aria-label={profileCopy.address}>
-            <button type="button" className={addressMode === "hotel" ? "active" : ""} onClick={() => { setAddressMode("hotel"); setCandidates([]); }}>{profileCopy.hotel}</button>
-            <button type="button" className={addressMode === "upload" ? "active" : ""} onClick={() => { setAddressMode("upload"); setCandidates([]); }}>{profileCopy.image}</button>
-            <button type="button" className={addressMode === "manual" ? "active" : ""} onClick={() => { setAddressMode("manual"); setCandidates([]); }}>{profileCopy.road}</button>
+          <div className="address-heading">
+            <MapPin size={19} />
+            <div><p className="eyebrow">{productCopy.address.step}</p><h3 id="delivery-address-title">{productCopy.address.title}</h3></div>
           </div>
-          {addressMode === "hotel" && <label>{selectionCopy.hotelOrStay}<input value={hotelQuery} onChange={(event) => setHotelQuery(event.target.value)} placeholder="YOBI Myeongdong Hotel" /></label>}
-          {addressMode === "upload" && <>
-            <label className="upload-zone"><ImageUp size={25} /><strong>{addressImage ? addressImage.name : selectionCopy.chooseImage}</strong><span>PNG · JPEG · WebP · 8MB</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={fileChanged} /></label>
-            <button type="button" className="secondary-button full" onClick={() => void loadDemoBooking()} disabled={!consent || loading}>{selectionCopy.chooseImage}</button>
-          </>}
-          {addressMode === "manual" && <div className="address-form compact">
-            <label>{selectionCopy.hotelOrStay}<input value={manualAddress.hotel_name} onChange={(event) => setManualAddress((value) => ({ ...value, hotel_name: event.target.value }))} /></label>
-            <label>{profileCopy.road}<input value={manualAddress.road_address} onChange={(event) => setManualAddress((value) => ({ ...value, road_address: event.target.value }))} placeholder={selectionCopy.fullRoad} /></label>
-            <div className="address-form-row"><label>{selectionCopy.postalCode}<input value={manualAddress.postal_code} onChange={(event) => setManualAddress((value) => ({ ...value, postal_code: event.target.value }))} /></label><label>{selectionCopy.city}<input value={manualAddress.city} onChange={(event) => setManualAddress((value) => ({ ...value, city: event.target.value }))} /></label></div>
-          </div>}
-          {addressNotice && <p className="notice-copy">{addressNotice}</p>}
-          <div ref={candidateRef}>
-            {candidates.map((candidate) => <article className="address-candidate" key={candidate.place_id}><Hotel size={20} /><div><strong>{candidate.hotel_name}</strong><p>{candidate.road_address}</p><small>{Math.round(candidate.confidence * 100)}%</small></div><button type="button" className="primary-button" onClick={() => void confirmCandidate(candidate)} disabled={loading}>{selectionCopy.confirmStart}</button></article>)}
+          <p className="demo-address-notice"><ShieldNotice /> {productCopy.address.demoNotice}</p>
+
+          {editMode && addressRefId && (
+            <article className="current-address">
+              <MapPin size={19} />
+              <div><small>{productCopy.address.currentAddress}</small><strong>{addressSummary}</strong></div>
+              <button type="button" className="secondary-button" onClick={() => void keepCurrentAddress()} disabled={!consent || loading}>
+                {productCopy.address.keepAddress}
+              </button>
+            </article>
+          )}
+
+          <div className="address-methods" role="tablist" aria-label={productCopy.address.title}>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={addressMode === "search"}
+              className={addressMode === "search" ? "active" : ""}
+              onClick={() => { setAddressMode("search"); setCandidates([]); }}
+            ><Search size={16} /> {productCopy.address.search}</button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={addressMode === "upload"}
+              className={addressMode === "upload" ? "active" : ""}
+              onClick={() => { setAddressMode("upload"); setCandidates([]); }}
+            ><ImageUp size={16} /> {productCopy.address.bookingImage}</button>
+          </div>
+
+          {addressMode === "search" && (
+            <label role="tabpanel">
+              {productCopy.address.searchLabel}
+              <div className="address-search-field"><Search size={18} /><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder={productCopy.address.searchPlaceholder} /></div>
+            </label>
+          )}
+
+          {addressMode === "upload" && (
+            <div role="tabpanel">
+              <label className="upload-zone">
+                <ImageUp size={25} />
+                <strong>{addressImage ? addressImage.name : productCopy.address.chooseImage}</strong>
+                <span>PNG · JPEG · WebP · 8MB</span>
+                <input type="file" accept="image/png,image/jpeg,image/webp" onChange={fileChanged} />
+              </label>
+              <button type="button" className="secondary-button full" onClick={() => void loadDemoBooking()} disabled={!consent || loading}>
+                {productCopy.address.useDemoImage}
+              </button>
+            </div>
+          )}
+
+          {addressNotice && <p className="notice-copy" role="status">{addressNotice}</p>}
+          <div ref={candidateRef} className="address-results">
+            {candidates.map((candidate) => (
+              <article className="address-candidate" key={candidate.place_id}>
+                <Building2 size={20} />
+                <div><strong>{candidate.hotel_name}</strong><p>{candidate.road_address}</p></div>
+                <button type="button" className="primary-button" onClick={() => void confirmCandidate(candidate)} disabled={loading}>
+                  {productCopy.address.select}
+                </button>
+              </article>
+            ))}
           </div>
         </section>
 
-        <label className="consent-row"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} /><span>{profileCopy.consent}</span></label>
+        <label className="consent-row">
+          <input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} />
+          <span>{productCopy.address.consent}</span>
+        </label>
         {error && <p className="form-error" role="alert">{error}</p>}
         <button className="primary-button full large" disabled={!consent || !addressReady || loading}>
-          {loading ? selectionCopy.checkingContext : editMode && addressMode === "existing" ? chatMenuCopy.saveChanges : addressMode === "manual" ? selectionCopy.saveStart : profileCopy.check}<ArrowRight size={19} />
+          {loading ? selectionCopy.checkingContext : productCopy.address.check}<ArrowRight size={19} />
         </button>
       </form>
     </main>
   );
+}
+
+function ShieldNotice() {
+  return <span aria-hidden="true">ⓘ</span>;
 }

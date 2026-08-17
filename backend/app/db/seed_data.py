@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
+from app.db.demo_address import demo_address_row
 from app.knowledge.authoring import parse_document
 from app.knowledge.catalog_seed import build_knowledge_catalog_seed, default_knowledge_root
 from app.knowledge.resolver import INGREDIENT_ALIASES
@@ -833,33 +834,20 @@ def build_seed() -> dict[str, list[dict[str, Any]]]:
     hotels: list[dict[str, Any]] = []
     for hotel_index in range(1, 21):
         is_canonical_hotel = hotel_index == 1
+        if is_canonical_hotel:
+            hotels.append(demo_address_row())
+            continue
         hotels.append(
             {
                 "place_id": f"hotel_demo_{hotel_index:02d}",
-                "name_ko": "요비 명동 호텔"
-                if is_canonical_hotel
-                else f"요비 데모 호텔 {hotel_index:02d}",
-                "name_en": "YOBI Myeongdong Hotel"
-                if is_canonical_hotel
-                else f"YOBI Demo Hotel {hotel_index:02d}",
-                "aliases_json": json.dumps(
-                    ["YOBI Hotel Myeongdong", "요비호텔"]
-                    if is_canonical_hotel
-                    else [f"Demo Stay {hotel_index:02d}"]
-                ),
-                "road_address": (
-                    "서울특별시 중구 데모로 21"
-                    if is_canonical_hotel
-                    else f"서울특별시 중구 데모길 {100 + hotel_index}"
-                ),
+                "name_ko": f"요비 데모 호텔 {hotel_index:02d}",
+                "name_en": f"YOBI Demo Hotel {hotel_index:02d}",
+                "aliases_json": json.dumps([f"Demo Stay {hotel_index:02d}"]),
+                "road_address": f"서울특별시 중구 데모길 {100 + hotel_index}",
                 "postal_code": f"04{500 + hotel_index:03d}",
                 "city": "Seoul",
                 "delivery_hint": "Please leave the order with the hotel front desk.",
-                "fixture_sha256": (
-                    "49f7f262d369a904b3b4ae395ec438bb5fcd98581b643dcfa32bbf4bbec08876"
-                    if is_canonical_hotel
-                    else None
-                ),
+                "fixture_sha256": None,
                 "service_area_id": "area_myeongdong",
                 "is_synthetic": 1,
             }

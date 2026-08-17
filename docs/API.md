@@ -3,6 +3,12 @@
 All product endpoints are under `/api/v1`. OpenAPI is available at `/docs` while the
 FastAPI service is reachable internally.
 
+> 2026-08-17 contract update: migration `012`, preference catalog
+> `preference-catalog-2026.08.17-v3`, the expanded external data family, and the
+> server-owned ranking/preview contract are active in Oracle and served by final
+> application `20260816T201131Z-29fbc2f9fd32`. Public API/browser closure is recorded
+> in `TEST_REPORT.md`.
+
 | Method | Path | Contract |
 |---|---|---|
 | GET | `/healthz` | Process liveness, no dependency check |
@@ -11,9 +17,13 @@ FastAPI service is reachable internally.
 | POST/GET | `/api/v1/sessions[/{id}]` | Explicit state-machine session |
 | POST | `/api/v1/sessions/{id}/reset` | Reset one retained session without deleting its profile |
 | GET | `/api/v1/recommendation/preferences/catalog` | Localized, versioned selectable preference catalog (ETag-aware) |
+| POST | `/api/v1/sessions/{id}/structured-recommendations/preview` | Read-only SQL/support preview; no criteria/session mutation, vector retrieval, Wiki generation, or provider call |
 | PUT | `/api/v1/sessions/{id}/recommendation-criteria` | Idempotently commit structured preferences and dietary filters |
 | POST | `/api/v1/sessions/{id}/recommendations` | Create or replay one bounded structured recommendation request |
 | GET | `/api/v1/sessions/{id}/recommendation-requests/{request_id}` | Poll the persisted structured recommendation request/result |
+| POST | `/api/v1/sessions/{id}/recommendation-comparisons` | Idempotent, grounded comparison of the 2-3 menus in one completed snapshot |
+| GET | `/api/v1/sessions/{id}/food-rankings` | Session/service-area-filtered demo ranking (`review_count`, `order_count`, or `korean_popularity`; limit 1-20) |
+| GET | `/api/v1/sessions/{id}/featured/kpop-demon-hunters` | Five-concept, general-Wiki-backed feature mapped to currently available menus |
 | POST | `/api/v1/sessions/{id}/messages` | Deprecated v1 free-chat compatibility; not called by the structured UI |
 | POST | `/api/v1/sessions/{id}/messages/stream` | Deprecated v1 SSE compatibility; not called by the structured UI |
 | GET | `/api/v1/sessions/{id}/messages` | Historical visible message history; internal v2 audit rows are excluded |
@@ -73,13 +83,33 @@ texture, and cooking-method facets. A code is valid only when it is exposed by t
 catalog version; clients must not invent labels or infer dietary rules from
 nationality, language, religion, or a prior conversation.
 
+Active catalog `preference-catalog-2026.08.17-v3` exposes cuisine codes `KOREAN`,
+`CHINESE`, `SOUTHEAST_ASIAN`, `MEXICAN`, `JAPANESE`, `ITALIAN`, and `AMERICAN`.
+The order is presentation metadata; selection semantics remain same-category OR and
+cross-category AND.
+
+The catalog also publishes `capabilities` for `halal_certified_only`, `vegan`, and
+`max_spice_level`. Each capability carries `enabled` and a human-readable
+`disabled_reason`. A false value means the active release lacks the minimum reviewed
+menu/merchant coverage; the client disables the control, displays the reason, clears
+any stale draft value, and submits the neutral value (`false`, `false`, or spice
+ceiling `5`). Disabled does not mean the underlying menu is certified, vegan, mild, or
+unsafe—it means YOBI cannot support that filter from the active evidence.
+
+`POST /sessions/{id}/structured-recommendations/preview` accepts the same
+`RecommendationCriteriaV2` body used by the selector. It performs only server-owned
+objective SQL and reviewed concept-support joins. It returns
+`eligible_menu_count`, `eligible_merchant_count`, `zero_reason_codes`, `release_id`,
+`support_manifest_sha256`, `ranking_policy_version`, and `timing_ms`. It is read-only:
+it does not commit criteria, advance session state, retrieve vectors/Wiki passages,
+dispatch a provider request, or expose raw SQL/menu/session identifiers.
+
 `PUT /recommendation-criteria` stores a versioned criteria snapshot. Values selected
-within a facet express `OR`; every non-empty subjective facet expresses the user's
-cross-facet `AND` intent. This is not a SQL claim that prose has become a boolean
-attribute: the evidence pool supplies per-facet passages and the model must support
-each active facet when selecting a normal result. The current structural validator
-checks those references, while semantic relevance remains a provider/evaluation
-boundary. `max_spice_level` is a five-step ceiling with a Korean or US reference scale.
+within a facet express `OR`; every non-empty facet expresses the user's cross-facet
+`AND` intent. Migration `012` binds reviewed `CONCEPT_PREFERENCE_SUPPORT` rows to the
+active release. The server uses those rows for eligibility and an explicit,
+versioned deterministic score; prose is not silently converted into unreviewed
+merchant facts. `max_spice_level` is a five-step ceiling with a Korean or US reference scale.
 The public v2 dietary payload
 contains only `halal_certified_only` and `vegan`: it accepts no allergy filters.
 Halal eligibility requires an active, in-scope certification record. Vegan is a
@@ -87,23 +117,48 @@ conservative menu/Wiki-evidence rule and may return a warning rather than a safe
 guarantee.
 
 `POST /recommendations` validates availability, service area, price, spice, halal
-scope, and vegan conflicts on the server. It then combines lexical and embedding
-retrieval into an auditable evidence pool. One generation dispatch may choose final
-menu order and produce explanations grounded by that pool; it cannot issue tools,
-continue a conversation, or retrieve another menu. The server does not rerank the
-model's valid final order. It validates menu/evidence IDs and does not treat generated
-prose as server-owned certification, but it is not a general semantic-entailment
-checker. If no eligible result exists, the request completes without a model call. If
-the single dispatch fails or violates the structural pool contract, a clearly labelled
-search-result fallback may be returned without a second model call.
-Fallback results are proximity-ranked saved searches and are not presented as proof
-that every subjective facet was semantically satisfied.
+scope, vegan conflicts, active concept mapping, and selected-option support on the
+server. SQL/support retrieval produces eligible candidates; deterministic scoring,
+stable tie-breaks, and diversity freeze the final top three before generation. One
+generation dispatch may produce explanations for exactly those frozen menus. It
+cannot choose, replace, or reorder a menu, issue tools, continue a conversation, or
+retrieve another candidate. The server validates exact frozen order and evidence IDs
+and does not treat generated prose as certification; semantic entailment remains an
+evaluation boundary. If no eligible result exists, the request completes without a
+model call. If the single dispatch fails, a clearly labelled deterministic rendering
+of the same server-ranked menus may be returned without a second model call.
+Fallback results preserve server eligibility and rank; they are not presented as a
+provider-authored explanation.
+
+`POST /recommendation-comparisons` requires the completed recommendation
+`snapshot_id`, its recommendation `request_id`, and an `idempotency_key`. It compares
+exactly the frozen 2-3 menus; it cannot change their IDs/order or create a replacement
+recommendation. The first request may make one separate, bounded comparison-writing
+provider call. Provider failure returns a deterministic comparison of the same menus,
+and an exact idempotency replay returns the cached comparison without another call.
+This optional comparison call is separate from the recommendation batch's single
+explanation dispatch and does not write a legacy `COMPARE_MENUS` event.
+
+`GET /food-rankings` applies the session's confirmed demo delivery area and current
+menu availability, returns a browse snapshot usable by `SELECT_MENU`, and supports
+three sort keys. For the external catalog, review ranking uses the source menu review
+count; order and Korean-popularity are deterministic demo proxies calculated from
+source menu/merchant review counts. Only synthetic fixture menus with neither source
+count use stable menu-ID-derived demo values. `demo_basis` makes this boundary
+explicit. The response is not a live or platform-wide Yogiyo ranking.
+
+`GET /featured/kpop-demon-hunters` returns at most one available mapped menu for each
+of Gimbap, Gukbap, Hotteok, Seolleongtang, and Eomuk, plus a browse snapshot and
+general-Wiki evidence IDs. The endpoint uses reviewed synthetic general-food prose and
+high-confidence concept mappings; it does not verify a merchant recipe or use general
+Wiki facts as merchant-specific dietary evidence.
 
 Before a selectable snapshot is committed, current server rows are revalidated against
 the request's pinned release family; current price, delivery fee/ETA, halal, and vegan
-fields replace request-time projections without changing valid model prose/order. A
+fields replace request-time projections without changing valid generated prose or
+server-owned order. A
 terminal request GET/reload recomputes that live projection and can omit stale menus
-without changing the persisted model output or invoking generation. `SELECT_MENU`, cart
+without changing the persisted explanation output or invoking generation. `SELECT_MENU`, cart
 review, and checkout revalidate the applicable current-meal v2 criteria; retained
 profile allergy/religion fields do not silently re-enter the v2 ordering path.
 If only the price moved outside the originally selected band, the result remains
@@ -166,8 +221,18 @@ required Responses/Function Calling capabilities, model/endpoint configuration, 
 compatible input/output/tool limits. Invalid configuration returns sanitized
 `GENAI_NOT_READY` reason codes, never a key or endpoint identifier.
 
-The current source does not yet make `/readyz` a complete structured-v2 release-family
-manifest check. In particular, an HTTP 200 is not proof that independent catalog and
-certification manifests were atomically validated and activated. Extending readiness
-and proving the release-family activation/rollback against Oracle remain Phase 8
-deployment gates.
+The current source reports `source_integrity_ready` and `recommendation_ready`
+separately and `/readyz` requires both. The external release verifier additionally
+checks the active support/ranking manifest. This is stronger than the old canonical
+catalog/knowledge aliases, but HTTP 200 alone still does not prove that the candidate
+Oracle plan, normal generation/order smoke, isolated provider-fallback smoke,
+performance sample, rollback, and final redeployment were executed. Those remain
+standard deployment evidence gates.
+
+The visible 2026-08-16 browser flow is welcome+locale → supported demo address →
+selector → chat-style one-card result carousel → options/cart/delivery/review →
+explicit Yogiyo handoff mock. The handoff button changes only local presentation
+state: it neither opens an external Yogiyo URL nor creates an order. The mock-checkout
+and synthetic-order endpoints remain supported for backend integrity/regression and
+are exercised by the release smoke; they are not a Yogiyo integration and are not
+exposed as an internal payment-success/order-complete product flow.

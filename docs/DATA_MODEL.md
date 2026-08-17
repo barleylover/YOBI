@@ -1,9 +1,12 @@
 # Data model
 
-> Counts below describe the 2026-08-12 local structured-recommendation source
-> contract. Migration `010` and the v4 prose-first knowledge catalog have not been
-> applied to Oracle or activated on OCI. Historical live database evidence does not
-> prove the current schema/runtime path.
+> The synthetic counts below are retained as the 2026-08-12 local fixture contract.
+> Oracle now holds the final 2026-08-17 external public-web catalog (200 merchants,
+> 15,085 menus, 31,293 option groups, 208,513 option items), migration `012`, and the
+> expanded active knowledge/support/ranking family: 198 concepts/documents, 1,551
+> chunks, 3,922 mapped menus, and 1,499 support rows. Final application
+> `20260816T201131Z-29fbc2f9fd32` serves and publicly verifies this state; see
+> `TEST_REPORT.md`.
 
 YOBI keeps ordering facts, conversation state, and menu knowledge in one relational
 contract. Oracle is the deployed database and SQLite is the local contract-compatible
@@ -12,7 +15,7 @@ runner; FastAPI uses `YOBI_APP`, and production configuration rejects `ADMIN`.
 
 ## Core catalog and ordering state
 
-The base synthetic catalog is stored in `SERVICE_AREA`, `MENU_CATEGORY`, `MERCHANT`,
+The base synthetic fixture catalog is stored in `SERVICE_AREA`, `MENU_CATEGORY`, `MERCHANT`,
 `MENU`, `MENU_OPTION_GROUP`, `MENU_OPTION_ITEM`, `EVIDENCE`, `MENU_KNOWLEDGE`, and
 `ADDRESS_PLACE`. `REVIEW_SNIPPET` is retained for the demo UI and backward
 compatibility, but it has recommendation and safety weight `0`.
@@ -24,11 +27,14 @@ order idempotency remain server-authoritative. `AUDIT_LOG` is the safe operation
 event sink. `SCHEMA_MIGRATION` records each immutable migration filename, SHA-256
 checksum, and application time.
 
-`USER_PROFILE` retains the historical religion, dietary/allergy, and `1..3` spice
-columns for additive-schema compatibility. The current structured recommendation UI
-does not collect or consume allergy values, does not infer filters from religion or
-nationality, and does not use the legacy profile spice value. Its current-meal
-criteria have explicit halal/vegan booleans and an independent `1..5` maximum.
+`USER_PROFILE` retains the historical age, religion, favorite-food, dietary/allergy,
+and `1..3` spice columns for additive-schema compatibility. The current public UI does
+not ask for those demographic/preference fields: it submits neutral placeholders and
+the structured recommendation service uses only the preferred presentation language
+as soft provider context. It does not infer filters from religion or nationality and
+does not use the legacy profile spice value. Current-meal criteria have explicit
+halal/vegan booleans and an independent `1..5` maximum, subject to the active catalog's
+capability flags.
 
 The deterministic Wiki-centric seed currently expects 3 service areas, 100 categories,
 60 merchants, 600 menus, 600 legacy menu-knowledge rows, 1,200 evidence rows, 2,400
@@ -55,8 +61,8 @@ filtering without needing additional locations.
 ## Legacy conversation state and shared snapshots
 
 The migration-005 fields below remain because historical conversations, selection
-events, and the existing order flow still read them. They are not the input model for
-the new recommendation selector.
+events, browse snapshots, and the backend order flow still read them. They are not the
+input model for the new recommendation selector.
 
 Migration `005_conversation_state.sql` extends `CHAT_SESSION` with:
 
@@ -83,8 +89,11 @@ non-user-visible internal audit message ID instead of rendering a chat turn. The
 snapshot still stores state version, `RecommendationResult`, candidate order, and card
 payload. `CONVERSATION_EVENT` retains select, reject, compare, and option-update event
 types with a per-session idempotency key and resulting state version. The current v2
-browser writes `SELECT_MENU`; comparison/evidence are local views of the received
-payload, and `SIMILAR` uses the recommendation-request API rather than a compare event.
+browser writes `SELECT_MENU`; Wiki evidence is a local view, `SIMILAR` uses the
+recommendation-request API, and comparison uses the dedicated idempotent comparison
+endpoint rather than a legacy compare event. Comparison output is cached by
+idempotency key inside the structured request's result JSON; it never changes frozen
+candidate IDs/order.
 
 ## Versioned menu Wiki and knowledge graph
 
@@ -105,8 +114,8 @@ Migration `006_knowledge_graph.sql` introduces a release-scoped relational graph
 | `OPTION_INGREDIENT_EFFECT` | Menu-option `ADD`/`REMOVE` effects and assertion status |
 | `KNOWLEDGE_RUNTIME_STATE` | The single active, ready knowledge release |
 
-Authoring files live under `knowledge/dishes/`. Their front matter is JSON-compatible
-YAML validated by Pydantic. Objective, essential facts such as defining ingredients
+Authoring files live under `knowledge/dishes/` and `knowledge/external_dishes/`. Their
+front matter is JSON-compatible YAML validated by Pydantic. Objective, essential facts such as defining ingredients
 and preparation remain structured claims. Subjective qualities such as taste,
 texture, cultural context, and comparisons are authored as natural
 encyclopedic prose and compiled into paragraph passages for retrieval. The compiler
@@ -171,22 +180,20 @@ The legacy `MENU_KNOWLEDGE`, normalized menu relations, and `EVIDENCE` tables re
 available for existing API/UI consumers. The new resolver merges those specific facts
 with the active concept release rather than deleting or silently redefining them.
 
-## Structured hybrid search and mutation compatibility
+## Structured eligibility, ranking, and mutation compatibility
 
 Oracle menu and chunk vectors are `VECTOR(1536, FLOAT32)`. V2 first applies confirmed
-service area, availability, base-price band, maximum `1..5` spice, valid halal scope,
-confirmed vegan conflict, and similar-history exclusions. It then builds a broad
-pool from exact aliases/lexical routing and Wiki-passage embedding similarity. Each
-pool item keeps evidence for the user's selected values plus the full server-owned
-menu payload and release provenance. SQLite stores equivalent vectors as JSON and
-computes cosine similarity in application code; Oracle uses
-`VECTOR_DISTANCE(..., COSINE)`.
+service area, availability, base-price band, supported maximum `1..5` spice, valid
+halal scope, confirmed vegan conflict, and similar-history exclusions. Disabled
+catalog capabilities are normalized to neutral criteria before this query; absent
+coverage is never interpreted as a positive safety or dietary fact.
 
-Retrieval score bounds the evidence pool but is not the final recommendation rank.
-One generation response chooses and orders final menu IDs from the pool while writing
-their explanations. The server validates pool membership and evidence and preserves a
-valid model order. Rating, merchant prose, and reviews contribute `0` to this v2 pool
-and are not supplied to the generation context.
+In the migration-012 contract, reviewed `CONCEPT_PREFERENCE_SUPPORT` joins and
+objective filters define eligibility. The server computes a versioned explicit score,
+uses stable tie-breaks and diversity, and freezes at most three final menus. Wiki
+retrieval supplies explanation evidence for those menus; one generation response may
+write explanations but cannot choose or reorder IDs. Rating, merchant prose, and
+reviews contribute `0` and are not supplied to the generation context.
 
 Migration `007_service_area_and_mutation_idempotency.sql` adds `service_area_id` to
 `ADDRESS_PLACE` and `ADDRESS_REF`, and `agent_request_key` to `CART_ITEM`. The unique
@@ -216,14 +223,16 @@ family that carries the preference-catalog identity.
 
 `STRUCTURED_RECOMMENDATION_REQUEST` is the one-dispatch ledger: it records the request
 hash, criteria version, pinned release family and eligibility time, evidence-pool
-snapshot, terminal result/failure, dispatch count, and timestamps. Its internal status
-records distinguish no eligible results, no model match, search-result fallback, a
-completed response, and an unknown result after a dispatch interruption.
+snapshot, frozen candidates/ranking trace, terminal result/failure, dispatch count,
+and timestamps. Its internal status records distinguish no eligible results,
+deterministic explanation fallback, a completed response, and an unknown result after
+a dispatch interruption.
 `RECOMMENDATION_SNAPSHOT` additionally keeps the criteria, release-family ID,
 serialized evidence pool, generation status/count, and structural-grounding JSON used
 by its resulting card. Snapshot completion re-checks the exact pinned family at
 current UTC and rewrites only the server-owned menu projection (including current
-price, fee/ETA, halal, and vegan state) while preserving valid model prose/order. A
+price, fee/ETA, halal, and vegan state) while preserving valid explanation prose and
+server-owned order. A
 terminal request GET can return an even newer live projection and remove a stale menu
 without mutating the stored result row. There are no separate persisted columns for
 every menu price/service-area version or for generation provider/model/prompt
@@ -234,8 +243,36 @@ evidence.
 `RECOMMENDATION_PREFERENCE_OPTION`, and `SPICE_REFERENCE` bind the active Wiki,
 catalog, preference vocabulary, spice examples, certification release, and embedding
 metadata. `MERCHANT_CERTIFICATION` holds merchant/menu-scoped halal evidence used by
-objective eligibility. These synthetic rows remain demo data, not proof of a real
-restaurant or certification.
+objective eligibility. The schema can hold synthetic certification rows for the base
+fixture, but the external public-web catalog supplies no formal certification; its
+halal capability therefore remains disabled unless a separately reviewed release adds
+adequate scoped evidence. No row is proof about a real restaurant merely because the
+schema can represent it.
+
+Migration `011_external_catalog_import.sql` adds the external public-web catalog
+batch, source-detail, source-section, source-option, and explicit classification
+ledger used to preserve provenance and source limitations. External catalog rows are
+operational public-web observations, not synthetic menus and not a live Yogiyo API.
+They do not provide reviewed recipes, formal certifications, verified spice levels,
+or serving-size facts.
+
+Migration `012_concept_preference_support_and_server_ranking.sql` adds
+`CONCEPT_PREFERENCE_SUPPORT` with release/concept/category/option identity,
+`SUPPORTED | UNSUPPORTED | REVIEW_REQUIRED`, support strength, reviewed evidence
+chunk, provenance, review status, method version, and synthetic flag. It adds
+support/ranking manifest fields to `RECOMMENDATION_RELEASE_FAMILY`; frozen candidate,
+ranking trace/policy, support digest, and finalization fields to the request and
+snapshot ledgers; and bounded lookup/filter indexes. The release builder records a
+classification for every external menu and never invents source-specific ingredient,
+certification, spice, or serving facts.
+
+The synthetic Oracle seed and SQLite initialization share one support compiler. It
+accepts only high-confidence mapped concepts and their inheritance-enabled,
+`REVIEWED_DEMO` `SYNTHETIC_WIKI` public non-safety chunks, cites one deterministic
+chunk per concept/category/option edge, and excludes price bands from semantic
+support. Both repositories compute the family support-manifest digest from the same
+stable fields/order and pin `yobi-concept-rank-v1` plus its policy digest; a legacy or
+zero manifest is a seed-integrity failure.
 
 The current local family has a foreign key to `KNOWLEDGE_RELEASE` and stores the
 catalog, preference, spice, certification, and embedding version identities selected
@@ -244,16 +281,48 @@ immutable release-table foreign keys or manifests. Their operational compatibili
 atomic activation, and rollback remain Phase 8 Oracle/readiness gates; an `ACTIVE`
 local pointer is not evidence that those deployment gates passed.
 
-Migrations `001`-`010` are append-only and checksum-protected. `005`-`010` use
+The 2026-08-16 external SQLite mirror baseline was separately applied and verified:
+114 concepts/documents, 1,299 chunks, 1,955 high-confidence mapped menus, explicit
+classification for 15,085/15,085 menus, and 1,073 reviewed support rows. The final
+2026-08-17 family supersedes it with 198 concepts/documents, 1,551 chunks, 3,922
+high-confidence mappings, and 1,499 support rows. Both audits reported zero invented
+source-specific fact rows; the latter is active in Oracle and publicly ready.
+
+## Browse snapshots and capability projection
+
+The preference catalog response derives three release-aware capabilities rather than
+persisting unconditional UI switches:
+
+- halal requires at least three currently eligible certified menus;
+- vegan and five-level spice each require reviewed coverage across at least three
+  menus and two merchants.
+
+Each response carries `enabled` plus a disabled reason. The UI clears stale unsupported
+criteria and submits neutral values; `STRUCTURED_RECOMMENDATION_REQUEST` therefore
+never treats unavailable evidence as a hidden constraint.
+
+`food-rankings` and `featured/kpop-demon-hunters` create ordinary
+`RECOMMENDATION_SNAPSHOT` authorization records through the same selected/shown menu
+history. External ranking values use source menu/merchant review counts; order and
+popularity are explicitly derived demo proxies. Only synthetic fixture menus with no
+source counts use stable ID-derived values. None are persisted platform-wide Yogiyo
+statistics. The five-item feature is a reviewed general-concept
+mapping for Gimbap, Gukbap, Hotteok, Seolleongtang, and Eomuk. Its Wiki text remains
+general food knowledge and never becomes a merchant recipe or dietary assertion.
+
+Migrations `001`-`012` are append-only and checksum-protected. `005`-`012` use
 already-exists-tolerant Oracle blocks so the same unmodified release can resume after
 Oracle's implicit DDL commits. No rollback script drops these additive objects; an app
 rollback must remain compatible with them.
 
 ## Synthetic and real-data boundary
 
-Menus, merchants, reviews, origin declarations, menu facts, address fixtures,
-payments, and orders are synthetic or Mock. `SYNTHETIC_WIKI` describes general food
-concepts; `SYNTHETIC_MERCHANT_ORIGIN_DECLARATION` and `SYNTHETIC_MENU_SPEC` identify
-their narrower scopes. No row is evidence of a real Yogiyo integration or a real
-restaurant recipe. AI-authored knowledge remains versioned and review-labelled and
-is not automatically promoted to verified real-world safety data.
+The target merchant/menu/option catalog is a versioned import of public Yogiyo web
+fields (`YOGIYO_PUBLIC_WEB`); it is not a live Yogiyo integration and not evidence of a
+restaurant recipe. Source review counts remain catalog observations used only by the
+clearly labelled browse ranking view; demo ranking proxies, address fixtures,
+payments, and orders remain synthetic/mock.
+`SYNTHETIC_WIKI` describes general food concepts, and the external concept mapping is
+an explicitly derived demo layer. AI-authored knowledge remains versioned and
+review-labelled and is never promoted to verified merchant ingredients, formal
+certification, or real-world safety data.

@@ -1,6 +1,111 @@
 # YOBI MVP implementation status
 
-Last updated: 2026-08-12 KST
+Last updated: 2026-08-17 KST
+
+## 2026-08-17 Wiki expansion and UI refinement (FINAL ACTIVE)
+
+Application `20260816T201131Z-29fbc2f9fd32` is the final public release. The release
+keeps the deterministic server-owned recommendation structure while adding a more
+conversational assistant/user-bubble presentation, stronger visual hierarchy, sticky
+quick replies, refined carousel/order messages, and seven public cuisine choices.
+Public browser verification covered welcome+locale, fixed address, the expanded
+selector, and horizontal-overflow safety without submitting another recommendation.
+
+The active Oracle knowledge family now contains 198 concepts/documents, 154
+relations, 430 closure rows, 345 claims, 1,551 chunks, 3,922 high-confidence mappings,
+15,085/15,085 classifications, and 1,499 preference-support rows. This is +84 Wiki
+documents and +1,967 mapped menus over the previous family. Active identities:
+
+- knowledge `external-knowledge-0ffd2f53ba2e2539ee9c5a27`
+- recommendation family
+  `external-recommendation-0ffd2f53ba2e2539ee9c5a27-71a41f074c-5515c9c687`
+- support manifest
+  `71a41f074cb7fa0693b2d92009bcdf708ac0a335a08802171c5f1a408066d5f4`
+- preference catalog `preference-catalog-2026.08.17-v3`
+
+The expanded-cuisine quality run executed exactly five live provider requests. Four
+were normal grounded results. The Italian case produced three valid server-frozen
+menus but used the safety fallback; strict review found that the fallback response
+discarded existing selected-cuisine evidence. The serializer now preserves that
+evidence, and expanded SQLite plus live Oracle regression checks passed with zero
+additional provider calls. The final deploy also made zero provider calls. This is a
+reviewed 4-normal/1-safe-fallback observation, not a false 5/5 normal-generation claim
+and not a percentile benchmark.
+
+| Partition | Final evidence |
+|---|---|
+| `LOCAL` | Focused final gate 85/85 PASS; Ruff PASS; MyPy 86 sources PASS; Python 3.9 AST 87 files PASS; frontend 47/47, build, and Playwright 24/36-skip/0-fail remain unchanged after the UI build. |
+| `ORACLE-OCI` | Exact migrations `001`–`012`; staged and active query plans; 3,922 mappings/1,499 supports; Italian zero-provider fallback regression; reviewed-five binding; health/readiness PASS. |
+| `PUBLIC API` | Root, health, readiness, QR, and preference catalog HTTP 200; protected demo status 403; readiness reports 198 documents, 1,551 chunks, and 3,922 mapped menus. |
+| `PUBLIC BROWSER` | Welcome+locale → fixed address → expanded selector PASS; seven cuisine buttons and no horizontal overflow; generated test profile/session deleted. |
+| `NETWORK` | Temporary Bastion removed; TCP 22 ingress 0; TCP 80 unchanged; temporary Bastion/LB/NLB absence verified. |
+
+Detailed evidence: [`evidence/KNOWLEDGE_EXPANSION_20260817.md`](evidence/KNOWLEDGE_EXPANSION_20260817.md).
+
+## Historical 2026-08-16 external catalog recommendation release (superseded)
+
+The status below records the predecessor and is retained for chronology. It is not the
+current application or active knowledge identity.
+
+The implementation scope is complete locally. It includes migration `012`, a reviewed
+external concept/Wiki release, preference support manifest, server-owned deterministic
+ranking/diversity, frozen top-three candidates, explanation-only one-dispatch
+generation, preview/capabilities/readiness APIs, the combined welcome+locale flow,
+fixed demo address, button-only preference collection, chat-card carousel, common
+navigation, KDH/ranking, options/cart/review and explicit Yogiyo handoff. The UI does
+not expose a payment-success or order-complete screen; the synthetic checkout/order
+API is retained only for backend release integrity.
+
+The initial public baseline served 200 merchants, 15,085 menus, 31,293 option groups
+and 208,513 option items but had zero active recommendation knowledge/mappings. The
+active Oracle data family now contains 114 concepts/documents, 107 relations, 300
+closure rows, 345 claims, 1,299 chunks, 1,955 high-confidence mappings, 15,085/15,085
+classifications and 1,073 preference-support rows, with zero invented merchant-specific
+facts. The source is a supplied `YOGIYO_PUBLIC_WEB` snapshot, not a live Yogiyo API.
+
+### Evidence partitions
+
+| Partition | Current state | Evidence boundary |
+|---|---|---|
+| `LOCAL` | **PASS** | `make test`: Ruff, MyPy 83, backend 478/478 in 1,026.07s, frontend 47/47, ESLint. Build: 1,805 modules. Evaluation: 100 queries and 369 chatbot assertions with 0 failures. Playwright: 24 pass/36 intentional skip/0 fail. Local desktop/mobile/Arabic RTL browser flows passed. |
+| `ORACLE-OCI` | **PASS** | Migration/data/support/ranking identities are active. Exactly five final quality requests passed: median 7,336.520 ms, max 7,860.266 ms, no percentile claim, 5/5 grounded/diverse/stable. |
+| `PUBLIC API` | **PASS** | Final health/readiness/root/demo QR 200, protected route 403, source and recommendation readiness true. |
+| `PUBLIC BROWSER` | **PASS** | Final combined welcome+locale/start UI rechecked; the user independently observed recommendation results, while the five-case HTTP gate verified internal criteria/evidence/order contracts. |
+
+The active catalog is
+`yogiyo-public-web:20260814:yobi-diverse-merchant-selection-v2:8a9d54b7230a`;
+knowledge is `external-knowledge-fe97d5a7bf7205681f75aeb5`; recommendation family is
+`external-recommendation-fe97d5a7bf7205681f75aeb5-78909a764a-5515c9c687`.
+The support manifest is
+`78909a764a01935850f615cd5f35bc8095e16455ea8fcc8611bb3dcebb94111`
+and ranking-policy hash is
+`5515c9c6877641a111e29ba418890b166b84374101877005749257eae826e191`.
+
+### Candidate failure chronology and recovery
+
+| Candidate | Result |
+|---|---|
+| `20260815T231001Z-b32f68c7353f` | Staged Oracle plan proof failed; no ready marker; old app retained, exact SSH rule cleaned. |
+| `20260815T231426Z-64ea3e65938c` | Plan/source/structured passed, performance hit `DPY-4008`; no ready marker. It is now the verified active recovery checkpoint with public health/readiness 200. |
+| `20260815T232437Z-50c1721d66b5` | Bind fixed and plan/source/structured passed; performance stopped at `PERFORMANCE_NORMAL_RECOMMENDATION_REQUIRED` after a provider rate-limit sample; automatic rollback restored the recovery checkpoint and cleaned SSH ingress. |
+| `20260816T031853Z-e469d49d03b0` | Provisional query-plan/source/structured gates passed; a non-portable provisional-marker write failed and automatic rollback restored the recovery checkpoint. |
+| `20260816T032847Z-2d9eab12f72a` | The marker write was fixed; an inverted provisional success condition still triggered automatic rollback after all three provisional gates passed. |
+| `20260816T034237Z-e9417303ad55` | **ACTIVE PROVISIONAL** — query-plan, source-integrity, normal structured order and isolated fallback passed; performance was explicitly deferred; ready and provisional markers were written; public API/browser and final network cleanup passed. |
+
+The invalid bind is fixed, and structured generation now uses
+`openai.gpt-oss-120b`, output cap 2,048, provider concurrency 2, exactly one dispatch,
+and no automatic retry/model fallback. The release benchmark counts exactly 30 paced
+normal requests and a separate barrier concurrency-3 gate.
+
+Historical checkpoint claim: **PASS — superseded deployment complete at that time**.
+
+- historical application: `20260816T034237Z-e9417303ad55`
+- quality evidence SHA-256:
+  `868d35c331de63f4de3b600fd68e0628a3a2e26dd009f038b4a968adaad006a3`
+- final cleanup: TCP 22 `0`, TCP 80 unchanged at `1`, temporary LB count restored
+- the previously required full30/concurrency3 benchmark was explicitly superseded by
+  the user's focused five-case quality acceptance; five samples support correctness
+  inspection, not statistical percentile claims
 
 > The 2026-08-12 structured-recommendation revision is deployed as release
 > `20260812T141008Z-8418f92b7e37`. Migration `010`, the prose-first Wiki, persisted
