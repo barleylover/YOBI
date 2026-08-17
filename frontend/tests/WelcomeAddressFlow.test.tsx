@@ -174,7 +174,8 @@ describe("merged welcome and neutral demo address flow", () => {
       dietary_rules: [],
       favorite_foods: [],
     })));
-    fireEvent.click(await screen.findByRole("button", { name: "Select this address" }));
+    await waitFor(() => expect(document.querySelector(".address-submit")).toHaveTextContent("Select this address"));
+    fireEvent.click(document.querySelector<HTMLButtonElement>(".address-submit") as HTMLButtonElement);
     expect(await screen.findByText("Chat route")).toBeInTheDocument();
     expect(useSessionStore.getState().addressRefId).toBe("address_ref_demo");
   });

@@ -85,8 +85,7 @@ export function OnboardingPage() {
     }
   }
 
-  async function findAddress(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function findAddress() {
     setLoading(true);
     setError("");
     setCandidates([]);
@@ -107,17 +106,26 @@ export function OnboardingPage() {
   }
 
   async function confirmCandidate(candidate: AddressCandidate) {
-    if (!createdContext) return;
     setLoading(true);
     setError("");
     try {
-      const result = await api.confirmAddress(createdContext.session.session_id, candidate);
-      finish(result.address_ref_id, `${candidate.hotel_name} · ${candidate.road_address}`, createdContext.session);
+      const context = createdContext ?? await ensureContext();
+      const result = await api.confirmAddress(context.session.session_id, candidate);
+      finish(result.address_ref_id, `${candidate.hotel_name} · ${candidate.road_address}`, context.session);
     } catch (cause) {
       setError(language === "English" ? actionableError(cause, selectionCopy.confirmError) : selectionCopy.confirmError);
     } finally {
       setLoading(false);
     }
+  }
+
+  async function submitAddress(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (candidates.length > 0) {
+      await confirmCandidate(candidates[0]);
+      return;
+    }
+    await findAddress();
   }
 
   async function loadDemoBooking() {
@@ -152,7 +160,7 @@ export function OnboardingPage() {
 
   return (
     <main className="onboarding-shell profile-only figma-address-shell">
-      <form className="onboarding-card simplified-address-card figma-address-card" onSubmit={findAddress}>
+      <form className="onboarding-card simplified-address-card figma-address-card" onSubmit={submitAddress}>
         <header className="mobile-step-header">
           <button
             type="button"
@@ -204,7 +212,7 @@ export function OnboardingPage() {
           {addressMode === "search" && (
             <label role="tabpanel">
               {productCopy.address.searchLabel}
-              <div className="address-search-field"><Search size={18} /><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder={productCopy.address.searchPlaceholder} /></div>
+              <div className="address-search-field"><Search size={18} /><input value={searchQuery} onChange={(event) => { setSearchQuery(event.target.value); setCandidates([]); }} placeholder={productCopy.address.searchPlaceholder} /></div>
             </label>
           )}
 
@@ -240,8 +248,8 @@ export function OnboardingPage() {
           <span>{productCopy.address.consent}</span>
         </label>
         {error && <p className="form-error" role="alert">{error}</p>}
-        <button className="primary-button full large address-submit" disabled={!consent || !addressReady || loading}>
-          {loading ? selectionCopy.checkingContext : productCopy.address.check}
+        <button className="primary-button full large address-submit" disabled={!consent || (!candidates.length && !addressReady) || loading}>
+          {loading ? selectionCopy.checkingContext : candidates.length ? productCopy.address.select : productCopy.address.check}
         </button>
       </form>
     </main>
