@@ -1,0 +1,165 @@
+{
+  "cases": [
+    {
+      "dispatch_count": 1,
+      "error_codes": [
+        "WIKI_EVIDENCE_MISSING"
+      ],
+      "evidence_count": 3,
+      "fallback_reason": null,
+      "feature_manifest_sha256": "21518714d6549e0602f312535fcf1960d3bad0e2ef7631b6e35298add255ea98",
+      "language": "ko",
+      "latency_ms": 18000.569,
+      "ledger_status": "COMPLETED",
+      "matched_group_count_min": 2,
+      "menu_order_sha256": "9e5c05ab6a857f2cb98029d115788c67e09e1736b8284cab040f5ddd2c00f7db",
+      "merchant_count": 3,
+      "name": "postdeploy_spicy_noodles_ko",
+      "release_family_id": "external-recommendation-13d51589941ebe911a350626-21518714d6-d557ecf273",
+      "required_group_count": 2,
+      "result_count": 3,
+      "selected_cuisine_codes": [],
+      "selection_status": "GROK_SELECTED",
+      "shortlist_count": 15,
+      "status": "FAIL"
+    },
+    {
+      "dispatch_count": 1,
+      "error_codes": [
+        "FAILURE_CODE_PRESENT",
+        "GROK_SELECTION_STATUS_INVALID",
+        "LEDGER_STATUS_SEARCH_FALLBACK",
+        "STATUS_NOT_RECOMMENDED",
+        "WIKI_EVIDENCE_MISSING"
+      ],
+      "evidence_count": 4,
+      "fallback_reason": "RATE_LIMIT",
+      "feature_manifest_sha256": "21518714d6549e0602f312535fcf1960d3bad0e2ef7631b6e35298add255ea98",
+      "language": "en",
+      "latency_ms": 2030.175,
+      "ledger_status": "SEARCH_FALLBACK",
+      "matched_group_count_min": 3,
+      "menu_order_sha256": "2442e5033920a2e870b7973ed9f894b6f9ee7ead7ed2f7dca9a5d7e95d3a939c",
+      "merchant_count": 3,
+      "name": "postdeploy_crispy_chicken_fried_en",
+      "release_family_id": "external-recommendation-13d51589941ebe911a350626-21518714d6-d557ecf273",
+      "required_group_count": 3,
+      "result_count": 3,
+      "selected_cuisine_codes": [],
+      "selection_status": "DETERMINISTIC_FALLBACK",
+      "shortlist_count": 15,
+      "status": "FAIL"
+    },
+    {
+      "dispatch_count": 1,
+      "error_codes": [
+        "FAILURE_CODE_PRESENT",
+        "GROK_SELECTION_STATUS_INVALID",
+        "LEDGER_STATUS_SEARCH_FALLBACK",
+        "STATUS_NOT_RECOMMENDED"
+      ],
+      "evidence_count": 6,
+      "fallback_reason": "RATE_LIMIT",
+      "feature_manifest_sha256": "21518714d6549e0602f312535fcf1960d3bad0e2ef7631b6e35298add255ea98",
+      "language": "ko",
+      "latency_ms": 1444.239,
+      "ledger_status": "SEARCH_FALLBACK",
+      "matched_group_count_min": 3,
+      "menu_order_sha256": "e1ba95d7628c48d5f0ec5371c48383a3bd78fe205c4c549e9aea1e185b11a81e",
+      "merchant_count": 3,
+      "name": "postdeploy_clean_mild_soup_hot_ko",
+      "release_family_id": "external-recommendation-13d51589941ebe911a350626-21518714d6-d557ecf273",
+      "required_group_count": 3,
+      "result_count": 3,
+      "selected_cuisine_codes": [],
+      "selection_status": "DETERMINISTIC_FALLBACK",
+      "shortlist_count": 15,
+      "status": "FAIL"
+    },
+    {
+      "dispatch_count": 1,
+      "error_codes": [],
+      "evidence_count": 3,
+      "fallback_reason": null,
+      "feature_manifest_sha256": "21518714d6549e0602f312535fcf1960d3bad0e2ef7631b6e35298add255ea98",
+      "language": "en",
+      "latency_ms": 16760.376,
+      "ledger_status": "COMPLETED",
+      "matched_group_count_min": 2,
+      "menu_order_sha256": "b75ed6800710ed98820903de015fac4862afa83f4775e1914907920d757c4002",
+      "merchant_count": 3,
+      "name": "postdeploy_italian_noodles_10k_19k_en",
+      "release_family_id": "external-recommendation-13d51589941ebe911a350626-21518714d6-d557ecf273",
+      "required_group_count": 2,
+      "result_count": 3,
+      "selected_cuisine_codes": [
+        "ITALIAN"
+      ],
+      "selection_status": "GROK_SELECTED",
+      "shortlist_count": 15,
+      "status": "PASS"
+    },
+    {
+      "dispatch_count": 1,
+      "error_codes": [
+        "DUPLICATE_MERCHANT",
+        "FAILURE_CODE_PRESENT",
+        "FINAL_MERCHANT_DIVERSITY_INVALID",
+        "GROK_SELECTION_STATUS_INVALID",
+        "LEDGER_STATUS_SEARCH_FALLBACK",
+        "STATUS_NOT_RECOMMENDED",
+        "WIKI_EVIDENCE_MISSING"
+      ],
+      "evidence_count": 2,
+      "fallback_reason": "RATE_LIMIT",
+      "feature_manifest_sha256": "21518714d6549e0602f312535fcf1960d3bad0e2ef7631b6e35298add255ea98",
+      "language": "ko",
+      "latency_ms": 1295.712,
+      "ledger_status": "SEARCH_FALLBACK",
+      "matched_group_count_min": 3,
+      "menu_order_sha256": "cf8258fdf91e908f4bac45feecddcf360189436aa8a40e79072c737bc04ce9ee",
+      "merchant_count": 2,
+      "name": "postdeploy_sweet_frozen_dessert_ko",
+      "release_family_id": "external-recommendation-13d51589941ebe911a350626-21518714d6-d557ecf273",
+      "required_group_count": 3,
+      "result_count": 3,
+      "selected_cuisine_codes": [],
+      "selection_status": "DETERMINISTIC_FALLBACK",
+      "shortlist_count": 15,
+      "status": "FAIL"
+    }
+  ],
+  "completed_at": "2026-08-18T04:05:41.929309+00:00",
+  "executed": 5,
+  "failure_action": "KEEP_ACTIVE_PROVISIONAL_NO_AUTO_ROLLBACK",
+  "gate": "recommendation-v2-postdeploy-five",
+  "latency": {
+    "max_ms": 18000.569,
+    "max_target_ms": 10000,
+    "median_ms": 2030.175,
+    "median_target_ms": 8000,
+    "percentile_claim": "not_made_for_five_samples"
+  },
+  "manual_rollback_command": "sudo -n /opt/yobi/current/deploy/rollback.sh",
+  "preflight_error_codes": [],
+  "provider_call_count": 5,
+  "provider_retry_count": 0,
+  "release": {
+    "application": {
+      "archive_sha256": "25ca40a10793a1c5183ba18e52f214b26cffd1119acc6145f7dc7bf7e086facc",
+      "managed": true,
+      "release_id": "20260818T035750Z-25ca40a10793",
+      "source_git_commit": "adc4fdff45a8da16d65ae27c6735c753f89e6ec0"
+    },
+    "database": {
+      "active_release_id": null,
+      "feature_manifest_sha256": "21518714d6549e0602f312535fcf1960d3bad0e2ef7631b6e35298add255ea98",
+      "ranking_policy_version": "yobi-hybrid-rank-v2",
+      "recommendation_release_family_id": null
+    }
+  },
+  "requested": 5,
+  "run_id": "postdeploy-20260818T035750Z-25ca40a10793",
+  "schema_version": "1",
+  "status": "FAIL"
+}
