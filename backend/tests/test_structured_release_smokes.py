@@ -80,10 +80,6 @@ class _GroundedFakeGenerator:
                             evidence_ids=evidence_ids,
                         )
                     )
-            wiki_ids = [
-                str(passage["evidence_id"])
-                for passage in item.get("wiki_passages", [])[:1]
-            ]
             recommendations.append(
                 GeneratedMenuRecommendation(
                     rank=rank,
@@ -92,7 +88,6 @@ class _GroundedFakeGenerator:
                     selection_reason="The selected preference has reviewed support.",
                     description="This general food description is backed by the cited passage.",
                     matched_criteria=matched,
-                    wiki_evidence_ids=wiki_ids,
                     caution_codes=[],
                 )
             )

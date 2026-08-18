@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     llm_max_tools_per_request: int = Field(default=4, ge=1, le=14)
     llm_max_tool_calls_per_response: int = Field(default=4, ge=1, le=14)
     tool_call_max_steps: int = Field(default=6, ge=1, le=12)
-    recommendation_prompt_version: str = "yobi-structured-rag-v2"
+    recommendation_prompt_version: str = "yobi-structured-rag-v3-server-wiki-binding"
     recommendation_raw_hits_per_value: int = Field(default=20, ge=4, le=100)
     recommendation_evidence_pool_limit: int = Field(default=24, ge=6, le=60)
     recommendation_candidate_limit: int = Field(default=100, ge=15, le=100)

@@ -55,6 +55,7 @@ from recommendation_quality_smoke import _validate_batch
 
 PREDEPLOY_CASE_NAME = "predeploy_spicy_fried_chicken_en"
 POSTDEPLOY_CASE_COUNT = 5
+DIAGNOSTIC_FOUR_CASE_COUNT = 4
 POSTDEPLOY_INTERVAL_SECONDS = 60
 POSTDEPLOY_CASES = (
     (
@@ -420,6 +421,7 @@ def run_predeploy(release_family_id: str, settings: Settings) -> dict[str, Any]:
             result_payload = StructuredRecommendationService._validated_result_payload(
                 generated,
                 shortlist,
+                max_wiki_passages=settings.recommendation_llm_passages_per_menu,
             )
             menu_ids, merchant_ids = _selected_ids(result_payload)
             if len(menu_ids) != 3 or len(set(menu_ids)) != 3:
@@ -479,11 +481,20 @@ def _ready_errors(ready: dict[str, Any]) -> list[str]:
     return [f"{name}_INVALID" for name, passed in checks.items() if not passed]
 
 
-def run_postdeploy(base_url: str, repository: Any, *, run_id: str) -> dict[str, Any]:
+def run_postdeploy(
+    base_url: str,
+    repository: Any,
+    *,
+    run_id: str,
+    cases: list[LiveCase] | None = None,
+    gate: str = "recommendation-v2-postdeploy-five",
+    run_id_prefix: str = "postdeploy",
+) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     preflight_errors: list[str] = []
     release: dict[str, Any] = {}
-    cases = _case_definitions()
+    cases = list(cases or _case_definitions())
+    expected_case_count = len(cases)
     with httpx.Client(base_url=base_url.rstrip("/"), timeout=30) as client:
         response = client.get("/readyz")
         if response.status_code != 200:
@@ -498,7 +509,7 @@ def run_postdeploy(base_url: str, repository: Any, *, run_id: str) -> dict[str, 
             )
             release_id = str(application_release.get("release_id") or "")
             if application_release.get("managed") is not True or run_id != (
-                f"postdeploy-{release_id}"
+                f"{run_id_prefix}-{release_id}"
             ):
                 preflight_errors.append("RUN_ID_RELEASE_BINDING_INVALID")
             release = {
@@ -541,7 +552,7 @@ def run_postdeploy(base_url: str, repository: Any, *, run_id: str) -> dict[str, 
                     preflight_errors.append(f"{case.name}:{type(exc).__name__.upper()}")
                     break
 
-        if not preflight_errors and len(contexts) == POSTDEPLOY_CASE_COUNT:
+        if not preflight_errors and len(contexts) == expected_case_count:
             for case_index, (case, context, request_id) in enumerate(contexts):
                 if case_index:
                     sleep(POSTDEPLOY_INTERVAL_SECONDS)
@@ -652,17 +663,17 @@ def run_postdeploy(base_url: str, repository: Any, *, run_id: str) -> dict[str, 
     }
     passed = (
         not preflight_errors
-        and len(results) == POSTDEPLOY_CASE_COUNT
-        and provider_call_count == POSTDEPLOY_CASE_COUNT
+        and len(results) == expected_case_count
+        and provider_call_count == expected_case_count
         and all(item["status"] == "PASS" for item in results)
         and float(latency_summary["median_ms"] or 1e12) <= 8_000
         and float(latency_summary["max_ms"] or 1e12) <= 10_000
     )
     return {
         "schema_version": "1",
-        "gate": "recommendation-v2-postdeploy-five",
+        "gate": gate,
         "status": "PASS" if passed else "FAIL",
-        "requested": POSTDEPLOY_CASE_COUNT,
+        "requested": expected_case_count,
         "executed": len(results),
         "provider_call_count": provider_call_count,
         "provider_retry_count": 0,
@@ -678,7 +689,11 @@ def run_postdeploy(base_url: str, repository: Any, *, run_id: str) -> dict[str, 
         "release": release,
         "cases": results,
         "failure_action": (
-            "FINALIZE_ZERO_CALL" if passed else "KEEP_ACTIVE_PROVISIONAL_NO_AUTO_ROLLBACK"
+            "FINALIZE_ZERO_CALL"
+            if passed and gate == "recommendation-v2-postdeploy-five"
+            else "DIAGNOSTIC_COMPLETE_NO_RELEASE_STATE_CHANGE"
+            if passed
+            else "KEEP_ACTIVE_PROVISIONAL_NO_AUTO_ROLLBACK"
         ),
         "manual_rollback_command": "sudo -n /opt/yobi/current/deploy/rollback.sh",
     }
@@ -686,7 +701,7 @@ def run_postdeploy(base_url: str, repository: Any, *, run_id: str) -> dict[str, 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("predeploy", "postdeploy"))
+    parser.add_argument("mode", choices=("predeploy", "postdeploy", "diagnostic-four"))
     parser.add_argument("--run-id", required=True)
     parser.add_argument(
         "--output-dir",
@@ -734,8 +749,17 @@ def main() -> None:
     if args.mode == "predeploy":
         assert args.release_family_id is not None
         payload = run_predeploy(args.release_family_id, get_settings())
-    else:
+    elif args.mode == "postdeploy":
         payload = run_postdeploy(args.base_url, get_repository(), run_id=args.run_id)
+    else:
+        payload = run_postdeploy(
+            args.base_url,
+            get_repository(),
+            run_id=args.run_id,
+            cases=_case_definitions()[:DIAGNOSTIC_FOUR_CASE_COUNT],
+            gate="recommendation-v2-diagnostic-four",
+            run_id_prefix="diagnostic-four",
+        )
     payload.update({"run_id": args.run_id, "completed_at": _utc_now()})
     digest = _write_artifact(final_path, payload)
     print(

@@ -467,7 +467,6 @@ def _generated_recommendation(menu_id: str, rank: int) -> dict[str, Any]:
                 "evidence_ids": [f"evidence-flavor-{suffix}"],
             },
         ],
-        "wiki_evidence_ids": [f"evidence-wiki-{suffix}"],
         "caution_codes": [],
     }
 
@@ -672,6 +671,11 @@ def test_model_can_select_and_reorder_three_from_the_frozen_shortlist() -> None:
     stored = repository.requests["recommendation-request-0001"]
     assert stored.dispatch_count == 1
     assert stored.status is RecommendationRequestStatus.COMPLETED
+    assert stored.result_json is not None
+    for item in stored.result_json["recommendations"]:
+        passage_ids = [passage["evidence_id"] for passage in item["wiki_passages"]]
+        assert passage_ids
+        assert item["wiki_evidence_ids"] == passage_ids
 
 
 def test_same_request_replay_does_not_dispatch_again() -> None:

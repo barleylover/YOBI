@@ -45,6 +45,7 @@ class RecommendationGroundingRejectionCode(str, Enum):
     MATCHED_CATEGORY_SET_MISMATCH = "MATCHED_CATEGORY_SET_MISMATCH"
     SELECTED_VALUE_OUTSIDE_REQUEST = "SELECTED_VALUE_OUTSIDE_REQUEST"
     CATEGORY_EVIDENCE_NOT_OWNED = "CATEGORY_EVIDENCE_NOT_OWNED"
+    WIKI_EVIDENCE_NOT_AVAILABLE = "WIKI_EVIDENCE_NOT_AVAILABLE"
     WIKI_EVIDENCE_NOT_OWNED = "WIKI_EVIDENCE_NOT_OWNED"
     INTERNAL_ID_LEAK = "INTERNAL_ID_LEAK"
     SHORTLIST_PRICE_INVALID = "SHORTLIST_PRICE_INVALID"
@@ -85,6 +86,7 @@ _REJECTION_STAGE_BY_CODE = {
             RecommendationGroundingRejectionCode.MATCHED_CATEGORY_SET_MISMATCH,
             RecommendationGroundingRejectionCode.SELECTED_VALUE_OUTSIDE_REQUEST,
             RecommendationGroundingRejectionCode.CATEGORY_EVIDENCE_NOT_OWNED,
+            RecommendationGroundingRejectionCode.WIKI_EVIDENCE_NOT_AVAILABLE,
             RecommendationGroundingRejectionCode.WIKI_EVIDENCE_NOT_OWNED,
             RecommendationGroundingRejectionCode.INTERNAL_ID_LEAK,
         )
@@ -140,7 +142,6 @@ class GeneratedMenuRecommendation(BaseModel):
     selection_reason: str = Field(min_length=1, max_length=1000)
     description: str = Field(min_length=1, max_length=2000)
     matched_criteria: list[MatchedCriterion] = Field(max_length=20)
-    wiki_evidence_ids: list[str] = Field(max_length=20)
     caution_codes: list[str] = Field(max_length=20)
 
 
@@ -247,11 +248,6 @@ RECOMMENDATION_GENERATION_JSON_SCHEMA: dict[str, Any] = {
                             "additionalProperties": False,
                         },
                     },
-                    "wiki_evidence_ids": {
-                        "type": "array",
-                        "maxItems": 20,
-                        "items": {"type": "string"},
-                    },
                     "caution_codes": {
                         "type": "array",
                         "maxItems": 20,
@@ -265,7 +261,6 @@ RECOMMENDATION_GENERATION_JSON_SCHEMA: dict[str, Any] = {
                     "selection_reason",
                     "description",
                     "matched_criteria",
-                    "wiki_evidence_ids",
                     "caution_codes",
                 ],
                 "additionalProperties": False,
@@ -442,6 +437,10 @@ class RecommendationGenerationValidator:
             allowed_wiki_evidence = self._all_evidence_ids(
                 pool_item.get("wiki_passages", [])
             )
+            if not allowed_wiki_evidence:
+                raise _grounding_rejected(
+                    RecommendationGroundingRejectionCode.WIKI_EVIDENCE_NOT_AVAILABLE
+                )
             for category_code, selected_codes in active_categories.items():
                 matched = matched_by_category[category_code]
                 matched_codes = set(matched.selected_value_codes)
@@ -458,10 +457,6 @@ class RecommendationGenerationValidator:
                     raise _grounding_rejected(
                         RecommendationGroundingRejectionCode.CATEGORY_EVIDENCE_NOT_OWNED
                     )
-            if not set(recommendation.wiki_evidence_ids) <= allowed_wiki_evidence:
-                raise _grounding_rejected(
-                    RecommendationGroundingRejectionCode.WIKI_EVIDENCE_NOT_OWNED
-                )
         return result
 
     @staticmethod
@@ -937,8 +932,9 @@ outside the shortlist. Values inside one category mean OR and categories mean AN
 menu must cite valid evidence for every selected category.
 
 For every matched category, cite only evidence IDs attached to that menu and selected value. Use
-the supplied Wiki prose for the explanation. General Wiki prose describes the food generally; it
-does not prove a specific restaurant recipe. Do not invent ingredients, prices, availability,
+the supplied Wiki prose for the explanation, but do not return wiki_evidence_ids; the server binds
+the supplied Wiki evidence to each selected menu. General Wiki prose describes the food generally;
+it does not prove a specific restaurant recipe. Do not invent ingredients, prices, availability,
 certifications, restaurants, options, or cultural facts. Do not expose internal IDs in prose.
 Allergy and allergen guidance is outside this recommendation product. Do not make allergy-safety,
 allergen-absence, or cross-contact claims even if incidental Wiki prose mentions uncertainty.

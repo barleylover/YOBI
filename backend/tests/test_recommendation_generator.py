@@ -202,7 +202,6 @@ def _recommendation(menu_id: str, rank: int, cuisine_id: str, flavor_id: str) ->
                 "evidence_ids": [flavor_id],
             },
         ],
-        "wiki_evidence_ids": [cuisine_id, flavor_id],
         "caution_codes": [],
     }
 
@@ -517,26 +516,17 @@ def test_generator_rechecks_hard_constraints_after_model_selection(
     assert len(provider.calls) == 1
 
 
-def test_generator_rejects_menu_fact_used_as_wiki_evidence() -> None:
-    recommendation = _recommendation(
-        "dish-a", 1, "chunk-a-cuisine", "chunk-a-flavor"
-    )
-    recommendation["wiki_evidence_ids"] = ["fact_dish_a_price"]
+def test_generator_rejects_selected_menu_without_wiki_evidence() -> None:
     provider = FakeProvider(
         {
             "status": "RECOMMENDED",
             "criteria_summary": "Korean and spicy",
-            "recommendations": [recommendation, *_recommendations_three()[1:]],
+            "recommendations": _recommendations_three(),
             "unmatched_category_codes": [],
         }
     )
     pool_item = _pool_item("dish-a", "chunk-a-cuisine", "chunk-a-flavor")
-    pool_item["menu_facts"] = [
-        {
-            "evidence_id": "fact_dish_a_price",
-            "content": "Current base price: KRW 9,000.",
-        }
-    ]
+    pool_item["wiki_passages"] = []
     generator = RecommendationGenerator(Settings(), provider=provider)
 
     with pytest.raises(GenAIProviderError) as caught:
@@ -550,7 +540,7 @@ def test_generator_rejects_menu_fact_used_as_wiki_evidence() -> None:
     assert caught.value.code is GenAIErrorCode.GROUNDING_REJECTED
     assert (
         caught.value.safe_reason_code
-        == RecommendationGroundingRejectionCode.WIKI_EVIDENCE_NOT_OWNED.value
+        == RecommendationGroundingRejectionCode.WIKI_EVIDENCE_NOT_AVAILABLE.value
     )
     assert len(provider.calls) == 1
 

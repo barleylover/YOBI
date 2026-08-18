@@ -301,7 +301,11 @@ class StructuredRecommendationService:
             provider_metrics = generated.provider_metrics
             if generated.status is RecommendationGenerationStatus.NO_MATCH:
                 raise ValueError("GENERATOR_NO_MATCH_NOT_AUTHORIZED")
-            result_json = self._validated_result_payload(generated, evidence_pool)
+            result_json = self._validated_result_payload(
+                generated,
+                evidence_pool,
+                max_wiki_passages=self.settings.recommendation_llm_passages_per_menu,
+            )
             status = RecommendationRequestStatus.COMPLETED
             snapshot = self._snapshot_for_result(
                 session=session,
@@ -832,6 +836,8 @@ class StructuredRecommendationService:
     def _validated_result_payload(
         generated: Any,
         evidence_pool: list[EvidencePoolItem],
+        *,
+        max_wiki_passages: int,
     ) -> dict[str, Any]:
         pool_by_id = {item.menu.menu_id: item for item in evidence_pool}
         recommendations: list[dict[str, Any]] = []
@@ -839,16 +845,20 @@ class StructuredRecommendationService:
             pool_item = pool_by_id.get(generated_item.menu_id)
             if pool_item is None:
                 raise ValueError("GENERATED_MENU_OUTSIDE_SERVER_SHORTLIST")
+            wiki_passages = pool_item.wiki_passages[:max_wiki_passages]
+            if not wiki_passages:
+                raise ValueError("GENERATED_MENU_WIKI_EVIDENCE_MISSING")
             recommendations.append(
                 {
                     **generated_item.model_dump(mode="json"),
                     "rank": rank,
                     "menu_id": pool_item.menu.menu_id,
                     "menu": pool_item.menu.model_dump(mode="json"),
+                    "wiki_evidence_ids": [
+                        passage.evidence_id for passage in wiki_passages
+                    ],
                     "wiki_passages": [
-                        passage.model_dump(mode="json")
-                        for passage in pool_item.wiki_passages
-                        if passage.evidence_id in generated_item.wiki_evidence_ids
+                        passage.model_dump(mode="json") for passage in wiki_passages
                     ],
                     "halal_certified": pool_item.halal_certified,
                     "halal_scope_label": pool_item.halal_scope_label,

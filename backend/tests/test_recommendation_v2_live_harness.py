@@ -21,6 +21,7 @@ sys.modules[SPEC.name] = live_harness
 SPEC.loader.exec_module(live_harness)
 
 POSTDEPLOY_CASES = live_harness.POSTDEPLOY_CASES
+DIAGNOSTIC_FOUR_CASE_COUNT = live_harness.DIAGNOSTIC_FOUR_CASE_COUNT
 _case_definitions = live_harness._case_definitions
 _expected_predeploy_run_id = live_harness._expected_predeploy_run_id
 _allowed_predeploy_run_ids = live_harness._allowed_predeploy_run_ids
@@ -88,6 +89,17 @@ def test_live_harness_fixes_the_exact_one_plus_five_cases() -> None:
     assert cases[3].scenario.criteria.price_bands == ["FROM_10000_TO_19999"]
     assert cases[4].scenario.criteria.food_forms == ["DESSERT_BAKERY"]
     assert live_harness.POSTDEPLOY_INTERVAL_SECONDS == 60
+
+
+def test_diagnostic_four_is_bounded_and_cannot_finalize_the_release() -> None:
+    source = (ROOT / "deploy" / "run_recommendation_v2_diagnostic_four.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert DIAGNOSTIC_FOUR_CASE_COUNT == 4
+    assert "recommendation_v2_live_harness.py' diagnostic-four" in source
+    assert "finalize_recommendation_v2_release.sh" not in source
+    assert "release state is unchanged" in source
 
 
 def test_live_harness_requires_the_frozen_runtime_configuration() -> None:
