@@ -662,12 +662,24 @@ print(family)'
     # The one allowed staged-family Grok probe happens before either the app or
     # recommendation-family active pointer changes. A failure exits here and
     # leaves the existing live release active.
-    predeploy_run_id="predeploy-$(printf '%s' "$new_recommendation_release_family_id" \
+    predeploy_base_run_id="predeploy-$(printf '%s' "$new_recommendation_release_family_id" \
       | sha256sum | awk '{print substr($1,1,32)}')"
-    predeploy_artifact="/opt/yobi/shared/evidence/recommendation-v2/predeploy-${predeploy_run_id}.json"
-    if [[ -f "$predeploy_artifact" ]] \
-      && sudo "$new_release/venv/bin/python" - "$predeploy_artifact" \
-        "$new_recommendation_release_family_id" <<'PY'
+    predeploy_run_id=""
+    for recovery_number in {0..9}; do
+      candidate_run_id="$predeploy_base_run_id"
+      if (( recovery_number > 0 )); then
+        candidate_run_id="${predeploy_base_run_id}-r${recovery_number}"
+      fi
+      predeploy_artifact="/opt/yobi/shared/evidence/recommendation-v2/predeploy-${candidate_run_id}.json"
+      predeploy_started="/opt/yobi/shared/evidence/recommendation-v2/predeploy-${candidate_run_id}.started.json"
+      if [[ ! -e "$predeploy_artifact" && ! -e "$predeploy_started" ]]; then
+        predeploy_run_id="$candidate_run_id"
+        break
+      fi
+      [[ -f "$predeploy_artifact" ]] \
+        || { printf 'Existing predeploy run is incomplete.\n' >&2; exit 1; }
+      if ! predeploy_artifact_status="$(sudo "$new_release/venv/bin/python" - \
+        "$predeploy_artifact" "$new_recommendation_release_family_id" <<'PY'
 import hashlib
 import json
 import sys
@@ -679,26 +691,40 @@ sidecar = path.with_suffix(path.suffix + ".sha256")
 encoded = path.read_bytes()
 digest = hashlib.sha256(encoded).hexdigest()
 payload = json.loads(encoded)
-valid = (
+common = (
     sidecar.read_text(encoding="utf-8") == f"{digest}  {path.name}\n"
     and payload.get("gate") == "recommendation-v2-predeploy-one"
-    and payload.get("status") == "FAIL"
     and payload.get("release_family_id") == family_id
-    and payload.get("provider_call_count") == 0
     and payload.get("provider_retry_count") == 0
 )
-raise SystemExit(0 if valid else 1)
+if common and payload.get("status") == "FAIL" and payload.get("provider_call_count") == 0:
+    print("FAIL_ZERO")
+elif common and payload.get("status") == "PASS" and payload.get("provider_call_count") == 1:
+    print("PASS_ONE")
+else:
+    raise SystemExit(1)
 PY
-    then
-      predeploy_run_id="${predeploy_run_id}-r1"
-    fi
+      )"; then
+        printf 'Existing predeploy run cannot be recovered without a provider retry.\n' >&2
+        exit 1
+      fi
+      if [[ "$predeploy_artifact_status" == "PASS_ONE" ]]; then
+        predeploy_run_id="$candidate_run_id"
+        break
+      fi
+      [[ "$predeploy_artifact_status" == "FAIL_ZERO" ]] \
+        || { printf 'Existing predeploy artifact status is invalid.\n' >&2; exit 1; }
+    done
+    [[ -n "$predeploy_run_id" ]] \
+      || { printf 'Provider-free predeploy recovery ledger is exhausted.\n' >&2; exit 1; }
     sudo env PYTHONPATH="$new_release/backend:$new_release" \
       "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
       "$new_release/scripts/recommendation_v2_live_harness.py" predeploy \
       --run-id "$predeploy_run_id" \
       --output-dir /opt/yobi/shared/evidence/recommendation-v2 \
       --release-family-id "$new_recommendation_release_family_id"
-    unset predeploy_artifact predeploy_run_id
+    unset candidate_run_id predeploy_artifact predeploy_artifact_status \
+      predeploy_base_run_id predeploy_run_id predeploy_started recovery_number
   fi
 elif [[ "$catalog_mode" == "synthetic" ]]; then
   sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \

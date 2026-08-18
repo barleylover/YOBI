@@ -203,3 +203,11 @@ def test_provisional_activation_is_zero_call_after_the_single_staged_probe() -> 
     )
     assert 'payload.get("run_id") == f"postdeploy-{application.get(\'release_id\')}"' in finalizer
     assert '"$EVIDENCE_RELEASE_ID" == "$EXPECTED_RELEASE_ID"' in finalizer
+
+
+def test_oracle_support_union_normalizes_wiki_clob_to_varchar() -> None:
+    source = (ROOT / "backend" / "app" / "db" / "oracle_repository.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "DBMS_LOB.SUBSTR(chunk.content,2000,1) AS content" in source

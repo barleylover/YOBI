@@ -3273,7 +3273,9 @@ class OracleYobiRepository:
             SELECT membership.menu_id,support.category_code,support.option_code,
                    support.support_strength*0.65 AS support_strength,
                    support.evidence_chunk_id AS evidence_id,
-                   support.review_status,chunk.content,chunk.facet,
+                   support.review_status,
+                   DBMS_LOB.SUBSTR(chunk.content,2000,1) AS content,
+                   chunk.facet,
                    'CONCEPT_GENERAL' AS evidence_scope
             FROM menu_concept_membership membership
             JOIN concept_preference_support support

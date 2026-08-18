@@ -188,11 +188,11 @@ def _failed_zero_call_predeploy_is_valid(
     output_dir: Path,
     *,
     release_family_id: str,
+    run_id: str,
 ) -> bool:
-    """Allow one immutable recovery run after a provider-free preflight failure."""
+    """Validate an immutable failure that never reached the provider."""
 
-    base_run_id = _expected_predeploy_run_id(release_family_id)
-    final_path = output_dir / f"predeploy-{base_run_id}.json"
+    final_path = output_dir / f"predeploy-{run_id}.json"
     sidecar = final_path.with_suffix(final_path.suffix + ".sha256")
     if not final_path.is_file() or final_path.is_symlink() or not sidecar.is_file():
         return False
@@ -216,11 +216,16 @@ def _failed_zero_call_predeploy_is_valid(
 def _allowed_predeploy_run_ids(output_dir: Path, release_family_id: str) -> set[str]:
     base_run_id = _expected_predeploy_run_id(release_family_id)
     allowed = {base_run_id}
-    if _failed_zero_call_predeploy_is_valid(
-        output_dir,
-        release_family_id=release_family_id,
-    ):
-        allowed.add(f"{base_run_id}-r1")
+    previous_run_id = base_run_id
+    for recovery_number in range(1, 10):
+        if not _failed_zero_call_predeploy_is_valid(
+            output_dir,
+            release_family_id=release_family_id,
+            run_id=previous_run_id,
+        ):
+            break
+        previous_run_id = f"{base_run_id}-r{recovery_number}"
+        allowed.add(previous_run_id)
     return allowed
 
 
