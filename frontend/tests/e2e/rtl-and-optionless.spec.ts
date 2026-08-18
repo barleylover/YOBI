@@ -13,7 +13,7 @@ async function fulfillJson(route: Route, body: unknown) {
 
 async function startArabicSession(page: Page) {
   await page.goto("/");
-  await page.locator(".welcome-locale select").first().selectOption("العربية");
+  await page.locator(".yv2-entry-locales select").first().selectOption("العربية");
   await page.getByRole("button", { name: "ابدأ" }).click();
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "البحث عن عنوان العرض" }).click();

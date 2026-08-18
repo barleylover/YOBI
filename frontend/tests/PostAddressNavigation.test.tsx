@@ -83,7 +83,7 @@ describe("post-address discovery navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "K-Demon feature" }));
 
     const hero = await screen.findByRole("img", { name: /K-food on screen/i });
-    expect(hero).toHaveAttribute("src", "/yobi-gimbap-feature-hero.png");
+    expect(hero).toHaveAttribute("src", "/figma-yobi-v2/kpop-menu-01.png");
     expect(document.querySelector(".ranking-position")).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "Choose this menu" }));
     await waitFor(() => expect(onChoose).toHaveBeenCalledWith(menu, "feature_snapshot_1"));

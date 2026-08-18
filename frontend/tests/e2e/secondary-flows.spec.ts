@@ -22,21 +22,23 @@ test("halal and vegan conflicts are resolved explicitly before recommendation", 
     });
   });
   await startStructuredSession(page);
-  const ingredients = page.locator("details.preference-category").filter({ hasText: "Main ingredient" });
-  if (await ingredients.getAttribute("open") === null) await ingredients.locator("summary").click();
+  const ingredients = page.locator("[data-category='main_ingredients']");
   await ingredients.getByRole("button", { name: "Pork", exact: true }).click();
+  await expect(ingredients.getByRole("button", { name: "Pork", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("tab", { name: /Exact conditions/ }).click();
   const halal = page.getByRole("checkbox", { name: /Only show halal-certified restaurants/ });
   if (await halal.isDisabled()) {
     await expect(halal).toBeDisabled();
     return;
   }
-  await expect(ingredients.getByRole("button", { name: "Pork", exact: true })).toHaveAttribute("aria-pressed", "true");
   await halal.click();
   await expect(halal).toBeChecked();
 
   await expect(page.getByRole("alert")).toContainText("conflicts with the halal or vegan filter");
   await expect(page.getByRole("button", { name: "Show my recommendations" })).toBeDisabled();
+  await page.getByRole("tab", { name: /Core preferences/ }).click();
   await ingredients.getByRole("button", { name: "Pork", exact: true }).click();
+  await page.getByRole("tab", { name: /Exact conditions/ }).click();
   await expect(page.getByRole("button", { name: "Show my recommendations" })).toBeEnabled();
 });
 
@@ -47,7 +49,7 @@ test("result comparison and criteria editing are button-only actions", async ({ 
   const compare = page.getByRole("button", { name: "Compare these menus" });
   if (await compare.isEnabled().catch(() => false)) {
     await compare.click();
-    await expect(page.locator(".comparison-message")).toBeVisible();
+    await expect(page.locator(".yv2-comparison-panel")).toBeVisible();
   }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   await page.getByRole("button", { name: "Edit choices" }).click();

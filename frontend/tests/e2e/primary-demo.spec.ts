@@ -36,7 +36,7 @@ test("primary tourist flow selects criteria, recommends once and reaches the ord
   expect(Math.abs(carouselSizing.carouselWidth - carouselSizing.cardWidth)).toBeLessThanOrEqual(2);
   expect(carouselSizing.snapType).toContain("mandatory");
   await expect(page.getByRole("button", { name: "View Wiki evidence" }).first()).toBeVisible();
-  await expect(page.getByText(/Restaurant and order information is prepared for this experience/i)).toBeVisible();
+  await expect(page.locator(".yv2-result-boundary")).toContainText(/Restaurant and order information is prepared for this experience/i);
   await page.getByRole("button", { name: "Choose this menu" }).first().click();
   await expect(page.getByTestId("order-flow")).toBeVisible();
   await completeCurrentOptions(page);

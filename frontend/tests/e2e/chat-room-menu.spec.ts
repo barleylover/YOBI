@@ -6,7 +6,8 @@ test("structured draft survives profile editing without allergy or chat controls
   await startStructuredSession(page);
   const firstChip = await selectFirstPricePreference(page);
   const label = (await firstChip.innerText()).trim();
-  await page.getByRole("button", { name: "Edit my information" }).click();
+  await page.locator(".yv2-preference-tabs [role='tab']").first().click();
+  await page.getByRole("button", { name: "Edit choices", exact: true }).first().click();
 
   await expect(page).toHaveURL(/\/profile\?edit=1/);
   await expect(page.getByText("Current demo address")).toBeVisible();
@@ -16,6 +17,7 @@ test("structured draft survives profile editing without allergy or chat controls
   await page.getByRole("button", { name: "Keep this address" }).click();
 
   await expect(page).toHaveURL(/\/chat\/session_/);
+  await page.locator(".yv2-preference-tabs [role='tab']").nth(2).click();
   await expect(page.getByRole("button", { name: label, exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("textbox")).toHaveCount(0);
 });
@@ -24,7 +26,8 @@ test("Korean structured controls include localized filters and five KR/US levels
   test.skip(testInfo.project.name !== "iPhone 13", "One primary mobile proof is sufficient.");
   await startStructuredSession(page, true);
 
-  await expect(page.getByText("여러 개 선택 가능").first()).toBeVisible();
+  await page.getByRole("tab", { name: /정확 조건/ }).click();
+  await expect(page.getByRole("heading", { name: "정확 조건" })).toBeVisible();
   await expect(page.getByRole("checkbox", { name: /할랄 인증 식당만 보기/ })).toBeVisible();
   await expect(page.getByRole("checkbox", { name: /비건 메뉴 찾기/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "한국 음식 기준" })).toBeVisible();

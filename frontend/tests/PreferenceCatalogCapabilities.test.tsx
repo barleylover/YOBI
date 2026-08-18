@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PreferenceSelector } from "../src/components/PreferenceSelector";
 import { normalizePreferenceCatalog } from "../src/lib/preferenceCatalog";
@@ -58,6 +58,7 @@ describe("catalog capability contract", () => {
         onComplete={vi.fn()}
       />,
     );
+    fireEvent.click(screen.getByRole("tab", { name: /Exact conditions/ }));
     expect(screen.getByRole("checkbox", { name: /No verifiable formal certification coverage/ })).toBeDisabled();
     expect(screen.getByText("Reviewed menu-level spice values are unavailable.")).toBeInTheDocument();
   });
@@ -76,6 +77,7 @@ describe("catalog capability contract", () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole("tab", { name: /정확 조건/ }));
     expect(screen.getByRole("checkbox", { name: /검증 가능한 공식 인증 정보가 없어/ })).toBeDisabled();
     expect(screen.getByText("검토된 메뉴별 맵기 정보가 없어 현재 사용할 수 없습니다.")).toBeInTheDocument();
     expect(screen.queryByText(/No verifiable formal certification/)).not.toBeInTheDocument();

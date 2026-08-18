@@ -1,6 +1,7 @@
-import { ArrowLeft, ArrowRight, Languages, MapPin, MapPinned, ShieldCheck, Sparkles } from "lucide-react";
+import { ArrowLeft, ArrowRight, ChevronRight, Globe2, MapPin } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { YobiLogo } from "../components/YobiLogo";
 import {
   LANGUAGES,
   LANGUAGE_META,
@@ -52,62 +53,65 @@ export function WelcomePage() {
     navigate("/profile");
   }
 
+  function openLocalePicker(tab: "language" | "country") {
+    const params = new URLSearchParams({ tab, returnTo: location.pathname + location.search });
+    navigate(`/start?${params.toString()}`);
+  }
+
   return (
-    <main className="welcome-shell">
-      <section className="welcome-card">
-        <header className="welcome-brand">
-          <div className="brand-mark">YO<span>BI</span></div>
-          <span>{productCopy.entry.benefitFlavor}</span>
+    <main className="yv2-entry-shell">
+      <section className="yv2-entry-card">
+        <header className="yv2-entry-header">
+          {editMode && (
+            <button className="yv2-icon-button" type="button" aria-label={productCopy.handoff.back} onClick={() => navigate(returnTo)}>
+              <ArrowLeft size={20} />
+            </button>
+          )}
+          <YobiLogo />
         </header>
 
-        {editMode && (
-          <button className="text-button welcome-back" type="button" onClick={() => navigate(returnTo)}>
-            <ArrowLeft size={17} /> {productCopy.handoff.back}
-          </button>
-        )}
-
-        <div className="welcome-content">
-          <div className="welcome-hero">
-            <div className="yobi-avatar" aria-hidden="true">Y</div>
-            <h1>{productCopy.entry.heroTitle}<span>{productCopy.entry.heroBuddy}</span></h1>
-          </div>
-          <section className="welcome-pitch">
+        <div className="yv2-entry-content">
+          <div className="yv2-entry-copy">
+            <h1>{productCopy.entry.heroTitle}</h1>
             <h2>{productCopy.entry.pitchTitle}</h2>
             <p>{productCopy.entry.pitchDescription}</p>
-          </section>
-          <div className="welcome-benefits">
-            <span><Sparkles size={16} /> {productCopy.entry.benefitFlavor}</span>
-            <span><ShieldCheck size={16} /> {productCopy.entry.benefitDietary}</span>
-            <span><MapPin size={16} /> {productCopy.entry.benefitDelivery}</span>
           </div>
 
-          <section className="welcome-locale" aria-label={`${productCopy.entry.languageLabel} · ${productCopy.entry.countryLabel}`}>
-            <label>
-              <span><Languages size={17} /> {productCopy.entry.languageLabel}</span>
-              <select value={language} onChange={(event) => changeLanguage(event.target.value)}>
-                {LANGUAGES.map((item) => <option key={item}>{item}</option>)}
-              </select>
-            </label>
-            <label>
-              <span><MapPinned size={17} /> {productCopy.entry.countryLabel}</span>
-              <select value={country} onChange={(event) => setCountry(event.target.value)}>
-                {countries.map(([name, code]) => (
-                  <option value={name} key={code}>{countryName(name, locale)}</option>
-                ))}
-              </select>
-              <small>{productCopy.entry.countryHelp(language)}</small>
-            </label>
+          <section className="yv2-entry-locales" aria-label={`${productCopy.entry.languageLabel} · ${productCopy.entry.countryLabel}`}>
+            <div className="yv2-entry-locale-row">
+              <Globe2 size={21} aria-hidden="true" />
+              <label>
+                <span>{productCopy.entry.languageLabel}</span>
+                <select aria-label={productCopy.entry.languageLabel} value={language} onChange={(event) => changeLanguage(event.target.value)}>
+                  {LANGUAGES.map((item) => <option key={item}>{item}</option>)}
+                </select>
+              </label>
+              <button type="button" aria-label={`${productCopy.entry.languageLabel} · ${language}`} onClick={() => openLocalePicker("language")}>
+                <ChevronRight size={19} />
+              </button>
+            </div>
+            <div className="yv2-entry-locale-row">
+              <MapPin size={21} aria-hidden="true" />
+              <label>
+                <span>{productCopy.entry.countryLabel}</span>
+                <select aria-label={productCopy.entry.countryLabel} value={country} onChange={(event) => setCountry(event.target.value)}>
+                  {countries.map(([name, code]) => (
+                    <option value={name} key={code}>{countryName(name, locale)}</option>
+                  ))}
+                </select>
+              </label>
+              <button type="button" aria-label={`${productCopy.entry.countryLabel} · ${countryName(country, locale)}`} onClick={() => openLocalePicker("country")}>
+                <ChevronRight size={19} />
+              </button>
+            </div>
           </section>
         </div>
 
-        <footer>
-          <div>
-            <p>{productCopy.entry.localeApplies}</p>
-            <p>{productCopy.entry.experienceNotice}</p>
-          </div>
-          <button className="primary-button welcome-cta" type="button" onClick={start}>
-            {productCopy.entry.start} <ArrowRight size={20} />
+        <footer className="yv2-entry-footer">
+          <button className="yv2-primary-button" type="button" onClick={start}>
+            {productCopy.entry.start}<ArrowRight size={20} />
           </button>
+          <p>{productCopy.entry.experienceNotice}</p>
         </footer>
       </section>
     </main>

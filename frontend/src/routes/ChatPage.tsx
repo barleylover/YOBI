@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Settings2, ShoppingBag } from "lucide-react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
+import { ChannelHeader } from "../components/ChannelHeader";
 import { OrderFlowPanel } from "../components/OrderFlowPanel";
 import { PostAddressNavigation } from "../components/PostAddressNavigation";
 import { PreferenceSelector } from "../components/PreferenceSelector";
@@ -568,15 +568,35 @@ export function ChatPage() {
   }
 
   const showsLoading = hydrating || recommendationPhase === "RETRIEVING" || recommendationPhase === "GENERATING";
+  const showChannelHeader = !showsLoading && recommendationPhase !== "SELECTING";
+
+  function channelBack() {
+    if (recommendationPhase === "ORDERING") {
+      setSelectedMenu(null);
+      setRecommendationPhase("RESULTS");
+      return;
+    }
+    if (recommendationPhase === "RESULTS" || recommendationPhase === "SEARCH_FALLBACK") {
+      editCriteria();
+      return;
+    }
+    navigate(-1);
+  }
+
   return (
-    <main className="chat-shell structured-recommendation-shell">
+    <main className={`chat-shell structured-recommendation-shell yv2-chat-shell yv2-chat-${recommendationPhase.toLowerCase()}`}>
       <section className="chat-column">
-        <header className="chat-header">
-          <div className="brand-mark compact">YO<span>BI</span></div>
-          <div><strong>{copy.buddy}</strong><span><i /> {recommendationCopy.selectorEyebrow}</span></div>
-          <button type="button" aria-label={recommendationCopy.editProfile} title={recommendationCopy.editProfile} onClick={editProfile}><Settings2 size={18} /></button>
-          <button className="cart-button" aria-label={language === "English" ? `${journeyCopy.openCart}, ${cartQuantity} items` : `${journeyCopy.openCart}, ${journeyCopy.quantity} ${cartQuantity}`} onClick={openCart} disabled={!selectedMenu}><ShoppingBag size={19} />{cartQuantity > 0 && <span className="cart-badge">{cartQuantity}</span>}</button>
-        </header>
+        {showChannelHeader && (
+          <ChannelHeader
+            subtitle={copy.buddy}
+            backLabel={productCopy.handoff.back}
+            cartLabel={language === "English" ? `${journeyCopy.openCart}, ${cartQuantity} items` : `${journeyCopy.openCart}, ${journeyCopy.quantity} ${cartQuantity}`}
+            cartQuantity={cartQuantity}
+            cartDisabled={!selectedMenu}
+            onBack={channelBack}
+            onCart={openCart}
+          />
+        )}
 
         <div className="structured-recommendation-content" aria-live="polite">
           {catalogLoading && !catalog && <section className="recommendation-progress"><span className="loading-orbit" /><h1>{recommendationCopy.loadingChoices}</h1></section>}
@@ -584,19 +604,11 @@ export function ChatPage() {
           {catalogStale && catalog && <div className="catalog-stale-notice" role="status"><span>{recommendationCopy.savedCatalog}</span><button type="button" onClick={reloadCatalog}>{recommendationCopy.retry}</button></div>}
           {error && recommendationPhase !== "ERROR" && <p className="form-error" role="alert">{error}</p>}
 
-          {catalog && <div className="conversation-day-divider" aria-hidden="true"><span>{conversationDate}</span></div>}
+          {catalog && recommendationPhase !== "SELECTING" && !showsLoading && <div className="conversation-day-divider" aria-hidden="true"><span>{conversationDate}</span></div>}
 
           {catalog && recommendationPhase === "SELECTING" && (
-            <div className="assistant-message-row preference-prompt-message" data-testid="assistant-preference-prompt">
-              <div className="assistant-avatar" aria-hidden="true">Y</div>
-              <div className="assistant-message-stack">
-                <strong className="assistant-name"><i /> {productCopy.recommendation.assistantName}</strong>
-                <section className="assistant-bubble preference-prompt-bubble">
-                  <p className="eyebrow">{recommendationCopy.selectorEyebrow}</p>
-                  <p className="conversation-prompt-title">{recommendationCopy.selectorTitle}</p>
-                  <p>{recommendationCopy.selectorDescription}</p>
-                </section>
-              </div>
+            <div className="visually-hidden" data-testid="assistant-preference-prompt">
+              {recommendationCopy.selectorTitle} {recommendationCopy.selectorDescription}
             </div>
           )}
 
@@ -639,28 +651,26 @@ export function ChatPage() {
               onChange={applyDraftCriteria}
               onValidateAdd={(nextCriteria) => checkCriteriaPreview(nextCriteria, true)}
               onComplete={() => void submitCriteria()}
+              onBack={editProfile}
             />
           )}
 
           {catalog && showsLoading && (
-            <div className="assistant-message-row state-message">
-              <div className="assistant-avatar" aria-hidden="true">Y</div>
-              <div className="assistant-message-stack">
-                <strong className="assistant-name">{productCopy.recommendation.assistantName}</strong>
-                <section className="assistant-bubble recommendation-progress">
-                  <div className="chat-loading-heading">
-                    <span className="typing-indicator" aria-hidden="true"><i /><i /><i /></span>
-                    <h1>{hydrating ? recommendationCopy.restoring : recommendationPhase === "GENERATING" ? recommendationCopy.generating : recommendationCopy.retrieving}</h1>
-                  </div>
-                  <ol className="recommendation-stages" aria-label={recommendationCopy.retrieving}>
-                    <li className="active">{productCopy.recommendation.retrievingStage}</li>
-                    <li className={recommendationPhase === "GENERATING" ? "active" : ""}>{productCopy.recommendation.evidenceStage}</li>
-                    <li className={recommendationPhase === "GENERATING" ? "active" : ""}>{productCopy.recommendation.generatingStage}</li>
-                  </ol>
-                  <p>{recommendationCopy.noHiddenRelaxation}</p>
-                </section>
+            <section className="yv2-recommendation-loading" aria-labelledby="yv2-loading-title">
+              <div className="yv2-loading-orbit" aria-hidden="true"><span /><i /><b /></div>
+              <div>
+                <p className="yv2-eyebrow">{productCopy.recommendation.assistantName}</p>
+                <h1 id="yv2-loading-title">{hydrating ? recommendationCopy.restoring : recommendationPhase === "GENERATING" ? recommendationCopy.generating : recommendationCopy.retrieving}</h1>
+                <p>{recommendationCopy.selectedCount(selectedPreferenceLabels.length)} · {preview?.eligible_menu_count ?? "—"} menus</p>
               </div>
-            </div>
+              <ol className="yv2-loading-stages" aria-label={recommendationCopy.retrieving}>
+                <li className="active"><i />{productCopy.recommendation.retrievingStage}</li>
+                <li className={recommendationPhase === "GENERATING" ? "active" : ""}><i />{productCopy.recommendation.evidenceStage}</li>
+                <li className={recommendationPhase === "GENERATING" ? "active" : ""}><i />{productCopy.recommendation.generatingStage}</li>
+              </ol>
+              <aside className="yv2-info-banner">{recommendationCopy.noHiddenRelaxation}</aside>
+              <button className="yv2-secondary-button" type="button" onClick={editCriteria}>{recommendationCopy.editCriteria}</button>
+            </section>
           )}
 
           {catalog && latestRecommendation && (recommendationPhase === "RESULTS" || recommendationPhase === "SEARCH_FALLBACK") && (
@@ -736,13 +746,16 @@ export function ChatPage() {
         </div>
         <footer className="experience-notice">{recommendationCopy.experienceNotice}</footer>
       </section>
-      <PostAddressNavigation
-        sessionId={sessionId}
-        language={language}
-        locale={locale}
-        disabled={busy}
-        onChoose={chooseCollectionMenu}
-      />
+      {showChannelHeader && (
+        <PostAddressNavigation
+          sessionId={sessionId}
+          language={language}
+          locale={locale}
+          disabled={busy}
+          onChoose={chooseCollectionMenu}
+          onEditProfile={editProfile}
+        />
+      )}
     </main>
   );
 }

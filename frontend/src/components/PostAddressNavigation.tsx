@@ -5,6 +5,7 @@ import {
   ChevronUp,
   Flame,
   ListOrdered,
+  UserRound,
   Star,
   X,
 } from "lucide-react";
@@ -13,6 +14,7 @@ import { actionableError, api } from "../lib/api";
 import { getDynamicCopy } from "../lib/i18n";
 import { asSupportedLanguage, menuName } from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
+import { getRecommendationCopy } from "../lib/recommendationI18n";
 import {
   carouselDeltaForArrow,
   carouselIndexFromOffset,
@@ -31,12 +33,14 @@ interface Props {
   locale: string;
   disabled?: boolean;
   onChoose: (menu: MenuSummary, snapshotId: string) => void | Promise<void>;
+  onEditProfile?: () => void;
 }
 
 type DiscoveryView = "rankings" | "feature" | null;
 
-export function PostAddressNavigation({ sessionId, language, locale, disabled = false, onChoose }: Props) {
+export function PostAddressNavigation({ sessionId, language, locale, disabled = false, onChoose, onEditProfile }: Props) {
   const productCopy = getProductCopy(asSupportedLanguage(language));
+  const preferenceCopy = getRecommendationCopy(asSupportedLanguage(language));
   const dynamicCopy = getDynamicCopy(asSupportedLanguage(language));
   const copy = productCopy.navigation;
   const recommendationCopy = productCopy.recommendation;
@@ -202,7 +206,7 @@ export function PostAddressNavigation({ sessionId, language, locale, disabled = 
 
           {view === "feature" && (
             <div className="feature-view">
-              <img className="feature-hero" src="/yobi-gimbap-feature-hero.png" alt={copy.featureTitle} />
+              <img className="feature-hero" src="/figma-yobi-v2/kpop-menu-01.png" alt={copy.featureTitle} />
               <div className="feature-intro"><h3>{copy.featureTitle}</h3><p>{copy.featureDescription}</p></div>
               {loading && <p className="collection-state" role="status">{copy.loading}</p>}
               {error && <p className="collection-state error" role="alert">{error}</p>}
@@ -250,11 +254,21 @@ export function PostAddressNavigation({ sessionId, language, locale, disabled = 
         </section>
       )}
 
-      <nav ref={navRef} className={expanded ? "post-address-nav expanded" : "post-address-nav"} aria-label={copy.expand.replace(/\s[+]$/, "")}>
+      <nav ref={navRef} className={expanded ? "post-address-nav yv2-channel-menu expanded" : "post-address-nav yv2-channel-menu"} aria-label={copy.expand.replace(/\s[+]$/, "")}>
         {expanded && (
-          <div className="discovery-nav-actions">
-            <button type="button" onClick={() => setView("rankings")} disabled={disabled}><ListOrdered size={18} /> {copy.foodRankings}</button>
-            <button type="button" onClick={() => setView("feature")} disabled={disabled}><Star size={18} /> {copy.feature}</button>
+          <div className="discovery-nav-actions yv2-channel-menu-panel">
+            <header><strong>{copy.menu}</strong><button type="button" aria-label={copy.collapse} onClick={() => setExpanded(false)}><ChevronDown size={20} /></button></header>
+            <button type="button" className="yv2-profile-menu-item" onClick={() => { setExpanded(false); onEditProfile?.(); }} disabled={disabled || !onEditProfile}>
+              <UserRound size={20} /><span><strong>{preferenceCopy.editProfile}</strong><small>{productCopy.entry.languageLabel} · {productCopy.entry.countryLabel}</small></span>
+            </button>
+            <div className="yv2-discovery-menu-row">
+              <button type="button" onClick={() => { setExpanded(false); setView("rankings"); }} disabled={disabled}>
+                <ListOrdered size={23} /><span>{copy.foodRankings}</span>
+              </button>
+              <button type="button" onClick={() => { setExpanded(false); setView("feature"); }} disabled={disabled}>
+                <img src="/figma-yobi-v2/kpop-menu-02.png" alt="" /><span><Star size={15} />{copy.feature}</span>
+              </button>
+            </div>
           </div>
         )}
         <button
@@ -264,7 +278,7 @@ export function PostAddressNavigation({ sessionId, language, locale, disabled = 
           aria-label={expanded ? copy.collapse : copy.expand}
           onClick={() => setExpanded((value) => !value)}
         >
-          {expanded ? <ChevronDown size={22} /> : <ChevronUp size={22} />}
+          <span>{copy.menu}</span>{expanded ? <ChevronDown size={20} /> : <ChevronUp size={20} />}
         </button>
       </nav>
     </>
