@@ -2,8 +2,8 @@ import { expect, type Page } from "@playwright/test";
 
 export async function startStructuredSession(page: Page, korean = false) {
   await page.goto("/");
-  const languageSelect = page.locator(".welcome-locale select").first();
-  const countrySelect = page.locator(".welcome-locale select").nth(1);
+  const languageSelect = page.locator(".yv2-entry-locales select").first();
+  const countrySelect = page.locator(".yv2-entry-locales select").nth(1);
   await expect(languageSelect).toBeVisible();
   if (korean) {
     await languageSelect.selectOption({ label: "한국어" });
@@ -22,9 +22,9 @@ export async function startStructuredSession(page: Page, korean = false) {
 }
 
 export async function selectFirstPricePreference(page: Page) {
+  await page.locator(".yv2-preference-tabs [role='tab']").nth(2).click();
   const priceCategory = page.locator("[data-category='price_bands']");
-  if (await priceCategory.getAttribute("open") === null) await priceCategory.locator("summary").click();
-  const firstChip = priceCategory.locator(".preference-chip:visible").first();
+  const firstChip = priceCategory.locator(".yv2-preference-chip").first();
   await expect(firstChip).toBeVisible();
   await firstChip.click();
   await expect(firstChip).toHaveAttribute("aria-pressed", "true");

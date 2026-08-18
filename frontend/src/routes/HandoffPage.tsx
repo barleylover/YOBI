@@ -1,4 +1,4 @@
-import { ArrowLeft, CheckCircle2, ExternalLink, ShoppingBag } from "lucide-react";
+import { ArrowLeft, CheckCircle2, ExternalLink, Info, MapPin, ShoppingBag } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
 import { actionableError, api } from "../lib/api";
@@ -13,6 +13,7 @@ export function HandoffPage() {
   const copy = getProductCopy(asSupportedLanguage(language)).handoff;
   const session = useSessionStore((state) => state.session);
   const addressRefId = useSessionStore((state) => state.addressRefId);
+  const addressSummary = useSessionStore((state) => state.addressSummary);
   const [cart, setCart] = useState<CartPreview | null>(null);
   const [loading, setLoading] = useState(true);
   const [ended, setEnded] = useState(false);
@@ -35,41 +36,70 @@ export function HandoffPage() {
   if (!session || !addressRefId) return <Navigate to="/" replace />;
 
   return (
-    <main className="handoff-shell">
-      <section className="handoff-card">
-        <header>
-          <Link to={`/chat/${session.session_id}`}><ArrowLeft size={18} /> YOBI</Link>
-          <span>{copy.cta} · {copy.eyebrow}</span>
+    <main className="yv2-cart-shell">
+      <section className="yv2-cart-card">
+        <header className="yv2-page-header">
+          <Link className="yv2-icon-button" aria-label={copy.back} to={`/chat/${session.session_id}`}><ArrowLeft size={20} /></Link>
+          <h1>{uiCopy.readyCheckout}</h1>
+          <span className="yv2-cart-header-icon"><ShoppingBag size={19} /></span>
         </header>
 
         {!ended ? (
           <>
-            <div className="handoff-icon" aria-hidden="true"><ShoppingBag size={34} /></div>
-            <p className="eyebrow">{copy.eyebrow}</p>
-            <h1>{copy.title}</h1>
-            <p className="handoff-lead">{copy.description}</p>
-            <p>{copy.account}</p>
+            <div className="yv2-cart-content">
+              <header className="yv2-screen-title">
+                <p className="yv2-eyebrow">{copy.eyebrow}</p>
+                <h1>{copy.title}</h1>
+                <p>{copy.description}</p>
+              </header>
 
-            {loading && <p className="collection-state" role="status">{journeyCopy.loading}</p>}
-            {error && <p className="form-error" role="alert">{error}</p>}
-            {cart && (
-              <section className="handoff-cart-summary" aria-label={uiCopy.review}>
-                <div><span>{journeyCopy.items}: {cart.items.length}</span><strong>₩{cart.total_price.toLocaleString(locale)}</strong></div>
-                {cart.items.map((item) => <p key={item.cart_item_id}>{language === "한국어" ? item.menu_name_ko : item.menu_name} × {item.quantity}</p>)}
-              </section>
-            )}
+              {loading && <p className="collection-state" role="status">{journeyCopy.loading}</p>}
+              {error && <p className="yv2-error-banner" role="alert">{error}</p>}
+              {cart && (
+                <>
+                  <section className="handoff-cart-summary yv2-cart-items" aria-label={uiCopy.review}>
+                    {cart.items.map((item) => (
+                      <article key={item.cart_item_id}>
+                        <span className="yv2-cart-item-art"><ShoppingBag size={18} /></span>
+                        <div>
+                          <strong>{language === "한국어" ? item.menu_name_ko : item.menu_name}</strong>
+                          <small>{item.options.map((option) => language === "한국어" ? option.name_ko : option.name_en).join(" · ") || copy.account}</small>
+                          <span>× {item.quantity}</span>
+                        </div>
+                        <strong>₩{item.line_total.toLocaleString(locale)}</strong>
+                      </article>
+                    ))}
+                  </section>
 
-            <button type="button" className="yogiyo-button" onClick={() => setEnded(true)} disabled={loading || !cart?.ready_to_checkout}>
-              {copy.cta} <ExternalLink size={19} />
-            </button>
-            <p className="handoff-boundary">{copy.boundary}</p>
+                  <section className="yv2-cart-address">
+                    <MapPin size={18} />
+                    <div><span>{uiCopy.delivery}</span><strong>{addressSummary}</strong></div>
+                  </section>
+
+                  <section className="yv2-cart-totals">
+                    <div><span>{journeyCopy.items}</span><span>₩{cart.subtotal.toLocaleString(locale)}</span></div>
+                    <div><span>{uiCopy.delivery}</span><span>₩{cart.delivery_fee.toLocaleString(locale)}</span></div>
+                    <div><strong>{journeyCopy.total}</strong><strong>₩{cart.total_price.toLocaleString(locale)}</strong></div>
+                  </section>
+                </>
+              )}
+
+              <aside className="yv2-info-banner"><Info size={17} /><span>{copy.boundary}</span></aside>
+            </div>
+
+            <footer className="yv2-cart-actions">
+              <button type="button" className="yv2-primary-button yogiyo-button" onClick={() => setEnded(true)} disabled={loading || !cart?.ready_to_checkout}>
+                {copy.cta} <ExternalLink size={18} />
+              </button>
+              <Link to={`/chat/${session.session_id}`}>{copy.back}</Link>
+            </footer>
           </>
         ) : (
-          <section className="handoff-ended" role="status">
-            <div className="handoff-icon complete" aria-hidden="true"><CheckCircle2 size={38} /></div>
+          <section className="yv2-handoff-ended" role="status">
+            <span><CheckCircle2 size={40} /></span>
             <h1>{copy.done}</h1>
             <p>{copy.boundary}</p>
-            <Link className="secondary-button full" to={`/chat/${session.session_id}`}>{copy.back}</Link>
+            <Link className="yv2-secondary-button" to={`/chat/${session.session_id}`}>{copy.back}</Link>
           </section>
         )}
       </section>

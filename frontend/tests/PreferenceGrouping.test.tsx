@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PreferenceSelector } from "../src/components/PreferenceSelector";
 import { getPreferenceGroupCopy } from "../src/lib/preferenceGroupI18n";
@@ -58,9 +58,10 @@ describe("preference category grouping and meaning guidance", () => {
       />,
     );
 
-    expect(screen.getByRole("heading", { name: "Core preferences" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Core preferences/ })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText(/1–3 subjective choices/)).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Additional preferences" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Additional preferences/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: /Exact conditions/ }));
     expect(screen.getByRole("heading", { name: "Exact conditions" })).toBeInTheDocument();
     const exact = container.querySelector<HTMLElement>("[data-preference-group='exact']");
     expect(exact).not.toBeNull();
@@ -82,6 +83,7 @@ describe("preference category grouping and meaning guidance", () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole("tab", { name: /Exact conditions/ }));
     const guide = screen.getByText(/SPICY is a flavor you enjoy/);
     expect(guide).toHaveTextContent(/maximum spice is a hard cap/);
     expect(guide).toHaveTextContent(/VEGETABLE is a preferred main ingredient/);

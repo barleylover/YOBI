@@ -142,6 +142,24 @@ describe("merged welcome and neutral demo address flow", () => {
     );
   });
 
+  it("opens the Figma locale picker with all 16 languages and 36 countries", async () => {
+    render(
+      <MemoryRouter initialEntries={["/start?tab=language&returnTo=%2F"]}>
+        <Routes>
+          <Route path="/start" element={<LocalePage />} />
+          <Route path="/" element={<WelcomePage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(document.querySelectorAll(".yv2-locale-list > button")).toHaveLength(16);
+    fireEvent.click(screen.getByRole("button", { name: /한국어/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /국가.*36/ }));
+    expect(document.querySelectorAll(".yv2-locale-list > button")).toHaveLength(36);
+    fireEvent.click(screen.getByRole("button", { name: "완료" }));
+    expect(await screen.findByRole("heading", { name: /안녕하세요, YOBI예요/ })).toBeInTheDocument();
+  });
+
   it("removes demographic questions and sends a neutral profile before search address confirmation", async () => {
     resetStore();
     const createProfile = vi.spyOn(api, "createProfile").mockResolvedValue(profile);

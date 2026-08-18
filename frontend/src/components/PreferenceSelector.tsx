@@ -1,5 +1,5 @@
-import { Check, RotateCcw, Sparkles } from "lucide-react";
-import { useMemo } from "react";
+import { ArrowLeft, ArrowRight, Check, RotateCcw, Sparkles } from "lucide-react";
+import { useMemo, useState } from "react";
 import type {
   PreferenceCatalog,
   PreferenceCatalogCategory,
@@ -22,6 +22,12 @@ const CATEGORY_KEYS: PreferenceCategoryCode[] = [
   "cooking_methods",
 ];
 
+const STEP_CATEGORIES: PreferenceCategoryCode[][] = [
+  ["cuisine_origins", "main_ingredients", "food_forms"],
+  ["flavors", "temperatures", "textures", "cooking_methods"],
+  ["price_bands"],
+];
+
 interface Props {
   catalog: PreferenceCatalog;
   criteria: RecommendationCriteriaV2;
@@ -36,6 +42,7 @@ interface Props {
   onChange: (criteria: RecommendationCriteriaV2) => void;
   onValidateAdd?: (criteria: RecommendationCriteriaV2) => Promise<boolean>;
   onComplete: () => void;
+  onBack?: () => void;
 }
 
 function countCriteria(criteria: RecommendationCriteriaV2) {
@@ -58,25 +65,19 @@ export function PreferenceSelector({
   onChange,
   onValidateAdd,
   onComplete,
+  onBack,
 }: Props) {
-  function capabilityReason(
-    capability: { enabled: boolean; reason?: string | null } | undefined,
-    fallback: string,
-    koreanUnavailable: string,
-  ) {
-    if (capability?.enabled !== false) return fallback;
-    const normalizedLocale = catalog.locale.toLowerCase();
-    if (normalizedLocale === "ko" || normalizedLocale.startsWith("ko-")) return koreanUnavailable;
-    if (normalizedLocale === "en" || normalizedLocale.startsWith("en-")) return capability.reason || fallback;
-    return fallback;
-  }
-
+  const [step, setStep] = useState(0);
   const selectedCount = countCriteria(criteria);
   const groupCopy = getPreferenceGroupCopy(catalog.locale);
-  const groupedCategories = useMemo(() => ({
-    core: catalog.categories.filter((category) => category.group === "core"),
-    additional: catalog.categories.filter((category) => category.group === "additional"),
-    exact: catalog.categories.filter((category) => category.group === "exact"),
+  const stepCopy = [
+    groupCopy.core,
+    groupCopy.additional,
+    groupCopy.exact,
+  ];
+  const categoriesByStep = useMemo(() => STEP_CATEGORIES.map((codes) => {
+    const codeSet = new Set(codes);
+    return catalog.categories.filter((category) => codeSet.has(category.code));
   }), [catalog.categories]);
   const ingredientCodes = new Set(criteria.main_ingredients);
   const hasConflict = (
@@ -91,6 +92,19 @@ export function PreferenceSelector({
   const selectedLabels = CATEGORY_KEYS.flatMap((key) => criteria[key].map((code) => optionLabels.get(code) ?? code));
   if (criteria.dietary_filters.halal_certified_only) selectedLabels.push(copy.halal);
   if (criteria.dietary_filters.vegan) selectedLabels.push(copy.vegan);
+  const completeEnabled = (selectedCount > 0 || canSubmitUnchanged) && !hasConflict;
+
+  function capabilityReason(
+    capability: { enabled: boolean; reason?: string | null } | undefined,
+    fallback: string,
+    koreanUnavailable: string,
+  ) {
+    if (capability?.enabled !== false) return fallback;
+    const normalizedLocale = catalog.locale.toLowerCase();
+    if (normalizedLocale === "ko" || normalizedLocale.startsWith("ko-")) return koreanUnavailable;
+    if (normalizedLocale === "en" || normalizedLocale.startsWith("en-")) return capability.reason || fallback;
+    return fallback;
+  }
 
   async function toggle(category: PreferenceCategoryCode, code: string) {
     const selected = criteria[category];
@@ -126,17 +140,34 @@ export function PreferenceSelector({
     } as RecommendationCriteriaV2);
   }
 
-  const completeEnabled = (selectedCount > 0 || canSubmitUnchanged) && !hasConflict;
+  function previousStep() {
+    if (step > 0) {
+      setStep((value) => value - 1);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+    onBack?.();
+  }
 
-  function categoryPanel(category: PreferenceCatalogCategory, open = false) {
+  function nextStep() {
+    if (step < 2) {
+      setStep((value) => value + 1);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+    onComplete();
+  }
+
+  function categoryPanel(category: PreferenceCatalogCategory) {
     return (
-      <details className="preference-category" data-category={category.code} open={open} key={category.code}>
-        <summary><span><strong>{category.label}</strong>{category.description && <small>{category.description}</small>}</span><em>{criteria[category.code].length}</em></summary>
-        <div className="preference-category-actions">
-          <span>{copy.multiSelect}</span>
-          {criteria[category.code].length > 0 && <button type="button" onClick={() => clearCategory(category.code)}>{copy.clearCategory}</button>}
-        </div>
-        <div className="preference-chip-grid">
+      <section className="yv2-preference-category preference-category" data-category={category.code} key={category.code}>
+        <header>
+          <div><h2>{category.label}</h2>{category.description && <p>{category.description}</p>}</div>
+          {criteria[category.code].length > 0 && (
+            <button type="button" onClick={() => clearCategory(category.code)}>{copy.clearCategory}</button>
+          )}
+        </header>
+        <div className="yv2-preference-chip-grid">
           {category.options.map((option) => {
             const selected = criteria[category.code].includes(option.code);
             return (
@@ -144,124 +175,148 @@ export function PreferenceSelector({
                 type="button"
                 key={option.code}
                 data-option-code={option.code}
-                className={selected ? "preference-chip selected" : "preference-chip"}
+                className={selected ? "yv2-preference-chip selected" : "yv2-preference-chip"}
                 aria-pressed={selected}
                 disabled={busy}
                 onClick={() => void toggle(category.code, option.code)}
               >
-                {selected && <Check size={14} />}
+                <span className="yv2-chip-check">{selected && <Check size={13} />}</span>
                 <span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span>
               </button>
             );
           })}
         </div>
-      </details>
+      </section>
     );
   }
 
   return (
-    <section className={conversationMode ? "preference-selector conversation-quick-replies" : "preference-selector"} aria-labelledby="preference-selector-title">
-      <header className={conversationMode ? "preference-selector-heading visually-hidden" : "preference-selector-heading"}>
-        <p className="eyebrow">{copy.selectorEyebrow}</p>
-        <h1 id="preference-selector-title">{copy.selectorTitle}</h1>
-        <p>{copy.selectorDescription}</p>
-        <span><Check size={14} /> {copy.multiSelect}</span>
+    <section className={conversationMode ? "yv2-preference-selector conversation-quick-replies" : "yv2-preference-selector"} aria-labelledby="preference-selector-title">
+      <header className="yv2-preference-header">
+        <button className="yv2-icon-button" type="button" aria-label={copy.editCriteria} onClick={previousStep}>
+          <ArrowLeft size={20} />
+        </button>
+        <div className="yv2-step-progress">
+          <span>{step + 2} / 4</span>
+          <i><b style={{ inlineSize: `${((step + 2) / 4) * 100}%` }} /></i>
+        </div>
+        <span className="yv2-selection-count">{copy.selectedCount(selectedCount)}</span>
       </header>
 
-      <div className="preference-preview" aria-live="polite">
-        {previewLoading && <span>{copy.loadingChoices}</span>}
-        {!previewLoading && previewMessage && <span className={preview?.eligible_menu_count === 0 ? "warning" : ""}>{previewMessage}</span>}
+      <nav className="yv2-preference-tabs" aria-label={copy.selectorTitle}>
+        {stepCopy.map((item, index) => (
+          <button
+            type="button"
+            role="tab"
+            className={step === index ? "active" : ""}
+            aria-selected={step === index}
+            aria-current={step === index ? "step" : undefined}
+            onClick={() => setStep(index)}
+            key={item.title}
+          >
+            <span>{index + 1}</span>{item.title}
+          </button>
+        ))}
+      </nav>
+
+      <div className="yv2-preference-body">
+        <header className="yv2-screen-title">
+          <p className="yv2-eyebrow">{copy.selectorEyebrow}</p>
+          <h1 id="preference-selector-title">{step === 0 ? copy.selectorTitle : stepCopy[step].title}</h1>
+          <p>{stepCopy[step].help}</p>
+        </header>
+
+        {(previewLoading || previewMessage) && (
+          <div className={preview?.eligible_menu_count === 0 ? "yv2-preview-pill warning" : "yv2-preview-pill"} aria-live="polite">
+            <Sparkles size={15} />{previewLoading ? copy.loadingChoices : previewMessage}
+          </div>
+        )}
+
+        {selectedLabels.length > 0 && (
+          <div className="yv2-selected-strip" aria-label={copy.selectedSummary}>
+            {selectedLabels.map((label, index) => <span key={`${label}-${index}`}>{label}</span>)}
+          </div>
+        )}
+
+        <section className="yv2-preference-step-content" data-preference-group={step === 0 ? "core" : step === 1 ? "additional" : "exact"}>
+          <div className="yv2-preference-category-list">
+            {categoriesByStep[step].map(categoryPanel)}
+          </div>
+
+          {step === 2 && (
+            <>
+              <aside className="yv2-meaning-guide">
+                <strong>{groupCopy.semanticTitle}</strong>
+                <p>{groupCopy.semanticHelp}</p>
+              </aside>
+
+              <fieldset className="preference-dietary yv2-preference-dietary">
+                <legend>{copy.dietaryTitle}</legend>
+                <label className={criteria.dietary_filters.halal_certified_only ? "dietary-toggle selected" : "dietary-toggle"}>
+                  <input
+                    type="checkbox"
+                    checked={criteria.dietary_filters.halal_certified_only}
+                    disabled={busy || catalog.capabilities?.halal_certified_only?.enabled === false}
+                    onChange={(event) => void changeDietary("halal_certified_only", event.target.checked)}
+                  />
+                  <span><strong>{copy.halal}</strong><small>{capabilityReason(
+                    catalog.capabilities?.halal_certified_only,
+                    copy.halalHelp,
+                    "검증 가능한 공식 인증 정보가 없어 현재 사용할 수 없습니다.",
+                  )}</small></span>
+                </label>
+                <label className={criteria.dietary_filters.vegan ? "dietary-toggle selected" : "dietary-toggle"}>
+                  <input
+                    type="checkbox"
+                    checked={criteria.dietary_filters.vegan}
+                    disabled={busy || catalog.capabilities?.vegan?.enabled === false}
+                    onChange={(event) => void changeDietary("vegan", event.target.checked)}
+                  />
+                  <span><strong>{copy.vegan}</strong><small>{capabilityReason(
+                    catalog.capabilities?.vegan,
+                    copy.veganHelp,
+                    "검토된 메뉴별 재료 정보가 없어 현재 사용할 수 없습니다.",
+                  )}</small></span>
+                </label>
+              </fieldset>
+
+              <SpiceReferenceScale
+                value={criteria.max_spice_level}
+                country={criteria.spice_reference_country}
+                references={catalog.spice_references}
+                copy={copy}
+                disabled={busy || catalog.capabilities?.max_spice_level?.enabled === false}
+                onChange={(max_spice_level) => onChange({ ...criteria, max_spice_level })}
+                onCountryChange={(spice_reference_country) => onChange({ ...criteria, spice_reference_country })}
+              />
+              {catalog.capabilities?.max_spice_level?.enabled === false && (
+                <p className="preference-capability-note" role="status">{capabilityReason(
+                  catalog.capabilities.max_spice_level,
+                  copy.spiceHelp,
+                  "검토된 메뉴별 맵기 정보가 없어 현재 사용할 수 없습니다.",
+                )}</p>
+              )}
+            </>
+          )}
+        </section>
+
+        {hasConflict && <p className="yv2-error-banner" role="alert">{conflictMessage}</p>}
       </div>
 
-      {selectedLabels.length > 0 && (
-        <section className="preference-summary" aria-label={copy.selectedSummary}>
-          <div><strong>{copy.selectedSummary}</strong><span>{copy.selectedCount(selectedCount)}</span></div>
-          <div className="preference-summary-tags">{selectedLabels.map((label, index) => <span key={`${label}-${index}`}>{label}</span>)}</div>
-        </section>
-      )}
-
-      <section className="preference-group" data-preference-group="core" aria-labelledby="preference-group-core">
-        <header><span>01</span><div><h2 id="preference-group-core">{groupCopy.core.title}</h2><p>{groupCopy.core.help}</p></div></header>
-        <div className="preference-category-list">
-          {groupedCategories.core.map((category, index) => categoryPanel(category, index < 2))}
-        </div>
-      </section>
-
-      <section className="preference-group" data-preference-group="additional" aria-labelledby="preference-group-additional">
-        <header><span>02</span><div><h2 id="preference-group-additional">{groupCopy.additional.title}</h2><p>{groupCopy.additional.help}</p></div></header>
-        <div className="preference-category-list">
-          {groupedCategories.additional.map((category) => categoryPanel(category))}
-        </div>
-      </section>
-
-      <section className="preference-group preference-group-exact" data-preference-group="exact" aria-labelledby="preference-group-exact">
-        <header><span>03</span><div><h2 id="preference-group-exact">{groupCopy.exact.title}</h2><p>{groupCopy.exact.help}</p></div></header>
-        <aside className="preference-meaning-guide" aria-labelledby="preference-meaning-title">
-          <strong id="preference-meaning-title">{groupCopy.semanticTitle}</strong>
-          <p>{groupCopy.semanticHelp}</p>
-        </aside>
-        <div className="preference-category-list">
-          {groupedCategories.exact.map((category) => categoryPanel(category, true))}
-        </div>
-
-        <fieldset className="preference-dietary">
-          <legend>{copy.dietaryTitle}</legend>
-          <label className={criteria.dietary_filters.halal_certified_only ? "dietary-toggle selected" : "dietary-toggle"}>
-            <input
-              type="checkbox"
-              checked={criteria.dietary_filters.halal_certified_only}
-              disabled={busy || catalog.capabilities?.halal_certified_only?.enabled === false}
-              onChange={(event) => void changeDietary("halal_certified_only", event.target.checked)}
-            />
-            <span><strong>{copy.halal}</strong><small>{capabilityReason(
-              catalog.capabilities?.halal_certified_only,
-              copy.halalHelp,
-              "검증 가능한 공식 인증 정보가 없어 현재 사용할 수 없습니다.",
-            )}</small></span>
-          </label>
-          <label className={criteria.dietary_filters.vegan ? "dietary-toggle selected" : "dietary-toggle"}>
-            <input
-              type="checkbox"
-              checked={criteria.dietary_filters.vegan}
-              disabled={busy || catalog.capabilities?.vegan?.enabled === false}
-              onChange={(event) => void changeDietary("vegan", event.target.checked)}
-            />
-            <span><strong>{copy.vegan}</strong><small>{capabilityReason(
-              catalog.capabilities?.vegan,
-              copy.veganHelp,
-              "검토된 메뉴별 재료 정보가 없어 현재 사용할 수 없습니다.",
-            )}</small></span>
-          </label>
-        </fieldset>
-
-        <SpiceReferenceScale
-          value={criteria.max_spice_level}
-          country={criteria.spice_reference_country}
-          references={catalog.spice_references}
-          copy={copy}
-          disabled={busy || catalog.capabilities?.max_spice_level?.enabled === false}
-          onChange={(max_spice_level) => {
-            onChange({ ...criteria, max_spice_level });
-          }}
-          onCountryChange={(spice_reference_country) => {
-            onChange({ ...criteria, spice_reference_country });
-          }}
-        />
-        {catalog.capabilities?.max_spice_level?.enabled === false && (
-          <p className="preference-capability-note" role="status">{capabilityReason(
-            catalog.capabilities.max_spice_level,
-            copy.spiceHelp,
-            "검토된 메뉴별 맵기 정보가 없어 현재 사용할 수 없습니다.",
-          )}</p>
-        )}
-      </section>
-
-      {hasConflict && <p className="preference-conflict" role="alert">{conflictMessage}</p>}
-
-      <footer className="preference-submit-bar">
+      <footer className="yv2-preference-footer">
         <div><strong>{copy.selectedCount(selectedCount)}</strong><small>{copy.noHiddenRelaxation}</small></div>
-        <button type="button" className="text-button" onClick={clearAll} disabled={busy || selectedCount === 0}><RotateCcw size={16} /> {copy.clearAll}</button>
-        <button type="button" className="primary-button" onClick={onComplete} disabled={busy || !completeEnabled}><Sparkles size={18} /> {copy.complete}</button>
+        <button type="button" className="yv2-clear-button" onClick={clearAll} disabled={busy || selectedCount === 0}>
+          <RotateCcw size={15} />{copy.clearAll}
+        </button>
+        <button
+          type="button"
+          className="yv2-primary-button"
+          onClick={nextStep}
+          disabled={busy || (step === 2 && !completeEnabled)}
+        >
+          {step === 2 ? copy.complete : stepCopy[step + 1].title}
+          {step === 2 ? <Sparkles size={18} /> : <ArrowRight size={18} />}
+        </button>
       </footer>
     </section>
   );

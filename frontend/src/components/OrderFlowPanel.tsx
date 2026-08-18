@@ -6,7 +6,7 @@ import { useSessionStore } from "../stores/session";
 import type { CartPreview, DietaryFiltersV2, MenuSummary, OptionGroup } from "../types";
 import { RichCard } from "./RichCard";
 import { useI18n } from "../lib/i18n";
-import { asSupportedLanguage, menuName } from "../lib/locale";
+import { asSupportedLanguage, menuName, type SupportedLanguage } from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
 import { getRecommendationCopy } from "../lib/recommendationI18n";
 
@@ -26,10 +26,30 @@ interface Props {
 
 type Phase = "options" | "note" | "more" | "browse" | "delivery" | "review";
 
+const defaultRestLabels: Record<SupportedLanguage, string> = {
+  English: "Use defaults for the rest",
+  "한국어": "나머지는 기본 옵션 사용",
+  "日本語": "残りは既定を使う",
+  "中文（简体）": "其余使用默认选项",
+  "中文（繁體）": "其餘使用預設選項",
+  Español: "Usar valores predeterminados",
+  Français: "Utiliser les choix par défaut",
+  Deutsch: "Restliche Standards verwenden",
+  Italiano: "Usa i valori predefiniti",
+  Português: "Usar padrões no restante",
+  "ไทย": "ใช้ค่าเริ่มต้นที่เหลือ",
+  "Tiếng Việt": "Dùng mặc định cho phần còn lại",
+  "Bahasa Indonesia": "Gunakan default untuk sisanya",
+  "العربية": "استخدام الإعدادات الافتراضية للباقي",
+  "हिन्दी": "बाकी के लिए डिफ़ॉल्ट चुनें",
+  "Русский": "Использовать стандартные варианты",
+};
+
 export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, onClose, onOptionChange }: Props) {
   const navigate = useNavigate();
   const setCartQuantity = useSessionStore((state) => state.setCartQuantity);
   const cartQuantity = useSessionStore((state) => state.cartQuantity);
+  const addressSummary = useSessionStore((state) => state.addressSummary);
   const { copy, dynamicCopy, journeyCopy, language } = useI18n();
   const productCopy = getProductCopy(asSupportedLanguage(language));
   const recommendationCopy = getRecommendationCopy(language);
@@ -89,6 +109,13 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
 
   const currentGroup = groups[groupIndex];
   const selectedOptionIds = useMemo(() => Object.values(selections), [selections]);
+  const supportedLanguage = asSupportedLanguage(language);
+
+  function optionIsBlocked(option: OptionGroup["items"][number]) {
+    return !option.available
+      || Boolean(dietaryFilters?.halal_certified_only && option.halal_certification_preserved === false)
+      || Boolean(dietaryFilters?.vegan && option.vegan_status === "CONFLICT");
+  }
 
   async function selectOption(group: OptionGroup, optionId: string) {
     setBusy(true);
@@ -107,6 +134,26 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
         if (groupIndex < groups.length - 1) setGroupIndex((value) => value + 1);
         else setPhase("note");
       }, 160);
+    } catch (cause) {
+      setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function applyDefaultsForRest() {
+    setBusy(true);
+    setError("");
+    try {
+      const nextSelections = { ...selections };
+      for (const group of groups.slice(groupIndex)) {
+        const defaultOption = group.items.find((option) => !optionIsBlocked(option));
+        if (!defaultOption) throw new Error("NO_COMPATIBLE_OPTION");
+        await onOptionChange?.(activeMenu.menu_id, group.option_group_id, [defaultOption.option_item_id], false);
+        nextSelections[group.option_group_id] = defaultOption.option_item_id;
+      }
+      setSelections(nextSelections);
+      setPhase("note");
     } catch (cause) {
       setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
     } finally {
@@ -206,8 +253,8 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
   }
 
   return (
-    <section className="order-flow" aria-label={copy.orderBuilder} data-testid="order-flow">
-      <header>
+    <section className="order-flow yv2-order-flow" aria-label={copy.orderBuilder} data-testid="order-flow">
+      <header className="yv2-order-header">
         <div>
           <p className="eyebrow">{copy.orderBuilder}</p>
           <h3>{menuName(activeMenu, language)}</h3>
@@ -216,7 +263,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
         <button className="text-button" onClick={onClose}>{copy.close}</button>
       </header>
 
-      <div className="mini-progress" aria-label={copy.orderBuilder}>
+      <div className="mini-progress yv2-order-progress" aria-label={copy.orderBuilder}>
         {(["options", "delivery", "review"] as const).map((step, index) => (
           <span className={phase === step || (step === "options" && ["note", "more", "browse"].includes(phase)) ? "active" : ""} key={step}>
             {index + 1}<small>{step === "options" ? copy.options : step === "delivery" ? copy.delivery : copy.review}</small>
@@ -225,8 +272,9 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
       </div>
 
       {phase === "options" && currentGroup && (
-        <div className="decision-panel" data-testid={`option-group-${currentGroup.option_group_id}`}>
-          <p className="step-count">{groupIndex + 1} of {groups.length}</p>
+        <div className="decision-panel yv2-option-panel" data-testid={`option-group-${currentGroup.option_group_id}`}>
+          <p className="step-count">{copy.orderBuilder} · {copy.options} {groupIndex + 1} / {groups.length}</p>
+          <div className="yv2-option-bars" aria-hidden="true">{groups.map((group, index) => <i className={index <= groupIndex ? "active" : ""} key={group.option_group_id} />)}</div>
           <h4>{language === "한국어" ? currentGroup.name_ko : currentGroup.name_en}</h4>
           <p>{language === "English" ? currentGroup.description : dynamicCopy.catalogDescription}</p>
           <div className="option-list">
@@ -244,7 +292,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
                 <button
                   className={selections[currentGroup.option_group_id] === option.option_item_id ? "option-button selected" : "option-button"}
                   onClick={() => void selectOption(currentGroup, option.option_item_id)}
-                  disabled={busy || !option.available || breaksHalal || breaksVegan}
+                  disabled={busy || optionIsBlocked(option)}
                 >
                   <span><strong>{language === "한국어" ? option.name_ko : option.name_en}</strong>{language !== "한국어" && <small>{option.name_ko}</small>}</span>
                   <span>{option.price_delta ? `+₩${option.price_delta.toLocaleString()}` : journeyCopy.included}<ChevronRight size={17} /></span>
@@ -257,6 +305,10 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
                 )}
               </div>
             })}
+          </div>
+          <div className="yv2-order-quick-replies">
+            <button type="button" onClick={() => void applyDefaultsForRest()} disabled={busy}>{defaultRestLabels[supportedLanguage]}</button>
+            <button type="button" onClick={onClose} disabled={busy}>{recommendationCopy.editCriteria}</button>
           </div>
         </div>
       )}
@@ -315,9 +367,10 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
       )}
 
       {phase === "review" && cart && (
-        <div className="decision-panel cart-review" data-testid="cart-review">
+        <div className="decision-panel cart-review yv2-cart-review" data-testid="cart-review">
           <p className="step-count">{copy.finalReview}</p>
           <h4>{journeyCopy.reviewTitle}</h4>
+          <section className="yv2-review-address"><span>{copy.delivery}</span><strong>{addressSummary}</strong></section>
           {cart.items.map((item) => (
             <div className="cart-line" key={item.cart_item_id}>
               <div><strong>{language === "한국어" ? item.menu_name_ko : item.menu_name}</strong><small>{item.options.map((option) => language === "한국어" ? option.name_ko : option.name_en).join(", ")}</small></div>
@@ -339,6 +392,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
             <h5>{copy.readyCheckout}</h5>
             <div className={!cart.missing_slots.includes("minimum_order_amount") ? "readiness-pass" : "readiness-fail"}><Check size={16} /><span><strong>{journeyCopy.restaurantMinimum}</strong><small>{cart.minimum_order_amount ? `₩${cart.subtotal.toLocaleString()} / ₩${cart.minimum_order_amount.toLocaleString()}${cart.minimum_order_shortfall ? ` · ${journeyCopy.add} ₩${cart.minimum_order_shortfall.toLocaleString()}` : ` · ${journeyCopy.met}`}` : journeyCopy.noMinimum}</small></span></div>
           </section>
+          <aside className="yv2-info-banner">{recommendationCopy.experienceNotice}</aside>
           <button className="primary-button full large" onClick={proceedToHandoff} disabled={busy || !cart.ready_to_checkout}>{productCopy.handoff.cta} <ChevronRight size={18} /></button>
           {!cart.ready_to_checkout && <p className="checkout-action">{journeyCopy.completeRequirements}</p>}
         </div>

@@ -237,8 +237,10 @@ describe("ChatPage structured recommendation contract", () => {
     fireEvent.click(screen.getByRole("button", { name: "Korean" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Korean" })).toHaveAttribute("aria-pressed", "true"));
     expect(screen.getAllByText("8 menus from 4 restaurants currently fit")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("tab", { name: /Additional preferences/ }));
     fireEvent.click(screen.getByRole("button", { name: "Sweet" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Sweet" })).toHaveAttribute("aria-pressed", "true"));
+    fireEvent.click(screen.getByRole("tab", { name: /Exact conditions/ }));
     fireEvent.click(screen.getByRole("button", { name: /Show my recommendations/ }));
 
     await waitFor(() => expect(putCriteria).toHaveBeenCalledWith(
@@ -268,6 +270,7 @@ describe("ChatPage structured recommendation contract", () => {
     await screen.findByRole("heading", { name: "What sounds good?" });
     fireEvent.click(screen.getByRole("button", { name: "Pork" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Pork" })).toHaveAttribute("aria-pressed", "true"));
+    fireEvent.click(screen.getByRole("tab", { name: /Exact conditions/ }));
     fireEvent.click(screen.getByRole("checkbox", { name: /Only show halal-certified restaurants/ }));
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("conflicts with the halal or vegan filter"));
@@ -294,6 +297,7 @@ describe("ChatPage structured recommendation contract", () => {
     expect(await screen.findByRole("heading", { name: "What sounds good?" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Korean" })).toHaveAttribute("aria-pressed", "true"));
     const hydrationReads = getConversation.mock.calls.length;
+    fireEvent.click(screen.getByRole("tab", { name: /Exact conditions/ }));
     fireEvent.click(screen.getByRole("button", { name: /Show my recommendations/ }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("available choices were updated");

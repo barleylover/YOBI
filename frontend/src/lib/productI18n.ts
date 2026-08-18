@@ -61,6 +61,7 @@ export interface ProductCopy {
     zeroCombination: string;
   };
   navigation: {
+    menu: string;
     expand: string;
     collapse: string;
     foodRankings: string;
@@ -446,6 +447,7 @@ const en: ProductCopy = {
     zeroCombination: "That extra choice would leave no eligible menu, so it was not added.",
   },
   navigation: {
+    menu: "Menu",
     expand: "Open YOBI discoveries",
     collapse: "Close YOBI discoveries",
     foodRankings: "Food rankings",
@@ -516,6 +518,7 @@ const ko: ProductCopy = {
     zeroCombination: "이 조건을 더하면 가능한 메뉴가 0개라서 추가하지 않았어요.",
   },
   navigation: {
+    menu: "메뉴",
     expand: "YOBI 둘러보기 열기",
     collapse: "YOBI 둘러보기 닫기",
     foodRankings: "음식순위",
@@ -610,6 +613,7 @@ function buildLocalizedProductCopy(language: LocalizedLanguage): ProductCopy {
       zeroCombination: recommendation.noResultsDescription,
     },
     navigation: {
+      menu: words.menu,
       expand: `${words.discoveries} +`,
       collapse: `${words.discoveries} −`,
       foodRankings: words.foodRankings,

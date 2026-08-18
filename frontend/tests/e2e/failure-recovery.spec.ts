@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { selectFirstPreferenceAndRecommend } from "./structured-helpers";
 
 const configuredBaseUrl = process.env.YOBI_E2E_BASE_URL;
 const configuredHost = configuredBaseUrl ? new URL(configuredBaseUrl).hostname : "";
@@ -9,8 +10,8 @@ const expectsProtectedControl = Boolean(
 test("onboarding and structured selector remain accessible at every required viewport", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: /Hi, I’m YOBI/ })).toBeVisible();
-  const languageSelect = page.locator(".welcome-locale select").first();
-  const countrySelect = page.locator(".welcome-locale select").nth(1);
+  const languageSelect = page.locator(".yv2-entry-locales select").first();
+  const countrySelect = page.locator(".yv2-entry-locales select").nth(1);
   await expect(languageSelect.locator("option")).toHaveCount(16);
   await languageSelect.selectOption("한국어");
   await expect(countrySelect).toHaveValue("South Korea");
@@ -25,9 +26,11 @@ test("onboarding and structured selector remain accessible at every required vie
   await page.getByRole("button", { name: "이 주소 선택" }).first().click();
 
   await expect(page.getByRole("heading", { name: "어떤 음식이 끌리세요?" })).toBeVisible();
+  await page.getByRole("tab", { name: /정확 조건/ }).click();
   await expect(page.getByRole("checkbox")).toHaveCount(2);
   await expect(page.locator(".spice-reference-choice")).toHaveCount(5);
   await expect(page.getByRole("textbox")).toHaveCount(0);
+  await selectFirstPreferenceAndRecommend(page, true);
   const discoveryToggle = page.locator(".discovery-nav-toggle");
   await discoveryToggle.click();
   await page.getByRole("button", { name: "케데헌 특집" }).click();
@@ -81,7 +84,7 @@ test("Japanese and Arabic product copy persist into the address step and Arabic 
   test.skip(testInfo.project.name !== "iPhone 13", "One mobile locale-layout proof is sufficient.");
 
   await page.goto("/");
-  await page.locator(".welcome-locale select").first().selectOption("日本語");
+  await page.locator(".yv2-entry-locales select").first().selectOption("日本語");
   await expect(page.getByRole("heading", { name: /こんにちは、YOBIです/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /始める/ })).toBeVisible();
   await page.getByRole("button", { name: /始める/ }).click();
@@ -91,7 +94,7 @@ test("Japanese and Arabic product copy persist into the address step and Arabic 
 
   await page.evaluate(() => sessionStorage.clear());
   await page.goto("/");
-  await page.locator(".welcome-locale select").first().selectOption("العربية");
+  await page.locator(".yv2-entry-locales select").first().selectOption("العربية");
   await expect(page.getByRole("heading", { name: /مرحبًا، أنا YOBI/ })).toBeVisible();
   await expect(page.getByRole("heading", { name: "اختر الطعام الكوري بمعلومات واضحة، لا بالتخمين." })).toBeVisible();
   await expect(page.getByText("ما الطعام الذي ترغب فيه؟")).toHaveCount(0);
@@ -111,8 +114,8 @@ test("Japanese and Arabic product copy persist into the address step and Arabic 
   await expect(page.getByRole("button", { name: "اختيار هذه الوجبة" })).toHaveCount(0);
   await arabicAddress.click();
   await expect(page.getByRole("heading", { name: "ما الطعام الذي ترغب فيه؟" })).toBeVisible();
-  await expect(page.locator(".preference-preview")).not.toContainText(/menus|restaurants|selected/i);
-  await expect(page.locator(".preference-preview")).toContainText(/وجبة من .* مطعم/);
+  await expect(page.locator(".yv2-preview-pill")).not.toContainText(/menus|restaurants|selected/i);
+  await expect(page.locator(".yv2-preview-pill")).toContainText(/وجبة من .* مطعم/);
 });
 
 test("reduced-motion preference disables smooth motion in the new flow", async ({ page }, testInfo) => {
