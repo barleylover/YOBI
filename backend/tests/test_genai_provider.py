@@ -326,7 +326,7 @@ def test_agent_rejects_provider_input_and_tool_limits_before_calling_provider(
 def test_required_genai_configuration_fails_closed_without_breaking_local_demo() -> None:
     assert genai_configuration_errors(Settings()) == []
     assert Settings().structured_recommendation_model == "xai.grok-4.3"
-    assert Settings().structured_recommendation_max_output_tokens == 4096
+    assert Settings().structured_recommendation_max_output_tokens == 2048
     assert Settings().structured_recommendation_max_concurrent_requests == 2
 
     production_errors = genai_configuration_errors(Settings(app_env="production"))

@@ -6,7 +6,7 @@ from enum import Enum
 from threading import BoundedSemaphore
 from typing import Any, Callable
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, model_validator
 
 from app.core.config import Settings
 from app.genai.contracts import GenAIErrorCode, GenAIProvider, GenAIProviderError
@@ -42,10 +42,16 @@ class GeneratedMenuRecommendation(BaseModel):
 class RecommendationGenerationV2(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    _provider_metrics: dict[str, int] = PrivateAttr(default_factory=dict)
+
     status: RecommendationGenerationStatus
     criteria_summary: str = Field(min_length=1, max_length=1000)
     recommendations: list[GeneratedMenuRecommendation] = Field(min_length=3, max_length=3)
     unmatched_category_codes: list[str] = Field(max_length=20)
+
+    @property
+    def provider_metrics(self) -> dict[str, int]:
+        return dict(self._provider_metrics)
 
     @model_validator(mode="after")
     def validate_status_and_order(self) -> RecommendationGenerationV2:
@@ -528,7 +534,8 @@ class RecommendationGenerator:
         }
         if capabilities.structured_output:
             request["text"] = recommendation_generation_text_config()
-        self._enforce_input_limit(request)
+        request_metrics = self._request_metrics(request, shortlist_count=len(evidence_pool))
+        self._enforce_input_limit(request, request_metrics=request_metrics)
         try:
             with self._request_slots:
                 if before_provider_call is not None:
@@ -537,17 +544,27 @@ class RecommendationGenerator:
                     self.settings.structured_recommendation_model,
                     **request,
                 )
-        except GenAIProviderError:
+        except GenAIProviderError as exc:
+            exc.safe_metadata = {**request_metrics, **exc.safe_metadata}
             raise
         except Exception as exc:
             raise GenAIProviderError(
                 GenAIErrorCode.PROVIDER_UNAVAILABLE,
                 retryable=False,
                 cause=exc,
+                safe_metadata=request_metrics,
             ) from exc
+        provider_metrics = {
+            **request_metrics,
+            **self._response_usage_metrics(response),
+        }
         raw = str(getattr(response, "output_text", "")).strip()
         if not raw:
-            raise GenAIProviderError(GenAIErrorCode.EMPTY_RESPONSE, retryable=False)
+            raise GenAIProviderError(
+                GenAIErrorCode.EMPTY_RESPONSE,
+                retryable=False,
+                safe_metadata=provider_metrics,
+            )
         try:
             parsed = self._parse_json(raw)
             result = RecommendationGenerationV2.model_validate(parsed)
@@ -556,12 +573,19 @@ class RecommendationGenerator:
                 GenAIErrorCode.GROUNDING_REJECTED,
                 retryable=False,
                 cause=exc,
+                safe_metadata=provider_metrics,
             ) from exc
-        return self.validator.validate(
-            result,
-            criteria=criteria,
-            evidence_pool=evidence_pool,
-        )
+        try:
+            validated = self.validator.validate(
+                result,
+                criteria=criteria,
+                evidence_pool=evidence_pool,
+            )
+        except GenAIProviderError as exc:
+            exc.safe_metadata = {**provider_metrics, **exc.safe_metadata}
+            raise
+        validated._provider_metrics = provider_metrics
+        return validated
 
     def compare(
         self,
@@ -651,9 +675,69 @@ class RecommendationGenerator:
             raise GenAIProviderError(GenAIErrorCode.GROUNDING_REJECTED, retryable=False)
         return result
 
-    def _enforce_input_limit(self, request: dict[str, Any]) -> None:
+    @staticmethod
+    def _request_metrics(
+        request: dict[str, Any],
+        *,
+        shortlist_count: int,
+    ) -> dict[str, int]:
         serialized = json.dumps(request, ensure_ascii=False, separators=(",", ":"))
-        conservative_bound = len(serialized.encode("utf-8"))
+        encoded = serialized.encode("utf-8")
+        return {
+            "request_character_count": len(serialized),
+            "request_utf8_bytes": len(encoded),
+            "input_token_upper_bound": len(encoded),
+            "shortlist_count": shortlist_count,
+            "requested_max_output_tokens": int(request.get("max_output_tokens") or 0),
+        }
+
+    @staticmethod
+    def _response_usage_metrics(response: Any) -> dict[str, int]:
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return {}
+
+        def value(source: Any, key: str) -> int | None:
+            raw = source.get(key) if isinstance(source, dict) else getattr(source, key, None)
+            if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+                return None
+            return raw
+
+        metrics: dict[str, int] = {}
+        for source_key, target_key in (
+            ("input_tokens", "input_tokens"),
+            ("output_tokens", "output_tokens"),
+            ("total_tokens", "total_tokens"),
+        ):
+            measured = value(usage, source_key)
+            if measured is not None:
+                metrics[target_key] = measured
+        input_details = (
+            usage.get("input_tokens_details")
+            if isinstance(usage, dict)
+            else getattr(usage, "input_tokens_details", None)
+        )
+        output_details = (
+            usage.get("output_tokens_details")
+            if isinstance(usage, dict)
+            else getattr(usage, "output_tokens_details", None)
+        )
+        cached = value(input_details, "cached_tokens")
+        reasoning = value(output_details, "reasoning_tokens")
+        if cached is not None:
+            metrics["cached_input_tokens"] = cached
+        if reasoning is not None:
+            metrics["reasoning_tokens"] = reasoning
+        return metrics
+
+    def _enforce_input_limit(
+        self,
+        request: dict[str, Any],
+        *,
+        request_metrics: dict[str, int] | None = None,
+    ) -> None:
+        metrics = request_metrics or self._request_metrics(request, shortlist_count=0)
+        conservative_bound = metrics["input_token_upper_bound"]
         limit = min(
             self.settings.llm_max_input_tokens,
             self.provider.capabilities.max_input_tokens,
@@ -662,6 +746,7 @@ class RecommendationGenerator:
             raise GenAIProviderError(
                 GenAIErrorCode.CAPABILITY_LIMIT_EXCEEDED,
                 retryable=False,
+                safe_metadata=metrics,
             )
 
     @staticmethod

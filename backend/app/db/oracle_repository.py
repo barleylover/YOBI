@@ -1210,6 +1210,7 @@ class OracleYobiRepository:
         result_json: dict[str, Any] | None = None,
         snapshot: RecommendationSnapshot | None = None,
         failure_code: str | None = None,
+        provider_metrics: dict[str, int] | None = None,
     ) -> RecommendationRequestRecord:
         terminal_statuses = {
             RecommendationRequestStatus.COMPLETED,
@@ -1514,6 +1515,7 @@ class OracleYobiRepository:
                     ),
                     "fallback_reason": failure_code,
                     "final_candidates": final_candidates,
+                    "provider_metrics": dict(provider_metrics or {}),
                 }
             )
             serialized_ranking_trace = json.dumps(

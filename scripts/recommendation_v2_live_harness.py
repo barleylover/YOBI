@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import median
-from time import perf_counter
+from time import perf_counter, sleep
 from typing import Any
 
 import httpx
@@ -41,7 +41,10 @@ from app.domain.structured_recommendation import (
 )
 from app.genai.providers import choose_genai_provider
 from app.genai.recommendation_generator import RecommendationGenerator
-from app.services.structured_recommendation import StructuredRecommendationService
+from app.services.structured_recommendation import (
+    StructuredRecommendationService,
+    compact_generation_payload,
+)
 from recommendation_performance_smoke import (
     Scenario,
     _criteria_for,
@@ -52,6 +55,7 @@ from recommendation_quality_smoke import _validate_batch
 
 PREDEPLOY_CASE_NAME = "predeploy_spicy_fried_chicken_en"
 POSTDEPLOY_CASE_COUNT = 5
+POSTDEPLOY_INTERVAL_SECONDS = 60
 POSTDEPLOY_CASES = (
     (
         "postdeploy_spicy_noodles_ko",
@@ -260,9 +264,10 @@ def _reuse_completed_predeploy(
 def _settings_errors(settings: Settings) -> list[str]:
     checks = {
         "STRUCTURED_MODEL": settings.structured_recommendation_model == "xai.grok-4.3",
-        "MAX_OUTPUT_TOKENS": settings.structured_recommendation_max_output_tokens == 4096,
+        "MAX_OUTPUT_TOKENS": settings.structured_recommendation_max_output_tokens == 2048,
         "CANDIDATE_LIMIT": settings.recommendation_candidate_limit == 100,
         "SHORTLIST_LIMIT": settings.recommendation_llm_shortlist_limit == 15,
+        "PASSAGES_PER_MENU": settings.recommendation_llm_passages_per_menu == 2,
         "SELECTION_ENABLED": settings.recommendation_llm_selection_enabled is True,
         "CONCURRENCY": settings.structured_recommendation_max_concurrent_requests == 2,
         "TIMEOUT": settings.llm_timeout_seconds == 120.0,
@@ -402,7 +407,13 @@ def run_predeploy(release_family_id: str, settings: Settings) -> dict[str, Any]:
             generated = generator.generate(
                 criteria=criteria.model_dump(mode="json"),
                 soft_profile_context={"preferred_language": "English"},
-                evidence_pool=[item.generation_payload() for item in shortlist],
+                evidence_pool=[
+                    compact_generation_payload(
+                        item,
+                        max_wiki_passages=settings.recommendation_llm_passages_per_menu,
+                    )
+                    for item in shortlist
+                ],
                 locale="English",
             )
             latency_ms = round((perf_counter() - started) * 1_000, 3)
@@ -454,6 +465,8 @@ def _ready_errors(ready: dict[str, Any]) -> list[str]:
         "SELECTION": structured.get("selection_enabled") is True,
         "CANDIDATE_LIMIT": structured.get("candidate_limit") == 100,
         "SHORTLIST_LIMIT": structured.get("shortlist_limit") == 15,
+        "PASSAGES_PER_MENU": structured.get("passages_per_menu") == 2,
+        "MAX_OUTPUT_TOKENS": structured.get("max_output_tokens") == 2048,
         "RANK_POLICY": structured.get("ranking_policy_version") == "yobi-hybrid-rank-v2",
         "FEATURE_COUNT": int(structured.get("feature_count") or 0) > 0,
         "FEATURE_MANIFEST": bool(
@@ -527,7 +540,9 @@ def run_postdeploy(base_url: str, repository: Any, *, run_id: str) -> dict[str, 
                     break
 
         if not preflight_errors and len(contexts) == POSTDEPLOY_CASE_COUNT:
-            for case, context, request_id in contexts:
+            for case_index, (case, context, request_id) in enumerate(contexts):
+                if case_index:
+                    sleep(POSTDEPLOY_INTERVAL_SECONDS)
                 started = perf_counter()
                 batch: dict[str, Any] = {}
                 transport_error: str | None = None
@@ -574,6 +589,12 @@ def run_postdeploy(base_url: str, repository: Any, *, run_id: str) -> dict[str, 
                 else:
                     errors.append("RESPONSE_BODY_MISSING")
                 errors.extend(_record_errors(record, case.scenario.criteria))
+                provider_metrics = (
+                    record.ranking_trace_json.get("provider_metrics", {}) if record else {}
+                )
+                provider_metrics = (
+                    provider_metrics if isinstance(provider_metrics, dict) else {}
+                )
                 results.append(
                     {
                         "name": case.name,
@@ -587,6 +608,7 @@ def run_postdeploy(base_url: str, repository: Any, *, run_id: str) -> dict[str, 
                             record.ranking_trace_json.get("selection_status") if record else None
                         ),
                         "fallback_reason": record.failure_code if record else None,
+                        "provider_metrics": provider_metrics,
                         "shortlist_count": len(record.evidence_pool_json) if record else 0,
                         "release_family_id": record.release_family_id if record else None,
                         "feature_manifest_sha256": (
@@ -597,6 +619,12 @@ def run_postdeploy(base_url: str, repository: Any, *, run_id: str) -> dict[str, 
                 )
 
     provider_call_count = sum(int(item["dispatch_count"]) for item in results)
+    measured_usage = [
+        item["provider_metrics"]
+        for item in results
+        if isinstance(item.get("provider_metrics"), dict)
+        and isinstance(item["provider_metrics"].get("total_tokens"), int)
+    ]
     latencies = [float(item["latency_ms"]) for item in results]
     latency_summary = {
         "median_ms": round(median(latencies), 3) if latencies else None,
@@ -621,6 +649,13 @@ def run_postdeploy(base_url: str, repository: Any, *, run_id: str) -> dict[str, 
         "executed": len(results),
         "provider_call_count": provider_call_count,
         "provider_retry_count": 0,
+        "dispatch_interval_seconds": POSTDEPLOY_INTERVAL_SECONDS,
+        "token_usage": {
+            "measured_case_count": len(measured_usage),
+            "input_tokens": sum(int(item.get("input_tokens") or 0) for item in measured_usage),
+            "output_tokens": sum(int(item.get("output_tokens") or 0) for item in measured_usage),
+            "total_tokens": sum(int(item.get("total_tokens") or 0) for item in measured_usage),
+        },
         "preflight_error_codes": sorted(set(preflight_errors)),
         "latency": latency_summary,
         "release": release,

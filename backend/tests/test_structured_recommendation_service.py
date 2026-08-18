@@ -241,6 +241,7 @@ class FakeRecommendationRepository:
         result_json: dict[str, Any] | None = None,
         snapshot: Any | None = None,
         failure_code: str | None = None,
+        provider_metrics: dict[str, int] | None = None,
     ) -> RecommendationRequestRecord:
         record = self.requests[request_id]
         assert record.session_id == session_id
@@ -252,6 +253,10 @@ class FakeRecommendationRepository:
                 "snapshot_id": snapshot.snapshot_id if snapshot else None,
                 "result_json": result_json,
                 "failure_code": failure_code,
+                "ranking_trace_json": {
+                    **record.ranking_trace_json,
+                    "provider_metrics": dict(provider_metrics or {}),
+                },
                 "completed_at": datetime.now(timezone.utc),
             }
         )
@@ -1080,8 +1085,16 @@ def test_generation_soft_profile_context_excludes_sensitive_legacy_fields() -> N
     assert "nationality" not in serialized_context
     assert "age_band" not in serialized_context
     assert "favorite_foods" not in serialized_context
-    assert len(generation_input["evidence_pool"][0]["wiki_passages"]) <= 4
-    criterion_payload = generation_input["evidence_pool"][0]["criterion_evidence"]
+    compact_item = generation_input["evidence_pool"][0]
+    assert len(compact_item["wiki_passages"]) <= 2
+    assert {
+        "ranking_trace",
+        "knowledge_release_id",
+        "catalog_release_id",
+        "recommendation_release_family_id",
+        "menu_facts",
+    }.isdisjoint(compact_item)
+    criterion_payload = compact_item["criterion_evidence"]
     assert all(
         "content" not in reference
         for category in criterion_payload.values()

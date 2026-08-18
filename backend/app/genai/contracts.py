@@ -48,11 +48,13 @@ class GenAIProviderError(RuntimeError):
         *,
         retryable: bool,
         cause: BaseException | None = None,
+        safe_metadata: dict[str, int] | None = None,
     ) -> None:
         super().__init__(code.value)
         self.code = code
         self.retryable = retryable
         self.cause = cause
+        self.safe_metadata = dict(safe_metadata or {})
 
 
 class GenAIProvider(Protocol):

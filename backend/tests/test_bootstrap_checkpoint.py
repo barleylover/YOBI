@@ -67,10 +67,11 @@ def test_runtime_environment_can_resume_and_upgrade_release_policy(
     assert persisted.count('LLM_MAX_RETRIES="0"') == 1
     assert 'EMBEDDING_PROVIDER="deterministic"' in persisted
     assert 'STRUCTURED_RECOMMENDATION_MODEL="xai.grok-4.3"' in persisted
-    assert 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="4096"' in persisted
+    assert 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="2048"' in persisted
     assert 'STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS="2"' in persisted
     assert 'RECOMMENDATION_CANDIDATE_LIMIT="100"' in persisted
     assert 'RECOMMENDATION_LLM_SHORTLIST_LIMIT="15"' in persisted
+    assert 'RECOMMENDATION_LLM_PASSAGES_PER_MENU="2"' in persisted
     assert 'RECOMMENDATION_LLM_SELECTION_ENABLED="true"' in persisted
     assert 'DB_PASSWORD="synthetic-password"' in persisted
     assert stat.S_IMODE(runtime_env.stat().st_mode) == 0o600
@@ -90,6 +91,7 @@ def test_runtime_environment_can_resume_and_upgrade_release_policy(
         "STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS",
         "RECOMMENDATION_CANDIDATE_LIMIT",
         "RECOMMENDATION_LLM_SHORTLIST_LIMIT",
+        "RECOMMENDATION_LLM_PASSAGES_PER_MENU",
         "RECOMMENDATION_LLM_SELECTION_ENABLED",
         "OCI_GENAI_STRUCTURED_OUTPUT_ENABLED",
         "OCI_GENAI_STREAMING_ENABLED",
@@ -119,7 +121,7 @@ def test_retry_policy_matches_settings_and_runtime_restore() -> None:
         bootstrap.Settings.model_fields[
             "structured_recommendation_max_output_tokens"
         ].default
-        == 4096
+        == 2048
     )
     assert (
         bootstrap.Settings.model_fields[
@@ -130,16 +132,17 @@ def test_retry_policy_matches_settings_and_runtime_restore() -> None:
     write_source = inspect.getsource(bootstrap.write_env)
     main_source = inspect.getsource(bootstrap.main)
     assert "STRUCTURED_RECOMMENDATION_MODEL={quote('xai.grok-4.3')}" in write_source
-    assert "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS={quote('4096')}" in write_source
+    assert "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS={quote('2048')}" in write_source
     assert "STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS={quote('2')}" in write_source
     assert '"STRUCTURED_RECOMMENDATION_MODEL": "xai.grok-4.3"' in main_source
-    assert '"STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS": "4096"' in main_source
+    assert '"STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS": "2048"' in main_source
     assert '"STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS": "2"' in main_source
     assert 'STRUCTURED_RECOMMENDATION_MODEL="xai.grok-4.3"' in restore
-    assert 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="4096"' in restore
+    assert 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="2048"' in restore
     assert 'STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS="2"' in restore
     assert 'RECOMMENDATION_CANDIDATE_LIMIT="100"' in restore
     assert 'RECOMMENDATION_LLM_SHORTLIST_LIMIT="15"' in restore
+    assert 'RECOMMENDATION_LLM_PASSAGES_PER_MENU="2"' in restore
     assert 'RECOMMENDATION_LLM_SELECTION_ENABLED="true"' in restore
     assert 'OCI_GENAI_STRUCTURED_OUTPUT_ENABLED="false"' in restore
     assert 'OCI_GENAI_STREAMING_ENABLED="false"' in restore
@@ -159,6 +162,7 @@ def test_grok_43_release_envelope_is_persisted() -> None:
         "STRUCTURED_RECOMMENDATION_MODEL",
         "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS",
         "STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS",
+        "RECOMMENDATION_LLM_PASSAGES_PER_MENU",
         "OCI_GENAI_STRUCTURED_OUTPUT_ENABLED",
         "OCI_GENAI_STREAMING_ENABLED",
     ):

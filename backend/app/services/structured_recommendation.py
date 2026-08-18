@@ -45,6 +45,41 @@ from app.genai.recommendation_generator import (
 from app.services.demo_control import DemoControl
 
 
+def compact_generation_payload(
+    item: EvidencePoolItem,
+    *,
+    max_wiki_passages: int,
+) -> dict[str, Any]:
+    """Keep grounding fields while dropping persistence-only ranking metadata."""
+
+    payload = item.generation_payload()
+    payload["wiki_passages"] = payload["wiki_passages"][:max_wiki_passages]
+    for operational_key in (
+        "ranking_trace",
+        "knowledge_release_id",
+        "catalog_release_id",
+        "recommendation_release_family_id",
+        "menu_facts",
+    ):
+        payload.pop(operational_key, None)
+    criterion_evidence = payload.get("criterion_evidence", {})
+    if isinstance(criterion_evidence, dict):
+        for category in criterion_evidence.values():
+            if not isinstance(category, dict):
+                continue
+            for value in category.values():
+                if not isinstance(value, dict):
+                    continue
+                references = value.get("evidence", [])
+                if isinstance(references, list):
+                    value["evidence"] = [
+                        {key: field for key, field in reference.items() if key != "content"}
+                        for reference in references
+                        if isinstance(reference, dict)
+                    ]
+    return payload
+
+
 class StructuredRecommendationService:
     """V2 orchestration: eligibility/retrieval first, one generation dispatch second."""
 
@@ -241,6 +276,7 @@ class StructuredRecommendationService:
 
         soft_profile_context = {"preferred_language": profile.preferred_language}
         provider_started = monotonic()
+        provider_metrics: dict[str, int] = {}
 
         def mark_provider_call() -> None:
             called = self.repository.mark_recommendation_provider_called(
@@ -262,6 +298,7 @@ class StructuredRecommendationService:
                 locale=profile.preferred_language,
                 before_provider_call=mark_provider_call,
             )
+            provider_metrics = generated.provider_metrics
             if generated.status is RecommendationGenerationStatus.NO_MATCH:
                 raise ValueError("GENERATOR_NO_MATCH_NOT_AUTHORIZED")
             result_json = self._validated_result_payload(generated, evidence_pool)
@@ -281,11 +318,22 @@ class StructuredRecommendationService:
                 status,
                 result_json=result_json,
                 snapshot=snapshot,
+                provider_metrics=provider_metrics,
             )
             persistence_ms = int((monotonic() - persistence_started) * 1000)
         except Exception as exc:
             provider_ms = int((monotonic() - provider_started) * 1000)
             failure_code = self._failure_code(exc)
+            safe_metadata = getattr(exc, "safe_metadata", None)
+            if isinstance(safe_metadata, dict):
+                provider_metrics = {
+                    str(key): int(value)
+                    for key, value in safe_metadata.items()
+                    if isinstance(key, str)
+                    and isinstance(value, int)
+                    and not isinstance(value, bool)
+                    and value >= 0
+                }
             fallback_json = self._search_fallback_payload(
                 criteria_record,
                 evidence_pool,
@@ -306,6 +354,7 @@ class StructuredRecommendationService:
                 result_json=fallback_json,
                 snapshot=fallback_snapshot,
                 failure_code=failure_code,
+                provider_metrics=provider_metrics,
             )
             persistence_ms = int((monotonic() - persistence_started) * 1000)
         self._log_terminal_timing(
@@ -745,28 +794,12 @@ class StructuredRecommendationService:
         return "; ".join(values) or copy.criteria_default
 
     def _generation_payload(self, item: EvidencePoolItem) -> dict[str, Any]:
-        """Bound Wiki prose bodies while retaining criterion-to-evidence IDs."""
+        """Send only fields needed for bounded selection and grounded prose."""
 
-        payload = item.generation_payload()
-        payload["wiki_passages"] = payload["wiki_passages"][
-            : self.settings.recommendation_passages_per_menu
-        ]
-        criterion_evidence = payload.get("criterion_evidence", {})
-        if isinstance(criterion_evidence, dict):
-            for category in criterion_evidence.values():
-                if not isinstance(category, dict):
-                    continue
-                for value in category.values():
-                    if not isinstance(value, dict):
-                        continue
-                    references = value.get("evidence", [])
-                    if isinstance(references, list):
-                        value["evidence"] = [
-                            {key: field for key, field in reference.items() if key != "content"}
-                            for reference in references
-                            if isinstance(reference, dict)
-                        ]
-        return payload
+        return compact_generation_payload(
+            item,
+            max_wiki_passages=self.settings.recommendation_llm_passages_per_menu,
+        )
 
     @staticmethod
     def _validated_result_payload(

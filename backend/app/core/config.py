@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     oci_genai_model: str = "xai.grok-4.3"
     oci_genai_fallback_model: str = "openai.gpt-oss-120b"
     structured_recommendation_model: str = "xai.grok-4.3"
-    structured_recommendation_max_output_tokens: int = Field(default=4096, ge=64)
+    structured_recommendation_max_output_tokens: int = Field(default=2048, ge=64)
     structured_recommendation_max_concurrent_requests: int = Field(
         default=2, ge=1, le=8
     )
@@ -71,6 +71,7 @@ class Settings(BaseSettings):
     recommendation_evidence_pool_limit: int = Field(default=24, ge=6, le=60)
     recommendation_candidate_limit: int = Field(default=100, ge=15, le=100)
     recommendation_llm_shortlist_limit: int = Field(default=15, ge=3, le=15)
+    recommendation_llm_passages_per_menu: int = Field(default=2, ge=1, le=4)
     recommendation_llm_selection_enabled: bool = True
     recommendation_passages_per_menu: int = Field(default=4, ge=1, le=8)
     recommendation_result_limit: int = Field(default=3, ge=1, le=5)

@@ -87,6 +87,7 @@ def test_live_harness_fixes_the_exact_one_plus_five_cases() -> None:
     assert cases[2].scenario.criteria.temperatures == ["HOT"]
     assert cases[3].scenario.criteria.price_bands == ["FROM_10000_TO_19999"]
     assert cases[4].scenario.criteria.food_forms == ["DESSERT_BAKERY"]
+    assert live_harness.POSTDEPLOY_INTERVAL_SECONDS == 60
 
 
 def test_live_harness_requires_the_frozen_runtime_configuration() -> None:
@@ -118,6 +119,8 @@ def test_ready_contract_exposes_only_bounded_structured_metadata() -> None:
             "selection_enabled": True,
             "candidate_limit": 100,
             "shortlist_limit": 15,
+            "passages_per_menu": 2,
+            "max_output_tokens": 2048,
             "ranking_policy_version": "yobi-hybrid-rank-v2",
             "feature_count": 62_826,
             "feature_manifest_sha256": "c" * 64,
@@ -202,7 +205,24 @@ def test_provisional_activation_is_zero_call_after_the_single_staged_probe() -> 
         encoding="utf-8"
     )
     assert 'payload.get("run_id") == f"postdeploy-{application.get(\'release_id\')}"' in finalizer
+    assert 'payload.get("dispatch_interval_seconds") == 60' in finalizer
     assert '"$EVIDENCE_RELEASE_ID" == "$EXPECTED_RELEASE_ID"' in finalizer
+
+
+def test_code_only_provisional_reuses_active_data_without_a_provider_probe() -> None:
+    source = (ROOT / "deploy" / "deploy.sh").read_text(encoding="utf-8")
+
+    assert 'YOBI_CODE_ONLY_PROVISIONAL:-false' in source
+    code_only_branch = source.split(
+        'if [[ "$code_only_provisional" == "true" ]]; then', 1
+    )[1].split("else", 1)[0]
+    assert 'new_knowledge_release_id="$old_knowledge_release_id"' in code_only_branch
+    assert (
+        'new_recommendation_release_family_id="$old_recommendation_release_family_id"'
+        in code_only_branch
+    )
+    assert "build_external_knowledge_release.py" not in code_only_branch
+    assert "recommendation_v2_live_harness.py" not in code_only_branch
 
 
 def test_oracle_support_union_normalizes_wiki_clob_to_varchar() -> None:

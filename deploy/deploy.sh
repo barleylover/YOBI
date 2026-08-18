@@ -11,6 +11,7 @@ readonly ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly RECOVERY_ALLOW_UNREADY_CURRENT="${YOBI_RECOVERY_ALLOW_UNREADY_CURRENT:-false}"
 readonly PROVISIONAL_DEPLOY="${YOBI_PROVISIONAL_DEPLOY:-false}"
 readonly ZERO_PROVIDER_PROVISIONAL="${YOBI_ZERO_PROVIDER_PROVISIONAL:-false}"
+readonly CODE_ONLY_PROVISIONAL="${YOBI_CODE_ONLY_PROVISIONAL:-false}"
 readonly QUALITY_FIVE_ONLY="${YOBI_QUALITY_FIVE_ONLY:-false}"
 readonly POST_QUALITY_REVIEW_DEPLOY="${YOBI_POST_QUALITY_REVIEW_DEPLOY:-false}"
 readonly GUARDED_SSH_HOST="${YOBI_GUARDED_SSH_HOST:-}"
@@ -26,6 +27,9 @@ readonly GUARDED_SSH_CONTROL_PATH="${YOBI_GUARDED_SSH_CONTROL_PATH:-}"
 [[ "$ZERO_PROVIDER_PROVISIONAL" == "true" \
   || "$ZERO_PROVIDER_PROVISIONAL" == "false" ]] \
   || { printf 'YOBI_ZERO_PROVIDER_PROVISIONAL must be true or false.\n' >&2; exit 1; }
+[[ "$CODE_ONLY_PROVISIONAL" == "true" \
+  || "$CODE_ONLY_PROVISIONAL" == "false" ]] \
+  || { printf 'YOBI_CODE_ONLY_PROVISIONAL must be true or false.\n' >&2; exit 1; }
 [[ "$QUALITY_FIVE_ONLY" == "true" || "$QUALITY_FIVE_ONLY" == "false" ]] \
   || { printf 'YOBI_QUALITY_FIVE_ONLY must be true or false.\n' >&2; exit 1; }
 [[ "$POST_QUALITY_REVIEW_DEPLOY" == "true" \
@@ -42,6 +46,12 @@ readonly GUARDED_SSH_CONTROL_PATH="${YOBI_GUARDED_SSH_CONTROL_PATH:-}"
     && "$QUALITY_FIVE_ONLY" == "false" \
     && "$POST_QUALITY_REVIEW_DEPLOY" == "false" ) ]] \
   || { printf 'Zero-provider mode requires the exclusive provisional deployment mode.\n' >&2; exit 1; }
+[[ "$CODE_ONLY_PROVISIONAL" != "true" \
+  || ( "$PROVISIONAL_DEPLOY" == "true" \
+    && "$ZERO_PROVIDER_PROVISIONAL" == "false" \
+    && "$QUALITY_FIVE_ONLY" == "false" \
+    && "$POST_QUALITY_REVIEW_DEPLOY" == "false" ) ]] \
+  || { printf 'Code-only mode requires exclusive provisional deployment.\n' >&2; exit 1; }
 
 for command in git oci ssh tar shasum python3; do
   command -v "$command" >/dev/null || { printf 'Missing command: %s\n' "$command" >&2; exit 1; }
@@ -273,7 +283,7 @@ ssh -t -p "$ssh_port" -i "$SSH_KEY" \
   "${ssh_host_key_options[@]}" \
   "${ssh_connection_options[@]}" \
   "$SSH_USER@$host" \
-  "sudo -n bash -s -- '$RELEASE_ID' '$ARCHIVE_SHA256' '$REMOTE_ARCHIVE' '$SSH_USER' '$ARCHIVE_NONCE' '$RECOVERY_ALLOW_UNREADY_CURRENT' '$PROVISIONAL_DEPLOY' '$ZERO_PROVIDER_PROVISIONAL' '$QUALITY_FIVE_ONLY' '$POST_QUALITY_REVIEW_DEPLOY' '$source_git_commit'" <<'REMOTE'
+  "sudo -n bash -s -- '$RELEASE_ID' '$ARCHIVE_SHA256' '$REMOTE_ARCHIVE' '$SSH_USER' '$ARCHIVE_NONCE' '$RECOVERY_ALLOW_UNREADY_CURRENT' '$PROVISIONAL_DEPLOY' '$ZERO_PROVIDER_PROVISIONAL' '$CODE_ONLY_PROVISIONAL' '$QUALITY_FIVE_ONLY' '$POST_QUALITY_REVIEW_DEPLOY' '$source_git_commit'" <<'REMOTE'
 set -euo pipefail
 [[ "${EUID}" -eq 0 ]] || { printf 'Remote deployment requires root.\n' >&2; exit 1; }
 release_id="$1"
@@ -284,9 +294,10 @@ archive_nonce="$5"
 recovery_allow_unready_current="$6"
 provisional_deploy="$7"
 zero_provider_provisional="$8"
-quality_five_only="$9"
-post_quality_review_deploy="${10}"
-source_git_commit="${11}"
+code_only_provisional="$9"
+quality_five_only="${10}"
+post_quality_review_deploy="${11}"
+source_git_commit="${12}"
 [[ "$release_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$ \
   && "$archive_sha256" =~ ^[0-9a-f]{64}$ \
   && "$source_git_commit" =~ ^[0-9a-f]{40}$ \
@@ -298,6 +309,8 @@ source_git_commit="${11}"
     || "$provisional_deploy" == "false" ) \
   && ( "$zero_provider_provisional" == "true" \
     || "$zero_provider_provisional" == "false" ) \
+  && ( "$code_only_provisional" == "true" \
+    || "$code_only_provisional" == "false" ) \
   && ( "$quality_five_only" == "true" \
     || "$quality_five_only" == "false" ) \
   && ( "$post_quality_review_deploy" == "true" \
@@ -315,6 +328,12 @@ source_git_commit="${11}"
     && "$quality_five_only" == "false" \
     && "$post_quality_review_deploy" == "false" ) ]] \
   || { printf 'Remote zero-provider mode requires exclusive provisional deployment.\n' >&2; exit 1; }
+[[ "$code_only_provisional" != "true" \
+  || ( "$provisional_deploy" == "true" \
+    && "$zero_provider_provisional" == "false" \
+    && "$quality_five_only" == "false" \
+    && "$post_quality_review_deploy" == "false" ) ]] \
+  || { printf 'Remote code-only mode requires exclusive provisional deployment.\n' >&2; exit 1; }
 
 cleanup_remote_archive() {
   if [[ -n "$remote_archive" ]]; then
@@ -389,7 +408,8 @@ write_provisional_marker() {
   local marker_path="$release_path/.yobi-release-provisional"
   validate_release_path "$release_path" || return 1
   install -o root -g yobi -m 0644 /dev/null "$marker_path" || return 1
-  if [[ "$zero_provider_provisional" == "true" ]]; then
+  if [[ "$zero_provider_provisional" == "true" \
+    || "$code_only_provisional" == "true" ]]; then
     printf '%s\n' 'recommendation-v2-five=pending' \
       | tee "$marker_path" >/dev/null || return 1
   else
@@ -626,7 +646,22 @@ catalog_mode="$(sudo env PYTHONPATH="$new_release/backend:$new_release" \
   "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
   "$new_release/scripts/catalog_mode.py" get-mode)"
 if [[ "$catalog_mode" == "external" ]]; then
-  staged_release_json="$(sudo env PYTHONPATH="$new_release/backend:$new_release" \
+  if [[ "$code_only_provisional" == "true" ]]; then
+    [[ -n "$old_knowledge_release_id" \
+      && -n "$old_recommendation_release_family_id" ]] \
+      || { printf 'Code-only deployment requires active data release pointers.\n' >&2; exit 1; }
+    new_knowledge_release_id="$old_knowledge_release_id"
+    new_recommendation_release_family_id="$old_recommendation_release_family_id"
+    sudo env PYTHONPATH="$new_release/backend:$new_release" "${runtime_env_runner[@]}" \
+      "$new_release/venv/bin/python" \
+      "$new_release/scripts/recommendation_query_plan.py" \
+      --backend oracle --scope active --verify
+    sudo env PYTHONPATH="$new_release/backend:$new_release" "${runtime_env_runner[@]}" \
+      "$new_release/venv/bin/python" "$new_release/scripts/manage_demo_address.py" \
+      --verify-only
+    printf 'CODE-ONLY: reusing active knowledge and recommendation family without provider calls.\n'
+  else
+    staged_release_json="$(sudo env PYTHONPATH="$new_release/backend:$new_release" \
     "${runtime_env_runner[@]}" \
     "$new_release/venv/bin/python" \
     "$new_release/scripts/build_external_knowledge_release.py" \
@@ -725,6 +760,7 @@ PY
       --release-family-id "$new_recommendation_release_family_id"
     unset candidate_run_id predeploy_artifact predeploy_artifact_status \
       predeploy_base_run_id predeploy_run_id predeploy_started recovery_number
+    fi
   fi
 elif [[ "$catalog_mode" == "synthetic" ]]; then
   sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \
@@ -770,7 +806,8 @@ printf 'knowledge_release_id=%s\nprevious_knowledge_release_id=%s\nrecommendatio
 harden_release_tree "$new_release" \
   || { printf 'Activated release permissions are not trusted.\n' >&2; exit 1; }
 sudo ln -sfn "$new_release" /opt/yobi/current
-if [[ "$catalog_mode" == "external" ]]; then
+if [[ "$catalog_mode" == "external" \
+  && "$code_only_provisional" != "true" ]]; then
   sudo env PYTHONPATH="$new_release/backend:$new_release" \
     "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
     "$new_release/scripts/build_external_knowledge_release.py" \
@@ -779,6 +816,11 @@ if [[ "$catalog_mode" == "external" ]]; then
     && "$(run_recommendation_manager get-active)" \
       == "$new_recommendation_release_family_id" ]] \
     || { printf 'Activated staged release pointers did not match.\n' >&2; exit 1; }
+elif [[ "$catalog_mode" == "external" ]]; then
+  [[ "$(run_knowledge_manager get-active)" == "$new_knowledge_release_id" \
+    && "$(run_recommendation_manager get-active)" \
+      == "$new_recommendation_release_family_id" ]] \
+    || { printf 'Code-only deployment changed active data pointers.\n' >&2; exit 1; }
 fi
 run_release_smokes() {
   local completed_release_gates=()
@@ -795,7 +837,8 @@ run_release_smokes() {
       || return 1
     completed_release_gates+=(source-integrity)
   fi
-  if [[ "$zero_provider_provisional" == "true" ]]; then
+  if [[ "$zero_provider_provisional" == "true" \
+    || "$code_only_provisional" == "true" ]]; then
     if [[ "$catalog_mode" != "external" \
       || "${#completed_release_gates[@]}" -ne 2 \
       || "${completed_release_gates[0]}" != "query-plan" \

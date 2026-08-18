@@ -146,6 +146,7 @@ class YobiRepository(Protocol):
         result_json: dict[str, Any] | None = None,
         snapshot: RecommendationSnapshot | None = None,
         failure_code: str | None = None,
+        provider_metrics: dict[str, int] | None = None,
     ) -> RecommendationRequestRecord: ...
 
     def get_recommendation_request(

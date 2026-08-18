@@ -304,12 +304,16 @@ def readyz(
             "selection_enabled": current_settings.recommendation_llm_selection_enabled,
             "candidate_limit": current_settings.recommendation_candidate_limit,
             "shortlist_limit": current_settings.recommendation_llm_shortlist_limit,
+            "passages_per_menu": current_settings.recommendation_llm_passages_per_menu,
+            "max_output_tokens": current_settings.structured_recommendation_max_output_tokens,
             "ranking_policy_version": db.get("ranking_policy_version"),
             "feature_count": db.get("feature_count", 0),
             "feature_manifest_sha256": db.get("feature_manifest_sha256"),
             "ready": bool(
                 current_settings.recommendation_llm_selection_enabled
                 and current_settings.structured_recommendation_model == "xai.grok-4.3"
+                and current_settings.recommendation_llm_passages_per_menu == 2
+                and current_settings.structured_recommendation_max_output_tokens == 2048
                 and db.get("recommendation_ready") is True
             ),
         },

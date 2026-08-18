@@ -59,6 +59,7 @@ valid = (
     and payload.get("executed") == 5
     and payload.get("provider_call_count") == 5
     and payload.get("provider_retry_count") == 0
+    and payload.get("dispatch_interval_seconds") == 60
     and isinstance(application, dict)
     and application.get("release_id") is not None
     and payload.get("run_id") == f"postdeploy-{application.get('release_id')}"

@@ -93,6 +93,21 @@ class RateLimitedProvider(FakeProvider):
         raise GenAIProviderError(GenAIErrorCode.RATE_LIMIT, retryable=True)
 
 
+class UsageProvider(FakeProvider):
+    def create_response(self, model: str, **kwargs: Any) -> Any:
+        self.calls.append({"model": model, **kwargs})
+        return SimpleNamespace(
+            output_text=json.dumps(self.output),
+            usage=SimpleNamespace(
+                input_tokens=1_234,
+                output_tokens=456,
+                total_tokens=1_690,
+                input_tokens_details=SimpleNamespace(cached_tokens=100),
+                output_tokens_details=SimpleNamespace(reasoning_tokens=200),
+            ),
+        )
+
+
 def _criteria() -> dict[str, Any]:
     return {
         "cuisine_origins": ["KOREAN"],
@@ -205,7 +220,7 @@ def test_generator_dispatches_once_without_tools_and_allows_bounded_rerank() -> 
     ]
     assert len(provider.calls) == 1
     assert provider.calls[0]["model"] == "xai.grok-4.3"
-    assert provider.calls[0]["max_output_tokens"] == 4096
+    assert provider.calls[0]["max_output_tokens"] == 2048
     assert "tools" not in provider.calls[0]
     instructions = str(provider.calls[0]["instructions"])
     assert "Return the JSON immediately without analysis or preamble." in instructions
@@ -239,6 +254,30 @@ def test_generator_supplies_json_contract_without_native_structured_output() -> 
     request_payload = json.loads(provider.calls[0]["input"][0]["content"])
     assert request_payload["response_contract"] == RECOMMENDATION_GENERATION_JSON_SCHEMA
     assert "text" not in provider.calls[0]
+
+
+def test_generator_records_actual_usage_and_request_size_without_exposing_it_to_model() -> None:
+    provider = UsageProvider(
+        {
+            "status": "RECOMMENDED",
+            "criteria_summary": "Korean and spicy",
+            "recommendations": _recommendations_three(),
+            "unmatched_category_codes": [],
+        }
+    )
+    result = RecommendationGenerator(Settings(), provider=provider).generate(
+        criteria=_criteria(),
+        soft_profile_context={},
+        evidence_pool=_pool_three(),
+        locale="English",
+    )
+
+    assert result.provider_metrics["input_tokens"] == 1_234
+    assert result.provider_metrics["output_tokens"] == 456
+    assert result.provider_metrics["reasoning_tokens"] == 200
+    assert result.provider_metrics["request_utf8_bytes"] > 0
+    assert result.provider_metrics["requested_max_output_tokens"] == 2048
+    assert "provider_metrics" not in result.model_dump()
 
 
 def test_generator_rejects_menu_outside_evidence_pool_without_second_dispatch() -> None:
@@ -480,7 +519,7 @@ def test_comparison_uses_structured_model_cap_in_one_dispatch() -> None:
     assert [item.menu_id for item in result.items] == ["dish-a", "dish-b"]
     assert len(provider.calls) == 1
     assert provider.calls[0]["model"] == "xai.grok-4.3"
-    assert provider.calls[0]["max_output_tokens"] == 4096
+    assert provider.calls[0]["max_output_tokens"] == 2048
 
 
 def test_structured_rate_limit_never_retries_or_dispatches_fallback_model() -> None:
@@ -502,6 +541,8 @@ def test_structured_rate_limit_never_retries_or_dispatches_fallback_model() -> N
         )
 
     assert caught.value.code is GenAIErrorCode.RATE_LIMIT
+    assert caught.value.safe_metadata["request_utf8_bytes"] > 0
+    assert caught.value.safe_metadata["requested_max_output_tokens"] == 2048
     assert [call["model"] for call in provider.calls] == ["xai.grok-4.3"]
 
 
