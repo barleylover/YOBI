@@ -115,6 +115,7 @@ def test_ready_contract_exposes_only_bounded_structured_metadata() -> None:
     ready = {
         "status": "ready",
         "structured_recommendation": {
+            "grounding_diagnostics_version": "yobi-grounding-diagnostics-v1",
             "model_id": "xai.grok-4.3",
             "selection_enabled": True,
             "candidate_limit": 100,

@@ -18,6 +18,7 @@ from app.genai.contracts import (
 from app.genai.recommendation_generator import (
     RECOMMENDATION_GENERATION_JSON_SCHEMA,
     RecommendationGenerator,
+    RecommendationGroundingRejectionCode,
 )
 
 
@@ -57,6 +58,16 @@ class FakeProvider:
     def create_response(self, model: str, **kwargs: Any) -> Any:
         self.calls.append({"model": model, **kwargs})
         return SimpleNamespace(output_text=json.dumps(self.output))
+
+
+class RawTextProvider(FakeProvider):
+    def __init__(self, raw_output: str) -> None:
+        super().__init__({}, structured_output=False)
+        self.raw_output = raw_output
+
+    def create_response(self, model: str, **kwargs: Any) -> Any:
+        self.calls.append({"model": model, **kwargs})
+        return SimpleNamespace(output_text=self.raw_output)
 
 
 class BlockingProvider(FakeProvider):
@@ -280,6 +291,50 @@ def test_generator_records_actual_usage_and_request_size_without_exposing_it_to_
     assert "provider_metrics" not in result.model_dump()
 
 
+@pytest.mark.parametrize(
+    ("raw_output", "expected_reason"),
+    [
+        ("not-json", RecommendationGroundingRejectionCode.INVALID_JSON),
+        (
+            json.dumps({"status": "RECOMMENDED"}),
+            RecommendationGroundingRejectionCode.RESPONSE_SCHEMA_INVALID,
+        ),
+        (
+            json.dumps(
+                {
+                    "status": "RECOMMENDED",
+                    "criteria_summary": "Korean and spicy",
+                    "recommendations": [
+                        {**item, "rank": 3 - index}
+                        for index, item in enumerate(_recommendations_three())
+                    ],
+                    "unmatched_category_codes": [],
+                }
+            ),
+            RecommendationGroundingRejectionCode.RANK_ORDER_INVALID,
+        ),
+    ],
+)
+def test_generator_classifies_response_contract_rejections(
+    raw_output: str,
+    expected_reason: RecommendationGroundingRejectionCode,
+) -> None:
+    provider = RawTextProvider(raw_output)
+
+    with pytest.raises(GenAIProviderError) as caught:
+        RecommendationGenerator(Settings(), provider=provider).generate(
+            criteria=_criteria(),
+            soft_profile_context={},
+            evidence_pool=_pool_three(),
+            locale="English",
+        )
+
+    assert caught.value.code is GenAIErrorCode.GROUNDING_REJECTED
+    assert caught.value.safe_reason_code == expected_reason.value
+    assert caught.value.safe_reason_stage == "RESPONSE_CONTRACT"
+    assert len(provider.calls) == 1
+
+
 def test_generator_rejects_menu_outside_evidence_pool_without_second_dispatch() -> None:
     output = {
         "status": "RECOMMENDED",
@@ -305,6 +360,10 @@ def test_generator_rejects_menu_outside_evidence_pool_without_second_dispatch() 
         )
 
     assert caught.value.code is GenAIErrorCode.GROUNDING_REJECTED
+    assert (
+        caught.value.safe_reason_code
+        == RecommendationGroundingRejectionCode.MENU_OUTSIDE_SHORTLIST.value
+    )
     assert len(provider.calls) == 1
 
 
@@ -332,6 +391,10 @@ def test_generator_rejects_duplicate_menu_ids_without_second_dispatch() -> None:
         )
 
     assert caught.value.code is GenAIErrorCode.GROUNDING_REJECTED
+    assert (
+        caught.value.safe_reason_code
+        == RecommendationGroundingRejectionCode.DUPLICATE_MENU_ID.value
+    )
     assert len(provider.calls) == 1
 
 
@@ -359,6 +422,10 @@ def test_generator_rejects_evidence_owned_by_another_menu() -> None:
         )
 
     assert caught.value.code is GenAIErrorCode.GROUNDING_REJECTED
+    assert (
+        caught.value.safe_reason_code
+        == RecommendationGroundingRejectionCode.CATEGORY_EVIDENCE_NOT_OWNED.value
+    )
     assert len(provider.calls) == 1
 
 
@@ -384,21 +451,42 @@ def test_generator_enforces_three_merchants_when_shortlist_supports_it() -> None
         )
 
     assert caught.value.code is GenAIErrorCode.GROUNDING_REJECTED
+    assert (
+        caught.value.safe_reason_code
+        == RecommendationGroundingRejectionCode.MERCHANT_DIVERSITY_VIOLATION.value
+    )
     assert len(provider.calls) == 1
 
 
 @pytest.mark.parametrize(
-    ("pool_update", "criteria_update"),
+    ("pool_update", "criteria_update", "expected_reason"),
     [
-        ({"base_price": 12_000}, {}),
-        ({"spice_level": 4}, {}),
-        ({"halal_certified": False}, {"dietary_filters": {"halal_certified_only": True, "vegan": False}}),
-        ({"vegan_status": "CONFLICT"}, {"dietary_filters": {"halal_certified_only": False, "vegan": True}}),
+        (
+            {"base_price": 12_000},
+            {},
+            RecommendationGroundingRejectionCode.PRICE_BAND_VIOLATION,
+        ),
+        (
+            {"spice_level": 4},
+            {},
+            RecommendationGroundingRejectionCode.SPICE_LEVEL_VIOLATION,
+        ),
+        (
+            {"halal_certified": False},
+            {"dietary_filters": {"halal_certified_only": True, "vegan": False}},
+            RecommendationGroundingRejectionCode.HALAL_CERTIFICATION_VIOLATION,
+        ),
+        (
+            {"vegan_status": "CONFLICT"},
+            {"dietary_filters": {"halal_certified_only": False, "vegan": True}},
+            RecommendationGroundingRejectionCode.VEGAN_STATUS_VIOLATION,
+        ),
     ],
 )
 def test_generator_rechecks_hard_constraints_after_model_selection(
     pool_update: dict[str, Any],
     criteria_update: dict[str, Any],
+    expected_reason: RecommendationGroundingRejectionCode,
 ) -> None:
     pool = _pool_three()
     pool[0].update(pool_update)
@@ -421,6 +509,7 @@ def test_generator_rechecks_hard_constraints_after_model_selection(
         )
 
     assert caught.value.code is GenAIErrorCode.GROUNDING_REJECTED
+    assert caught.value.safe_reason_code == expected_reason.value
     assert len(provider.calls) == 1
 
 
@@ -455,6 +544,10 @@ def test_generator_rejects_menu_fact_used_as_wiki_evidence() -> None:
         )
 
     assert caught.value.code is GenAIErrorCode.GROUNDING_REJECTED
+    assert (
+        caught.value.safe_reason_code
+        == RecommendationGroundingRejectionCode.WIKI_EVIDENCE_NOT_OWNED.value
+    )
     assert len(provider.calls) == 1
 
 
@@ -479,6 +572,10 @@ def test_generator_rejects_model_no_match_after_server_freezes_candidates() -> N
         )
 
     assert caught.value.code is GenAIErrorCode.GROUNDING_REJECTED
+    assert (
+        caught.value.safe_reason_code
+        == RecommendationGroundingRejectionCode.MODEL_RETURNED_NO_MATCH.value
+    )
     assert len(provider.calls) == 1
     assert "text" not in provider.calls[0]
 

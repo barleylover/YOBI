@@ -3,12 +3,14 @@ from __future__ import annotations
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from inspect import getsource
 from pathlib import Path
 from typing import Literal
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.db.oracle_repository import OracleYobiRepository
 from app.db.sqlite_repository import SQLiteYobiRepository
 from app.dependencies import get_repository
 from app.domain.concept_ranking import RANKING_POLICY_SHA256, RANKING_POLICY_VERSION
@@ -488,6 +490,31 @@ def test_criteria_and_request_ledger_state_and_idempotency(
     assert all(
         item.recommendation_release_family_id == reserved.release_family_id for item in pinned_pool
     )
+    repository.mark_recommendation_dispatched(
+        session.session_id,
+        request_input.request_id,
+        pinned_pool,
+    )
+    completed = repository.complete_recommendation_request(
+        session.session_id,
+        request_input.request_id,
+        RecommendationRequestStatus.SEARCH_FALLBACK,
+        result_json={
+            "status": "SEARCH_FALLBACK",
+            "criteria_summary": "Deterministic fallback",
+            "recommendations": [],
+            "unmatched_category_codes": [],
+        },
+        failure_code="GROUNDING_REJECTED",
+        grounding_rejection_code="CATEGORY_EVIDENCE_NOT_OWNED",
+        grounding_rejection_stage="EVIDENCE_GROUNDING",
+    )
+    assert completed.ranking_trace_json["grounding_rejection_code"] == (
+        "CATEGORY_EVIDENCE_NOT_OWNED"
+    )
+    assert completed.ranking_trace_json["grounding_rejection_stage"] == (
+        "EVIDENCE_GROUNDING"
+    )
 
     with pytest.raises(ValueError, match="PREFERENCE_CATALOG_CHANGED"):
         repository.save_recommendation_criteria(
@@ -499,6 +526,13 @@ def test_criteria_and_request_ledger_state_and_idempotency(
                 request_id="criteria-request-0002",
             ),
         )
+
+
+def test_oracle_completion_persists_the_same_grounding_diagnostic_fields() -> None:
+    source = getsource(OracleYobiRepository.complete_recommendation_request)
+
+    assert '"grounding_rejection_code": grounding_rejection_code' in source
+    assert '"grounding_rejection_stage": grounding_rejection_stage' in source
 
 
 def test_legacy_request_rows_receive_additive_release_pin() -> None:

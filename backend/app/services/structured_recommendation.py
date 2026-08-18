@@ -324,6 +324,8 @@ class StructuredRecommendationService:
         except Exception as exc:
             provider_ms = int((monotonic() - provider_started) * 1000)
             failure_code = self._failure_code(exc)
+            grounding_rejection_code = getattr(exc, "safe_reason_code", None)
+            grounding_rejection_stage = getattr(exc, "safe_reason_stage", None)
             safe_metadata = getattr(exc, "safe_metadata", None)
             if isinstance(safe_metadata, dict):
                 provider_metrics = {
@@ -355,6 +357,16 @@ class StructuredRecommendationService:
                 snapshot=fallback_snapshot,
                 failure_code=failure_code,
                 provider_metrics=provider_metrics,
+                grounding_rejection_code=(
+                    grounding_rejection_code
+                    if isinstance(grounding_rejection_code, str)
+                    else None
+                ),
+                grounding_rejection_stage=(
+                    grounding_rejection_stage
+                    if isinstance(grounding_rejection_stage, str)
+                    else None
+                ),
             )
             persistence_ms = int((monotonic() - persistence_started) * 1000)
         self._log_terminal_timing(
@@ -425,6 +437,12 @@ class StructuredRecommendationService:
             "support_manifest_sha256": record.support_manifest_sha256,
             "feature_manifest_sha256": record.feature_manifest_sha256,
             "safe_error_code": record.failure_code,
+            "grounding_rejection_code": record.ranking_trace_json.get(
+                "grounding_rejection_code"
+            ),
+            "grounding_rejection_stage": record.ranking_trace_json.get(
+                "grounding_rejection_stage"
+            ),
         }
         # New-policy repositories expose measured SQL/support/rerank/evidence
         # stages.  Legacy/fake repositories omit them instead of emitting

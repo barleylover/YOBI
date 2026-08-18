@@ -18,6 +18,109 @@ class RecommendationGenerationStatus(str, Enum):
     NO_MATCH = "NO_MATCH"
 
 
+GROUNDING_DIAGNOSTICS_VERSION = "yobi-grounding-diagnostics-v1"
+
+
+class RecommendationGroundingRejectionStage(str, Enum):
+    RESPONSE_CONTRACT = "RESPONSE_CONTRACT"
+    SELECTION_POLICY = "SELECTION_POLICY"
+    EVIDENCE_GROUNDING = "EVIDENCE_GROUNDING"
+    HARD_CONSTRAINT = "HARD_CONSTRAINT"
+
+
+class RecommendationGroundingRejectionCode(str, Enum):
+    """Safe, non-prompt diagnostic reasons behind GROUNDING_REJECTED."""
+
+    INVALID_JSON = "INVALID_JSON"
+    RESPONSE_SCHEMA_INVALID = "RESPONSE_SCHEMA_INVALID"
+    MODEL_RETURNED_NO_MATCH = "MODEL_RETURNED_NO_MATCH"
+    RECOMMENDATION_COUNT_INVALID = "RECOMMENDATION_COUNT_INVALID"
+    DUPLICATE_MENU_ID = "DUPLICATE_MENU_ID"
+    RANK_ORDER_INVALID = "RANK_ORDER_INVALID"
+    RESULT_LIMIT_EXCEEDED = "RESULT_LIMIT_EXCEEDED"
+    UNMATCHED_CATEGORY_PRESENT = "UNMATCHED_CATEGORY_PRESENT"
+    MENU_OUTSIDE_SHORTLIST = "MENU_OUTSIDE_SHORTLIST"
+    MERCHANT_DIVERSITY_VIOLATION = "MERCHANT_DIVERSITY_VIOLATION"
+    MATCHED_CATEGORY_DUPLICATE = "MATCHED_CATEGORY_DUPLICATE"
+    MATCHED_CATEGORY_SET_MISMATCH = "MATCHED_CATEGORY_SET_MISMATCH"
+    SELECTED_VALUE_OUTSIDE_REQUEST = "SELECTED_VALUE_OUTSIDE_REQUEST"
+    CATEGORY_EVIDENCE_NOT_OWNED = "CATEGORY_EVIDENCE_NOT_OWNED"
+    WIKI_EVIDENCE_NOT_OWNED = "WIKI_EVIDENCE_NOT_OWNED"
+    INTERNAL_ID_LEAK = "INTERNAL_ID_LEAK"
+    SHORTLIST_PRICE_INVALID = "SHORTLIST_PRICE_INVALID"
+    PRICE_BAND_VIOLATION = "PRICE_BAND_VIOLATION"
+    CRITERIA_SPICE_INVALID = "CRITERIA_SPICE_INVALID"
+    SHORTLIST_SPICE_INVALID = "SHORTLIST_SPICE_INVALID"
+    SPICE_LEVEL_VIOLATION = "SPICE_LEVEL_VIOLATION"
+    DIETARY_CRITERIA_INVALID = "DIETARY_CRITERIA_INVALID"
+    HALAL_CERTIFICATION_VIOLATION = "HALAL_CERTIFICATION_VIOLATION"
+    VEGAN_STATUS_VIOLATION = "VEGAN_STATUS_VIOLATION"
+
+
+_REJECTION_STAGE_BY_CODE = {
+    **{
+        code: RecommendationGroundingRejectionStage.RESPONSE_CONTRACT
+        for code in (
+            RecommendationGroundingRejectionCode.INVALID_JSON,
+            RecommendationGroundingRejectionCode.RESPONSE_SCHEMA_INVALID,
+            RecommendationGroundingRejectionCode.MODEL_RETURNED_NO_MATCH,
+            RecommendationGroundingRejectionCode.RECOMMENDATION_COUNT_INVALID,
+            RecommendationGroundingRejectionCode.DUPLICATE_MENU_ID,
+            RecommendationGroundingRejectionCode.RANK_ORDER_INVALID,
+        )
+    },
+    **{
+        code: RecommendationGroundingRejectionStage.SELECTION_POLICY
+        for code in (
+            RecommendationGroundingRejectionCode.RESULT_LIMIT_EXCEEDED,
+            RecommendationGroundingRejectionCode.UNMATCHED_CATEGORY_PRESENT,
+            RecommendationGroundingRejectionCode.MENU_OUTSIDE_SHORTLIST,
+            RecommendationGroundingRejectionCode.MERCHANT_DIVERSITY_VIOLATION,
+        )
+    },
+    **{
+        code: RecommendationGroundingRejectionStage.EVIDENCE_GROUNDING
+        for code in (
+            RecommendationGroundingRejectionCode.MATCHED_CATEGORY_DUPLICATE,
+            RecommendationGroundingRejectionCode.MATCHED_CATEGORY_SET_MISMATCH,
+            RecommendationGroundingRejectionCode.SELECTED_VALUE_OUTSIDE_REQUEST,
+            RecommendationGroundingRejectionCode.CATEGORY_EVIDENCE_NOT_OWNED,
+            RecommendationGroundingRejectionCode.WIKI_EVIDENCE_NOT_OWNED,
+            RecommendationGroundingRejectionCode.INTERNAL_ID_LEAK,
+        )
+    },
+    **{
+        code: RecommendationGroundingRejectionStage.HARD_CONSTRAINT
+        for code in (
+            RecommendationGroundingRejectionCode.SHORTLIST_PRICE_INVALID,
+            RecommendationGroundingRejectionCode.PRICE_BAND_VIOLATION,
+            RecommendationGroundingRejectionCode.CRITERIA_SPICE_INVALID,
+            RecommendationGroundingRejectionCode.SHORTLIST_SPICE_INVALID,
+            RecommendationGroundingRejectionCode.SPICE_LEVEL_VIOLATION,
+            RecommendationGroundingRejectionCode.DIETARY_CRITERIA_INVALID,
+            RecommendationGroundingRejectionCode.HALAL_CERTIFICATION_VIOLATION,
+            RecommendationGroundingRejectionCode.VEGAN_STATUS_VIOLATION,
+        )
+    },
+}
+
+
+def _grounding_rejected(
+    reason: RecommendationGroundingRejectionCode,
+    *,
+    cause: BaseException | None = None,
+    safe_metadata: dict[str, int] | None = None,
+) -> GenAIProviderError:
+    return GenAIProviderError(
+        GenAIErrorCode.GROUNDING_REJECTED,
+        retryable=False,
+        cause=cause,
+        safe_metadata=safe_metadata,
+        safe_reason_code=reason.value,
+        safe_reason_stage=_REJECTION_STAGE_BY_CODE[reason].value,
+    )
+
+
 class MatchedCriterion(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -275,16 +378,28 @@ class RecommendationGenerationValidator:
         evidence_pool: list[dict[str, Any]],
     ) -> RecommendationGenerationV2:
         if len(result.recommendations) > self.result_limit:
-            raise GenAIProviderError(GenAIErrorCode.GROUNDING_REJECTED, retryable=False)
+            raise _grounding_rejected(
+                RecommendationGroundingRejectionCode.RESULT_LIMIT_EXCEEDED
+            )
         if result.status is RecommendationGenerationStatus.NO_MATCH:
-            raise GenAIProviderError(GenAIErrorCode.GROUNDING_REJECTED, retryable=False)
+            raise _grounding_rejected(
+                RecommendationGroundingRejectionCode.MODEL_RETURNED_NO_MATCH
+            )
         if result.unmatched_category_codes:
-            raise GenAIProviderError(GenAIErrorCode.GROUNDING_REJECTED, retryable=False)
+            raise _grounding_rejected(
+                RecommendationGroundingRejectionCode.UNMATCHED_CATEGORY_PRESENT
+            )
 
         pool_by_menu = {str(item.get("menu_id", "")): item for item in evidence_pool}
         actual_menu_ids = [item.menu_id for item in result.recommendations]
-        if len(actual_menu_ids) != 3 or not set(actual_menu_ids) <= set(pool_by_menu):
-            raise GenAIProviderError(GenAIErrorCode.GROUNDING_REJECTED, retryable=False)
+        if len(actual_menu_ids) != 3:
+            raise _grounding_rejected(
+                RecommendationGroundingRejectionCode.RECOMMENDATION_COUNT_INVALID
+            )
+        if not set(actual_menu_ids) <= set(pool_by_menu):
+            raise _grounding_rejected(
+                RecommendationGroundingRejectionCode.MENU_OUTSIDE_SHORTLIST
+            )
         available_merchants = {
             str(item.get("merchant_id", "")) for item in evidence_pool if item.get("merchant_id")
         }
@@ -292,7 +407,9 @@ class RecommendationGenerationValidator:
             str(pool_by_menu[menu_id].get("merchant_id", "")) for menu_id in actual_menu_ids
         }
         if len(available_merchants) >= 3 and len(selected_merchants) != 3:
-            raise GenAIProviderError(GenAIErrorCode.GROUNDING_REJECTED, retryable=False)
+            raise _grounding_rejected(
+                RecommendationGroundingRejectionCode.MERCHANT_DIVERSITY_VIOLATION
+            )
         active_categories = {
             key: {str(value) for value in criteria.get(key, [])}
             for key in _SUBJECTIVE_CRITERIA_FIELDS
@@ -301,22 +418,21 @@ class RecommendationGenerationValidator:
         for recommendation in result.recommendations:
             pool_item = pool_by_menu.get(recommendation.menu_id)
             if pool_item is None:
-                raise GenAIProviderError(
-                    GenAIErrorCode.GROUNDING_REJECTED,
-                    retryable=False,
+                raise _grounding_rejected(
+                    RecommendationGroundingRejectionCode.MENU_OUTSIDE_SHORTLIST
                 )
             self._validate_hard_constraints(pool_item, criteria)
             self._reject_internal_id_leak(recommendation)
             matched_by_category = {
                 matched.category_code: matched for matched in recommendation.matched_criteria
             }
-            if (
-                len(matched_by_category) != len(recommendation.matched_criteria)
-                or matched_by_category.keys() != active_categories.keys()
-            ):
-                raise GenAIProviderError(
-                    GenAIErrorCode.GROUNDING_REJECTED,
-                    retryable=False,
+            if len(matched_by_category) != len(recommendation.matched_criteria):
+                raise _grounding_rejected(
+                    RecommendationGroundingRejectionCode.MATCHED_CATEGORY_DUPLICATE
+                )
+            if matched_by_category.keys() != active_categories.keys():
+                raise _grounding_rejected(
+                    RecommendationGroundingRejectionCode.MATCHED_CATEGORY_SET_MISMATCH
                 )
             criterion_evidence = pool_item.get("criterion_evidence", {})
             if not isinstance(criterion_evidence, dict):
@@ -328,9 +444,8 @@ class RecommendationGenerationValidator:
                 matched = matched_by_category[category_code]
                 matched_codes = set(matched.selected_value_codes)
                 if not matched_codes or not matched_codes <= selected_codes:
-                    raise GenAIProviderError(
-                        GenAIErrorCode.GROUNDING_REJECTED,
-                        retryable=False,
+                    raise _grounding_rejected(
+                        RecommendationGroundingRejectionCode.SELECTED_VALUE_OUTSIDE_REQUEST
                     )
                 allowed_category_ids = self._criterion_evidence_ids(
                     criterion_evidence,
@@ -338,14 +453,12 @@ class RecommendationGenerationValidator:
                     matched_codes,
                 )
                 if not set(matched.evidence_ids) <= allowed_category_ids:
-                    raise GenAIProviderError(
-                        GenAIErrorCode.GROUNDING_REJECTED,
-                        retryable=False,
+                    raise _grounding_rejected(
+                        RecommendationGroundingRejectionCode.CATEGORY_EVIDENCE_NOT_OWNED
                     )
             if not set(recommendation.wiki_evidence_ids) <= allowed_wiki_evidence:
-                raise GenAIProviderError(
-                    GenAIErrorCode.GROUNDING_REJECTED,
-                    retryable=False,
+                raise _grounding_rejected(
+                    RecommendationGroundingRejectionCode.WIKI_EVIDENCE_NOT_OWNED
                 )
         return result
 
@@ -360,9 +473,8 @@ class RecommendationGenerationValidator:
         try:
             price = int(raw_price) if raw_price is not None else 0
         except (TypeError, ValueError):
-            raise GenAIProviderError(
-                GenAIErrorCode.GROUNDING_REJECTED,
-                retryable=False,
+            raise _grounding_rejected(
+                RecommendationGroundingRejectionCode.SHORTLIST_PRICE_INVALID
             ) from None
         price_bands = {str(value) for value in criteria.get("price_bands", [])}
         price_matches = {
@@ -371,56 +483,52 @@ class RecommendationGenerationValidator:
             "FROM_20000_TO_29999": 20_000 <= price < 30_000,
             "OVER_30000": price >= 30_000,
         }
-        if price <= 0 or (
-            price_bands
-            and not any(price_matches.get(band, False) for band in price_bands)
+        if price <= 0:
+            raise _grounding_rejected(
+                RecommendationGroundingRejectionCode.SHORTLIST_PRICE_INVALID
+            )
+        if price_bands and not any(
+            price_matches.get(band, False) for band in price_bands
         ):
-            raise GenAIProviderError(
-                GenAIErrorCode.GROUNDING_REJECTED,
-                retryable=False,
+            raise _grounding_rejected(
+                RecommendationGroundingRejectionCode.PRICE_BAND_VIOLATION
             )
 
         try:
             max_spice_level = int(criteria.get("max_spice_level", 5))
         except (TypeError, ValueError):
-            raise GenAIProviderError(
-                GenAIErrorCode.GROUNDING_REJECTED,
-                retryable=False,
+            raise _grounding_rejected(
+                RecommendationGroundingRejectionCode.CRITERIA_SPICE_INVALID
             ) from None
         raw_spice_level = pool_item.get("spice_level")
         if max_spice_level < 5:
             try:
                 spice_level = int(raw_spice_level) if raw_spice_level is not None else 6
             except (TypeError, ValueError):
-                raise GenAIProviderError(
-                    GenAIErrorCode.GROUNDING_REJECTED,
-                    retryable=False,
+                raise _grounding_rejected(
+                    RecommendationGroundingRejectionCode.SHORTLIST_SPICE_INVALID
                 ) from None
             if spice_level > max_spice_level:
-                raise GenAIProviderError(
-                    GenAIErrorCode.GROUNDING_REJECTED,
-                    retryable=False,
+                raise _grounding_rejected(
+                    RecommendationGroundingRejectionCode.SPICE_LEVEL_VIOLATION
                 )
 
         dietary = criteria.get("dietary_filters", {})
         if not isinstance(dietary, dict):
-            raise GenAIProviderError(
-                GenAIErrorCode.GROUNDING_REJECTED,
-                retryable=False,
+            raise _grounding_rejected(
+                RecommendationGroundingRejectionCode.DIETARY_CRITERIA_INVALID
             )
         if dietary.get("halal_certified_only") is True and pool_item.get(
             "halal_certified"
         ) is not True:
-            raise GenAIProviderError(
-                GenAIErrorCode.GROUNDING_REJECTED,
-                retryable=False,
+            raise _grounding_rejected(
+                RecommendationGroundingRejectionCode.HALAL_CERTIFICATION_VIOLATION
             )
         if dietary.get("vegan") is True and str(
             pool_item.get("vegan_status") or "UNKNOWN"
         ) not in {"LIKELY_FIT", "POSSIBLE_WITH_CHECKS"}:
-            raise GenAIProviderError(
-                GenAIErrorCode.GROUNDING_REJECTED,
-                retryable=False,
+            raise _grounding_rejected(
+                RecommendationGroundingRejectionCode.VEGAN_STATUS_VIOLATION
             )
 
     @staticmethod
@@ -459,7 +567,9 @@ class RecommendationGenerationValidator:
             [recommendation.title, recommendation.selection_reason, recommendation.description]
         )
         if _INTERNAL_ID_PATTERN.search(prose):
-            raise GenAIProviderError(GenAIErrorCode.GROUNDING_REJECTED, retryable=False)
+            raise _grounding_rejected(
+                RecommendationGroundingRejectionCode.INTERNAL_ID_LEAK
+            )
 
 
 class RecommendationGenerator:
@@ -567,11 +677,18 @@ class RecommendationGenerator:
             )
         try:
             parsed = self._parse_json(raw)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise _grounding_rejected(
+                RecommendationGroundingRejectionCode.INVALID_JSON,
+                cause=exc,
+                safe_metadata=provider_metrics,
+            ) from exc
+        try:
             result = RecommendationGenerationV2.model_validate(parsed)
-        except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-            raise GenAIProviderError(
-                GenAIErrorCode.GROUNDING_REJECTED,
-                retryable=False,
+        except ValidationError as exc:
+            reason = self._schema_rejection_reason(parsed)
+            raise _grounding_rejected(
+                reason,
                 cause=exc,
                 safe_metadata=provider_metrics,
             ) from exc
@@ -586,6 +703,30 @@ class RecommendationGenerator:
             raise
         validated._provider_metrics = provider_metrics
         return validated
+
+    @staticmethod
+    def _schema_rejection_reason(
+        parsed: Any,
+    ) -> RecommendationGroundingRejectionCode:
+        if not isinstance(parsed, dict):
+            return RecommendationGroundingRejectionCode.RESPONSE_SCHEMA_INVALID
+        if parsed.get("status") == RecommendationGenerationStatus.NO_MATCH.value:
+            return RecommendationGroundingRejectionCode.MODEL_RETURNED_NO_MATCH
+        recommendations = parsed.get("recommendations")
+        if not isinstance(recommendations, list):
+            return RecommendationGroundingRejectionCode.RESPONSE_SCHEMA_INVALID
+        if len(recommendations) != 3:
+            return RecommendationGroundingRejectionCode.RECOMMENDATION_COUNT_INVALID
+        if all(isinstance(item, dict) for item in recommendations):
+            menu_ids = [item.get("menu_id") for item in recommendations]
+            if all(isinstance(menu_id, str) for menu_id in menu_ids) and len(
+                set(menu_ids)
+            ) != len(menu_ids):
+                return RecommendationGroundingRejectionCode.DUPLICATE_MENU_ID
+            ranks = [item.get("rank") for item in recommendations]
+            if ranks != [1, 2, 3]:
+                return RecommendationGroundingRejectionCode.RANK_ORDER_INVALID
+        return RecommendationGroundingRejectionCode.RESPONSE_SCHEMA_INVALID
 
     def compare(
         self,

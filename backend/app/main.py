@@ -69,6 +69,7 @@ from app.domain.structured_recommendation import (
     RecommendationRequestInput,
 )
 from app.genai.providers import genai_configuration_errors
+from app.genai.recommendation_generator import GROUNDING_DIAGNOSTICS_VERSION
 from app.services.address_ocr import AddressCandidateTokenCodec, choose_address_ocr
 from app.services.chat_service import ChatService
 from app.services.demo_control import DemoControl, FailureMode
@@ -300,6 +301,7 @@ def readyz(
             ),
         },
         "structured_recommendation": {
+            "grounding_diagnostics_version": GROUNDING_DIAGNOSTICS_VERSION,
             "model_id": current_settings.structured_recommendation_model,
             "selection_enabled": current_settings.recommendation_llm_selection_enabled,
             "candidate_limit": current_settings.recommendation_candidate_limit,

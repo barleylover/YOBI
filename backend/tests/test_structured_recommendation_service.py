@@ -242,6 +242,8 @@ class FakeRecommendationRepository:
         snapshot: Any | None = None,
         failure_code: str | None = None,
         provider_metrics: dict[str, int] | None = None,
+        grounding_rejection_code: str | None = None,
+        grounding_rejection_stage: str | None = None,
     ) -> RecommendationRequestRecord:
         record = self.requests[request_id]
         assert record.session_id == session_id
@@ -256,6 +258,8 @@ class FakeRecommendationRepository:
                 "ranking_trace_json": {
                     **record.ranking_trace_json,
                     "provider_metrics": dict(provider_metrics or {}),
+                    "grounding_rejection_code": grounding_rejection_code,
+                    "grounding_rejection_stage": grounding_rejection_stage,
                 },
                 "completed_at": datetime.now(timezone.utc),
             }
@@ -783,6 +787,18 @@ def test_invalid_provider_output_falls_back_without_second_dispatch() -> None:
         "menu-c",
     ]
     assert result.failure_code == "GROUNDING_REJECTED"
+    assert (
+        repository.requests[result.request_id].ranking_trace_json[
+            "grounding_rejection_code"
+        ]
+        == "MENU_OUTSIDE_SHORTLIST"
+    )
+    assert (
+        repository.requests[result.request_id].ranking_trace_json[
+            "grounding_rejection_stage"
+        ]
+        == "SELECTION_POLICY"
+    )
     assert repository.completed_statuses == [RecommendationRequestStatus.SEARCH_FALLBACK]
 
 
