@@ -184,6 +184,46 @@ def _expected_predeploy_run_id(release_family_id: str) -> str:
     return f"predeploy-{digest}"
 
 
+def _failed_zero_call_predeploy_is_valid(
+    output_dir: Path,
+    *,
+    release_family_id: str,
+) -> bool:
+    """Allow one immutable recovery run after a provider-free preflight failure."""
+
+    base_run_id = _expected_predeploy_run_id(release_family_id)
+    final_path = output_dir / f"predeploy-{base_run_id}.json"
+    sidecar = final_path.with_suffix(final_path.suffix + ".sha256")
+    if not final_path.is_file() or final_path.is_symlink() or not sidecar.is_file():
+        return False
+    encoded = final_path.read_bytes()
+    digest = hashlib.sha256(encoded).hexdigest()
+    if sidecar.read_text(encoding="utf-8") != f"{digest}  {final_path.name}\n":
+        return False
+    try:
+        payload = json.loads(encoded)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return bool(
+        payload.get("gate") == "recommendation-v2-predeploy-one"
+        and payload.get("status") == "FAIL"
+        and payload.get("release_family_id") == release_family_id
+        and payload.get("provider_call_count") == 0
+        and payload.get("provider_retry_count") == 0
+    )
+
+
+def _allowed_predeploy_run_ids(output_dir: Path, release_family_id: str) -> set[str]:
+    base_run_id = _expected_predeploy_run_id(release_family_id)
+    allowed = {base_run_id}
+    if _failed_zero_call_predeploy_is_valid(
+        output_dir,
+        release_family_id=release_family_id,
+    ):
+        allowed.add(f"{base_run_id}-r1")
+    return allowed
+
+
 def _reuse_completed_predeploy(
     final_path: Path,
     *,
@@ -603,9 +643,12 @@ def main() -> None:
         parser.error("predeploy requires --release-family-id")
     if args.mode == "predeploy":
         assert args.release_family_id is not None
-        expected_run_id = _expected_predeploy_run_id(args.release_family_id)
-        if args.run_id != expected_run_id:
-            parser.error(f"predeploy --run-id must be {expected_run_id}")
+        allowed_run_ids = _allowed_predeploy_run_ids(
+            args.output_dir,
+            args.release_family_id,
+        )
+        if args.run_id not in allowed_run_ids:
+            parser.error("predeploy --run-id is not valid for the immutable run ledger")
     final_path = args.output_dir / f"{args.mode}-{args.run_id}.json"
     try:
         _start_path, final_path = _reserve_run(args.output_dir, args.mode, args.run_id)

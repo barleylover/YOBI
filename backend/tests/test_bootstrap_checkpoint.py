@@ -65,7 +65,7 @@ def test_runtime_environment_can_resume_and_upgrade_release_policy(
     assert os.environ["ADB_DSN"] == "synthetic-dsn"
     persisted = runtime_env.read_text(encoding="utf-8")
     assert persisted.count('LLM_MAX_RETRIES="0"') == 1
-    assert 'EMBEDDING_PROVIDER="oci"' in persisted
+    assert 'EMBEDDING_PROVIDER="deterministic"' in persisted
     assert 'STRUCTURED_RECOMMENDATION_MODEL="xai.grok-4.3"' in persisted
     assert 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="4096"' in persisted
     assert 'STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS="2"' in persisted
@@ -105,8 +105,8 @@ def test_retry_policy_matches_settings_and_runtime_restore() -> None:
     assert "LLM_MAX_RETRIES=\"0\"" in restore
     assert "LLM_MAX_RETRIES=\"1\"" not in restore
     assert bootstrap.Settings.model_fields["embedding_provider"].default == "deterministic"
-    assert "quote('oci')" in inspect.getsource(bootstrap.write_env)
-    assert 'EMBEDDING_PROVIDER="oci"' in restore
+    assert "quote('deterministic')" in inspect.getsource(bootstrap.write_env)
+    assert 'EMBEDDING_PROVIDER="deterministic"' in restore
     assert 'OCI_GENAI_MAX_INPUT_TOKENS="131072"' in restore
     assert 'LLM_MAX_INPUT_TOKENS="131072"' in restore
     assert 'OCI_GENAI_MAX_OUTPUT_TOKENS="4096"' in restore

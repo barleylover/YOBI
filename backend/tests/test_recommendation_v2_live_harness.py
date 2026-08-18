@@ -23,6 +23,7 @@ SPEC.loader.exec_module(live_harness)
 POSTDEPLOY_CASES = live_harness.POSTDEPLOY_CASES
 _case_definitions = live_harness._case_definitions
 _expected_predeploy_run_id = live_harness._expected_predeploy_run_id
+_allowed_predeploy_run_ids = live_harness._allowed_predeploy_run_ids
 _record_errors = live_harness._record_errors
 _ready_errors = live_harness._ready_errors
 _reserve_run = live_harness._reserve_run
@@ -157,6 +158,31 @@ def test_completed_predeploy_probe_is_reused_without_another_call(tmp_path) -> N
 
     assert _reuse_completed_predeploy(final, release_family_id=family_id) == digest
     assert _reuse_completed_predeploy(final, release_family_id="other-family") is None
+
+
+def test_zero_call_preflight_failure_allows_one_immutable_recovery_run(tmp_path) -> None:
+    family_id = "family-v2"
+    run_id = _expected_predeploy_run_id(family_id)
+    _start, final = _reserve_run(tmp_path, "predeploy", run_id)
+    _write_artifact(
+        final,
+        {
+            "gate": "recommendation-v2-predeploy-one",
+            "status": "FAIL",
+            "release_family_id": family_id,
+            "provider_call_count": 0,
+            "provider_retry_count": 0,
+            "error_codes": ["PREDEPLOY_BADREQUESTERROR"],
+        },
+    )
+
+    assert _allowed_predeploy_run_ids(tmp_path, family_id) == {
+        run_id,
+        f"{run_id}-r1",
+    }
+    assert _allowed_predeploy_run_ids(tmp_path, "other-family") == {
+        _expected_predeploy_run_id("other-family")
+    }
 
 
 def test_provisional_activation_is_zero_call_after_the_single_staged_probe() -> None:

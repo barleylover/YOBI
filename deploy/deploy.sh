@@ -664,13 +664,41 @@ print(family)'
     # leaves the existing live release active.
     predeploy_run_id="predeploy-$(printf '%s' "$new_recommendation_release_family_id" \
       | sha256sum | awk '{print substr($1,1,32)}')"
+    predeploy_artifact="/opt/yobi/shared/evidence/recommendation-v2/predeploy-${predeploy_run_id}.json"
+    if [[ -f "$predeploy_artifact" ]] \
+      && sudo "$new_release/venv/bin/python" - "$predeploy_artifact" \
+        "$new_recommendation_release_family_id" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+family_id = sys.argv[2]
+sidecar = path.with_suffix(path.suffix + ".sha256")
+encoded = path.read_bytes()
+digest = hashlib.sha256(encoded).hexdigest()
+payload = json.loads(encoded)
+valid = (
+    sidecar.read_text(encoding="utf-8") == f"{digest}  {path.name}\n"
+    and payload.get("gate") == "recommendation-v2-predeploy-one"
+    and payload.get("status") == "FAIL"
+    and payload.get("release_family_id") == family_id
+    and payload.get("provider_call_count") == 0
+    and payload.get("provider_retry_count") == 0
+)
+raise SystemExit(0 if valid else 1)
+PY
+    then
+      predeploy_run_id="${predeploy_run_id}-r1"
+    fi
     sudo env PYTHONPATH="$new_release/backend:$new_release" \
       "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
       "$new_release/scripts/recommendation_v2_live_harness.py" predeploy \
       --run-id "$predeploy_run_id" \
       --output-dir /opt/yobi/shared/evidence/recommendation-v2 \
       --release-family-id "$new_recommendation_release_family_id"
-    unset predeploy_run_id
+    unset predeploy_artifact predeploy_run_id
   fi
 elif [[ "$catalog_mode" == "synthetic" ]]; then
   sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \

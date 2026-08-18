@@ -19,7 +19,7 @@ RUNTIME_ENV = Path("/etc/yobi/yobi.env")
 CHECKPOINT = Path("/opt/yobi/shared/control/bootstrap_state.json")
 LEGACY_CHECKPOINT = Path("/opt/yobi/shared/bootstrap_state.json")
 RUNTIME_RETRY_POLICY = 'LLM_MAX_RETRIES="0"'
-RUNTIME_EMBEDDING_POLICY = 'EMBEDDING_PROVIDER="oci"'
+RUNTIME_EMBEDDING_POLICY = 'EMBEDDING_PROVIDER="deterministic"'
 RUNTIME_OCI_INPUT_POLICY = 'OCI_GENAI_MAX_INPUT_TOKENS="131072"'
 RUNTIME_LLM_INPUT_POLICY = 'LLM_MAX_INPUT_TOKENS="131072"'
 RUNTIME_OCI_OUTPUT_POLICY = 'OCI_GENAI_MAX_OUTPUT_TOKENS="4096"'
@@ -112,7 +112,7 @@ def write_env(dsn: str, app_password: str, api_key: str, control_token: str) -> 
         f"OCI_GENAI_MAX_OUTPUT_TOKENS={quote('4096')}",
         f"OCI_EMBED_MODEL={quote('cohere.embed-v4.0')}",
         f"OCI_EMBED_DIMENSION={quote('1536')}",
-        f"EMBEDDING_PROVIDER={quote('oci')}",
+        f"EMBEDDING_PROVIDER={quote('deterministic')}",
         f"ADB_DSN={quote(dsn)}",
         f"DB_USERNAME={quote('YOBI_APP')}",
         f"DB_PASSWORD={quote(app_password)}",
@@ -371,7 +371,7 @@ def main() -> None:
                 "RECOMMENDATION_CANDIDATE_LIMIT": "100",
                 "RECOMMENDATION_LLM_SHORTLIST_LIMIT": "15",
                 "RECOMMENDATION_LLM_SELECTION_ENABLED": "true",
-                "EMBEDDING_PROVIDER": "oci",
+                "EMBEDDING_PROVIDER": "deterministic",
                 "LLM_MAX_RETRIES": "0",
             }
         )

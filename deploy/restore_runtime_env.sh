@@ -98,7 +98,7 @@ emit_runtime_env() {
   printf 'OCI_GENAI_MAX_OUTPUT_TOKENS="4096"\n'
   printf 'OCI_EMBED_MODEL="cohere.embed-v4.0"\n'
   printf 'OCI_EMBED_DIMENSION="1536"\n'
-  printf 'EMBEDDING_PROVIDER="oci"\n'
+  printf 'EMBEDDING_PROVIDER="deterministic"\n'
   printf 'ADB_DSN='; quote_env_value "$adb_tls_dsn"; printf '\n'
   printf 'DB_USERNAME="YOBI_APP"\n'
   printf 'DB_PASSWORD='; quote_env_value "$yobi_app_password"; printf '\n'
