@@ -463,7 +463,7 @@ def _ready_errors(ready: dict[str, Any]) -> list[str]:
         "READY_STATUS": ready.get("status") == "ready",
         "MODEL": structured.get("model_id") == "xai.grok-4.3",
         "GROUNDING_DIAGNOSTICS": structured.get("grounding_diagnostics_version")
-        == "yobi-grounding-diagnostics-v1",
+        == "yobi-grounding-diagnostics-v2",
         "SELECTION": structured.get("selection_enabled") is True,
         "CANDIDATE_LIMIT": structured.get("candidate_limit") == 100,
         "SHORTLIST_LIMIT": structured.get("shortlist_limit") == 15,
@@ -617,6 +617,11 @@ def run_postdeploy(base_url: str, repository: Any, *, run_id: str) -> dict[str, 
                         ),
                         "grounding_rejection_stage": (
                             record.ranking_trace_json.get("grounding_rejection_stage")
+                            if record
+                            else None
+                        ),
+                        "grounding_rejection_detail": (
+                            record.ranking_trace_json.get("grounding_rejection_detail")
                             if record
                             else None
                         ),

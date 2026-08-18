@@ -508,12 +508,16 @@ def test_criteria_and_request_ledger_state_and_idempotency(
         failure_code="GROUNDING_REJECTED",
         grounding_rejection_code="CATEGORY_EVIDENCE_NOT_OWNED",
         grounding_rejection_stage="EVIDENCE_GROUNDING",
+        grounding_rejection_detail="matched_criteria.0.evidence_ids:value_error",
     )
     assert completed.ranking_trace_json["grounding_rejection_code"] == (
         "CATEGORY_EVIDENCE_NOT_OWNED"
     )
     assert completed.ranking_trace_json["grounding_rejection_stage"] == (
         "EVIDENCE_GROUNDING"
+    )
+    assert completed.ranking_trace_json["grounding_rejection_detail"] == (
+        "matched_criteria.0.evidence_ids:value_error"
     )
 
     with pytest.raises(ValueError, match="PREFERENCE_CATALOG_CHANGED"):
@@ -533,6 +537,7 @@ def test_oracle_completion_persists_the_same_grounding_diagnostic_fields() -> No
 
     assert '"grounding_rejection_code": grounding_rejection_code' in source
     assert '"grounding_rejection_stage": grounding_rejection_stage' in source
+    assert '"grounding_rejection_detail": grounding_rejection_detail' in source
 
 
 def test_legacy_request_rows_receive_additive_release_pin() -> None:

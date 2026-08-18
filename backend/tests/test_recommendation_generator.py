@@ -332,6 +332,10 @@ def test_generator_classifies_response_contract_rejections(
     assert caught.value.code is GenAIErrorCode.GROUNDING_REJECTED
     assert caught.value.safe_reason_code == expected_reason.value
     assert caught.value.safe_reason_stage == "RESPONSE_CONTRACT"
+    if expected_reason is RecommendationGroundingRejectionCode.INVALID_JSON:
+        assert caught.value.safe_reason_detail is None
+    else:
+        assert caught.value.safe_reason_detail is not None
     assert len(provider.calls) == 1
 
 
@@ -578,6 +582,35 @@ def test_generator_rejects_model_no_match_after_server_freezes_candidates() -> N
     )
     assert len(provider.calls) == 1
     assert "text" not in provider.calls[0]
+
+
+def test_generator_contract_requires_empty_unmatched_categories() -> None:
+    assert RECOMMENDATION_GENERATION_JSON_SCHEMA["properties"][
+        "unmatched_category_codes"
+    ]["maxItems"] == 0
+    provider = FakeProvider(
+        {
+            "status": "RECOMMENDED",
+            "criteria_summary": "Korean and spicy",
+            "recommendations": _recommendations_three(),
+            "unmatched_category_codes": ["flavors"],
+        },
+        structured_output=False,
+    )
+
+    with pytest.raises(GenAIProviderError) as caught:
+        RecommendationGenerator(Settings(), provider=provider).generate(
+            criteria=_criteria(),
+            soft_profile_context={},
+            evidence_pool=_pool_three(),
+            locale="English",
+        )
+
+    assert caught.value.safe_reason_code == (
+        RecommendationGroundingRejectionCode.UNMATCHED_CATEGORY_PRESENT.value
+    )
+    assert caught.value.safe_reason_stage == "SELECTION_POLICY"
+    assert caught.value.safe_reason_detail == "unmatched_category_codes:too_long"
 
 
 def test_comparison_uses_structured_model_cap_in_one_dispatch() -> None:

@@ -244,6 +244,7 @@ class FakeRecommendationRepository:
         provider_metrics: dict[str, int] | None = None,
         grounding_rejection_code: str | None = None,
         grounding_rejection_stage: str | None = None,
+        grounding_rejection_detail: str | None = None,
     ) -> RecommendationRequestRecord:
         record = self.requests[request_id]
         assert record.session_id == session_id
@@ -260,6 +261,7 @@ class FakeRecommendationRepository:
                     "provider_metrics": dict(provider_metrics or {}),
                     "grounding_rejection_code": grounding_rejection_code,
                     "grounding_rejection_stage": grounding_rejection_stage,
+                    "grounding_rejection_detail": grounding_rejection_detail,
                 },
                 "completed_at": datetime.now(timezone.utc),
             }

@@ -18,7 +18,7 @@ class RecommendationGenerationStatus(str, Enum):
     NO_MATCH = "NO_MATCH"
 
 
-GROUNDING_DIAGNOSTICS_VERSION = "yobi-grounding-diagnostics-v1"
+GROUNDING_DIAGNOSTICS_VERSION = "yobi-grounding-diagnostics-v2"
 
 
 class RecommendationGroundingRejectionStage(str, Enum):
@@ -110,6 +110,7 @@ def _grounding_rejected(
     *,
     cause: BaseException | None = None,
     safe_metadata: dict[str, int] | None = None,
+    safe_reason_detail: str | None = None,
 ) -> GenAIProviderError:
     return GenAIProviderError(
         GenAIErrorCode.GROUNDING_REJECTED,
@@ -118,6 +119,7 @@ def _grounding_rejected(
         safe_metadata=safe_metadata,
         safe_reason_code=reason.value,
         safe_reason_stage=_REJECTION_STAGE_BY_CODE[reason].value,
+        safe_reason_detail=safe_reason_detail,
     )
 
 
@@ -150,7 +152,7 @@ class RecommendationGenerationV2(BaseModel):
     status: RecommendationGenerationStatus
     criteria_summary: str = Field(min_length=1, max_length=1000)
     recommendations: list[GeneratedMenuRecommendation] = Field(min_length=3, max_length=3)
-    unmatched_category_codes: list[str] = Field(max_length=20)
+    unmatched_category_codes: list[str] = Field(max_length=0)
 
     @property
     def provider_metrics(self) -> dict[str, int]:
@@ -271,7 +273,7 @@ RECOMMENDATION_GENERATION_JSON_SCHEMA: dict[str, Any] = {
         },
         "unmatched_category_codes": {
             "type": "array",
-            "maxItems": 20,
+            "maxItems": 0,
             "items": {"type": "string"},
         },
     },
@@ -691,6 +693,7 @@ class RecommendationGenerator:
                 reason,
                 cause=exc,
                 safe_metadata=provider_metrics,
+                safe_reason_detail=self._schema_rejection_detail(exc),
             ) from exc
         try:
             validated = self.validator.validate(
@@ -712,6 +715,9 @@ class RecommendationGenerator:
             return RecommendationGroundingRejectionCode.RESPONSE_SCHEMA_INVALID
         if parsed.get("status") == RecommendationGenerationStatus.NO_MATCH.value:
             return RecommendationGroundingRejectionCode.MODEL_RETURNED_NO_MATCH
+        unmatched = parsed.get("unmatched_category_codes")
+        if isinstance(unmatched, list) and unmatched:
+            return RecommendationGroundingRejectionCode.UNMATCHED_CATEGORY_PRESENT
         recommendations = parsed.get("recommendations")
         if not isinstance(recommendations, list):
             return RecommendationGroundingRejectionCode.RESPONSE_SCHEMA_INVALID
@@ -727,6 +733,20 @@ class RecommendationGenerator:
             if ranks != [1, 2, 3]:
                 return RecommendationGroundingRejectionCode.RANK_ORDER_INVALID
         return RecommendationGroundingRejectionCode.RESPONSE_SCHEMA_INVALID
+
+    @staticmethod
+    def _schema_rejection_detail(exc: ValidationError) -> str | None:
+        errors = exc.errors(
+            include_url=False,
+            include_context=False,
+            include_input=False,
+        )
+        if not errors:
+            return None
+        first = errors[0]
+        location = ".".join(str(part) for part in first.get("loc", ())) or "$"
+        error_type = str(first.get("type") or "validation_error")
+        return f"{location}:{error_type}"[:200]
 
     def compare(
         self,
@@ -924,8 +944,9 @@ Allergy and allergen guidance is outside this recommendation product. Do not mak
 allergen-absence, or cross-contact claims even if incidental Wiki prose mentions uncertainty.
 
 Always return status RECOMMENDED. NO_MATCH is a server decision made before this call. Do not ask
-questions, call tools, request more data, or emit Markdown fences. This request only explains the
-bounded shortlist in one response. Prompt profile: {self.settings.recommendation_prompt_version}.
+questions, call tools, request more data, or emit Markdown fences. Set unmatched_category_codes to
+exactly []. This request only explains the bounded shortlist in one response. Prompt profile:
+{self.settings.recommendation_prompt_version}.
 """.strip()
 
     @staticmethod

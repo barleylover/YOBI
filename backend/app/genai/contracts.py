@@ -51,6 +51,7 @@ class GenAIProviderError(RuntimeError):
         safe_metadata: dict[str, int] | None = None,
         safe_reason_code: str | None = None,
         safe_reason_stage: str | None = None,
+        safe_reason_detail: str | None = None,
     ) -> None:
         super().__init__(code.value)
         self.code = code
@@ -59,6 +60,7 @@ class GenAIProviderError(RuntimeError):
         self.safe_metadata = dict(safe_metadata or {})
         self.safe_reason_code = safe_reason_code
         self.safe_reason_stage = safe_reason_stage
+        self.safe_reason_detail = safe_reason_detail
 
 
 class GenAIProvider(Protocol):

@@ -1213,6 +1213,7 @@ class OracleYobiRepository:
         provider_metrics: dict[str, int] | None = None,
         grounding_rejection_code: str | None = None,
         grounding_rejection_stage: str | None = None,
+        grounding_rejection_detail: str | None = None,
     ) -> RecommendationRequestRecord:
         terminal_statuses = {
             RecommendationRequestStatus.COMPLETED,
@@ -1518,6 +1519,7 @@ class OracleYobiRepository:
                     "fallback_reason": failure_code,
                     "grounding_rejection_code": grounding_rejection_code,
                     "grounding_rejection_stage": grounding_rejection_stage,
+                    "grounding_rejection_detail": grounding_rejection_detail,
                     "final_candidates": final_candidates,
                     "provider_metrics": dict(provider_metrics or {}),
                 }

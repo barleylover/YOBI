@@ -326,6 +326,7 @@ class StructuredRecommendationService:
             failure_code = self._failure_code(exc)
             grounding_rejection_code = getattr(exc, "safe_reason_code", None)
             grounding_rejection_stage = getattr(exc, "safe_reason_stage", None)
+            grounding_rejection_detail = getattr(exc, "safe_reason_detail", None)
             safe_metadata = getattr(exc, "safe_metadata", None)
             if isinstance(safe_metadata, dict):
                 provider_metrics = {
@@ -365,6 +366,11 @@ class StructuredRecommendationService:
                 grounding_rejection_stage=(
                     grounding_rejection_stage
                     if isinstance(grounding_rejection_stage, str)
+                    else None
+                ),
+                grounding_rejection_detail=(
+                    grounding_rejection_detail
+                    if isinstance(grounding_rejection_detail, str)
                     else None
                 ),
             )
@@ -442,6 +448,9 @@ class StructuredRecommendationService:
             ),
             "grounding_rejection_stage": record.ranking_trace_json.get(
                 "grounding_rejection_stage"
+            ),
+            "grounding_rejection_detail": record.ranking_trace_json.get(
+                "grounding_rejection_detail"
             ),
         }
         # New-policy repositories expose measured SQL/support/rerank/evidence
