@@ -401,7 +401,8 @@ class StructuredRecommendationService:
         limit: int,
     ) -> list[EvidencePoolItem]:
         frozen: list[EvidencePoolItem] = []
-        for rank, item in enumerate(evidence_pool[:limit], start=1):
+        wiki_grounded_pool = [item for item in evidence_pool if item.wiki_passages]
+        for rank, item in enumerate(wiki_grounded_pool[:limit], start=1):
             trace = {
                 **item.ranking_trace,
                 "rank": rank,

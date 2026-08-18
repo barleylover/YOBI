@@ -397,7 +397,12 @@ def _menu(menu_id: str, *, score: float) -> MenuSummary:
     )
 
 
-def _pool_item(menu_id: str, *, score: float) -> EvidencePoolItem:
+def _pool_item(
+    menu_id: str,
+    *,
+    score: float,
+    has_wiki_passage: bool = True,
+) -> EvidencePoolItem:
     suffix = menu_id.rsplit("-", maxsplit=1)[-1]
     cuisine_id = f"evidence-cuisine-{suffix}"
     flavor_id = f"evidence-flavor-{suffix}"
@@ -429,13 +434,17 @@ def _pool_item(menu_id: str, *, score: float) -> EvidencePoolItem:
                 ],
             ),
         ],
-        wiki_passages=[
-            EvidenceReference(
-                evidence_id=wiki_id,
-                evidence_type="WIKI_PASSAGE",
-                content="The dish is commonly served as a satisfying meal.",
-            )
-        ],
+        wiki_passages=(
+            [
+                EvidenceReference(
+                    evidence_id=wiki_id,
+                    evidence_type="WIKI_PASSAGE",
+                    content="The dish is commonly served as a satisfying meal.",
+                )
+            ]
+            if has_wiki_passage
+            else []
+        ),
         menu_facts=[],
         halal_certified=False,
         vegan_status="POSSIBLE_WITH_CHECKS",
@@ -445,6 +454,28 @@ def _pool_item(menu_id: str, *, score: float) -> EvidencePoolItem:
         catalog_release_id="catalog-release-v1",
         recommendation_release_family_id="recommendation-family-v1",
     )
+
+
+def test_freeze_server_candidates_keeps_only_wiki_grounded_menus_and_backfills() -> None:
+    evidence_pool = [
+        _pool_item("menu-without-wiki-a", score=0.99, has_wiki_passage=False),
+        _pool_item("menu-with-wiki-a", score=0.90),
+        _pool_item("menu-without-wiki-b", score=0.89, has_wiki_passage=False),
+        _pool_item("menu-with-wiki-b", score=0.80),
+        _pool_item("menu-with-wiki-c", score=0.70),
+    ]
+
+    frozen = StructuredRecommendationService._freeze_server_candidates(
+        evidence_pool,
+        limit=2,
+    )
+
+    assert [item.menu.menu_id for item in frozen] == [
+        "menu-with-wiki-a",
+        "menu-with-wiki-b",
+    ]
+    assert [item.server_rank for item in frozen] == [1, 2]
+    assert all(item.wiki_passages for item in frozen)
 
 
 def _generated_recommendation(menu_id: str, rank: int) -> dict[str, Any]:
