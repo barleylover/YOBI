@@ -296,7 +296,9 @@ def _generate_batch(provider: Any, settings: Settings, batch: list[dict[str, Any
             "Translate each Korean food menu name into English and Japanese using only the supplied "
             "Korean name and Wiki passages. Return food names only. Never add taste, ingredient, origin, "
             "portion, popularity, or marketing modifiers that are absent from the original name. Preserve "
-            "brand names and disambiguate only when the Wiki evidence makes the food concept explicit. "
+            "brand identity, but romanize Korean brand words in name_en and transliterate them into kana "
+            "in name_ja. name_en must never contain Hangul. Disambiguate only when the Wiki evidence makes "
+            "the food concept explicit. "
             "Return exactly one JSON object matching response_contract, with no markdown, preamble, "
             "commentary, or trailing text. Return every input menu_id exactly once."
         ),

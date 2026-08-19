@@ -36,9 +36,11 @@ class _Provider:
     def __init__(self, responses: list[Any]) -> None:
         self.responses = responses
         self.models: list[str] = []
+        self.requests: list[dict[str, Any]] = []
 
-    def create_response(self, model: str, **_request: Any) -> Any:
+    def create_response(self, model: str, **request: Any) -> Any:
         self.models.append(model)
+        self.requests.append(request)
         response = self.responses.pop(0)
         if isinstance(response, BaseException):
             raise response
@@ -69,6 +71,7 @@ def test_invalid_english_name_retries_before_database_write() -> None:
 
     assert result.items[0].name_en == "Bibimbap"
     assert provider.models == ["xai.grok-4.3", "xai.grok-4.3"]
+    assert "name_en must never contain Hangul" in provider.requests[0]["instructions"]
 
 
 def test_parser_accepts_one_schema_object_inside_provider_commentary() -> None:
