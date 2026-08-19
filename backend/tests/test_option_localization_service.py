@@ -31,6 +31,7 @@ class OptionRepository:
         )
         self.group_names: dict[str, str] = {}
         self.item_names: dict[str, str] = {}
+        self.saved_model_id = ""
 
     def get_session(self, session_id: str) -> Session | None:
         return self.session if session_id == self.session.session_id else None
@@ -83,7 +84,7 @@ class OptionRepository:
         model_id: str,
     ) -> None:
         del session_id, menu_id
-        assert model_id == "xai.grok-4.3"
+        self.saved_model_id = model_id
         self.group_names = group_names
         self.item_names = item_names
 
@@ -107,9 +108,11 @@ class OptionProvider:
 
     def __init__(self, *, group_name: str = "辛さレベル", item_name: str = "マイルド") -> None:
         self.calls = 0
+        self.models: list[str] = []
         self.group_name = group_name
         self.item_name = item_name
         self.instructions = ""
+        self.max_output_tokens = 0
 
     def supports_model(self, model: str) -> bool:
         return model in {"xai.grok-4.3", "openai.gpt-oss-120b"}
@@ -118,9 +121,10 @@ class OptionProvider:
         return {"model": model, **kwargs}
 
     def create_response(self, model: str, **kwargs: Any) -> Any:
-        del model
         self.calls += 1
+        self.models.append(model)
         self.instructions = str(kwargs["instructions"])
+        self.max_output_tokens = int(kwargs["max_output_tokens"])
         return SimpleNamespace(
             output_text=json.dumps(
                 {
@@ -156,6 +160,7 @@ def test_japanese_options_are_generated_once_then_read_from_cache() -> None:
 
     assert provider.calls == 1
     assert "Japanese" in provider.instructions
+    assert provider.max_output_tokens == 4_096
     assert first[0].display_name == second[0].display_name == "辛さレベル"
     assert first[0].items[0].display_name == "マイルド"
 
@@ -176,3 +181,27 @@ def test_english_options_are_generated_once_then_read_from_cache() -> None:
     assert "English" in provider.instructions
     assert first[0].display_name == second[0].display_name == "Spice choice"
     assert first[0].items[0].display_name == "Not spicy"
+
+
+def test_invalid_grok_payload_falls_back_to_120b() -> None:
+    class InvalidGrokProvider(OptionProvider):
+        def create_response(self, model: str, **kwargs: Any) -> Any:
+            if model == "xai.grok-4.3":
+                self.calls += 1
+                self.models.append(model)
+                return SimpleNamespace(output_text='{"items": []}')
+            return super().create_response(model, **kwargs)
+
+    repository = OptionRepository()
+    provider = InvalidGrokProvider()
+    service = OptionLocalizationService(
+        repository,  # type: ignore[arg-type]
+        Settings(oci_genai_fallback_model="openai.gpt-oss-120b"),
+        provider=provider,
+    )
+
+    result = service.get_options("menu-1", "session-localized")
+
+    assert provider.models == ["xai.grok-4.3", "openai.gpt-oss-120b"]
+    assert repository.saved_model_id == "openai.gpt-oss-120b"
+    assert result[0].display_name == "辛さレベル"

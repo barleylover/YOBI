@@ -147,7 +147,10 @@ export function ChatPage() {
       setSelectedMenu(null);
       return;
     }
-    const fromV2 = batch?.recommendations.find((item) => item.menu.menu_id === selectedMenuId)?.menu;
+    const fromV2Item = batch?.recommendations.find((item) => item.menu.menu_id === selectedMenuId);
+    const fromV2 = fromV2Item
+      ? { ...fromV2Item.menu, localized_title: fromV2Item.localized_title }
+      : null;
     const fromLegacy = batch ? null : findMenu(conversation.latest_snapshot?.cards, selectedMenuId);
     setSelectedMenu(fromV2 ?? fromLegacy ?? null);
     if (fromV2 || fromLegacy) setRecommendationPhase("ORDERING");
@@ -516,7 +519,10 @@ export function ChatPage() {
         snapshot_id: snapshotId,
         menu_id: recommendation.menu.menu_id,
       });
-      setSelectedMenu(result.selected_menu ?? recommendation.menu);
+      setSelectedMenu({
+        ...(result.selected_menu ?? recommendation.menu),
+        localized_title: recommendation.localized_title,
+      });
       setRecommendationPhase("ORDERING");
     } catch (cause) {
       setError(actionableError(cause, journeyCopy.retry, language));

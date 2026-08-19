@@ -9,7 +9,7 @@ from app.core.config import Settings
 from app.db.repository import YobiRepository
 from app.domain.models import OptionGroup
 from app.domain.preference_catalog import normalize_preference_locale
-from app.genai.contracts import GenAIErrorCode, GenAIProvider, GenAIProviderError
+from app.genai.contracts import GenAIProvider, GenAIProviderError
 from app.genai.providers import choose_genai_provider
 
 
@@ -119,7 +119,7 @@ class OptionLocalizationService:
                 {"role": "user", "content": json.dumps(input_items, ensure_ascii=False)}
             ],
             "max_output_tokens": min(
-                self.settings.structured_recommendation_max_output_tokens,
+                max(self.settings.structured_recommendation_max_output_tokens, 4_096),
                 self.provider.capabilities.max_output_tokens,
             ),
         }
@@ -145,15 +145,19 @@ class OptionLocalizationService:
                 )
                 returned = [(item.kind, item.object_id) for item in parsed.items]
                 if len(returned) != len(set(returned)) or set(returned) != expected:
+                    if index + 1 < len(models):
+                        continue
                     return groups
                 generated = parsed
                 selected_model = model_id
                 break
-            except GenAIProviderError as exc:
-                if exc.code is GenAIErrorCode.RATE_LIMIT and index + 1 < len(models):
+            except GenAIProviderError:
+                if index + 1 < len(models):
                     continue
                 return groups
             except (ValidationError, ValueError, TypeError):
+                if index + 1 < len(models):
+                    continue
                 return groups
         if generated is None:
             return groups
