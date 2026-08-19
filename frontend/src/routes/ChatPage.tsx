@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Settings2, ShoppingBag } from "lucide-react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
+import { ChannelMenu } from "../components/ChannelMenu";
 import { OrderFlowPanel } from "../components/OrderFlowPanel";
-import { PostAddressNavigation } from "../components/PostAddressNavigation";
-import { PreferenceSelector } from "../components/PreferenceSelector";
+import { PreferenceWizard } from "../components/PreferenceWizard";
+import { PreparingScreen } from "../components/PreparingScreen";
 import { RecommendationResults } from "../components/RecommendationResults";
 import { actionableError, api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import { asSupportedLanguage, menuName } from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
+import { getRedesignCopy } from "../lib/redesignI18n";
 import {
   getCatalogChangedCopy,
   getRecommendationConflictCopy,
@@ -76,8 +77,9 @@ export function ChatPage() {
   const setRecommendationPhase = useSessionStore((state) => state.setRecommendationPhase);
   const setPendingRecommendation = useSessionStore((state) => state.setPendingRecommendation);
   const setLatestRecommendation = useSessionStore((state) => state.setLatestRecommendation);
-  const { copy, journeyCopy, language, locale } = useI18n();
+  const { journeyCopy, language, locale } = useI18n();
   const productCopy = getProductCopy(asSupportedLanguage(language));
+  const v2 = getRedesignCopy(asSupportedLanguage(language));
   const recommendationCopy = getRecommendationCopy(language);
   const recommendationConflictCopy = getRecommendationConflictCopy(language);
   const catalogChangedCopy = getCatalogChangedCopy(language);
@@ -567,181 +569,251 @@ export function ChatPage() {
     document.querySelector<HTMLElement>("[data-testid='order-flow']")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  function cancelRecommendation() {
+    recommendationAbortRef.current?.abort();
+    editCriteria();
+  }
+
+  const draftSelectedCount = [
+    draftCriteria.cuisine_origins, draftCriteria.flavors, draftCriteria.main_ingredients,
+    draftCriteria.food_forms, draftCriteria.temperatures, draftCriteria.price_bands,
+    draftCriteria.textures, draftCriteria.cooking_methods,
+  ].reduce((total, list) => total + list.length, 0)
+    + Number(draftCriteria.dietary_filters.halal_certified_only)
+    + Number(draftCriteria.dietary_filters.vegan);
+
   const showsLoading = hydrating || recommendationPhase === "RETRIEVING" || recommendationPhase === "GENERATING";
-  return (
-    <main className="chat-shell structured-recommendation-shell">
-      <section className="chat-column">
-        <header className="chat-header">
-          <div className="brand-mark compact">YO<span>BI</span></div>
-          <div><strong>{copy.buddy}</strong><span><i /> {recommendationCopy.selectorEyebrow}</span></div>
-          <button type="button" aria-label={recommendationCopy.editProfile} title={recommendationCopy.editProfile} onClick={editProfile}><Settings2 size={18} /></button>
-          <button className="cart-button" aria-label={language === "English" ? `${journeyCopy.openCart}, ${cartQuantity} items` : `${journeyCopy.openCart}, ${journeyCopy.quantity} ${cartQuantity}`} onClick={openCart} disabled={!selectedMenu}><ShoppingBag size={19} />{cartQuantity > 0 && <span className="cart-badge">{cartQuantity}</span>}</button>
-        </header>
 
-        <div className="structured-recommendation-content" aria-live="polite">
-          {catalogLoading && !catalog && <section className="recommendation-progress"><span className="loading-orbit" /><h1>{recommendationCopy.loadingChoices}</h1></section>}
-          {catalogError && !catalog && <section className="recommendation-state-card error"><h1>{recommendationCopy.catalogFailed}</h1><button className="primary-button" onClick={reloadCatalog}>{recommendationCopy.retry}</button></section>}
-          {catalogStale && catalog && <div className="catalog-stale-notice" role="status"><span>{recommendationCopy.savedCatalog}</span><button type="button" onClick={reloadCatalog}>{recommendationCopy.retry}</button></div>}
-          {error && recommendationPhase !== "ERROR" && <p className="form-error" role="alert">{error}</p>}
-
-          {catalog && <div className="conversation-day-divider" aria-hidden="true"><span>{conversationDate}</span></div>}
-
-          {catalog && recommendationPhase === "SELECTING" && (
-            <div className="assistant-message-row preference-prompt-message" data-testid="assistant-preference-prompt">
-              <div className="assistant-avatar" aria-hidden="true">Y</div>
-              <div className="assistant-message-stack">
-                <strong className="assistant-name"><i /> {productCopy.recommendation.assistantName}</strong>
-                <section className="assistant-bubble preference-prompt-bubble">
-                  <p className="eyebrow">{recommendationCopy.selectorEyebrow}</p>
-                  <p className="conversation-prompt-title">{recommendationCopy.selectorTitle}</p>
-                  <p>{recommendationCopy.selectorDescription}</p>
-                </section>
-              </div>
-            </div>
-          )}
-
-          {catalog && recommendationPhase !== "SELECTING" && (
-            <section className="conversation-history" aria-label={copy.conversation}>
-              <div className="assistant-message-row compact-message">
-                <div className="assistant-avatar" aria-hidden="true">Y</div>
-                <div className="assistant-message-stack">
-                  <strong className="assistant-name"><i /> {productCopy.recommendation.assistantName}</strong>
-                  <section className="assistant-bubble compact-prompt">
-                    <p>{recommendationCopy.selectorTitle}</p>
-                  </section>
-                </div>
-              </div>
-              {selectedPreferenceLabels.length > 0 && (
-                <div className="user-message-row" data-testid="user-preference-message">
-                  <div className="user-message-stack">
-                    <strong>{copy.you}</strong>
-                    <section className="user-bubble" aria-label={recommendationCopy.selectedSummary}>
-                      {selectedPreferenceLabels.map((label, index) => <span key={`${label}-${index}`}>{label}</span>)}
-                    </section>
-                  </div>
-                </div>
-              )}
-            </section>
-          )}
-
-          {catalog && recommendationPhase === "SELECTING" && (
-            <PreferenceSelector
-              catalog={catalog}
-              criteria={draftCriteria}
-              copy={recommendationCopy}
-              busy={busy}
-              previewLoading={previewLoading}
-              preview={preview}
-              previewMessage={previewMessage}
-              canSubmitUnchanged={Boolean(committedCriteria)}
-              conversationMode
-              conflictMessage={recommendationConflictCopy}
-              onChange={applyDraftCriteria}
-              onValidateAdd={(nextCriteria) => checkCriteriaPreview(nextCriteria, true)}
-              onComplete={() => void submitCriteria()}
-            />
-          )}
-
-          {catalog && showsLoading && (
-            <div className="assistant-message-row state-message">
-              <div className="assistant-avatar" aria-hidden="true">Y</div>
-              <div className="assistant-message-stack">
-                <strong className="assistant-name">{productCopy.recommendation.assistantName}</strong>
-                <section className="assistant-bubble recommendation-progress">
-                  <div className="chat-loading-heading">
-                    <span className="typing-indicator" aria-hidden="true"><i /><i /><i /></span>
-                    <h1>{hydrating ? recommendationCopy.restoring : recommendationPhase === "GENERATING" ? recommendationCopy.generating : recommendationCopy.retrieving}</h1>
-                  </div>
-                  <ol className="recommendation-stages" aria-label={recommendationCopy.retrieving}>
-                    <li className="active">{productCopy.recommendation.retrievingStage}</li>
-                    <li className={recommendationPhase === "GENERATING" ? "active" : ""}>{productCopy.recommendation.evidenceStage}</li>
-                    <li className={recommendationPhase === "GENERATING" ? "active" : ""}>{productCopy.recommendation.generatingStage}</li>
-                  </ol>
-                  <p>{recommendationCopy.noHiddenRelaxation}</p>
-                </section>
-              </div>
-            </div>
-          )}
-
-          {catalog && latestRecommendation && (recommendationPhase === "RESULTS" || recommendationPhase === "SEARCH_FALLBACK") && (
-            <RecommendationResults
-              batch={latestRecommendation}
-              catalog={catalog}
-              copy={recommendationCopy}
-              language={language}
-              locale={locale}
-              busy={busy}
-              onChoose={(item) => void chooseMenu(item)}
-              onSimilar={() => void requestAnother("SIMILAR")}
-              onEdit={editCriteria}
-              onCompare={compareRecommendations}
-              onRetry={() => void requestAnother("RETRY")}
-            />
-          )}
-
-          {recommendationPhase === "NO_RESULTS" && (
-            <div className="assistant-message-row state-message">
-              <div className="assistant-avatar" aria-hidden="true">Y</div>
-              <div className="assistant-message-stack">
-                <strong className="assistant-name">{productCopy.recommendation.assistantName}</strong>
-                <section className="assistant-bubble recommendation-state-card">
-                  <h1>{latestRecommendation?.failure_code?.includes("EXHAUST") ? productCopy.recommendation.exhaustedTitle : recommendationCopy.noResultsTitle}</h1>
-                  <p>{latestRecommendation?.failure_code?.includes("EXHAUST") ? productCopy.recommendation.exhaustedDescription : recommendationCopy.noResultsDescription}</p>
-                  <button className="primary-button" onClick={editCriteria}>{recommendationCopy.editCriteria}</button>
-                </section>
-              </div>
-            </div>
-          )}
-          {recommendationPhase === "ERROR" && (
-            <div className="assistant-message-row state-message">
-              <div className="assistant-avatar" aria-hidden="true">Y</div>
-              <div className="assistant-message-stack">
-                <strong className="assistant-name">{productCopy.recommendation.assistantName}</strong>
-                <section className="assistant-bubble recommendation-state-card error">
-                  <h1>{recommendationCopy.failedTitle}</h1>
-                  <p>{error || recommendationCopy.failedDescription}</p>
-                  <div className="button-row"><button className="primary-button" onClick={() => pendingRecommendation ? void recoverRecommendation(pendingRecommendation) : void requestAnother("RETRY")}>{recommendationCopy.tryAgain}</button><button className="secondary-button" onClick={editCriteria}>{recommendationCopy.editCriteria}</button></div>
-                </section>
-              </div>
-            </div>
-          )}
-
-          {selectedMenu && recommendationPhase === "ORDERING" && (
-            <section className="order-conversation">
-              <div className="user-message-row" data-testid="selected-menu-message">
-                <div className="user-message-stack">
-                  <strong>{copy.you}</strong>
-                  <section className="user-bubble selected-menu-bubble">{menuName(selectedMenu, language)}</section>
-                </div>
-              </div>
-              <div className="assistant-message-row order-message">
-                <div className="assistant-avatar" aria-hidden="true">Y</div>
-                <div className="assistant-message-stack">
-                  <strong className="assistant-name"><i /> {productCopy.recommendation.assistantName}</strong>
-                  <section className="assistant-bubble order-bubble">
-                    <p className="eyebrow">{copy.orderBuilder}</p>
-                    <OrderFlowPanel
-                      sessionId={sessionId}
-                      menu={selectedMenu}
-                      addressRefId={addressRefId}
-                      dietaryFilters={(committedCriteria ?? draftCriteria).dietary_filters}
-                      onClose={() => { setSelectedMenu(null); setRecommendationPhase("RESULTS"); }}
-                      onOptionChange={updateConversationOptions}
-                    />
-                  </section>
-                </div>
-              </div>
-            </section>
-          )}
+  if (catalogLoading && !catalog) {
+    return (
+      <main className="v2-screen subtle v2-preparing">
+        <div className="v2-preparing-body">
+          <img src="/figma/logo-mark.svg" alt="" width={62} height={62} />
+          <div className="v2-preparing-heading">
+            <h1>{recommendationCopy.loadingChoices}</h1>
+          </div>
         </div>
-        <footer className="experience-notice">{recommendationCopy.experienceNotice}</footer>
-      </section>
-      <PostAddressNavigation
+      </main>
+    );
+  }
+
+  if (catalogError && !catalog) {
+    return (
+      <main className="v2-screen subtle v2-preparing">
+        <div className="v2-preparing-body">
+          <img src="/figma/logo-mark.svg" alt="" width={62} height={62} />
+          <div className="v2-preparing-heading">
+            <h1>{recommendationCopy.catalogFailed}</h1>
+          </div>
+          <button type="button" className="v2-cta compact" style={{ maxWidth: 240 }} onClick={reloadCatalog}>
+            {recommendationCopy.retry}
+          </button>
+        </div>
+      </main>
+    );
+  }
+
+  if (catalog && showsLoading) {
+    return (
+      <main aria-live="polite">
+        <PreparingScreen
+          v2={v2}
+          phase={recommendationPhase === "GENERATING" ? "GENERATING" : "RETRIEVING"}
+          conditionsCount={draftSelectedCount}
+          eligibleMenus={preview?.eligible_menu_count ?? null}
+          subtitle={hydrating ? recommendationCopy.restoring : undefined}
+          onCancel={cancelRecommendation}
+        />
+      </main>
+    );
+  }
+
+  if (catalog && recommendationPhase === "SELECTING") {
+    return (
+      <main>
+        <PreferenceWizard
+          catalog={catalog}
+          criteria={draftCriteria}
+          copy={recommendationCopy}
+          v2={v2}
+          busy={busy}
+          previewLoading={previewLoading}
+          preview={preview}
+          previewMessage={previewMessage}
+          canSubmitUnchanged={Boolean(committedCriteria)}
+          conflictMessage={recommendationConflictCopy}
+          notice={[catalogStale ? recommendationCopy.savedCatalog : "", error].filter(Boolean).join(" ")}
+          onChange={applyDraftCriteria}
+          onValidateAdd={(nextCriteria) => checkCriteriaPreview(nextCriteria, true)}
+          onComplete={() => void submitCriteria()}
+          onBack={editProfile}
+        />
+      </main>
+    );
+  }
+
+  const messageTime = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }).format(new Date());
+  const showsResults = catalog && latestRecommendation
+    && (recommendationPhase === "RESULTS" || recommendationPhase === "SEARCH_FALLBACK");
+
+  return (
+    <main className="v2-screen v2-chat">
+      <header className="v2-chat-header">
+        <button type="button" className="v2-icon-button" aria-label={recommendationCopy.editCriteria} onClick={editCriteria}>
+          <img src="/figma/back-chevron.svg" alt="" width={9} height={16} />
+        </button>
+        <div className="v2-chat-title">
+          <p><strong>{productCopy.recommendation.assistantName}</strong><img src="/figma/verified-badge.svg" alt="" width={16} height={16} /></p>
+          <span>{v2.alwaysOn}</span>
+        </div>
+        <button
+          type="button"
+          className="v2-cart-button"
+          aria-label={language === "English" ? `${journeyCopy.openCart}, ${cartQuantity} items` : `${journeyCopy.openCart}, ${journeyCopy.quantity} ${cartQuantity}`}
+          onClick={openCart}
+          disabled={!selectedMenu}
+        >
+          <span className="cart-box" aria-hidden="true" />
+          {cartQuantity > 0 && <span className="cart-badge">{cartQuantity}</span>}
+        </button>
+      </header>
+
+      <div className="v2-thread" aria-live="polite">
+        {catalogStale && catalog && (
+          <div className="v2-banner" role="status">
+            <p>{recommendationCopy.savedCatalog} <button type="button" className="v2-inline-clear" onClick={reloadCatalog}>{recommendationCopy.retry}</button></p>
+          </div>
+        )}
+        {error && recommendationPhase !== "ERROR" && <p className="v2-error" role="alert">{error}</p>}
+
+        <div className="v2-date-divider" aria-hidden="true"><span>{conversationDate}</span></div>
+
+        {catalog && recommendationPhase !== "SELECTING" && (
+          <div className="v2-bot-message" data-testid="user-preference-message">
+            <img className="v2-bot-avatar" src="/figma/bot-avatar.svg" alt="" />
+            <div className="v2-bot-stack">
+              <p className="v2-bot-name">{productCopy.recommendation.assistantName}</p>
+              <div className="v2-bubble">
+                <p>
+                  {latestRecommendation && preview
+                    ? v2.foundSummary(preview.eligible_menu_count, preview.eligible_merchant_count)
+                    : recommendationCopy.resultsTitle}
+                </p>
+                {selectedPreferenceLabels.length > 0 && (
+                  <div className="v2-bubble-chips" aria-label={recommendationCopy.selectedSummary}>
+                    {selectedPreferenceLabels.map((label, index) => <span key={`${label}-${index}`}>{label}</span>)}
+                    <button type="button" onClick={editCriteria}>{v2.editChip}</button>
+                  </div>
+                )}
+              </div>
+              <p className="v2-timestamp">{messageTime}</p>
+            </div>
+          </div>
+        )}
+
+        {showsResults && latestRecommendation && catalog && (
+          <RecommendationResults
+            batch={latestRecommendation}
+            catalog={catalog}
+            copy={recommendationCopy}
+            v2={v2}
+            language={language}
+            locale={locale}
+            busy={busy}
+            timestamp={messageTime}
+            onChoose={(item) => void chooseMenu(item)}
+            onCompare={compareRecommendations}
+            onRetry={() => void requestAnother("RETRY")}
+          />
+        )}
+
+        {recommendationPhase === "NO_RESULTS" && (
+          <div className="v2-bot-message">
+            <img className="v2-bot-avatar" src="/figma/bot-avatar.svg" alt="" />
+            <div className="v2-bot-stack">
+              <p className="v2-bot-name">{productCopy.recommendation.assistantName}</p>
+              <div className="v2-bubble">
+                <p><strong>{latestRecommendation?.failure_code?.includes("EXHAUST") ? productCopy.recommendation.exhaustedTitle : recommendationCopy.noResultsTitle}</strong></p>
+                <p className="v2-bubble-sub">{latestRecommendation?.failure_code?.includes("EXHAUST") ? productCopy.recommendation.exhaustedDescription : recommendationCopy.noResultsDescription}</p>
+              </div>
+            </div>
+          </div>
+        )}
+        {recommendationPhase === "ERROR" && (
+          <div className="v2-bot-message">
+            <img className="v2-bot-avatar" src="/figma/bot-avatar.svg" alt="" />
+            <div className="v2-bot-stack">
+              <p className="v2-bot-name">{productCopy.recommendation.assistantName}</p>
+              <div className="v2-bubble">
+                <p><strong>{recommendationCopy.failedTitle}</strong></p>
+                <p className="v2-bubble-sub">{error || recommendationCopy.failedDescription}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {selectedMenu && recommendationPhase === "ORDERING" && (
+          <>
+            <div className="v2-user-message" data-testid="selected-menu-message">
+              <div className="v2-user-bubble">{menuName(selectedMenu, language)}</div>
+            </div>
+            <div className="v2-bot-message">
+              <img className="v2-bot-avatar" src="/figma/bot-avatar.svg" alt="" />
+              <div className="v2-bot-stack">
+                <p className="v2-bot-name">{productCopy.recommendation.assistantName}</p>
+                <OrderFlowPanel
+                  sessionId={sessionId}
+                  menu={selectedMenu}
+                  addressRefId={addressRefId}
+                  dietaryFilters={(committedCriteria ?? draftCriteria).dietary_filters}
+                  onClose={() => { setSelectedMenu(null); setRecommendationPhase("RESULTS"); }}
+                  onOptionChange={updateConversationOptions}
+                />
+              </div>
+            </div>
+          </>
+        )}
+
+        <p className="v2-experience-notice">{recommendationCopy.experienceNotice}</p>
+      </div>
+
+      <div className="v2-quick-replies">
+        {showsResults && (
+          <>
+            <button type="button" className="v2-quick-reply" onClick={() => void requestAnother("SIMILAR")} disabled={busy}>
+              {v2.seeOtherMenus}
+            </button>
+            <button type="button" className="v2-quick-reply" onClick={editCriteria} disabled={busy}>
+              {v2.editFilters}
+            </button>
+          </>
+        )}
+        {(recommendationPhase === "NO_RESULTS" || recommendationPhase === "ERROR") && (
+          <>
+            {recommendationPhase === "ERROR" && (
+              <button
+                type="button"
+                className="v2-quick-reply"
+                onClick={() => pendingRecommendation ? void recoverRecommendation(pendingRecommendation) : void requestAnother("RETRY")}
+                disabled={busy}
+              >
+                {recommendationCopy.tryAgain}
+              </button>
+            )}
+            <button type="button" className="v2-quick-reply" onClick={editCriteria} disabled={busy}>
+              {recommendationCopy.editCriteria}
+            </button>
+          </>
+        )}
+      </div>
+
+      <ChannelMenu
         sessionId={sessionId}
         language={language}
         locale={locale}
         disabled={busy}
         onChoose={chooseCollectionMenu}
+        onEditProfile={editProfile}
       />
     </main>
   );

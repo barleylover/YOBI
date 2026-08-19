@@ -1,10 +1,10 @@
 import { ChangeEvent, FormEvent, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Building2, ImageUp, MapPin, Search } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { actionableError, api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import { asSupportedLanguage } from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
+import { getRedesignCopy } from "../lib/redesignI18n";
 import { useSessionStore } from "../stores/session";
 import type { AddressCandidate, Profile, Session } from "../types";
 
@@ -15,7 +15,9 @@ export function OnboardingPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { selectionCopy, language } = useI18n();
-  const productCopy = getProductCopy(asSupportedLanguage(language));
+  const supportedLanguage = asSupportedLanguage(language);
+  const productCopy = getProductCopy(supportedLanguage);
+  const redesignCopy = getRedesignCopy(supportedLanguage);
   const profile = useSessionStore((state) => state.profile);
   const session = useSessionStore((state) => state.session);
   const addressRefId = useSessionStore((state) => state.addressRefId);
@@ -33,6 +35,7 @@ export function OnboardingPage() {
   const [searchQuery, setSearchQuery] = useState("YOBI Myeongdong Hotel");
   const [addressImage, setAddressImage] = useState<File | null>(null);
   const [candidates, setCandidates] = useState<AddressCandidate[]>([]);
+  const [selectedCandidateId, setSelectedCandidateId] = useState("");
   const [addressNotice, setAddressNotice] = useState("");
   const [createdContext, setCreatedContext] = useState<CreatedContext | null>(null);
   const [loading, setLoading] = useState(false);
@@ -85,20 +88,27 @@ export function OnboardingPage() {
     }
   }
 
+  function applyCandidates(result: { candidates: AddressCandidate[]; notice?: string | null }) {
+    setCandidates(result.candidates);
+    setSelectedCandidateId(result.candidates[0]?.place_id ?? "");
+    setAddressNotice(language === "English" ? (result.notice || productCopy.address.demoNotice) : productCopy.address.demoNotice);
+    if (!result.candidates.length) setError(selectionCopy.addressNotFound);
+    requestAnimationFrame(() => candidateRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }));
+  }
+
   async function findAddress(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!consent || loading) return;
     setLoading(true);
     setError("");
     setCandidates([]);
+    setSelectedCandidateId("");
     try {
       const context = await ensureContext();
       const result = addressMode === "upload"
         ? await api.uploadAddress(context.session.session_id, addressImage as File)
         : await api.resolveAddress(context.session.session_id, searchQuery || "YOBI demo address");
-      setCandidates(result.candidates);
-      setAddressNotice(language === "English" ? (result.notice || productCopy.address.demoNotice) : productCopy.address.demoNotice);
-      if (!result.candidates.length) setError(selectionCopy.addressNotFound);
-      requestAnimationFrame(() => candidateRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }));
+      applyCandidates(result);
     } catch (cause) {
       setError(language === "English" ? actionableError(cause, selectionCopy.addressError) : selectionCopy.addressError);
     } finally {
@@ -106,8 +116,9 @@ export function OnboardingPage() {
     }
   }
 
-  async function confirmCandidate(candidate: AddressCandidate) {
-    if (!createdContext) return;
+  async function confirmSelectedCandidate() {
+    const candidate = candidates.find((item) => item.place_id === selectedCandidateId);
+    if (!candidate || !createdContext) return;
     setLoading(true);
     setError("");
     try {
@@ -124,6 +135,7 @@ export function OnboardingPage() {
     setLoading(true);
     setError("");
     setCandidates([]);
+    setSelectedCandidateId("");
     try {
       const context = await ensureContext();
       const response = await fetch("/demo-booking.png");
@@ -132,10 +144,7 @@ export function OnboardingPage() {
         context.session.session_id,
         new File([blob], "yobi-demo-booking.png", { type: "image/png" }),
       );
-      setCandidates(result.candidates);
-      setAddressNotice(language === "English" ? (result.notice || productCopy.address.demoNotice) : productCopy.address.demoNotice);
-      if (!result.candidates.length) setError(selectionCopy.addressNotFound);
-      requestAnimationFrame(() => candidateRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }));
+      applyCandidates(result);
     } catch (cause) {
       setError(language === "English" ? actionableError(cause, selectionCopy.demoImageError) : selectionCopy.demoImageError);
     } finally {
@@ -146,111 +155,169 @@ export function OnboardingPage() {
   function fileChanged(event: ChangeEvent<HTMLInputElement>) {
     setAddressImage(event.target.files?.[0] ?? null);
     setCandidates([]);
+    setSelectedCandidateId("");
   }
 
-  const addressReady = addressMode === "search" ? searchQuery.trim().length > 0 : Boolean(addressImage);
+  function switchMode(mode: AddressMode) {
+    setAddressMode(mode);
+    setCandidates([]);
+    setSelectedCandidateId("");
+  }
 
   return (
-    <main className="onboarding-shell profile-only">
-      <form className="onboarding-card simplified-address-card" onSubmit={findAddress}>
-        <div className="profile-card-heading">
-          <div>
-            <div className="step-label">{productCopy.address.step}</div>
-            <h2>{productCopy.address.title}</h2>
+    <main className="v2-screen subtle">
+      <header className="v2-appbar">
+        <button
+          type="button"
+          className="v2-icon-button"
+          aria-label={redesignCopy.back}
+          onClick={() => navigate(editMode ? `/?edit=1&returnTo=${encodeURIComponent(returnTo)}` : "/")}
+        >
+          <img src="/figma/back-chevron.svg" alt="" width={9} height={16} />
+        </button>
+        <p className="v2-appbar-step">{redesignCopy.stepDelivery}</p>
+      </header>
+      <div className="v2-progress" aria-hidden="true">
+        <span className="active" /><span /><span />
+      </div>
+
+      <form className="v2-body" style={{ gap: 18, paddingTop: 22 }} onSubmit={findAddress}>
+        <div className="v2-heading">
+          <h1>{productCopy.address.title}</h1>
+          <p>{productCopy.address.description}</p>
+        </div>
+
+        {editMode && addressRefId && (
+          <div className="v2-select-card selected">
+            <div>
+              <strong>{addressSummary}</strong>
+              <small>{productCopy.address.currentAddress}</small>
+            </div>
+            <button
+              type="button"
+              className="v2-search-submit"
+              onClick={() => void keepCurrentAddress()}
+              disabled={!consent || loading}
+            >
+              {productCopy.address.keepAddress}
+            </button>
           </div>
+        )}
+
+        <div className="v2-seg-tabs" role="tablist" aria-label={productCopy.address.title}>
           <button
             type="button"
-            className="text-button"
-            onClick={() => navigate(editMode ? `/?edit=1&returnTo=${encodeURIComponent(returnTo)}` : "/")}
+            role="tab"
+            aria-selected={addressMode === "search"}
+            onClick={() => switchMode("search")}
           >
-            <ArrowLeft size={16} /> {productCopy.address.changeLocale}
+            {productCopy.address.search}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={addressMode === "upload"}
+            onClick={() => switchMode("upload")}
+          >
+            {productCopy.address.bookingImage}
           </button>
         </div>
 
-        <p className="address-intro">{productCopy.address.description}</p>
-
-        <section className="onboarding-address" aria-labelledby="delivery-address-title">
-          <div className="address-heading">
-            <MapPin size={19} />
-            <div><p className="eyebrow">{productCopy.address.step}</p><h3 id="delivery-address-title">{productCopy.address.title}</h3></div>
+        {addressMode === "search" && (
+          <div className="v2-search-field bordered" role="tabpanel">
+            <img src="/figma/search-icon.svg" alt="" />
+            <input
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder={productCopy.address.searchPlaceholder}
+              aria-label={productCopy.address.searchLabel}
+            />
+            <button type="submit" className="v2-search-submit" disabled={!consent || loading || !searchQuery.trim()}>
+              {redesignCopy.search}
+            </button>
           </div>
-          <p className="demo-address-notice"><ShieldNotice /> {productCopy.address.demoNotice}</p>
+        )}
 
-          {editMode && addressRefId && (
-            <article className="current-address">
-              <MapPin size={19} />
-              <div><small>{productCopy.address.currentAddress}</small><strong>{addressSummary}</strong></div>
-              <button type="button" className="secondary-button" onClick={() => void keepCurrentAddress()} disabled={!consent || loading}>
-                {productCopy.address.keepAddress}
-              </button>
-            </article>
-          )}
-
-          <div className="address-methods" role="tablist" aria-label={productCopy.address.title}>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={addressMode === "search"}
-              className={addressMode === "search" ? "active" : ""}
-              onClick={() => { setAddressMode("search"); setCandidates([]); }}
-            ><Search size={16} /> {productCopy.address.search}</button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={addressMode === "upload"}
-              className={addressMode === "upload" ? "active" : ""}
-              onClick={() => { setAddressMode("upload"); setCandidates([]); }}
-            ><ImageUp size={16} /> {productCopy.address.bookingImage}</button>
-          </div>
-
-          {addressMode === "search" && (
-            <label role="tabpanel">
-              {productCopy.address.searchLabel}
-              <div className="address-search-field"><Search size={18} /><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder={productCopy.address.searchPlaceholder} /></div>
+        {addressMode === "upload" && (
+          <div role="tabpanel" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <label className="v2-upload-zone">
+              <strong>{addressImage ? addressImage.name : productCopy.address.chooseImage}</strong>
+              <span>PNG · JPEG · WebP · 8MB</span>
+              <input type="file" accept="image/png,image/jpeg,image/webp" onChange={fileChanged} />
             </label>
-          )}
-
-          {addressMode === "upload" && (
-            <div role="tabpanel">
-              <label className="upload-zone">
-                <ImageUp size={25} />
-                <strong>{addressImage ? addressImage.name : productCopy.address.chooseImage}</strong>
-                <span>PNG · JPEG · WebP · 8MB</span>
-                <input type="file" accept="image/png,image/jpeg,image/webp" onChange={fileChanged} />
-              </label>
-              <button type="button" className="secondary-button full" onClick={() => void loadDemoBooking()} disabled={!consent || loading}>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                type="submit"
+                className="v2-cta compact secondary"
+                disabled={!consent || loading || !addressImage}
+              >
+                {productCopy.address.check}
+              </button>
+              <button
+                type="button"
+                className="v2-cta compact secondary"
+                onClick={() => void loadDemoBooking()}
+                disabled={!consent || loading}
+              >
                 {productCopy.address.useDemoImage}
               </button>
             </div>
-          )}
-
-          {addressNotice && <p className="notice-copy" role="status">{addressNotice}</p>}
-          <div ref={candidateRef} className="address-results">
-            {candidates.map((candidate) => (
-              <article className="address-candidate" key={candidate.place_id}>
-                <Building2 size={20} />
-                <div><strong>{candidate.hotel_name}</strong><p>{candidate.road_address}</p></div>
-                <button type="button" className="primary-button" onClick={() => void confirmCandidate(candidate)} disabled={loading}>
-                  {productCopy.address.select}
-                </button>
-              </article>
-            ))}
           </div>
-        </section>
+        )}
 
-        <label className="consent-row">
+        {loading && <p className="v2-status" role="status">{selectionCopy.checkingContext}</p>}
+        {addressNotice && candidates.length > 0 && <p className="v2-status" role="status">{addressNotice}</p>}
+
+        {candidates.length > 0 && (
+          <div className="v2-candidates" ref={candidateRef}>
+            <p>{redesignCopy.matchingAddresses(candidates.length)}</p>
+            {candidates.map((candidate) => {
+              const selected = candidate.place_id === selectedCandidateId;
+              return (
+                <button
+                  type="button"
+                  key={candidate.place_id}
+                  className={selected ? "v2-select-card selected" : "v2-select-card"}
+                  aria-pressed={selected}
+                  onClick={() => setSelectedCandidateId(candidate.place_id)}
+                  disabled={loading}
+                >
+                  <div>
+                    <strong>{candidate.hotel_name}</strong>
+                    <small>{candidate.road_address}</small>
+                  </div>
+                  {selected
+                    ? <img className="check" src="/figma/check-circle.svg" alt="" />
+                    : <img className="chevron" src="/figma/right-chevron.svg" alt="" />}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        <label className="v2-consent">
           <input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} />
+          <span className="box" aria-hidden="true" />
           <span>{productCopy.address.consent}</span>
         </label>
-        {error && <p className="form-error" role="alert">{error}</p>}
-        <button className="primary-button full large" disabled={!consent || !addressReady || loading}>
-          {loading ? selectionCopy.checkingContext : productCopy.address.check}<ArrowRight size={19} />
-        </button>
+
+        <div className="v2-banner">
+          <p>{redesignCopy.demoDeliveryBanner}</p>
+        </div>
+
+        {error && <p className="v2-error" role="alert">{error}</p>}
       </form>
+
+      <footer className="v2-cta-footer">
+        <button
+          type="button"
+          className="v2-cta"
+          onClick={() => void confirmSelectedCandidate()}
+          disabled={!consent || loading || !selectedCandidateId}
+        >
+          {redesignCopy.continueWithAddress}
+        </button>
+      </footer>
     </main>
   );
-}
-
-function ShieldNotice() {
-  return <span aria-hidden="true">ⓘ</span>;
 }

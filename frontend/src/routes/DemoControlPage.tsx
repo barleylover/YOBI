@@ -36,26 +36,57 @@ export function DemoControlPage() {
   }
 
   return (
-    <main className="center-page">
-      <section className="control-card">
-        <p className="eyebrow">Rehearsal only</p>
-        <h1>Demo control</h1>
-        <p>This unlinked page exposes only safe health state and deterministic failure injection.</p>
-        <label className="control-token">Rehearsal token<input type="password" autoComplete="off" value={token} onChange={(event) => setToken(event.target.value)} /></label>
-        <button className="secondary-button full" disabled={busy} onClick={() => void loadStatus()}><RefreshCw size={16} /> Load safe status</button>
-        <p className="control-message" role="status">{message}</p>
+    <main className="v2-screen subtle">
+      <div className="v2-body" style={{ gap: 14, maxWidth: 430 }}>
+        <div className="v2-heading">
+          <h1>Demo control</h1>
+          <p>This unlinked page exposes only safe health state and deterministic failure injection.</p>
+        </div>
+        <section className="v2-summary-card">
+          <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13, fontWeight: 600, color: "var(--text-default)" }}>
+            Rehearsal token
+            <div className="v2-search-field bordered">
+              <input type="password" autoComplete="off" value={token} onChange={(event) => setToken(event.target.value)} />
+            </div>
+          </label>
+          <button className="v2-cta compact secondary" disabled={busy} onClick={() => void loadStatus()}>
+            <RefreshCw size={16} style={{ marginRight: 8 }} /> Load safe status
+          </button>
+          <p className="v2-status" role="status">{message}</p>
+        </section>
         {status && (
-          <div className="control-status">
-            <article><Activity size={18} /><strong>API</strong><span>{status.api}</span></article>
-            <article><Database size={18} /><strong>Database</strong><span>{String(status.database.backend ?? "unknown")}</span></article>
-            <article><ShieldAlert size={18} /><strong>GenAI</strong><span>{status.genai}</span></article>
-            <article><Database size={18} /><strong>Catalog</strong><span>{String(status.database.catalog_version ?? "unknown")}</span></article>
-            <article><RefreshCw size={18} /><strong>Last seed</strong><span>{String(status.database.last_seed_time ?? "unknown")}</span></article>
-          </div>
+          <section className="v2-summary-card" style={{ gap: 10 }}>
+            {[
+              [<Activity size={18} key="i" />, "API", status.api],
+              [<Database size={18} key="i" />, "Database", String(status.database.backend ?? "unknown")],
+              [<ShieldAlert size={18} key="i" />, "GenAI", status.genai],
+              [<Database size={18} key="i" />, "Catalog", String(status.database.catalog_version ?? "unknown")],
+              [<RefreshCw size={18} key="i" />, "Last seed", String(status.database.last_seed_time ?? "unknown")],
+            ].map(([icon, label, value]) => (
+              <div className="v2-price-row" key={String(label)}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>{icon} {label}</span>
+                <strong>{value}</strong>
+              </div>
+            ))}
+          </section>
         )}
-        <fieldset className="failure-modes"><legend>Failure mode</legend>{modes.map((mode) => <button key={mode} disabled={busy} className={status?.fallback_mode === mode ? "active" : ""} onClick={() => void changeMode(mode)}>{mode.replaceAll("_", " ")}</button>)}</fieldset>
-        <small>Synthetic demo controls only. No real payment, restaurant, or courier action occurs.</small>
-      </section>
+        <section className="v2-summary-card">
+          <strong style={{ fontSize: 14 }}>Failure mode</strong>
+          <div className="v2-chip-grid">
+            {modes.map((mode) => (
+              <button
+                key={mode}
+                disabled={busy}
+                className={status?.fallback_mode === mode ? "v2-chip selected" : "v2-chip"}
+                onClick={() => void changeMode(mode)}
+              >
+                {mode.replaceAll("_", " ")}
+              </button>
+            ))}
+          </div>
+          <p className="v2-status">Synthetic demo controls only. No real payment, restaurant, or courier action occurs.</p>
+        </section>
+      </div>
     </main>
   );
 }

@@ -1,49 +1,35 @@
-import { ArrowLeft, ArrowRight, Languages, MapPin, MapPinned, ShieldCheck, Sparkles } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import {
-  LANGUAGES,
-  LANGUAGE_META,
-  asSupportedLanguage,
-  countryName,
-  sortedCountries,
-} from "../lib/locale";
+import { LANGUAGE_META, asSupportedLanguage, countryName } from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
+import { getRedesignCopy } from "../lib/redesignI18n";
 import { useSessionStore } from "../stores/session";
 
 export function WelcomePage() {
   const navigate = useNavigate();
   const location = useLocation();
   const profile = useSessionStore((state) => state.profile);
-  const savedLanguage = useSessionStore((state) => state.draftLanguage);
-  const savedCountry = useSessionStore((state) => state.draftCountry);
-  const setLocaleDraft = useSessionStore((state) => state.setLocaleDraft);
+  const language = useSessionStore((state) => state.draftLanguage);
+  const country = useSessionStore((state) => state.draftCountry);
   const updateProfile = useSessionStore((state) => state.updateProfile);
   const query = new URLSearchParams(location.search);
   const editMode = query.get("edit") === "1" && Boolean(profile);
   const returnTo = query.get("returnTo") || "/";
-  const [language, setLanguage] = useState(profile?.preferred_language ?? savedLanguage);
-  const [country, setCountry] = useState(profile?.nationality ?? savedCountry);
   const supportedLanguage = asSupportedLanguage(language);
   const locale = LANGUAGE_META[supportedLanguage].code;
   const productCopy = getProductCopy(supportedLanguage);
-  const countries = useMemo(() => sortedCountries(supportedLanguage), [supportedLanguage]);
+  const redesignCopy = getRedesignCopy(supportedLanguage);
 
   useEffect(() => {
     document.documentElement.lang = LANGUAGE_META[supportedLanguage].code;
     document.documentElement.dir = LANGUAGE_META[supportedLanguage].direction;
-    setLocaleDraft(language, country);
-  }, [country, language, setLocaleDraft, supportedLanguage]);
+  }, [supportedLanguage]);
 
-  function changeLanguage(nextLanguage: string) {
-    const nextSupportedLanguage = asSupportedLanguage(nextLanguage);
-    const nextCountry = sortedCountries(nextSupportedLanguage)[0][0];
-    setLanguage(nextLanguage);
-    setCountry(nextCountry);
+  function openLocalePicker(tab: "language" | "country") {
+    navigate(`/start?tab=${tab}${editMode ? `&edit=1&returnTo=${encodeURIComponent(returnTo)}` : ""}`);
   }
 
   function start() {
-    setLocaleDraft(language, country);
     if (editMode && profile) {
       updateProfile({ ...profile, preferred_language: language, nationality: country });
       navigate(`/profile?edit=1&returnTo=${encodeURIComponent(returnTo)}`);
@@ -53,63 +39,49 @@ export function WelcomePage() {
   }
 
   return (
-    <main className="welcome-shell">
-      <section className="welcome-card">
-        <header className="welcome-brand">
-          <div className="brand-mark">YO<span>BI</span></div>
-          <span>{productCopy.entry.benefitFlavor}</span>
+    <main className="v2-screen">
+      {editMode && (
+        <header className="v2-appbar">
+          <button type="button" className="v2-icon-button" aria-label={redesignCopy.back} onClick={() => navigate(returnTo)}>
+            <img src="/figma/back-chevron.svg" alt="" width={9} height={16} />
+          </button>
+          <p className="v2-appbar-step">{productCopy.address.changeLocale}</p>
         </header>
+      )}
+      <div className="v2-body" style={{ paddingTop: editMode ? 8 : 20, justifyContent: "space-between" }}>
+        <section className="v2-onboarding-hero">
+          <img src="/figma/logo-mark.svg" alt="YOBI" />
+          <h1>
+            {productCopy.entry.heroTitle}
+            <span>{productCopy.entry.heroBuddy}</span>
+          </h1>
+          <p>{productCopy.entry.pitchDescription}</p>
+        </section>
 
-        {editMode && (
-          <button className="text-button welcome-back" type="button" onClick={() => navigate(returnTo)}>
-            <ArrowLeft size={17} /> {productCopy.handoff.back}
+        <div className="v2-onboarding-context">
+          <button type="button" className="v2-field-card" onClick={() => openLocalePicker("language")}>
+            <div>
+              <small>{productCopy.entry.languageLabel}</small>
+              <strong>{language}</strong>
+            </div>
+            <img src="/figma/chevron-down.svg" alt="" />
           </button>
-        )}
-
-        <div className="welcome-content">
-          <div className="welcome-hero">
-            <div className="yobi-avatar" aria-hidden="true">Y</div>
-            <h1>{productCopy.entry.heroTitle}<span>{productCopy.entry.heroBuddy}</span></h1>
-          </div>
-          <section className="welcome-pitch">
-            <h2>{productCopy.entry.pitchTitle}</h2>
-            <p>{productCopy.entry.pitchDescription}</p>
-          </section>
-          <div className="welcome-benefits">
-            <span><Sparkles size={16} /> {productCopy.entry.benefitFlavor}</span>
-            <span><ShieldCheck size={16} /> {productCopy.entry.benefitDietary}</span>
-            <span><MapPin size={16} /> {productCopy.entry.benefitDelivery}</span>
-          </div>
-
-          <section className="welcome-locale" aria-label={`${productCopy.entry.languageLabel} · ${productCopy.entry.countryLabel}`}>
-            <label>
-              <span><Languages size={17} /> {productCopy.entry.languageLabel}</span>
-              <select value={language} onChange={(event) => changeLanguage(event.target.value)}>
-                {LANGUAGES.map((item) => <option key={item}>{item}</option>)}
-              </select>
-            </label>
-            <label>
-              <span><MapPinned size={17} /> {productCopy.entry.countryLabel}</span>
-              <select value={country} onChange={(event) => setCountry(event.target.value)}>
-                {countries.map(([name, code]) => (
-                  <option value={name} key={code}>{countryName(name, locale)}</option>
-                ))}
-              </select>
-              <small>{productCopy.entry.countryHelp(language)}</small>
-            </label>
-          </section>
+          <button type="button" className="v2-field-card" onClick={() => openLocalePicker("country")}>
+            <div>
+              <small>{productCopy.entry.countryLabel}</small>
+              <strong>{countryName(country, locale)}</strong>
+            </div>
+            <img src="/figma/chevron-down.svg" alt="" />
+          </button>
         </div>
+      </div>
 
-        <footer>
-          <div>
-            <p>{productCopy.entry.localeApplies}</p>
-            <p>{productCopy.entry.experienceNotice}</p>
-          </div>
-          <button className="primary-button welcome-cta" type="button" onClick={start}>
-            {productCopy.entry.start} <ArrowRight size={20} />
-          </button>
-        </footer>
-      </section>
+      <footer className="v2-cta-footer">
+        <button type="button" className="v2-cta" onClick={start}>
+          {productCopy.entry.start}
+        </button>
+        <p className="v2-footnote">{redesignCopy.demoFootnote}</p>
+      </footer>
     </main>
   );
 }

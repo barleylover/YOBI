@@ -1,14 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronRight, Languages, Leaf, Minus, Plus, ShoppingBag, Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { actionableError, api } from "../lib/api";
 import { useSessionStore } from "../stores/session";
-import type { CartPreview, DietaryFiltersV2, MenuSummary, OptionGroup } from "../types";
-import { RichCard } from "./RichCard";
+import type { CartPreview, DietaryFiltersV2, MenuSummary, OptionGroup, OptionItem } from "../types";
 import { useI18n } from "../lib/i18n";
 import { asSupportedLanguage, menuName } from "../lib/locale";
-import { getProductCopy } from "../lib/productI18n";
 import { getRecommendationCopy } from "../lib/recommendationI18n";
+import { getRedesignCopy } from "../lib/redesignI18n";
 
 interface Props {
   sessionId: string;
@@ -30,9 +28,10 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
   const navigate = useNavigate();
   const setCartQuantity = useSessionStore((state) => state.setCartQuantity);
   const cartQuantity = useSessionStore((state) => state.cartQuantity);
-  const { copy, dynamicCopy, journeyCopy, language } = useI18n();
-  const productCopy = getProductCopy(asSupportedLanguage(language));
+  const addressSummary = useSessionStore((state) => state.addressSummary);
+  const { copy, dynamicCopy, journeyCopy, language, locale } = useI18n();
   const recommendationCopy = getRecommendationCopy(language);
+  const v2 = getRedesignCopy(asSupportedLanguage(language));
   const [activeMenu, setActiveMenu] = useState(menu);
   const [phase, setPhase] = useState<Phase>("options");
   const [groups, setGroups] = useState<OptionGroup[]>([]);
@@ -89,17 +88,24 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
 
   const currentGroup = groups[groupIndex];
   const selectedOptionIds = useMemo(() => Object.values(selections), [selections]);
+  const selectedDelta = useMemo(() => groups.reduce((total, group) => {
+    const optionId = selections[group.option_group_id];
+    const option = group.items.find((item) => item.option_item_id === optionId);
+    return total + (option?.price_delta ?? 0);
+  }, 0), [groups, selections]);
+
+  function optionConflicts(option: OptionItem) {
+    const breaksHalal = Boolean(dietaryFilters?.halal_certified_only && option.halal_certification_preserved === false);
+    const breaksVegan = Boolean(dietaryFilters?.vegan && option.vegan_status === "CONFLICT");
+    const needsVeganCheck = Boolean(dietaryFilters?.vegan && option.vegan_status === "POSSIBLE_WITH_CHECKS");
+    return { breaksHalal, breaksVegan, needsVeganCheck };
+  }
 
   async function selectOption(group: OptionGroup, optionId: string) {
     setBusy(true);
     setError("");
     try {
-      await onOptionChange?.(
-        activeMenu.menu_id,
-        group.option_group_id,
-        [optionId],
-        false,
-      );
+      await onOptionChange?.(activeMenu.menu_id, group.option_group_id, [optionId], false);
       setSelections((current) => ({ ...current, [group.option_group_id]: optionId }));
       if (transitionTimer.current !== null) clearTimeout(transitionTimer.current);
       transitionTimer.current = setTimeout(() => {
@@ -107,6 +113,32 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
         if (groupIndex < groups.length - 1) setGroupIndex((value) => value + 1);
         else setPhase("note");
       }, 160);
+    } catch (cause) {
+      setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function applyDefaultsForRest() {
+    setBusy(true);
+    setError("");
+    try {
+      const next: Record<string, string> = { ...selections };
+      for (let index = groupIndex; index < groups.length; index += 1) {
+        const group = groups[index];
+        if (next[group.option_group_id]) continue;
+        const fallback = group.items.find((option) => {
+          if (!option.available) return false;
+          const { breaksHalal, breaksVegan } = optionConflicts(option);
+          return !breaksHalal && !breaksVegan;
+        });
+        if (!fallback) continue;
+        await onOptionChange?.(activeMenu.menu_id, group.option_group_id, [fallback.option_item_id], false);
+        next[group.option_group_id] = fallback.option_item_id;
+      }
+      setSelections(next);
+      setPhase("note");
     } catch (cause) {
       setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
     } finally {
@@ -205,145 +237,246 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
     }
   }
 
+  function changeAddress() {
+    navigate(`/profile?edit=1&returnTo=${encodeURIComponent(`/chat/${sessionId}`)}`);
+  }
+
+  const won = (value: number) => `₩${value.toLocaleString(locale)}`;
+
   return (
-    <section className="order-flow" aria-label={copy.orderBuilder} data-testid="order-flow">
-      <header>
-        <div>
-          <p className="eyebrow">{copy.orderBuilder}</p>
-          <h3>{menuName(activeMenu, language)}</h3>
-          <p>{activeMenu.merchant_name}</p>
-        </div>
-        <button className="text-button" onClick={onClose}>{copy.close}</button>
-      </header>
-
-      <div className="mini-progress" aria-label={copy.orderBuilder}>
-        {(["options", "delivery", "review"] as const).map((step, index) => (
-          <span className={phase === step || (step === "options" && ["note", "more", "browse"].includes(phase)) ? "active" : ""} key={step}>
-            {index + 1}<small>{step === "options" ? copy.options : step === "delivery" ? copy.delivery : copy.review}</small>
-          </span>
-        ))}
-      </div>
-
+    <section className="v2-order-flow" aria-label={copy.orderBuilder} data-testid="order-flow">
       {phase === "options" && currentGroup && (
-        <div className="decision-panel" data-testid={`option-group-${currentGroup.option_group_id}`}>
-          <p className="step-count">{groupIndex + 1} of {groups.length}</p>
-          <h4>{language === "한국어" ? currentGroup.name_ko : currentGroup.name_en}</h4>
-          <p>{language === "English" ? currentGroup.description : dynamicCopy.catalogDescription}</p>
-          <div className="option-list">
-            {currentGroup.items.map((option) => {
-              const breaksHalal = Boolean(
-                dietaryFilters?.halal_certified_only && option.halal_certification_preserved === false,
-              );
-              const breaksVegan = Boolean(
-                dietaryFilters?.vegan && option.vegan_status === "CONFLICT",
-              );
-              const needsVeganCheck = Boolean(
-                dietaryFilters?.vegan && option.vegan_status === "POSSIBLE_WITH_CHECKS",
-              );
-              return <div className="option-item-shell" key={option.option_item_id}>
-                <button
-                  className={selections[currentGroup.option_group_id] === option.option_item_id ? "option-button selected" : "option-button"}
-                  onClick={() => void selectOption(currentGroup, option.option_item_id)}
-                  disabled={busy || !option.available || breaksHalal || breaksVegan}
-                >
-                  <span><strong>{language === "한국어" ? option.name_ko : option.name_en}</strong>{language !== "한국어" && <small>{option.name_ko}</small>}</span>
-                  <span>{option.price_delta ? `+₩${option.price_delta.toLocaleString()}` : journeyCopy.included}<ChevronRight size={17} /></span>
-                </button>
-                {(breaksHalal || breaksVegan || needsVeganCheck) && (
-                  <p className={breaksHalal || breaksVegan ? "option-guidance conflict" : "option-guidance"}>
-                    <Leaf size={14} />
-                    {breaksHalal ? recommendationCopy.halalHelp : option.vegan_warning || recommendationCopy.veganChecks}
-                  </p>
-                )}
+        <>
+          <article className="v2-order-card" data-testid={`option-group-${currentGroup.option_group_id}`}>
+            <div className="v2-card-strip stacked">
+              <div className="strip-row">
+                <span>{v2.orderSetup(groupIndex + 1, groups.length)}</span>
+                <span>+{won(selectedDelta)}</span>
               </div>
-            })}
+              <div className="strip-progress" aria-hidden="true">
+                {groups.map((group, index) => (
+                  <i key={group.option_group_id} className={index <= groupIndex ? "filled" : ""} />
+                ))}
+              </div>
+            </div>
+            <div className="v2-order-body">
+              <div className="v2-order-heading">
+                <h3>{language === "한국어" ? currentGroup.name_ko : currentGroup.name_en}</h3>
+                <p>{v2.requiredTapOne}</p>
+              </div>
+              {currentGroup.items.map((option) => {
+                const { breaksHalal, breaksVegan, needsVeganCheck } = optionConflicts(option);
+                const selected = selections[currentGroup.option_group_id] === option.option_item_id;
+                return (
+                  <div key={option.option_item_id} className="v2-option-shell">
+                    <button
+                      type="button"
+                      className={selected ? "v2-option-row selected" : "v2-option-row"}
+                      onClick={() => void selectOption(currentGroup, option.option_item_id)}
+                      disabled={busy || !option.available || breaksHalal || breaksVegan}
+                    >
+                      <span className={selected ? "radio checked" : "radio"} aria-hidden="true" />
+                      <span className="labels">
+                        <strong>{language === "한국어" ? option.name_ko : option.name_en}</strong>
+                        {language !== "한국어" && <small>{option.name_ko}</small>}
+                      </span>
+                      <span className={option.price_delta ? "price strong" : "price"}>
+                        {option.price_delta ? `+${won(option.price_delta)}` : journeyCopy.included}
+                      </span>
+                    </button>
+                    {(breaksHalal || breaksVegan || needsVeganCheck) && (
+                      <p className={breaksHalal || breaksVegan ? "v2-option-guidance conflict" : "v2-option-guidance"}>
+                        {breaksHalal ? recommendationCopy.halalHelp : option.vegan_warning || recommendationCopy.veganChecks}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </article>
+          <div className="v2-inline-replies no-indent">
+            <button type="button" className="v2-quick-reply brand" onClick={() => void applyDefaultsForRest()} disabled={busy}>
+              {v2.useDefaults}
+            </button>
+            <button type="button" className="v2-quick-reply" onClick={onClose} disabled={busy}>
+              {v2.changeMenu}
+            </button>
           </div>
-        </div>
+        </>
       )}
 
       {phase === "note" && (
-        <div className="decision-panel">
-          <p className="step-count">{journeyCopy.restaurantNote}</p>
-          <h4>{journeyCopy.howSay}</h4>
-          <textarea value={note} onChange={(event) => setNote(event.target.value)} />
-          <div className="translation-preview">
-            <Languages size={18} />
-            <div><small>{journeyCopy.messageRestaurant}</small><strong>최대한 맵지 않게 부탁드립니다.</strong><p>{journeyCopy.backTranslation}: {note}</p></div>
+        <article className="v2-order-card">
+          <div className="v2-order-body">
+            <div className="v2-order-heading">
+              <h3>{journeyCopy.howSay}</h3>
+              <p>{journeyCopy.restaurantNote}</p>
+            </div>
+            <textarea className="v2-note-input" value={note} onChange={(event) => setNote(event.target.value)} />
+            <div className="v2-translation-preview">
+              <small>{journeyCopy.messageRestaurant}</small>
+              <strong>최대한 맵지 않게 부탁드립니다.</strong>
+              <p>{journeyCopy.backTranslation}: {note}</p>
+            </div>
+            <button type="button" className="v2-card-primary" onClick={() => void addToCart()} disabled={busy}>
+              {copy.addCart}
+            </button>
           </div>
-          <button className="primary-button full" onClick={addToCart} disabled={busy}>
-            <ShoppingBag size={18} /> {copy.addCart}
-          </button>
-        </div>
+        </article>
       )}
 
       {phase === "more" && cart && (
-        <div className="decision-panel more-menu-panel">
-          <p className="step-count">{copy.added}</p>
-          <h4>{copy.moreQuestion}</h4>
-          <p>{copy.moreDescription}</p>
-          <div className="button-row">
-            <button className="primary-button full" onClick={() => void browseThisRestaurant()} disabled={busy}>{copy.yesMore}</button>
-            <button className="secondary-button full" onClick={() => setPhase("delivery")} disabled={busy}>{copy.noDelivery}</button>
+        <>
+          <article className="v2-order-card">
+            <div className="v2-order-body">
+              <div className="v2-order-heading">
+                <h3>{copy.moreQuestion}</h3>
+                <p>{copy.moreDescription}</p>
+              </div>
+            </div>
+          </article>
+          <div className="v2-inline-replies no-indent">
+            <button type="button" className="v2-quick-reply brand" onClick={() => void browseThisRestaurant()} disabled={busy}>
+              {copy.yesMore}
+            </button>
+            <button type="button" className="v2-quick-reply" onClick={() => setPhase("delivery")} disabled={busy}>
+              {copy.noDelivery}
+            </button>
           </div>
-        </div>
+        </>
       )}
 
       {phase === "browse" && (
-        <div className="same-merchant-browser">
-          <RichCard
-            card={{
-              type: "menu_recommendations",
-              title: `${copy.moreFrom} · ${activeMenu.merchant_name}`,
-              subtitle: copy.swipeMore,
-              data: { menus: merchantMenus },
-            }}
-            onChooseMenu={chooseAdditionalMenu}
-            onQuickReply={() => undefined}
-          />
-          <button className="secondary-button full" onClick={() => setPhase("delivery")}>{copy.noMore}</button>
-        </div>
+        <article className="v2-order-card">
+          <div className="v2-order-body">
+            <div className="v2-order-heading">
+              <h3>{copy.moreFrom} · {activeMenu.merchant_name}</h3>
+              <p>{copy.swipeMore}</p>
+            </div>
+            <div className="v2-merchant-menu-list">
+              {merchantMenus.map((item) => (
+                <button
+                  type="button"
+                  className="v2-option-row"
+                  key={item.menu_id}
+                  onClick={() => chooseAdditionalMenu(item)}
+                  disabled={busy}
+                >
+                  <span className="labels">
+                    <strong>{menuName(item, language)}</strong>
+                    <small>{item.cultural_description || item.description || dynamicCopy.catalogDescription}</small>
+                  </span>
+                  <span className="price strong">{won(item.price)}</span>
+                </button>
+              ))}
+            </div>
+            <button type="button" className="v2-card-secondary" onClick={() => setPhase("delivery")} disabled={busy}>
+              {copy.noMore}
+            </button>
+          </div>
+        </article>
       )}
 
       {phase === "delivery" && (
-        <div className="decision-panel">
-          <p className="step-count">{copy.handoff}</p>
-          <h4>{journeyCopy.handoffQuestion}</h4>
-          <div className="delivery-choice selected"><Check size={18} /><span><strong>{journeyCopy.hotelFrontDesk}</strong><small>{journeyCopy.noBellCutlery}</small></span></div>
-          <div className="translation-preview"><Languages size={18} /><div><small>{journeyCopy.messageCourier}</small><strong>호텔 프런트에 맡겨 주세요. 일회용 수저와 포크는 필요 없습니다.</strong></div></div>
-          <button className="primary-button full" onClick={saveDelivery} disabled={busy}>{copy.confirmDelivery}</button>
-        </div>
+        <article className="v2-order-card">
+          <div className="v2-order-body">
+            <div className="v2-order-heading">
+              <h3>{journeyCopy.handoffQuestion}</h3>
+              <p>{copy.handoff}</p>
+            </div>
+            <div className="v2-option-row selected as-static">
+              <span className="radio checked" aria-hidden="true" />
+              <span className="labels">
+                <strong>{journeyCopy.hotelFrontDesk}</strong>
+                <small>{journeyCopy.noBellCutlery}</small>
+              </span>
+            </div>
+            <div className="v2-translation-preview">
+              <small>{journeyCopy.messageCourier}</small>
+              <strong>호텔 프런트에 맡겨 주세요. 일회용 수저와 포크는 필요 없습니다.</strong>
+            </div>
+            <button type="button" className="v2-card-primary" onClick={() => void saveDelivery()} disabled={busy}>
+              {copy.confirmDelivery}
+            </button>
+          </div>
+        </article>
       )}
 
       {phase === "review" && cart && (
-        <div className="decision-panel cart-review" data-testid="cart-review">
-          <p className="step-count">{copy.finalReview}</p>
-          <h4>{journeyCopy.reviewTitle}</h4>
-          {cart.items.map((item) => (
-            <div className="cart-line" key={item.cart_item_id}>
-              <div><strong>{language === "한국어" ? item.menu_name_ko : item.menu_name}</strong><small>{item.options.map((option) => language === "한국어" ? option.name_ko : option.name_en).join(", ")}</small></div>
-              <div className="cart-line-actions">
-                <div className="quantity-stepper" aria-label={`${journeyCopy.quantity}: ${item.menu_name}`}>
-                  <button aria-label={journeyCopy.decrease} onClick={() => changeQuantity(item.cart_item_id, item.quantity - 1)} disabled={busy || item.quantity <= 1}><Minus size={14} /></button>
-                  <span>{item.quantity}</span>
-                  <button aria-label={journeyCopy.increase} onClick={() => changeQuantity(item.cart_item_id, item.quantity + 1)} disabled={busy || item.quantity >= 10}><Plus size={14} /></button>
-                </div>
-                <strong>₩{item.line_total.toLocaleString()}</strong>
-                <button className="remove-cart-item" aria-label={`${journeyCopy.remove}: ${item.menu_name}`} onClick={() => removeItem(item.cart_item_id)} disabled={busy}><Trash2 size={15} /></button>
-              </div>
+        <>
+          <article className="v2-order-card" data-testid="cart-review">
+            <div className="v2-card-strip">
+              <span>{v2.orderReady}</span>
+              <span>{groups.length > 0 ? `${groups.length} / ${groups.length}` : ""}</span>
             </div>
-          ))}
-          <div className="price-row"><span>{journeyCopy.items}</span><span>₩{cart.subtotal.toLocaleString()}</span></div>
-          <div className="price-row"><span>{copy.delivery}</span><span>₩{cart.delivery_fee.toLocaleString()}</span></div>
-          <div className="price-row total"><span>{journeyCopy.total}</span><strong>₩{cart.total_price.toLocaleString()}</strong></div>
-          <section className="checkout-readiness" aria-label={copy.readyCheckout}>
-            <h5>{copy.readyCheckout}</h5>
-            <div className={!cart.missing_slots.includes("minimum_order_amount") ? "readiness-pass" : "readiness-fail"}><Check size={16} /><span><strong>{journeyCopy.restaurantMinimum}</strong><small>{cart.minimum_order_amount ? `₩${cart.subtotal.toLocaleString()} / ₩${cart.minimum_order_amount.toLocaleString()}${cart.minimum_order_shortfall ? ` · ${journeyCopy.add} ₩${cart.minimum_order_shortfall.toLocaleString()}` : ` · ${journeyCopy.met}`}` : journeyCopy.noMinimum}</small></span></div>
-          </section>
-          <button className="primary-button full large" onClick={proceedToHandoff} disabled={busy || !cart.ready_to_checkout}>{productCopy.handoff.cta} <ChevronRight size={18} /></button>
-          {!cart.ready_to_checkout && <p className="checkout-action">{journeyCopy.completeRequirements}</p>}
-        </div>
+            <div className="v2-order-body">
+              <div className="v2-review-label-row">
+                <span>{v2.deliverTo}</span>
+                <button type="button" onClick={changeAddress} disabled={busy}>{v2.editChip}</button>
+              </div>
+              <p className="v2-review-address">{addressSummary}</p>
+              <div className="v2-divider" />
+              <div className="v2-review-label-row">
+                <span>{v2.yourMenu}</span>
+                <button type="button" onClick={() => { setGroupIndex(0); setPhase(groups.length ? "options" : "note"); }} disabled={busy}>
+                  {v2.editChip}
+                </button>
+              </div>
+              {cart.items.map((item) => (
+                <div className="v2-cart-line" key={item.cart_item_id}>
+                  <div className="copy">
+                    <strong>{language === "한국어" ? item.menu_name_ko : item.menu_name}</strong>
+                    <small>{item.options.map((option) => language === "한국어" ? option.name_ko : option.name_en).join(" · ") || journeyCopy.included}</small>
+                  </div>
+                  <div className="controls">
+                    <div className="v2-stepper" aria-label={`${journeyCopy.quantity}: ${item.menu_name}`}>
+                      <button type="button" aria-label={journeyCopy.decrease} onClick={() => void changeQuantity(item.cart_item_id, item.quantity - 1)} disabled={busy || item.quantity <= 1}>−</button>
+                      <span>{item.quantity}</span>
+                      <button type="button" aria-label={journeyCopy.increase} onClick={() => void changeQuantity(item.cart_item_id, item.quantity + 1)} disabled={busy || item.quantity >= 10}>+</button>
+                    </div>
+                    <strong>{won(item.line_total)}</strong>
+                    <button type="button" className="remove" aria-label={`${journeyCopy.remove}: ${item.menu_name}`} onClick={() => void removeItem(item.cart_item_id)} disabled={busy}>×</button>
+                  </div>
+                </div>
+              ))}
+              <div className="v2-divider" />
+              <div className="v2-price-row"><span>{v2.subtotal}</span><strong>{won(cart.subtotal)}</strong></div>
+              <div className="v2-price-row"><span>{copy.delivery}</span><strong>{won(cart.delivery_fee)}</strong></div>
+              <div className="v2-divider" />
+              <div className="v2-price-row total">
+                <span>{v2.totalEstimated}</span>
+                <strong>{won(cart.total_price)}</strong>
+              </div>
+              {cart.minimum_order_amount != null && cart.missing_slots.includes("minimum_order_amount") && (
+                <p className="v2-option-guidance conflict">
+                  {journeyCopy.restaurantMinimum}: {won(cart.subtotal)} / {won(cart.minimum_order_amount)}
+                  {cart.minimum_order_shortfall ? ` · ${journeyCopy.add} ${won(cart.minimum_order_shortfall)}` : ""}
+                </p>
+              )}
+              <div className="v2-demo-warning">
+                <span aria-hidden="true">!</span>
+                <p>{v2.demoOrderWarning}</p>
+              </div>
+              <button
+                type="button"
+                className="v2-card-primary"
+                onClick={() => void proceedToHandoff()}
+                disabled={busy || !cart.ready_to_checkout}
+              >
+                {v2.prepareOrder(won(cart.total_price))}
+              </button>
+            </div>
+          </article>
+          <div className="v2-inline-replies no-indent">
+            <button type="button" className="v2-quick-reply" onClick={changeAddress} disabled={busy}>{v2.changeAddress}</button>
+            <button type="button" className="v2-quick-reply" onClick={() => { setGroupIndex(0); setPhase(groups.length ? "options" : "note"); }} disabled={busy}>
+              {v2.changeOptions}
+            </button>
+            <button type="button" className="v2-quick-reply" onClick={onClose} disabled={busy}>{v2.startOver}</button>
+          </div>
+        </>
       )}
-      {error && <p className="form-error" role="alert">{error}</p>}
+      {error && <p className="v2-error" role="alert">{error}</p>}
     </section>
   );
 }
