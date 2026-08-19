@@ -217,8 +217,7 @@ def _load_pending_oracle(
     for menu_id, name_ko in menu_rows:
         cursor.execute(
             """
-            SELECT chunk_id,content FROM (
-              SELECT DISTINCT chunk.chunk_id,chunk.content
+            SELECT chunk.chunk_id,chunk.content
               FROM menu_concept_membership membership
               JOIN dish_concept_closure closure
                 ON closure.release_id=membership.knowledge_release_id
@@ -230,18 +229,25 @@ def _load_pending_oracle(
               WHERE membership.knowledge_release_id=:knowledge_release_id
                 AND membership.menu_id=:menu_id
               ORDER BY chunk.chunk_id
-            ) WHERE ROWNUM<=3
             """,
             knowledge_release_id=knowledge_release_id,
             menu_id=str(menu_id),
         )
-        passages = [
-            {
-                "evidence_id": str(chunk_id),
-                "content": str(content.read() if hasattr(content, "read") else content),
-            }
-            for chunk_id, content in cursor.fetchall()
-        ]
+        passages: list[dict[str, str]] = []
+        seen_chunk_ids: set[str] = set()
+        for chunk_id, content in cursor:
+            evidence_id = str(chunk_id)
+            if evidence_id in seen_chunk_ids:
+                continue
+            seen_chunk_ids.add(evidence_id)
+            passages.append(
+                {
+                    "evidence_id": evidence_id,
+                    "content": str(content.read() if hasattr(content, "read") else content),
+                }
+            )
+            if len(passages) == 3:
+                break
         if not passages:
             raise RuntimeError(f"WIKI_PASSAGE_REQUIRED:{menu_id}")
         pending.append(

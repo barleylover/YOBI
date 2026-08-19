@@ -709,7 +709,9 @@ if [[ "$catalog_mode" == "external" ]]; then
       "$new_release/venv/bin/python" "$new_release/scripts/manage_demo_address.py" \
       --verify-only
     if [[ "$synthetic_enrichment_deploy" == "true" ]]; then
-      synthetic_release_id="synthetic-enrichment-${source_git_commit:0:12}"
+      # Keep the data release identity stable across deployment-script fixes so
+      # resumable localization never duplicates the already loaded base rows.
+      synthetic_release_id="synthetic-enrichment-861bed8e4f5c"
       sudo env PYTHONPATH="$new_release/backend:$new_release" \
         "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
         "$new_release/scripts/build_synthetic_enrichment_release.py" \
