@@ -266,9 +266,20 @@ def _generate_batch(provider: Any, settings: Settings, batch: list[dict[str, Any
             "Translate each Korean food menu name into English and Japanese using only the supplied "
             "Korean name and Wiki passages. Return food names only. Never add taste, ingredient, origin, "
             "portion, popularity, or marketing modifiers that are absent from the original name. Preserve "
-            "brand names and disambiguate only when the Wiki evidence makes the food concept explicit."
+            "brand names and disambiguate only when the Wiki evidence makes the food concept explicit. "
+            "Return exactly one JSON object matching response_contract, with no markdown, preamble, "
+            "commentary, or trailing text. Return every input menu_id exactly once."
         ),
-        "input": [{"role": "user", "content": json.dumps(batch, ensure_ascii=False)}],
+        "input": [
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {"menus": batch, "response_contract": SCHEMA},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            }
+        ],
         "max_output_tokens": min(1800, provider.capabilities.max_output_tokens),
     }
     if provider.capabilities.structured_output:
@@ -284,7 +295,10 @@ def _generate_batch(provider: Any, settings: Settings, batch: list[dict[str, Any
     for index, model_id in enumerate(models):
         try:
             response = provider.create_response(model_id, **request)
-            result = LocalizationBatch.model_validate(json.loads(str(response.output_text)))
+            raw = str(getattr(response, "output_text", "")).strip()
+            if raw.startswith("```") and raw.endswith("```"):
+                raw = "\n".join(raw.splitlines()[1:-1]).strip()
+            result = LocalizationBatch.model_validate(json.loads(raw))
             expected = {str(item["menu_id"]) for item in batch}
             if {item.menu_id for item in result.items} != expected or len(result.items) != len(batch):
                 raise ValueError("LOCALIZATION_BATCH_MENU_IDS_MISMATCH")
