@@ -165,6 +165,16 @@ def _optional_int(value: object) -> int | None:
     return None if value is None else int(cast(Any, value))
 
 
+def _synthetic_review_query_binds(parameters: dict[str, Any]) -> dict[str, Any]:
+    """Limit Oracle binds to placeholders used by the synthetic review query."""
+
+    return {
+        key: value
+        for key, value in parameters.items()
+        if key == "synthetic_release_id" or key.startswith("synthetic_menu_")
+    }
+
+
 EXPECTED_RUNTIME_COUNTS = {
     "service_area": 3,
     "menu_category": 100,
@@ -3949,7 +3959,7 @@ class OracleYobiRepository:
                   AND menu_id IN ({','.join(selected_binds)})
                 ORDER BY menu_id,display_order,review_id
                 """,
-                synthetic_binds,
+                _synthetic_review_query_binds(synthetic_binds),
             )
             for review in _rows(synthetic_cursor):
                 synthetic_reviews_by_menu[str(review["menu_id"])].append(
