@@ -13,7 +13,7 @@ import json
 import re
 import sqlite3
 import sys
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -30,7 +30,7 @@ from app.genai.contracts import GenAIErrorCode, GenAIProviderError
 from app.genai.providers import choose_genai_provider
 
 BATCH_SIZE = 10
-SCHEMA_ATTEMPTS_PER_MODEL = 3
+SCHEMA_ATTEMPTS_PER_MODEL = 10
 PROMPT_VERSION = "menu-localization-v1-wiki-bounded"
 
 
@@ -468,8 +468,17 @@ def main() -> None:
         result, model_id = _generate_batch(provider, settings, batch)
         return batch, result, model_id
 
+    first_generation_error: Exception | None = None
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
-        for batch, result, model_id in executor.map(generate_one, batches):
+        futures: list[
+            Future[tuple[list[dict[str, Any]], LocalizationBatch, str]]
+        ] = [executor.submit(generate_one, batch) for batch in batches]
+        for future in as_completed(futures):
+            try:
+                batch, result, model_id = future.result()
+            except Exception as exc:  # noqa: BLE001 - preserve other completed batches
+                first_generation_error = first_generation_error or exc
+                continue
             if args.backend == "oracle":
                 user, password, dsn = _oracle_credentials(settings)
                 with oracledb.connect(user=user, password=password, dsn=dsn) as connection:
@@ -503,6 +512,8 @@ def main() -> None:
                 file=sys.stderr,
                 flush=True,
             )
+    if first_generation_error is not None:
+        raise first_generation_error
 
     if args.backend == "oracle":
         user, password, dsn = _oracle_credentials(settings)

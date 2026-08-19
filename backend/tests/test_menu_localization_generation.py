@@ -82,9 +82,9 @@ def test_rate_limit_uses_only_the_fallback_model() -> None:
 
 
 def test_persistent_schema_failure_does_not_change_models() -> None:
-    provider = _Provider(["", "not-json", "[]"])
+    provider = _Provider([""] * 10)
 
     with pytest.raises(ValueError, match="LOCALIZATION_RESPONSE_INVALID"):
         _generate_batch(provider, _settings(), _batch())
 
-    assert provider.models == ["xai.grok-4.3"] * 3
+    assert provider.models == ["xai.grok-4.3"] * 10
