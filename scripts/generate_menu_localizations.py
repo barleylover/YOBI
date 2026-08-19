@@ -89,6 +89,26 @@ def _validate_name(value: str, *, language_code: str) -> str:
     return name
 
 
+def _parse_localization_json(raw: str) -> Any:
+    stripped = raw.strip()
+    if stripped.startswith("```") and stripped.endswith("```"):
+        stripped = "\n".join(stripped.splitlines()[1:-1]).strip()
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+        for index, character in enumerate(stripped):
+            if character != "{":
+                continue
+            try:
+                candidate, _ = decoder.raw_decode(stripped[index:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict) and "items" in candidate:
+                return candidate
+        raise
+
+
 def _load_pending(
     connection: sqlite3.Connection, release_id: str
 ) -> tuple[str, list[dict[str, Any]], int]:
@@ -299,9 +319,7 @@ def _generate_batch(provider: Any, settings: Settings, batch: list[dict[str, Any
             try:
                 response = provider.create_response(model_id, **request)
                 raw = str(getattr(response, "output_text", "")).strip()
-                if raw.startswith("```") and raw.endswith("```"):
-                    raw = "\n".join(raw.splitlines()[1:-1]).strip()
-                result = LocalizationBatch.model_validate(json.loads(raw))
+                result = LocalizationBatch.model_validate(_parse_localization_json(raw))
                 expected = {str(item["menu_id"]) for item in batch}
                 if (
                     {item.menu_id for item in result.items} != expected

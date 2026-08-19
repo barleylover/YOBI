@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from scripts.generate_menu_localizations import _generate_batch
+from scripts.generate_menu_localizations import _generate_batch, _parse_localization_json
 
 from app.genai.contracts import GenAIErrorCode, GenAIProviderError
 
@@ -65,6 +65,12 @@ def test_invalid_english_name_retries_before_database_write() -> None:
 
     assert result.items[0].name_en == "Bibimbap"
     assert provider.models == ["xai.grok-4.3", "xai.grok-4.3"]
+
+
+def test_parser_accepts_one_schema_object_inside_provider_commentary() -> None:
+    parsed = _parse_localization_json(f"Here is the result:\n{_valid()}\nDone.")
+
+    assert parsed["items"][0]["menu_id"] == "menu-1"
 
 
 def test_rate_limit_uses_only_the_fallback_model() -> None:
