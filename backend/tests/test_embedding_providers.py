@@ -13,18 +13,20 @@ from app.rag.providers import (
 
 
 class _FakeOCIClient:
-    def __init__(self, dimension: int) -> None:
+    def __init__(self, dimension: int, *, typed_response: bool = False) -> None:
         self.dimension = dimension
+        self.typed_response = typed_response
         self.calls: list[tuple[object, object]] = []
 
     def embed_text(self, details: object, *, retry_strategy: object) -> object:
         self.calls.append((details, retry_strategy))
         inputs = list(details.inputs)
-        return SimpleNamespace(
-            data=SimpleNamespace(
-                embeddings=[[float(index)] * self.dimension for index, _text in enumerate(inputs)]
-            )
-        )
+        vectors = [[float(index)] * self.dimension for index, _text in enumerate(inputs)]
+        if self.typed_response:
+            data = SimpleNamespace(embeddings=None, embeddings_by_type={"float": vectors})
+        else:
+            data = SimpleNamespace(embeddings=vectors, embeddings_by_type=None)
+        return SimpleNamespace(data=data)
 
 
 def _oci_settings() -> Settings:
@@ -59,6 +61,16 @@ def test_oci_embedding_rejects_wrong_provider_dimensions() -> None:
 
     with pytest.raises(RuntimeError, match="OCI_EMBEDDING_DIMENSION_MISMATCH"):
         provider.embed(["menu"], "SEARCH_QUERY")
+
+
+def test_oci_embedding_reads_embed4_float_vectors_from_typed_response() -> None:
+    provider = OCIEmbeddingProvider(_oci_settings())
+    provider._client = _FakeOCIClient(provider.dimension, typed_response=True)
+
+    vectors = provider.embed(["menu"], "SEARCH_QUERY")
+
+    assert len(vectors) == 1
+    assert len(vectors[0]) == 1536
 
 
 def test_default_provider_remains_explicit_deterministic_fallback() -> None:

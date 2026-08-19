@@ -113,7 +113,12 @@ class OCIEmbeddingProvider:
             details,
             retry_strategy=oci.retry.NoneRetryStrategy(),
         )
-        return [list(vector) for vector in (response.data.embeddings or [])]
+        vectors = response.data.embeddings
+        if vectors is None:
+            embeddings_by_type = response.data.embeddings_by_type
+            if isinstance(embeddings_by_type, dict):
+                vectors = embeddings_by_type.get("float")
+        return [list(vector) for vector in (vectors or [])]
 
     def embed(self, texts: list[str], mode: EmbeddingMode) -> list[list[float]]:
         if not texts:

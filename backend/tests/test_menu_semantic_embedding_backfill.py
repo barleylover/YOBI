@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from typing import Literal
 
+from oci.exceptions import ServiceError
+
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
     "yobi_backfill_menu_semantic_embeddings",
@@ -90,3 +92,18 @@ def test_embedding_manifest_binds_catalog_provider_menu_and_semantic_text() -> N
         provider=provider,
         rows=[("menu-a", "changed"), ("menu-b", "beta")],
     )
+
+
+def test_safe_error_code_classifies_oci_status_without_message_or_request_id() -> None:
+    error = ServiceError(
+        429,
+        "TooManyRequests",
+        {"opc-request-id": "secret-request-id"},
+        "sensitive provider message",
+    )
+
+    code = backfill._safe_error_code(error)
+
+    assert code == "OCI_429_TOOMANYREQUESTS"
+    assert "sensitive" not in code
+    assert "secret-request-id" not in code

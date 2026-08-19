@@ -14,6 +14,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import sys
 import tempfile
 import time
@@ -512,6 +513,13 @@ def _safe_error_code(exc: Exception) -> str:
     if isinstance(exc, oracledb.DatabaseError) and exc.args:
         code = getattr(exc.args[0], "code", None)
         return f"ORACLE_{code}" if isinstance(code, int) else "ORACLE_DATABASE_ERROR"
+    if type(exc).__name__ == "ServiceError" and type(exc).__module__.startswith("oci."):
+        status = getattr(exc, "status", None)
+        raw_code = str(getattr(exc, "code", "SERVICE_ERROR"))
+        safe_code = re.sub(r"[^A-Za-z0-9]+", "_", raw_code).strip("_").upper()
+        if isinstance(status, int) and safe_code:
+            return f"OCI_{status}_{safe_code}"
+        return "OCI_SERVICE_ERROR"
     value = str(exc)
     if value and all(character.isupper() or character.isdigit() or character == "_" for character in value):
         return value
