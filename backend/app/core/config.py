@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     oci_genai_model: str = "xai.grok-4.3"
     oci_genai_fallback_model: str = "openai.gpt-oss-120b"
     structured_recommendation_model: str = "xai.grok-4.3"
+    restaurant_note_model: str = "openai.gpt-oss-20b"
+    menu_localization_model: str = "xai.grok-4.3"
     structured_recommendation_max_output_tokens: int = Field(default=2048, ge=64)
     structured_recommendation_max_concurrent_requests: int = Field(
         default=2, ge=1, le=8

@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+"""Resumable EN/JA menu-name generation for a synthetic enrichment release.
+
+The command is read-only unless ``--apply`` is supplied. It never activates a
+release; activation remains a separate, explicit operation.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+import sqlite3
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, ValidationError
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "backend"))
+
+from app.core.config import Settings
+from app.db.sqlite_repository import SQLiteYobiRepository
+from app.genai.contracts import GenAIErrorCode, GenAIProviderError
+from app.genai.providers import choose_genai_provider
+
+BATCH_SIZE = 10
+PROMPT_VERSION = "menu-localization-v1-wiki-bounded"
+
+
+class LocalizedName(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    menu_id: str
+    name_en: str
+    name_ja: str
+
+
+class LocalizationBatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[LocalizedName]
+
+
+SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["items"],
+    "properties": {
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["menu_id", "name_en", "name_ja"],
+                "properties": {
+                    "menu_id": {"type": "string"},
+                    "name_en": {"type": "string"},
+                    "name_ja": {"type": "string"},
+                },
+            },
+        }
+    },
+}
+
+
+def _source_hash(name_ko: str, passages: list[dict[str, str]]) -> str:
+    payload = json.dumps(
+        {"name_ko": name_ko, "passages": passages},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _validate_name(value: str, *, language_code: str) -> str:
+    name = " ".join(value.split()).strip()
+    if not name or len(name) > 200 or re.search(r"[.!?。！？\n\r]", name):
+        raise ValueError("LOCALIZED_NAME_NOT_A_FOOD_NAME")
+    if language_code == "en" and re.search(r"[가-힣]", name):
+        raise ValueError("ENGLISH_LOCALIZED_NAME_CONTAINS_HANGUL")
+    return name
+
+
+def _load_pending(
+    connection: sqlite3.Connection, release_id: str
+) -> tuple[str, list[dict[str, Any]], int]:
+    release = connection.execute(
+        "SELECT knowledge_release_id FROM synthetic_enrichment_release WHERE release_id=?",
+        (release_id,),
+    ).fetchone()
+    if release is None:
+        raise RuntimeError("SYNTHETIC_ENRICHMENT_RELEASE_NOT_FOUND")
+    knowledge_release_id = str(release["knowledge_release_id"])
+    eligible_count = int(
+        connection.execute(
+            "SELECT COUNT(*) FROM menu_wiki_eligibility WHERE knowledge_release_id=?",
+            (knowledge_release_id,),
+        ).fetchone()[0]
+    )
+    rows = connection.execute(
+        """
+        SELECT menu.menu_id,menu.name_ko
+        FROM menu_wiki_eligibility eligibility
+        JOIN menu ON menu.menu_id=eligibility.menu_id
+        WHERE eligibility.knowledge_release_id=?
+          AND (
+            NOT EXISTS (
+              SELECT 1 FROM menu_localization localization
+              WHERE localization.release_id=? AND localization.menu_id=menu.menu_id
+                AND localization.language_code='en'
+                AND localization.validation_status='VALID'
+            ) OR NOT EXISTS (
+              SELECT 1 FROM menu_localization localization
+              WHERE localization.release_id=? AND localization.menu_id=menu.menu_id
+                AND localization.language_code='ja'
+                AND localization.validation_status='VALID'
+            )
+          )
+        ORDER BY menu.menu_id
+        """,
+        (knowledge_release_id, release_id, release_id),
+    ).fetchall()
+    pending: list[dict[str, Any]] = []
+    for row in rows:
+        passages = [
+            {"evidence_id": str(passage["chunk_id"]), "content": str(passage["content"])}
+            for passage in connection.execute(
+                """
+                SELECT DISTINCT chunk.chunk_id,chunk.content
+                FROM menu_concept_membership membership
+                JOIN dish_concept_closure closure
+                  ON closure.release_id=membership.knowledge_release_id
+                 AND closure.descendant_concept_id=membership.concept_id
+                 AND closure.inherit_claims=1
+                JOIN knowledge_chunk chunk
+                  ON chunk.release_id=closure.release_id
+                 AND chunk.concept_id=closure.ancestor_concept_id
+                WHERE membership.knowledge_release_id=? AND membership.menu_id=?
+                ORDER BY chunk.chunk_id LIMIT 3
+                """,
+                (knowledge_release_id, row["menu_id"]),
+            ).fetchall()
+        ]
+        if not passages:
+            raise RuntimeError(f"WIKI_PASSAGE_REQUIRED:{row['menu_id']}")
+        pending.append(
+            {
+                "menu_id": str(row["menu_id"]),
+                "name_ko": str(row["name_ko"]),
+                "wiki_passages": passages,
+            }
+        )
+    return knowledge_release_id, pending, eligible_count
+
+
+def _generate_batch(provider: Any, settings: Settings, batch: list[dict[str, Any]]) -> tuple[LocalizationBatch, str]:
+    request: dict[str, Any] = {
+        "instructions": (
+            "Translate each Korean food menu name into English and Japanese using only the supplied "
+            "Korean name and Wiki passages. Return food names only. Never add taste, ingredient, origin, "
+            "portion, popularity, or marketing modifiers that are absent from the original name. Preserve "
+            "brand names and disambiguate only when the Wiki evidence makes the food concept explicit."
+        ),
+        "input": [{"role": "user", "content": json.dumps(batch, ensure_ascii=False)}],
+        "max_output_tokens": min(1800, provider.capabilities.max_output_tokens),
+    }
+    if provider.capabilities.structured_output:
+        request["text"] = {
+            "format": {
+                "type": "json_schema",
+                "name": "yobi_menu_localization_v1",
+                "schema": SCHEMA,
+                "strict": True,
+            }
+        }
+    models = [settings.menu_localization_model, settings.oci_genai_fallback_model]
+    for index, model_id in enumerate(models):
+        try:
+            response = provider.create_response(model_id, **request)
+            result = LocalizationBatch.model_validate(json.loads(str(response.output_text)))
+            expected = {str(item["menu_id"]) for item in batch}
+            if {item.menu_id for item in result.items} != expected or len(result.items) != len(batch):
+                raise ValueError("LOCALIZATION_BATCH_MENU_IDS_MISMATCH")
+            return result, model_id
+        except GenAIProviderError as exc:
+            if exc.code is GenAIErrorCode.RATE_LIMIT and index == 0:
+                continue
+            raise
+        except (json.JSONDecodeError, ValidationError) as exc:
+            raise ValueError("LOCALIZATION_RESPONSE_INVALID") from exc
+    raise RuntimeError("LOCALIZATION_PROVIDER_UNAVAILABLE")
+
+
+def _apply_batch(
+    connection: sqlite3.Connection,
+    *,
+    release_id: str,
+    source_by_id: dict[str, dict[str, Any]],
+    result: LocalizationBatch,
+    model_id: str,
+) -> None:
+    generated_at = datetime.now(timezone.utc).isoformat()
+    rows: list[tuple[Any, ...]] = []
+    for item in result.items:
+        source = source_by_id[item.menu_id]
+        evidence_ids = [passage["evidence_id"] for passage in source["wiki_passages"]]
+        source_hash = _source_hash(str(source["name_ko"]), source["wiki_passages"])
+        for language_code, value in (("en", item.name_en), ("ja", item.name_ja)):
+            rows.append(
+                (
+                    release_id,
+                    item.menu_id,
+                    language_code,
+                    _validate_name(value, language_code=language_code),
+                    model_id,
+                    PROMPT_VERSION,
+                    json.dumps(evidence_ids),
+                    source_hash,
+                    "VALID",
+                    generated_at,
+                )
+            )
+    connection.executemany(
+        """
+        INSERT INTO menu_localization(
+          release_id,menu_id,language_code,display_name,model_id,prompt_version,
+          wiki_evidence_ids_json,source_hash,validation_status,generated_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(release_id,menu_id,language_code) DO UPDATE SET
+          display_name=excluded.display_name,model_id=excluded.model_id,
+          prompt_version=excluded.prompt_version,
+          wiki_evidence_ids_json=excluded.wiki_evidence_ids_json,
+          source_hash=excluded.source_hash,validation_status=excluded.validation_status,
+          generated_at=excluded.generated_at
+        """,
+        rows,
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sqlite", type=Path, default=ROOT / "backend/data/yobi_demo.db")
+    parser.add_argument("--release-id", required=True)
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--max-batches", type=int)
+    args = parser.parse_args()
+
+    SQLiteYobiRepository(args.sqlite).initialize()
+    with sqlite3.connect(args.sqlite) as connection:
+        connection.row_factory = sqlite3.Row
+        _, pending, eligible_count = _load_pending(connection, args.release_id)
+    planned_batches = (len(pending) + BATCH_SIZE - 1) // BATCH_SIZE
+    if not args.apply:
+        print(json.dumps({"release_id": args.release_id, "pending_menus": len(pending), "planned_batches": planned_batches, "applied": False}, sort_keys=True))
+        return
+
+    settings = Settings()
+    provider = choose_genai_provider(settings)
+    completed_batches = 0
+    for offset in range(0, len(pending), BATCH_SIZE):
+        if args.max_batches is not None and completed_batches >= args.max_batches:
+            break
+        batch = pending[offset : offset + BATCH_SIZE]
+        result, model_id = _generate_batch(provider, settings, batch)
+        with sqlite3.connect(args.sqlite) as connection:
+            _apply_batch(
+                connection,
+                release_id=args.release_id,
+                source_by_id={str(item["menu_id"]): item for item in batch},
+                result=result,
+                model_id=model_id,
+            )
+        completed_batches += 1
+
+    with sqlite3.connect(args.sqlite) as connection:
+        valid_count = int(
+            connection.execute(
+                """
+                SELECT COUNT(*) FROM menu_localization
+                WHERE release_id=? AND validation_status='VALID'
+                  AND language_code IN ('ko','en','ja')
+                """,
+                (args.release_id,),
+            ).fetchone()[0]
+        )
+        ready = valid_count == eligible_count * 3
+        if ready:
+            connection.execute(
+                "UPDATE synthetic_enrichment_release SET status='READY' WHERE release_id=?",
+                (args.release_id,),
+            )
+    print(json.dumps({"release_id": args.release_id, "completed_batches": completed_batches, "valid_localizations": valid_count, "expected_localizations": eligible_count * 3, "ready": ready, "applied": True}, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()

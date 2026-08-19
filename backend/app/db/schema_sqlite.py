@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS user_profile (
   profile_id TEXT PRIMARY KEY,
   preferred_language TEXT NOT NULL,
   nationality TEXT NOT NULL,
+  country_code TEXT,
   age_band TEXT NOT NULL,
   gender TEXT NOT NULL,
   religion_selection TEXT NOT NULL,
@@ -380,6 +381,7 @@ CREATE TABLE IF NOT EXISTS cart_item (
   line_total INTEGER NOT NULL,
   user_note TEXT NOT NULL DEFAULT '',
   korean_note TEXT NOT NULL DEFAULT '',
+  note_translation_id TEXT REFERENCES restaurant_note_translation(translation_id),
   created_at TEXT NOT NULL
 );
 
@@ -702,6 +704,7 @@ CREATE TABLE IF NOT EXISTS recommendation_release_family (
   feature_manifest_sha256 TEXT NOT NULL DEFAULT '0000000000000000000000000000000000000000000000000000000000000000',
   ranking_policy_version TEXT NOT NULL DEFAULT 'legacy-llm-rank-v2',
   ranking_policy_sha256 TEXT NOT NULL DEFAULT '0000000000000000000000000000000000000000000000000000000000000000',
+  synthetic_enrichment_release_id TEXT REFERENCES synthetic_enrichment_release(release_id),
   status TEXT NOT NULL CHECK (status IN ('LOADING','READY','ACTIVE','RETIRED')),
   activated_at TEXT
 );
@@ -888,6 +891,7 @@ CREATE TABLE IF NOT EXISTS structured_recommendation_request (
   finalized_at TEXT,
   dispatch_count INTEGER NOT NULL DEFAULT 0 CHECK (dispatch_count BETWEEN 0 AND 1),
   failure_code TEXT,
+  client_cancelled_at TEXT,
   created_at TEXT NOT NULL,
   dispatched_at TEXT,
   completed_at TEXT,
@@ -896,10 +900,182 @@ CREATE TABLE IF NOT EXISTS structured_recommendation_request (
     REFERENCES session_recommendation_criteria(session_id, criteria_version)
 );
 
+CREATE TABLE IF NOT EXISTS synthetic_enrichment_release (
+  release_id TEXT PRIMARY KEY,
+  catalog_release_id TEXT NOT NULL,
+  knowledge_release_id TEXT NOT NULL REFERENCES knowledge_release(release_id),
+  seed_value TEXT NOT NULL,
+  generator_version TEXT NOT NULL,
+  manifest_sha256 TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('LOADING','READY','ACTIVE','RETIRED')),
+  created_at TEXT NOT NULL,
+  activated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS synthetic_enrichment_runtime_state (
+  state_key TEXT PRIMARY KEY CHECK (state_key = 'ACTIVE'),
+  active_release_id TEXT NOT NULL REFERENCES synthetic_enrichment_release(release_id),
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS synthetic_country_profile (
+  release_id TEXT NOT NULL REFERENCES synthetic_enrichment_release(release_id),
+  country_code TEXT NOT NULL,
+  spice_baseline INTEGER NOT NULL CHECK (spice_baseline BETWEEN 1 AND 5),
+  affinity_score REAL NOT NULL CHECK (affinity_score BETWEEN 0 AND 1),
+  affinity_json TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY(release_id, country_code)
+);
+
+CREATE TABLE IF NOT EXISTS synthetic_menu_profile (
+  release_id TEXT NOT NULL REFERENCES synthetic_enrichment_release(release_id),
+  menu_id TEXT NOT NULL REFERENCES menu(menu_id),
+  spice_level INTEGER NOT NULL CHECK (spice_level BETWEEN 1 AND 5),
+  halal_fit INTEGER NOT NULL CHECK (halal_fit IN (0,1)),
+  vegan_fit INTEGER NOT NULL CHECK (vegan_fit IN (0,1)),
+  source_type TEXT NOT NULL DEFAULT 'SYNTHETIC_DEMO',
+  generator_version TEXT NOT NULL,
+  seed_hash TEXT NOT NULL,
+  PRIMARY KEY(release_id, menu_id)
+);
+
+CREATE TABLE IF NOT EXISTS synthetic_option_profile (
+  release_id TEXT NOT NULL REFERENCES synthetic_enrichment_release(release_id),
+  option_item_id TEXT NOT NULL REFERENCES menu_option_item(option_item_id),
+  halal_conflict INTEGER NOT NULL CHECK (halal_conflict IN (0,1)),
+  vegan_conflict INTEGER NOT NULL CHECK (vegan_conflict IN (0,1)),
+  source_type TEXT NOT NULL DEFAULT 'SYNTHETIC_DEMO',
+  seed_hash TEXT NOT NULL,
+  PRIMARY KEY(release_id, option_item_id)
+);
+
+CREATE TABLE IF NOT EXISTS synthetic_menu_country_preference (
+  release_id TEXT NOT NULL REFERENCES synthetic_enrichment_release(release_id),
+  menu_id TEXT NOT NULL REFERENCES menu(menu_id),
+  country_code TEXT NOT NULL,
+  preference_percent INTEGER NOT NULL CHECK (preference_percent BETWEEN 0 AND 100),
+  sample_size INTEGER NOT NULL CHECK (sample_size > 0),
+  PRIMARY KEY(release_id, menu_id, country_code),
+  FOREIGN KEY(release_id, country_code)
+    REFERENCES synthetic_country_profile(release_id, country_code)
+);
+
+CREATE TABLE IF NOT EXISTS synthetic_review_snippet (
+  review_id TEXT PRIMARY KEY,
+  release_id TEXT NOT NULL REFERENCES synthetic_enrichment_release(release_id),
+  menu_id TEXT NOT NULL REFERENCES menu(menu_id),
+  topic TEXT NOT NULL CHECK (topic IN ('TASTE','TEXTURE','VALUE','PACKAGING','CAVEAT')),
+  rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+  review_text TEXT NOT NULL,
+  source_type TEXT NOT NULL DEFAULT 'SYNTHETIC_DEMO',
+  display_order INTEGER NOT NULL CHECK (display_order >= 0),
+  seed_hash TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS menu_localization (
+  release_id TEXT NOT NULL REFERENCES synthetic_enrichment_release(release_id),
+  menu_id TEXT NOT NULL REFERENCES menu(menu_id),
+  language_code TEXT NOT NULL CHECK (language_code IN ('ko','en','ja')),
+  display_name TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  prompt_version TEXT NOT NULL,
+  wiki_evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+  source_hash TEXT NOT NULL,
+  validation_status TEXT NOT NULL CHECK (validation_status IN ('VALID','REJECTED')),
+  generated_at TEXT NOT NULL,
+  PRIMARY KEY(release_id, menu_id, language_code)
+);
+
+CREATE TABLE IF NOT EXISTS option_group_localization (
+  release_id TEXT NOT NULL REFERENCES synthetic_enrichment_release(release_id),
+  option_group_id TEXT NOT NULL REFERENCES menu_option_group(option_group_id),
+  language_code TEXT NOT NULL CHECK (language_code IN ('ko','en','ja')),
+  display_name TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  PRIMARY KEY(release_id, option_group_id, language_code)
+);
+
+CREATE TABLE IF NOT EXISTS option_item_localization (
+  release_id TEXT NOT NULL REFERENCES synthetic_enrichment_release(release_id),
+  option_item_id TEXT NOT NULL REFERENCES menu_option_item(option_item_id),
+  language_code TEXT NOT NULL CHECK (language_code IN ('ko','en','ja')),
+  display_name TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  PRIMARY KEY(release_id, option_item_id, language_code)
+);
+
+CREATE TABLE IF NOT EXISTS menu_presentation_cache (
+  cache_key TEXT PRIMARY KEY,
+  release_id TEXT NOT NULL REFERENCES synthetic_enrichment_release(release_id),
+  menu_id TEXT NOT NULL REFERENCES menu(menu_id),
+  language_code TEXT NOT NULL CHECK (language_code IN ('ko','en','ja')),
+  country_code TEXT NOT NULL,
+  localized_title TEXT NOT NULL,
+  short_explanation TEXT NOT NULL,
+  long_explanation TEXT NOT NULL,
+  review_summary TEXT NOT NULL,
+  evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+  review_ids_json TEXT NOT NULL DEFAULT '[]',
+  model_id TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS recommendation_provider_attempt (
+  session_id TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  attempt_no INTEGER NOT NULL CHECK (attempt_no BETWEEN 1 AND 9),
+  provider TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('STARTED','SUCCEEDED','FAILED')),
+  error_code TEXT,
+  latency_ms INTEGER,
+  input_tokens INTEGER,
+  output_tokens INTEGER,
+  created_at TEXT NOT NULL,
+  completed_at TEXT,
+  PRIMARY KEY(session_id, request_id, attempt_no),
+  FOREIGN KEY(session_id, request_id)
+    REFERENCES structured_recommendation_request(session_id, request_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS restaurant_note_translation (
+  translation_id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES chat_session(session_id) ON DELETE CASCADE,
+  source_language TEXT NOT NULL,
+  source_text TEXT NOT NULL,
+  korean_text TEXT,
+  back_translation TEXT,
+  provider TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('SUCCEEDED','FAILED')),
+  error_code TEXT,
+  request_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_rec_criteria_latest
   ON session_recommendation_criteria(session_id, criteria_version DESC);
 CREATE INDEX IF NOT EXISTS idx_rec_request_status
   ON structured_recommendation_request(session_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_provider_attempt_request
+  ON recommendation_provider_attempt(session_id, request_id, attempt_no);
+CREATE INDEX IF NOT EXISTS idx_note_translation_session
+  ON restaurant_note_translation(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_synthetic_menu_profile_fit
+  ON synthetic_menu_profile(release_id, halal_fit, vegan_fit, spice_level, menu_id);
+CREATE INDEX IF NOT EXISTS idx_synthetic_country_menu
+  ON synthetic_menu_country_preference(release_id, country_code, menu_id);
+CREATE INDEX IF NOT EXISTS idx_synthetic_review_menu
+  ON synthetic_review_snippet(release_id, menu_id, display_order);
+CREATE INDEX IF NOT EXISTS idx_menu_localization_lookup
+  ON menu_localization(release_id, language_code, menu_id);
+CREATE INDEX IF NOT EXISTS idx_menu_presentation_lookup
+  ON menu_presentation_cache(release_id, menu_id, language_code, country_code);
 CREATE INDEX IF NOT EXISTS idx_menu_pref_feature_lookup
   ON menu_preference_feature(
     knowledge_release_id, category_code, option_code, support_status, menu_id
