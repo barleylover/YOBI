@@ -29,7 +29,10 @@ from app.db.sqlite_repository import SQLiteYobiRepository
 from app.genai.contracts import GenAIErrorCode, GenAIProviderError
 from app.genai.providers import choose_genai_provider
 
-BATCH_SIZE = 10
+# OCI Generative AI can truncate an otherwise schema-valid response when a
+# multi-menu batch hits provider-side response limits. Singleton requests keep
+# the resumable job reliable; concurrency still provides deployment throughput.
+BATCH_SIZE = 1
 SCHEMA_ATTEMPTS_PER_MODEL = 10
 WIKI_PASSAGES_PER_MENU = 1
 PROMPT_VERSION = "menu-localization-v1-wiki-bounded"
