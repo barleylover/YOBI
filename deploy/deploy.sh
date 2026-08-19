@@ -584,6 +584,18 @@ restore_old_release() {
 }
 
 deployment_complete=false
+cleanup_failed_candidate_release() {
+  local current_release
+  [[ "$deployment_complete" != true ]] || return 0
+  [[ -d "$new_release" && ! -L "$new_release" ]] || return 0
+  validate_release_path "$new_release" || return 1
+  current_release="$(readlink -f /opt/yobi/current 2>/dev/null || true)"
+  [[ "$current_release" != "$new_release" ]] || return 1
+  sudo rm -rf --one-file-system -- "$new_release" || return 1
+  [[ ! -e "$new_release" ]] || return 1
+  printf 'Removed failed candidate release_id=%s.\n' "$release_id" >&2
+}
+
 verify_old_release_on_failure() {
   local status="$?"
   local current_after_failure
@@ -609,6 +621,9 @@ verify_old_release_on_failure() {
     if ! restore_knowledge_release || ! restore_recommendation_release; then
       printf 'CRITICAL: failed deployment could not restore prior release pointers.\n' >&2
     fi
+  fi
+  if ! cleanup_failed_candidate_release; then
+    printf 'WARNING: failed candidate release cleanup could not be verified.\n' >&2
   fi
   exit "$status"
 }
