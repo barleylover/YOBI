@@ -126,6 +126,24 @@ describe("welcome and address flow", () => {
     expect(useSessionStore.getState().draftLanguage).toBe("العربية");
   });
 
+  it("starts a new journey in the newly selected language instead of a stale profile language", async () => {
+    useSessionStore.setState({
+      profile: { ...profile, preferred_language: "한국어" },
+      session,
+      draftLanguage: "日本語",
+      draftCountry: "Japan",
+    });
+    renderWelcome();
+
+    fireEvent.click(screen.getByRole("button", { name: "始める" }));
+
+    expect(await screen.findByText("Profile route")).toBeInTheDocument();
+    expect(useSessionStore.getState().profile).toBeNull();
+    expect(useSessionStore.getState().session).toBeNull();
+    expect(useSessionStore.getState().draftLanguage).toBe("日本語");
+    expect(useSessionStore.getState().draftCountry).toBe("Japan");
+  });
+
   it("redirects the retired start route safely while preserving edit and return parameters", async () => {
     resetStore();
     useSessionStore.setState({ profile, session });

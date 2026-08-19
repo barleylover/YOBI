@@ -12,6 +12,7 @@ export function WelcomePage() {
   const language = useSessionStore((state) => state.draftLanguage);
   const country = useSessionStore((state) => state.draftCountry);
   const updateProfile = useSessionStore((state) => state.updateProfile);
+  const clearSession = useSessionStore((state) => state.clear);
   const query = new URLSearchParams(location.search);
   const editMode = query.get("edit") === "1" && Boolean(profile);
   const returnTo = query.get("returnTo") || "/";
@@ -36,6 +37,7 @@ export function WelcomePage() {
       navigate(`/profile?edit=1&returnTo=${encodeURIComponent(returnTo)}`);
       return;
     }
+    clearSession();
     navigate("/profile");
   }
 
