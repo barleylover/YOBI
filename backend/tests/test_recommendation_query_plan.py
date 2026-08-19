@@ -25,6 +25,12 @@ def test_oracle_index_inventory_queries_every_required_v2_index() -> None:
         assert f"'{index_name}'" in source
 
 
+def test_staged_context_uses_oracle_embedding_identity_for_oracle_gate() -> None:
+    source = inspect.getsource(query_plan._representative_context)
+
+    assert "build_external_plan(cursor, oracle=oracle)" in source
+
+
 def test_oracle_plan_accepts_feature_and_membership_index_access() -> None:
     object_names = {
         "CONCEPT_PREFERENCE_SUPPORT",

@@ -157,7 +157,7 @@ def _representative_context(
     scope: str,
 ) -> tuple[str, str, str, str, str]:
     if scope == "staged":
-        external_plan = build_external_plan(cursor)
+        external_plan = build_external_plan(cursor, oracle=oracle)
         staged_verification = verify_release_family(
             cursor,
             oracle,
