@@ -126,6 +126,10 @@ export const api = {
     request<Profile>("/api/v1/profiles", { method: "POST", body: JSON.stringify(body) }),
   updateProfile: (profileId: string, body: Record<string, unknown>) =>
     request<Profile>(`/api/v1/profiles/${profileId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  // Cascades on the server: every session of the profile is reset and deleted
+  // (cart, messages, recommendation state) before the profile row is removed.
+  deleteProfile: (profileId: string) =>
+    request<void>(`/api/v1/profiles/${profileId}`, { method: "DELETE" }, { timeoutMs: 8_000 }),
   createSession: (profileId: string) =>
     request<Session>("/api/v1/sessions", {
       method: "POST",

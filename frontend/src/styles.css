@@ -644,7 +644,7 @@ fieldset { margin: 22px 0; padding: 0; border: 0; }
   --shadow: 0 12px 30px rgba(25, 31, 40, .08);
 }
 
-html, body { color: var(--ink); background: #e8ecf1; }
+html, body { color: var(--ink); background: var(--app-backdrop); }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline-color: rgba(250, 0, 80, .34); }
 .primary-button, .secondary-button, .text-button { border-radius: 14px; font-weight: 800; }
 .primary-button { color: white; background: var(--coral); box-shadow: none; }
@@ -990,4 +990,125 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .figma-chat-shell .structured-menu-title-row > strong { margin: 0; }
   .result-action-rail { width: calc(100% - 20px); gap: 4px; }
   .result-action-rail button { padding-inline: 6px; font-size: 9.5px; }
+}
+
+/* ================================================================
+   Responsive layout corrections (redesign_correction)
+   Flexbox / Grid / relative units / media queries layered on top of
+   the Figma mobile frame. Kept last so it wins the cascade.
+   ================================================================ */
+
+/* (5) border-box everywhere so padding and border never inflate a card. */
+*, *::before, *::after { box-sizing: border-box; }
+
+:root {
+  --app-frame: 26.875rem;   /* 430px design frame, in a relative unit */
+  --app-backdrop: #e8ecf1;  /* gutter beside the frame on wide screens */
+  --card-max: 21rem;        /* menu card ceiling */
+  --card-min: 14rem;        /* menu card floor */
+  --gutter: clamp(0.75rem, 3.5vw, 1.5rem);
+}
+
+/* (1) Background covers the viewport at any ratio.
+   The backdrop colour is already set further up; this restates it through
+   the token and upgrades the height to dvh, so the fill tracks the mobile
+   URL bar instead of the taller-than-visible 100vh. vh stays as the
+   fallback for engines without dvh. */
+html { min-height: 100%; background: var(--app-backdrop); }
+body { min-height: 100vh; min-height: 100dvh; background: var(--app-backdrop); }
+
+/* #root carries no styles of its own, so a route <main> that dropped its
+   own min-height would leave the backdrop short. This flex chain makes the
+   route element stretch to the viewport regardless. */
+#root { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
+/* grow to fill, never shrink below content (shrinking would push long
+   pages out of their own background) */
+#root > * { flex: 1 0 auto; }
+
+/* The chat route is its own frame (it has no wrapper element), so it
+   paints the frame surface while body paints the backdrop. */
+.figma-chat-shell {
+  width: min(100%, var(--app-frame));
+  margin-inline: auto;
+  background: var(--canvas);
+}
+
+/* (2)(3) Menu card: relative sizing with explicit min/max, centred,
+   and a fixed internal running order. */
+.figma-chat-shell .card-stack {
+  width: 100%;
+  max-width: var(--card-max);
+  min-width: 0;
+  margin-inline: auto;
+}
+
+/* Equal-height carousel items: every card matches the tallest one, so
+   swiping does not resize the bubble. */
+.figma-chat-shell .structured-menu-carousel { align-items: stretch; }
+
+/* Rows: strip / artwork / content. Content takes the remaining space so
+   the card bottom is flush on every slide. */
+.figma-chat-shell .structured-menu-card {
+  grid-template-rows: auto auto 1fr;
+  min-width: 0;
+  border-radius: 0 0 clamp(0.75rem, 3vw, 1.125rem) clamp(0.75rem, 3vw, 1.125rem);
+}
+
+/* The strip now holds a single label, so start-align it rather than
+   leaving space-between to stretch one child across the row. */
+.menu-card-strip { justify-content: flex-start; }
+
+/* Artwork keeps its proportion instead of a hard 132px height.
+   12/5 reproduces the design height at the design width and scales from there.
+   The ratio sits on the image, not the wrapper: a percentage height against
+   an aspect-ratio-derived parent height collapses in some engines, so the
+   image owns its own box. */
+.figma-chat-shell .menu-artwork {
+  height: auto;
+  min-height: 0;
+  display: grid;
+  overflow: hidden;
+}
+.figma-chat-shell .menu-artwork img {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 12 / 5;
+  max-height: clamp(6.5rem, 34vw, 10.5rem);
+  object-fit: cover;
+}
+
+/* Internal element order is pinned: text flows, the CTA is always last
+   and always sits on the card floor. */
+.figma-chat-shell .structured-menu-content {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0;
+}
+.figma-chat-shell .structured-menu-content > .primary-button { margin-top: auto; }
+
+/* Long menu names and merchant names wrap instead of widening the card. */
+.figma-chat-shell .structured-menu-title-row { min-width: 0; }
+.figma-chat-shell .structured-menu-title-row > div { min-width: 0; }
+.figma-chat-shell .structured-menu-title-row h2,
+.figma-chat-shell .structured-menu-title-row p { overflow-wrap: anywhere; }
+
+/* Fact chips wrap onto new rows rather than overflowing horizontally. */
+.figma-chat-shell .structured-menu-facts { display: flex; flex-wrap: wrap; }
+
+/* (4) Tablet and up: the frame is centred on the backdrop and the
+   carousel may use the extra room, still bounded by --card-max. */
+@media (min-width: 431px) {
+  .figma-chat-shell .card-stack { max-width: min(100%, var(--card-max)); }
+}
+
+/* (4) Narrow phones: give the card the full bubble width so text keeps
+   a readable measure. */
+@media (max-width: 430px) {
+  .figma-chat-shell .card-stack { max-width: 100%; }
+}
+
+@media (max-width: 360px) {
+  .figma-chat-shell .card-stack { max-width: 100%; min-width: var(--card-min); }
+  .figma-chat-shell .menu-artwork { max-height: clamp(6rem, 32vw, 8rem); }
 }

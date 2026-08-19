@@ -162,14 +162,13 @@ export function RecommendationResults({
               setActiveIndex(carouselIndexFromOffset(element, batch.recommendations.length - 1));
             }}
           >
-            {batch.recommendations.map((item, index) => {
+            {batch.recommendations.map((item) => {
               const evidenceVisible = evidenceOpen.has(item.menu.menu_id);
               const foodDescription = item.description || item.menu.cultural_description || item.menu.description;
               return (
                 <article className="structured-menu-card" key={item.menu.menu_id} data-testid={`menu-${item.menu.menu_id}`}>
                   <header className="menu-card-strip">
                     <strong>YOBI PICK ARRIVED</strong>
-                    <span>{index + 1} / {batch.recommendations.length}</span>
                   </header>
                   <div className="menu-artwork">
                     <img src={item.menu.image_url || YOBI_FOOD_ILLUSTRATION} alt="" aria-hidden="true" />

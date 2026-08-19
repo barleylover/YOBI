@@ -1,6 +1,6 @@
 import { ArrowLeft, CheckCircle2, ExternalLink, ShoppingBag } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Link, Navigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import { actionableError, api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import { asSupportedLanguage } from "../lib/locale";
@@ -12,11 +12,30 @@ export function HandoffPage() {
   const { language, locale, journeyCopy, copy: uiCopy } = useI18n();
   const copy = getProductCopy(asSupportedLanguage(language)).handoff;
   const session = useSessionStore((state) => state.session);
+  const profile = useSessionStore((state) => state.profile);
   const addressRefId = useSessionStore((state) => state.addressRefId);
+  const resetAll = useSessionStore((state) => state.resetAll);
+  const navigate = useNavigate();
   const [cart, setCart] = useState<CartPreview | null>(null);
   const [loading, setLoading] = useState(true);
   const [ended, setEnded] = useState(false);
   const [error, setError] = useState("");
+  const [resetting, setResetting] = useState(false);
+
+  // Ends the demo: deletes the visitor's server-side records (the profile
+  // delete cascades through sessions, cart and messages), wipes every client
+  // cache, then returns to the untouched language/country screen so the next
+  // visitor starts clean.
+  async function endDemo() {
+    setResetting(true);
+    const profileId = profile?.profile_id;
+    if (profileId) {
+      // Best effort: a failed cleanup must never trap a visitor on this screen.
+      await api.deleteProfile(profileId).catch(() => undefined);
+    }
+    resetAll();
+    navigate("/", { replace: true });
+  }
 
   useEffect(() => {
     if (!session) return;
@@ -69,7 +88,9 @@ export function HandoffPage() {
             <div className="handoff-icon complete" aria-hidden="true"><CheckCircle2 size={38} /></div>
             <h1>{copy.done}</h1>
             <p>{copy.boundary}</p>
-            <Link className="secondary-button full" to={`/chat/${session.session_id}`}>{copy.back}</Link>
+            <button className="secondary-button full" type="button" disabled={resetting} onClick={endDemo}>
+              {copy.back}
+            </button>
           </section>
         )}
       </section>
