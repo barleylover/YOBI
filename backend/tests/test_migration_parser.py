@@ -13,12 +13,27 @@ SPEC.loader.exec_module(migrate)
 
 
 def test_split_statements_preserves_plsql_terminator() -> None:
-    sql = "SELECT 1 FROM dual;\n-- +YOBI STATEMENT\nBEGIN\n  NULL;\nEND;"
+    sql = (
+        "SELECT 1 FROM dual;\n-- +YOBI STATEMENT\n"
+        "-- leading migration rationale\nBEGIN\n  NULL;\nEND;"
+    )
 
     statements = migrate.split_statements(sql)
 
     assert statements[0] == "SELECT 1 FROM dual"
     assert statements[1].endswith("END;")
+
+
+def test_wiki_eligibility_migration_preserves_every_plsql_terminator() -> None:
+    path = ROOT / "database" / "migrations" / "014_wiki_eligibility_indexes.sql"
+    statements = migrate.split_statements(path.read_text(encoding="utf-8"))
+
+    assert len(statements) == 7
+    assert all(
+        statement.endswith("END;")
+        for statement in statements
+        if "BEGIN" in statement and "EXECUTE IMMEDIATE" in statement
+    )
 
 
 def test_three_level_spice_migration_is_append_only_and_parseable() -> None:
