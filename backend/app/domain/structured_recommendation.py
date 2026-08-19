@@ -186,6 +186,7 @@ class RecommendationRequestRecord(BaseModel):
     ranking_trace_json: dict[str, Any] = Field(default_factory=dict)
     ranking_policy_version: str = "legacy-llm-rank-v2"
     support_manifest_sha256: str = "0" * 64
+    feature_manifest_sha256: str = "0" * 64
     finalized_at: datetime | None = None
     dispatch_count: int = Field(default=0, ge=0, le=1)
     failure_code: str | None = None
@@ -228,6 +229,7 @@ class RecommendationReleaseFamily(BaseModel):
     embedding_model: str
     embedding_version: str
     support_manifest_sha256: str = "0" * 64
+    feature_manifest_sha256: str = "0" * 64
     ranking_policy_version: str = "legacy-llm-rank-v2"
     ranking_policy_sha256: str = "0" * 64
     status: Literal["LOADING", "READY", "ACTIVE", "RETIRED"]
@@ -263,7 +265,9 @@ class EvidencePoolItem(BaseModel):
     vegan_status: VeganEvidenceStatus | None = None
     vegan_warning: str | None = None
     retrieval_score: float = 0.0
-    server_rank: int | None = Field(default=None, ge=1, le=5)
+    # Repository retrieval can retain the complete 100-menu candidate union.
+    # The service rewrites this to 1..15 when it freezes the LLM shortlist.
+    server_rank: int | None = Field(default=None, ge=1, le=100)
     explicit_score: float = Field(default=0.0, ge=0.0, le=1.0)
     semantic_score: float = Field(default=0.0, ge=0.0, le=1.0)
     min_category_support: float = Field(default=0.0, ge=0.0, le=1.0)

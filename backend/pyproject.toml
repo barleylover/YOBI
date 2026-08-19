@@ -17,6 +17,7 @@ dependencies = [
   "httpx>=0.28,<1",
   "openai>=1.99,<2",
   "oracledb>=3.3,<4",
+  "oci>=2.161,<3",
   "Pillow>=11.3,<12",
 ]
 

@@ -1,0 +1,41 @@
+{
+  "baseline_holdout": {
+    "hard_constraint_violation_count": 0,
+    "max_latency_ms": 5373.677,
+    "median_latency_ms": 4150.4305,
+    "ndcg_at_3": 0.186085,
+    "negative_false_positive_rate": 0.6,
+    "positive_three_result_coverage": 1,
+    "precision_at_3": 0.278788,
+    "query_count": 60,
+    "recall_at_20": 0.09176
+  },
+  "bilingual_pair_top20_set_equal_rate": 1,
+  "candidate_holdout": {
+    "hard_constraint_violation_count": 0,
+    "max_latency_ms": 2673.824875,
+    "median_latency_ms": 1839.537042,
+    "ndcg_at_3": 1.0,
+    "negative_false_positive_rate": 0,
+    "positive_three_result_coverage": 1,
+    "precision_at_3": 1.0,
+    "query_count": 60,
+    "recall_at_20": 0.922076
+  },
+  "candidate_tune": {
+    "hard_constraint_violation_count": 0,
+    "max_latency_ms": 2651.544792,
+    "median_latency_ms": 1783.968,
+    "ndcg_at_3": 1.0,
+    "negative_false_positive_rate": 0,
+    "positive_three_result_coverage": 0.984,
+    "precision_at_3": 0.994667,
+    "query_count": 140,
+    "recall_at_20": 0.939737
+  },
+  "label_manifest_sha256": "3d93ea9db9bfce61c451480d00d48460a5066b662005c16c295346cd84dce4ac",
+  "label_policy_version": "source-evidence-silver-v2",
+  "label_status": "SILVER_NOT_RELEASE_APPROVAL",
+  "schema_version": "1",
+  "suite_version": "yobi-recommendation-golden-v2-2026-08-18-r4"
+}

@@ -871,7 +871,7 @@ def _run_transcripts(
     transcripts = _require_list(fixture["transcripts"], "transcripts")
     recorder.metrics["transcript_count"] = len(transcripts)
     settings = Settings(
-        _env_file=None,  # type: ignore[call-arg]
+        _env_file=None,
         oci_genai_api_key=SecretStr(""),
         demo_fallback_enabled=True,
     )

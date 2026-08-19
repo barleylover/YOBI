@@ -51,6 +51,7 @@ def test_runtime_environment_can_resume_and_upgrade_release_policy(
                 'DB_PASSWORD="synthetic-password"',
                 'OCI_GENAI_API_KEY="synthetic-api-key"',
                 'DEMO_CONTROL_TOKEN="synthetic-token"',
+                'OCI_COMPARTMENT_ID="ocid1.compartment.synthetic"',
                 'LLM_MAX_RETRIES="0"',
             ]
         )
@@ -64,12 +65,16 @@ def test_runtime_environment_can_resume_and_upgrade_release_policy(
     assert bootstrap.load_runtime_env() is True
     assert os.environ["ADB_DSN"] == "synthetic-dsn"
     persisted = runtime_env.read_text(encoding="utf-8")
-    assert 'LLM_MAX_RETRIES="1"' in persisted
-    assert 'LLM_MAX_RETRIES="0"' not in persisted
-    assert 'EMBEDDING_PROVIDER="deterministic"' in persisted
-    assert 'STRUCTURED_RECOMMENDATION_MODEL="openai.gpt-oss-120b"' in persisted
+    assert persisted.count('LLM_MAX_RETRIES="0"') == 1
+    assert 'EMBEDDING_PROVIDER="oci"' in persisted
+    assert 'OCI_EMBED_AUTH="instance_principal"' in persisted
+    assert 'STRUCTURED_RECOMMENDATION_MODEL="xai.grok-4.3"' in persisted
     assert 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="2048"' in persisted
     assert 'STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS="2"' in persisted
+    assert 'RECOMMENDATION_CANDIDATE_LIMIT="100"' in persisted
+    assert 'RECOMMENDATION_LLM_SHORTLIST_LIMIT="15"' in persisted
+    assert 'RECOMMENDATION_LLM_PASSAGES_PER_MENU="2"' in persisted
+    assert 'RECOMMENDATION_LLM_SELECTION_ENABLED="true"' in persisted
     assert 'DB_PASSWORD="synthetic-password"' in persisted
     assert stat.S_IMODE(runtime_env.stat().st_mode) == 0o600
     captured = capsys.readouterr()
@@ -83,30 +88,40 @@ def test_runtime_environment_can_resume_and_upgrade_release_policy(
         "DEMO_CONTROL_TOKEN",
         "LLM_MAX_RETRIES",
         "EMBEDDING_PROVIDER",
+        "OCI_EMBED_AUTH",
+        "OCI_COMPARTMENT_ID",
         "STRUCTURED_RECOMMENDATION_MODEL",
         "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS",
         "STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS",
+        "RECOMMENDATION_CANDIDATE_LIMIT",
+        "RECOMMENDATION_LLM_SHORTLIST_LIMIT",
+        "RECOMMENDATION_LLM_PASSAGES_PER_MENU",
+        "RECOMMENDATION_LLM_SELECTION_ENABLED",
+        "OCI_GENAI_STRUCTURED_OUTPUT_ENABLED",
+        "OCI_GENAI_STREAMING_ENABLED",
     ):
         os.environ.pop(key, None)
 
 
 def test_retry_policy_matches_settings_and_runtime_restore() -> None:
-    assert bootstrap.Settings.model_fields["llm_max_retries"].default == 1
-    assert "quote('1')" in inspect.getsource(bootstrap.write_env)
-    assert '"LLM_MAX_RETRIES": "1"' in inspect.getsource(bootstrap.main)
+    assert bootstrap.Settings.model_fields["llm_max_retries"].default == 0
+    assert "quote('0')" in inspect.getsource(bootstrap.write_env)
+    assert '"LLM_MAX_RETRIES": "0"' in inspect.getsource(bootstrap.main)
     restore = (ROOT / "deploy" / "restore_runtime_env.sh").read_text(encoding="utf-8")
-    assert "LLM_MAX_RETRIES=\"1\"" in restore
-    assert "LLM_MAX_RETRIES=\"0\"" not in restore
+    assert "LLM_MAX_RETRIES=\"0\"" in restore
+    assert "LLM_MAX_RETRIES=\"1\"" not in restore
     assert bootstrap.Settings.model_fields["embedding_provider"].default == "deterministic"
-    assert "quote('deterministic')" in inspect.getsource(bootstrap.write_env)
-    assert 'EMBEDDING_PROVIDER="deterministic"' in restore
+    assert "quote('oci')" in inspect.getsource(bootstrap.write_env)
+    assert 'EMBEDDING_PROVIDER="oci"' in restore
+    assert 'OCI_EMBED_AUTH="instance_principal"' in restore
+    assert "OCI_COMPARTMENT_ID=" in restore
     assert 'OCI_GENAI_MAX_INPUT_TOKENS="131072"' in restore
     assert 'LLM_MAX_INPUT_TOKENS="131072"' in restore
     assert 'OCI_GENAI_MAX_OUTPUT_TOKENS="4096"' in restore
     assert 'LLM_MAX_OUTPUT_TOKENS="4096"' in restore
     assert (
         bootstrap.Settings.model_fields["structured_recommendation_model"].default
-        == "openai.gpt-oss-120b"
+        == "xai.grok-4.3"
     )
     assert (
         bootstrap.Settings.model_fields[
@@ -122,15 +137,21 @@ def test_retry_policy_matches_settings_and_runtime_restore() -> None:
     )
     write_source = inspect.getsource(bootstrap.write_env)
     main_source = inspect.getsource(bootstrap.main)
-    assert "STRUCTURED_RECOMMENDATION_MODEL={quote('openai.gpt-oss-120b')}" in write_source
+    assert "STRUCTURED_RECOMMENDATION_MODEL={quote('xai.grok-4.3')}" in write_source
     assert "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS={quote('2048')}" in write_source
     assert "STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS={quote('2')}" in write_source
-    assert '"STRUCTURED_RECOMMENDATION_MODEL": "openai.gpt-oss-120b"' in main_source
+    assert '"STRUCTURED_RECOMMENDATION_MODEL": "xai.grok-4.3"' in main_source
     assert '"STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS": "2048"' in main_source
     assert '"STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS": "2"' in main_source
-    assert 'STRUCTURED_RECOMMENDATION_MODEL="openai.gpt-oss-120b"' in restore
+    assert 'STRUCTURED_RECOMMENDATION_MODEL="xai.grok-4.3"' in restore
     assert 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="2048"' in restore
     assert 'STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS="2"' in restore
+    assert 'RECOMMENDATION_CANDIDATE_LIMIT="100"' in restore
+    assert 'RECOMMENDATION_LLM_SHORTLIST_LIMIT="15"' in restore
+    assert 'RECOMMENDATION_LLM_PASSAGES_PER_MENU="2"' in restore
+    assert 'RECOMMENDATION_LLM_SELECTION_ENABLED="true"' in restore
+    assert 'OCI_GENAI_STRUCTURED_OUTPUT_ENABLED="false"' in restore
+    assert 'OCI_GENAI_STREAMING_ENABLED="false"' in restore
 
 
 def test_grok_43_release_envelope_is_persisted() -> None:
@@ -147,6 +168,9 @@ def test_grok_43_release_envelope_is_persisted() -> None:
         "STRUCTURED_RECOMMENDATION_MODEL",
         "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS",
         "STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS",
+        "RECOMMENDATION_LLM_PASSAGES_PER_MENU",
+        "OCI_GENAI_STRUCTURED_OUTPUT_ENABLED",
+        "OCI_GENAI_STREAMING_ENABLED",
     ):
         assert key in source
 
@@ -156,6 +180,7 @@ def test_release_policy_rejects_duplicate_embedding_provider_without_writing(
 ) -> None:
     runtime_env = tmp_path / "yobi.env"
     original = (
+        'OCI_COMPARTMENT_ID="ocid1.compartment.synthetic"\n'
         'LLM_MAX_RETRIES="0"\n'
         'EMBEDDING_PROVIDER="auto"\n'
         'EMBEDDING_PROVIDER="oci"\n'
@@ -185,6 +210,7 @@ def test_runtime_environment_load_disables_interpolation_and_execution(
                 f'DB_PASSWORD="{literal}"',
                 'OCI_GENAI_API_KEY="synthetic-key"',
                 'DEMO_CONTROL_TOKEN="synthetic-token"',
+                'OCI_COMPARTMENT_ID="ocid1.compartment.synthetic"',
                 'LLM_MAX_RETRIES="1"',
                 'EMBEDDING_PROVIDER="deterministic"',
             )
@@ -208,9 +234,16 @@ def test_runtime_environment_load_disables_interpolation_and_execution(
             "DEMO_CONTROL_TOKEN",
             "LLM_MAX_RETRIES",
             "EMBEDDING_PROVIDER",
+            "OCI_EMBED_AUTH",
+            "OCI_COMPARTMENT_ID",
             "STRUCTURED_RECOMMENDATION_MODEL",
             "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS",
             "STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS",
+            "RECOMMENDATION_CANDIDATE_LIMIT",
+            "RECOMMENDATION_LLM_SHORTLIST_LIMIT",
+            "RECOMMENDATION_LLM_SELECTION_ENABLED",
+            "OCI_GENAI_STRUCTURED_OUTPUT_ENABLED",
+            "OCI_GENAI_STREAMING_ENABLED",
         ):
             os.environ.pop(key, None)
 
@@ -218,6 +251,56 @@ def test_runtime_environment_load_disables_interpolation_and_execution(
 def test_environment_is_persisted_before_genai_smoke() -> None:
     source = inspect.getsource(bootstrap.main)
     assert source.index("write_env(") < source.index('checkpoint_status("genai_smoke")')
+
+
+def test_release_policy_requires_embedding_identity_before_writing(tmp_path: Path) -> None:
+    runtime_env = tmp_path / "yobi.env"
+    original = 'EMBEDDING_PROVIDER="deterministic"\n'
+    runtime_env.write_text(original, encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="OCI_COMPARTMENT_ID"):
+        bootstrap.persist_runtime_release_policy(runtime_env)
+
+    assert runtime_env.read_text(encoding="utf-8") == original
+
+
+def test_runtime_compartment_identity_is_added_without_rewriting_secrets(
+    tmp_path: Path,
+) -> None:
+    runtime_env = tmp_path / "yobi.env"
+    original = 'DB_PASSWORD="synthetic-secret"\nEMBEDDING_PROVIDER="deterministic"\n'
+    runtime_env.write_text(original, encoding="utf-8")
+
+    assert bootstrap.persist_runtime_compartment_identity(
+        "ocid1.compartment.oc1..synthetic",
+        runtime_env,
+    ) is True
+    persisted = runtime_env.read_text(encoding="utf-8")
+    assert persisted.startswith(original)
+    assert persisted.endswith(
+        'OCI_COMPARTMENT_ID="ocid1.compartment.oc1..synthetic"\n'
+    )
+    assert stat.S_IMODE(runtime_env.stat().st_mode) == 0o600
+    assert bootstrap.persist_runtime_compartment_identity(
+        "ocid1.compartment.oc1..synthetic",
+        runtime_env,
+    ) is False
+
+
+def test_runtime_compartment_identity_rejects_conflict_without_writing(
+    tmp_path: Path,
+) -> None:
+    runtime_env = tmp_path / "yobi.env"
+    original = 'OCI_COMPARTMENT_ID="ocid1.compartment.oc1..first"\n'
+    runtime_env.write_text(original, encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="conflicts with deployment target"):
+        bootstrap.persist_runtime_compartment_identity(
+            "ocid1.compartment.oc1..second",
+            runtime_env,
+        )
+
+    assert runtime_env.read_text(encoding="utf-8") == original
 
 
 def test_bootstrap_requires_every_migration_shipped_in_the_release() -> None:
@@ -230,6 +313,9 @@ def test_bootstrap_requires_every_migration_shipped_in_the_release() -> None:
     assert records["009"][0] == "009_cart_confirmation_fingerprint.sql"
     assert records["010"][0] == "010_structured_hybrid_rag_recommendation.sql"
     assert records["011"][0] == "011_external_catalog_import.sql"
+    assert records["012"][0] == "012_concept_preference_support_and_server_ranking.sql"
+    assert records["013"][0] == "013_menu_preference_features_and_hybrid_rank.sql"
+    assert records["014"][0] == "014_wiki_eligibility_indexes.sql"
     assert all(len(checksum) == 64 for _, checksum in records.values())
 
 

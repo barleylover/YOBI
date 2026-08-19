@@ -240,6 +240,78 @@ def test_dispatch_pacing_is_outside_measured_latency() -> None:
     assert outcome["latency_ms"] == 2_000.0
 
 
+def test_async_dispatch_polls_the_same_persisted_request() -> None:
+    calls: list[tuple[str, str]] = []
+    current = [0.0]
+
+    class FakeClient:
+        def post(self, path: str, json: dict[str, Any]) -> httpx.Response:
+            del json
+            calls.append(("POST", path))
+            current[0] += 0.1
+            return httpx.Response(
+                202,
+                json={
+                    "request_id": "request-async",
+                    "state_version": 3,
+                    "status": "PENDING",
+                    "recommendations": [],
+                },
+            )
+
+        def get(self, path: str) -> httpx.Response:
+            calls.append(("GET", path))
+            current[0] += 1.4
+            return httpx.Response(
+                200,
+                json={
+                    "request_id": "request-async",
+                    "state_version": 4,
+                    "status": "RECOMMENDED",
+                    "failure_code": None,
+                    "recommendations": [
+                        {
+                            "rank": 1,
+                            "menu": {"merchant_id": "merchant"},
+                            "wiki_passages": [{"evidence_id": "evidence"}],
+                        }
+                    ],
+                },
+            )
+
+    context = performance_smoke.HTTPRecommendationContext(
+        client=FakeClient(),
+        profile_id="profile",
+        session_id="session",
+        criteria_version=1,
+        state_version=3,
+    )
+    spec = performance_smoke.HTTPSampleSpec(
+        "single_en",
+        _scenarios()["single"],
+        "English",
+        performance_smoke.RecommendationMode.INITIAL,
+    )
+
+    outcome = performance_smoke._dispatch_http_recommendation(
+        context,
+        spec,
+        timer=lambda: current[0],
+        deadline_clock=lambda: current[0],
+        poll_sleeper=lambda _seconds: None,
+    )
+
+    assert outcome["valid_recommended"] is True
+    assert outcome["latency_ms"] == 1_500.0
+    assert calls == [
+        ("POST", "/api/v1/sessions/session/recommendations"),
+        (
+            "GET",
+            "/api/v1/sessions/session/recommendation-requests/request-async",
+        ),
+    ]
+
+
 def test_one_fallback_fails_full_provider_gate_but_retains_29_metrics() -> None:
     outcomes = [_valid_outcome(latency_ms=float(index + 1)) for index in range(29)]
     outcomes.append(_fallback_outcome())

@@ -13,7 +13,12 @@ import oracledb
 
 from app.core.config import Settings
 from app.db.browse_rankings import food_ranking_sql
-from app.db.concept_query import build_concept_candidate_query, build_concept_preview_query
+from app.db.concept_query import (
+    build_candidate_recall_channel_query,
+    build_concept_candidate_query,
+    build_concept_preview_count_query,
+    build_semantic_candidate_query,
+)
 from app.db.demo_address import demo_address_status
 from app.db.message_ordering import order_conversation_messages
 from app.db.oracle_pool import OraclePool
@@ -22,6 +27,9 @@ from app.domain.address import normalize_address_text
 from app.domain.concept_ranking import (
     RANKING_POLICY_VERSION,
     ConceptRankCandidate,
+    bayesian_review_prior,
+    candidate_channel_fusion_trace,
+    merge_candidate_channels,
     rank_concept_candidates,
 )
 from app.domain.dialogue import (
@@ -98,6 +106,7 @@ from app.domain.structured_recommendation import (
     RecommendationRequestStatus,
 )
 from app.knowledge.catalog_seed import KNOWLEDGE_CATALOG_VERSION, KNOWLEDGE_RELEASE_ID
+from app.knowledge.passage_ranking import rank_wiki_passages
 from app.knowledge.resolver import (
     VEGAN_INGREDIENTS,
     allergen_constraint_conflicts,
@@ -189,9 +198,7 @@ UPGRADE_RETAINED_RUNTIME_COUNT_KEYS = frozenset(
 
 def _runtime_counts_compatible(counts: dict[str, int]) -> bool:
     return set(counts) == set(EXPECTED_RUNTIME_COUNTS) and all(
-        actual >= expected
-        if key in UPGRADE_RETAINED_RUNTIME_COUNT_KEYS
-        else actual == expected
+        actual >= expected if key in UPGRADE_RETAINED_RUNTIME_COUNT_KEYS else actual == expected
         for key, expected in EXPECTED_RUNTIME_COUNTS.items()
         for actual in (counts[key],)
     )
@@ -300,6 +307,8 @@ class OracleYobiRepository:
     """Production repository: Oracle owns catalog, state, cart, checkout, and audit data."""
 
     def __init__(self, settings: Settings) -> None:
+        if settings.app_env == "production" and settings.embedding_provider != "oci":
+            raise RuntimeError("PRODUCTION_ORACLE_REQUIRES_OCI_EMBEDDINGS")
         self.settings = settings
         self.pool = OraclePool(settings)
         self.embedding_provider = choose_embedding_provider(settings)
@@ -767,10 +776,9 @@ class OracleYobiRepository:
             ),
             final_candidates_json=list(_json(row.get("final_candidates_json") or "[]")),
             ranking_trace_json=dict(_json(row.get("ranking_trace_json") or "{}")),
-            ranking_policy_version=str(
-                row.get("ranking_policy_version") or "legacy-llm-rank-v2"
-            ),
+            ranking_policy_version=str(row.get("ranking_policy_version") or "legacy-llm-rank-v2"),
             support_manifest_sha256=str(row.get("support_manifest_sha256") or "0" * 64),
+            feature_manifest_sha256=str(row.get("feature_manifest_sha256") or "0" * 64),
             finalized_at=(_datetime(row["finalized_at"]) if row.get("finalized_at") else None),
             dispatch_count=int(row["dispatch_count"]),
             failure_code=str(row["failure_code"]) if row.get("failure_code") else None,
@@ -1029,7 +1037,7 @@ class OracleYobiRepository:
             cursor.execute(
                 """
                 SELECT family.release_family_id,family.ranking_policy_version,
-                       family.support_manifest_sha256
+                       family.support_manifest_sha256,family.feature_manifest_sha256
                 FROM recommendation_runtime_state state
                 JOIN recommendation_release_family family
                   ON family.release_family_id=state.active_release_family_id
@@ -1048,10 +1056,11 @@ class OracleYobiRepository:
                   session_id,request_id,request_hash,criteria_version,request_mode,status,state_version,
                   recommendation_release_family_id,eligibility_as_of,
                   snapshot_id,evidence_pool_json,result_json,final_candidates_json,
-                  ranking_trace_json,ranking_policy_version,support_manifest_sha256,finalized_at,
+                  ranking_trace_json,ranking_policy_version,support_manifest_sha256,
+                  feature_manifest_sha256,finalized_at,
                   dispatch_count,failure_code,
                   created_at,dispatched_at,completed_at
-                ) VALUES (:1,:2,:3,:4,:5,'CREATED',:6,:7,:8,NULL,'[]',NULL,'[]','{}',:9,:10,NULL,0,NULL,:11,NULL,NULL)
+                ) VALUES (:1,:2,:3,:4,:5,'CREATED',:6,:7,:8,NULL,'[]',NULL,'[]','{}',:9,:10,:11,NULL,0,NULL,:12,NULL,NULL)
                 """,
                 [
                     session_id,
@@ -1064,6 +1073,7 @@ class OracleYobiRepository:
                     now,
                     str(pinned_family[1]),
                     str(pinned_family[2]),
+                    str(pinned_family[3]),
                     now,
                 ],
             )
@@ -1094,25 +1104,16 @@ class OracleYobiRepository:
             sort_keys=True,
             separators=(",", ":"),
         )
-        final_candidates = [
-            {
-                "rank": item.server_rank or rank,
-                "menu_id": item.menu.menu_id,
-                "merchant_id": item.menu.merchant_id,
-                "concept_id": item.knowledge_concept_id,
-            }
-            for rank, item in enumerate(evidence_pool[:3], start=1)
-        ]
-        serialized_final = json.dumps(
-            final_candidates, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-        )
+        serialized_final = "[]"
         serialized_trace = json.dumps(
             {
                 "ranking_policy_version": (
                     evidence_pool[0].ranking_trace.get("ranking_policy_version")
                     or RANKING_POLICY_VERSION
                 ),
-                "candidates": [item.ranking_trace for item in evidence_pool[:3]],
+                "shortlist_count": len(evidence_pool),
+                "selection_status": "PENDING",
+                "candidates": [item.ranking_trace for item in evidence_pool],
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -1141,14 +1142,13 @@ class OracleYobiRepository:
                 UPDATE structured_recommendation_request
                 SET status='DISPATCHED',evidence_pool_json=:evidence_pool,
                     final_candidates_json=:final_candidates,ranking_trace_json=:ranking_trace,
-                    finalized_at=:finalized_at,dispatch_count=1,dispatched_at=:dispatched_at
+                    dispatched_at=:dispatched_at
                 WHERE session_id=:session_id AND request_id=:request_id
                   AND status='CREATED' AND dispatch_count=0
                 """,
                 evidence_pool=serialized,
                 final_candidates=serialized_final,
                 ranking_trace=serialized_trace,
-                finalized_at=now,
                 dispatched_at=now,
                 session_id=session_id,
                 request_id=request_id,
@@ -1168,6 +1168,38 @@ class OracleYobiRepository:
                 raise RuntimeError("RECOMMENDATION_DISPATCH_WRITE_FAILED")
             return self._request_record_from_row(stored)
 
+    def mark_recommendation_provider_called(
+        self,
+        session_id: str,
+        request_id: str,
+    ) -> RecommendationRequestRecord:
+        with self.pool.connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                UPDATE structured_recommendation_request
+                SET dispatch_count=1
+                WHERE session_id=:session_id AND request_id=:request_id
+                  AND status='DISPATCHED' AND dispatch_count=0
+                """,
+                session_id=session_id,
+                request_id=request_id,
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("RECOMMENDATION_PROVIDER_CALL_CONFLICT")
+            cursor.execute(
+                """
+                SELECT * FROM structured_recommendation_request
+                WHERE session_id=:session_id AND request_id=:request_id
+                """,
+                session_id=session_id,
+                request_id=request_id,
+            )
+            stored = _row(cursor)
+            if stored is None:
+                raise RuntimeError("RECOMMENDATION_PROVIDER_CALL_WRITE_FAILED")
+            return self._request_record_from_row(stored)
+
     def complete_recommendation_request(
         self,
         session_id: str,
@@ -1177,6 +1209,10 @@ class OracleYobiRepository:
         result_json: dict[str, Any] | None = None,
         snapshot: RecommendationSnapshot | None = None,
         failure_code: str | None = None,
+        provider_metrics: dict[str, int] | None = None,
+        grounding_rejection_code: str | None = None,
+        grounding_rejection_stage: str | None = None,
+        grounding_rejection_detail: str | None = None,
     ) -> RecommendationRequestRecord:
         terminal_statuses = {
             RecommendationRequestStatus.COMPLETED,
@@ -1217,9 +1253,7 @@ class OracleYobiRepository:
                 if canonicalized_snapshot_replay:
                     return self._request_record_from_row(row, duplicate=True)
                 stored_result = (
-                    _json_text(row["result_json"])
-                    if row.get("result_json") is not None
-                    else None
+                    _json_text(row["result_json"]) if row.get("result_json") is not None else None
                 )
                 same_payload = (
                     current_status is status
@@ -1450,6 +1484,49 @@ class OracleYobiRepository:
                 if result_json is not None
                 else None
             )
+            final_candidates = []
+            if result_json is not None:
+                for rank, item in enumerate(result_json.get("recommendations", []), start=1):
+                    if not isinstance(item, dict):
+                        continue
+                    menu = cast(dict[str, Any], item.get("menu") or {})
+                    final_candidates.append(
+                        {
+                            "rank": rank,
+                            "menu_id": str(item.get("menu_id") or menu.get("menu_id") or ""),
+                            "merchant_id": str(menu.get("merchant_id") or ""),
+                        }
+                    )
+            serialized_final = json.dumps(
+                final_candidates,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            ranking_trace = dict(_json(row.get("ranking_trace_json") or "{}"))
+            ranking_trace.update(
+                {
+                    "selection_status": (
+                        "GROK_SELECTED"
+                        if status is RecommendationRequestStatus.COMPLETED
+                        else "DETERMINISTIC_FALLBACK"
+                        if status is RecommendationRequestStatus.SEARCH_FALLBACK
+                        else status.value
+                    ),
+                    "fallback_reason": failure_code,
+                    "grounding_rejection_code": grounding_rejection_code,
+                    "grounding_rejection_stage": grounding_rejection_stage,
+                    "grounding_rejection_detail": grounding_rejection_detail,
+                    "final_candidates": final_candidates,
+                    "provider_metrics": dict(provider_metrics or {}),
+                }
+            )
+            serialized_ranking_trace = json.dumps(
+                ranking_trace,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
             if snapshot is not None:
                 if criteria_row is None or pinned_family is None:
                     raise RuntimeError("RECOMMENDATION_SNAPSHOT_CONTEXT_MISSING")
@@ -1484,8 +1561,8 @@ class OracleYobiRepository:
                       recommendation_release_family_id,evidence_pool_json,
                       generation_status,generation_call_count,
                       grounding_validation_json,ranking_trace_json,ranking_policy_version,
-                      support_manifest_sha256,created_at
-                    ) VALUES (:1,:2,:3,:4,:5,:6,:7,:8,:9,:10,:11,:12,:13,:14,:15,:16,:17,:18,:19,:20)
+                      support_manifest_sha256,feature_manifest_sha256,created_at
+                    ) VALUES (:1,:2,:3,:4,:5,:6,:7,:8,:9,:10,:11,:12,:13,:14,:15,:16,:17,:18,:19,:20,:21)
                     """,
                     [
                         snapshot.snapshot_id,
@@ -1504,9 +1581,19 @@ class OracleYobiRepository:
                         status.value,
                         int(row["dispatch_count"]),
                         json.dumps({"validated": True}, separators=(",", ":")),
-                        _json_text(row.get("ranking_trace_json") or "{}"),
-                        str(row.get("ranking_policy_version") or pinned_family.ranking_policy_version),
-                        str(row.get("support_manifest_sha256") or pinned_family.support_manifest_sha256),
+                        serialized_ranking_trace,
+                        str(
+                            row.get("ranking_policy_version")
+                            or pinned_family.ranking_policy_version
+                        ),
+                        str(
+                            row.get("support_manifest_sha256")
+                            or pinned_family.support_manifest_sha256
+                        ),
+                        str(
+                            row.get("feature_manifest_sha256")
+                            or pinned_family.feature_manifest_sha256
+                        ),
                         snapshot.created_at,
                     ],
                 )
@@ -1517,7 +1604,8 @@ class OracleYobiRepository:
                 UPDATE structured_recommendation_request
                 SET status=:status,result_json=:result_json,snapshot_id=:snapshot_id,
                     failure_code=:failure_code,completed_at=:completed_at,
-                    state_version=:state_version
+                    state_version=:state_version,final_candidates_json=:final_candidates,
+                    ranking_trace_json=:ranking_trace,finalized_at=:finalized_at
                 WHERE session_id=:session_id AND request_id=:request_id
                   AND status=:expected_status
                 """,
@@ -1527,6 +1615,9 @@ class OracleYobiRepository:
                 failure_code=failure_code,
                 completed_at=completed_at,
                 state_version=resulting_state_version,
+                final_candidates=serialized_final,
+                ranking_trace=serialized_ranking_trace,
+                finalized_at=completed_at,
                 session_id=session_id,
                 request_id=request_id,
                 expected_status=current_status.value,
@@ -1624,11 +1715,7 @@ class OracleYobiRepository:
             existing = cache.get("canonical")
             if not isinstance(existing, dict):
                 existing = next(
-                    (
-                        value
-                        for _key, value in sorted(cache.items())
-                        if isinstance(value, dict)
-                    ),
+                    (value for _key, value in sorted(cache.items()) if isinstance(value, dict)),
                     None,
                 )
             if isinstance(existing, dict):
@@ -1693,9 +1780,8 @@ class OracleYobiRepository:
             embedding_model=str(row["embedding_model"]),
             embedding_version=str(row["embedding_version"]),
             support_manifest_sha256=str(row.get("support_manifest_sha256") or "0" * 64),
-            ranking_policy_version=str(
-                row.get("ranking_policy_version") or "legacy-llm-rank-v2"
-            ),
+            feature_manifest_sha256=str(row.get("feature_manifest_sha256") or "0" * 64),
+            ranking_policy_version=str(row.get("ranking_policy_version") or "legacy-llm-rank-v2"),
             ranking_policy_sha256=str(row.get("ranking_policy_sha256") or "0" * 64),
             status=cast(Any, str(row["status"])),
             activated_at=_datetime(row["activated_at"]) if row.get("activated_at") else None,
@@ -1728,9 +1814,8 @@ class OracleYobiRepository:
             embedding_model=str(row["embedding_model"]),
             embedding_version=str(row["embedding_version"]),
             support_manifest_sha256=str(row.get("support_manifest_sha256") or "0" * 64),
-            ranking_policy_version=str(
-                row.get("ranking_policy_version") or "legacy-llm-rank-v2"
-            ),
+            feature_manifest_sha256=str(row.get("feature_manifest_sha256") or "0" * 64),
+            ranking_policy_version=str(row.get("ranking_policy_version") or "legacy-llm-rank-v2"),
             ranking_policy_sha256=str(row.get("ranking_policy_sha256") or "0" * 64),
             status=cast(Any, str(row["status"])),
             activated_at=_datetime(row["activated_at"]) if row.get("activated_at") else None,
@@ -1832,8 +1917,7 @@ class OracleYobiRepository:
                 release_id=family.knowledge_release_id,
             )
             metrics = {
-                str(row[0]): (int(row[1]), int(row[2]), int(row[3]))
-                for row in cursor.fetchall()
+                str(row[0]): (int(row[1]), int(row[2]), int(row[3])) for row in cursor.fetchall()
             }
             cursor.execute(
                 """
@@ -1868,10 +1952,7 @@ class OracleYobiRepository:
                 release_id=family.knowledge_release_id,
             )
             metrics.update(
-                {
-                    str(row[0]): (int(row[1]), int(row[2]), int(row[3]))
-                    for row in cursor.fetchall()
-                }
+                {str(row[0]): (int(row[1]), int(row[2]), int(row[3])) for row in cursor.fetchall()}
             )
             cursor.execute(
                 """
@@ -1978,6 +2059,7 @@ class OracleYobiRepository:
         payload["spice_reference_version"] = family.spice_reference_version
         payload["knowledge_release_id"] = family.knowledge_release_id
         payload["support_manifest_sha256"] = family.support_manifest_sha256
+        payload["feature_manifest_sha256"] = family.feature_manifest_sha256
         payload["ranking_policy_version"] = family.ranking_policy_version
         return dict(payload)
 
@@ -2018,9 +2100,7 @@ class OracleYobiRepository:
                 dict.fromkeys(claim for menu in menus for claim in menu.grounded_claim_ids)
             ),
             grounded_passage_ids=list(
-                dict.fromkeys(
-                    passage for menu in menus for passage in menu.grounded_passage_ids
-                )
+                dict.fromkeys(passage for menu in menus for passage in menu.grounded_passage_ids)
             ),
             synthetic_data=all(menu.is_synthetic for menu in menus),
         )
@@ -2326,9 +2406,7 @@ class OracleYobiRepository:
                 connection, session_id, exclude_history=False
             )
             exact_clause, binds = self._browse_exact_filter_sql(connection, session_id)
-            binds.update({
-                f"feature_{index}": name for index, name in enumerate(feature_names)
-            })
+            binds.update({f"feature_{index}": name for index, name in enumerate(feature_names)})
             feature_binds = [f":feature_{index}" for index in range(len(feature_names))]
             area_clause = ""
             if service_area_id:
@@ -2384,7 +2462,7 @@ class OracleYobiRepository:
                   JOIN merchant ON merchant.merchant_id=menu.merchant_id
                   LEFT JOIN menu_source_detail source ON source.menu_id=menu.menu_id
                   WHERE state.state_key='ACTIVE' AND menu.price>0
-                    AND concept.canonical_name_en IN ({','.join(feature_binds)})
+                    AND concept.canonical_name_en IN ({",".join(feature_binds)})
                     AND COALESCE(source.liquor,0)=0 AND COALESCE(source.is_adult,0)=0
                     AND COALESCE(source.verified_adult,0)=0 AND COALESCE(source.soldout,0)=0
                     {area_clause}
@@ -2856,6 +2934,7 @@ class OracleYobiRepository:
                     connection,
                     session_id=session_id,
                     criteria=criteria,
+                    profile=profile,
                     mode=mode,
                     limit=limit,
                     family=family,
@@ -3174,24 +3253,49 @@ class OracleYobiRepository:
         cursor = connection.cursor()
         cursor.execute(
             f"""
-            SELECT mapping.menu_id,support.category_code,support.option_code,
-                   support.support_strength,support.evidence_chunk_id,
-                   support.review_status,chunk.content,chunk.facet
-            FROM menu_concept_map mapping
+            SELECT feature.menu_id,feature.category_code,feature.option_code,
+                   feature.support_strength,evidence.evidence_id,
+                   feature.review_status,evidence.excerpt AS content,
+                   evidence.source_type AS facet,feature.evidence_scope
+            FROM menu_preference_feature feature
+            JOIN menu_preference_feature_evidence evidence
+              ON evidence.knowledge_release_id=feature.knowledge_release_id
+             AND evidence.feature_id=feature.feature_id
+             AND evidence.evidence_role='SUPPORT'
+            WHERE feature.knowledge_release_id=:release_id
+              AND feature.support_status='SUPPORTED'
+              AND feature.evidence_scope='MENU_DIRECT'
+              AND feature.menu_id IN ({",".join(menu_binds)})
+              AND ({" OR ".join(predicates).replace("support.", "feature.")})
+            UNION ALL
+            SELECT membership.menu_id,support.category_code,support.option_code,
+                   support.support_strength*0.65 AS support_strength,
+                   support.evidence_chunk_id AS evidence_id,
+                   support.review_status,
+                   DBMS_LOB.SUBSTR(chunk.content,2000,1) AS content,
+                   chunk.facet,
+                   'CONCEPT_GENERAL' AS evidence_scope
+            FROM menu_concept_membership membership
             JOIN concept_preference_support support
-              ON support.knowledge_release_id=mapping.release_id
-             AND support.concept_id=mapping.concept_id
+              ON support.knowledge_release_id=membership.knowledge_release_id
+             AND support.concept_id=membership.concept_id
              AND support.support_status='SUPPORTED'
             JOIN knowledge_chunk chunk
               ON chunk.release_id=support.knowledge_release_id
              AND chunk.chunk_id=support.evidence_chunk_id
-            WHERE mapping.release_id=:release_id AND mapping.mapping_status='MAPPED'
-              AND mapping.confidence_band='high'
-              AND mapping.menu_id IN ({','.join(menu_binds)})
-              AND ({' OR '.join(predicates)})
-            ORDER BY mapping.menu_id,support.category_code,
-                     support.support_strength DESC,support.option_code,
-                     support.evidence_chunk_id
+            WHERE membership.knowledge_release_id=:release_id
+              AND membership.menu_id IN ({",".join(menu_binds)})
+              AND ({" OR ".join(predicates)})
+              AND NOT EXISTS (
+                SELECT 1 FROM menu_preference_feature contradiction
+                WHERE contradiction.knowledge_release_id=membership.knowledge_release_id
+                  AND contradiction.menu_id=membership.menu_id
+                  AND contradiction.category_code=support.category_code
+                  AND contradiction.option_code=support.option_code
+                  AND contradiction.support_status='CONTRADICTED'
+                  AND contradiction.evidence_scope='MENU_DIRECT'
+              )
+            ORDER BY menu_id,category_code,support_strength DESC,option_code,evidence_id
             """,
             binds,
         )
@@ -3203,14 +3307,13 @@ class OracleYobiRepository:
         *,
         release_id: str,
         menu_ids: list[str],
+        criteria: RecommendationCriteriaV2,
+        preferred_evidence_ids_by_menu: dict[str, set[str]],
         passages_per_menu: int,
     ) -> dict[str, list[dict[str, Any]]]:
         if not menu_ids:
             return {}
-        binds: dict[str, Any] = {
-            "release_id": release_id,
-            "passages_per_menu": passages_per_menu,
-        }
+        binds: dict[str, Any] = {"release_id": release_id}
         menu_binds = []
         for index, menu_id in enumerate(menu_ids):
             key = f"wiki_menu_{index}"
@@ -3219,16 +3322,12 @@ class OracleYobiRepository:
         cursor = connection.cursor()
         cursor.execute(
             f"""
-            SELECT * FROM (
-              SELECT mapping.menu_id,chunk.chunk_id,chunk.content,chunk.facet,
-                     ROW_NUMBER() OVER (
-                       PARTITION BY mapping.menu_id
-                       ORDER BY closure.depth,chunk.chunk_id
-                     ) passage_rank
-              FROM menu_concept_map mapping
+            SELECT membership.menu_id,chunk.chunk_id,chunk.content,chunk.facet,
+                   closure.depth,chunk.chunk_index
+              FROM menu_concept_membership membership
               JOIN dish_concept_closure closure
-                ON closure.release_id=mapping.release_id
-               AND closure.descendant_concept_id=mapping.concept_id
+                ON closure.release_id=membership.knowledge_release_id
+               AND closure.descendant_concept_id=membership.concept_id
                AND closure.inherit_claims=1
               JOIN knowledge_chunk chunk
                 ON chunk.release_id=closure.release_id
@@ -3236,9 +3335,8 @@ class OracleYobiRepository:
               JOIN knowledge_document document
                 ON document.release_id=chunk.release_id
                AND document.document_id=chunk.document_id
-              WHERE mapping.release_id=:release_id AND mapping.mapping_status='MAPPED'
-                AND mapping.confidence_band='high'
-                AND mapping.menu_id IN ({','.join(menu_binds)})
+              WHERE membership.knowledge_release_id=:release_id
+                AND membership.menu_id IN ({",".join(menu_binds)})
                 AND document.source_type='SYNTHETIC_WIKI'
                 AND document.review_status='REVIEWED_DEMO'
                 AND lower(chunk.facet)<>'safety'
@@ -3246,15 +3344,22 @@ class OracleYobiRepository:
                   JSON_VALUE(chunk.metadata_json,'$.recommendation_visibility')='PUBLIC_RAG'
                   OR JSON_VALUE(chunk.metadata_json,'$.recommendation_visibility') IS NULL
                 )
-            ) WHERE passage_rank<=:passages_per_menu
-            ORDER BY menu_id,passage_rank
+            ORDER BY membership.menu_id,closure.depth,chunk.chunk_index,chunk.chunk_id
             """,
             binds,
         )
         grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in _rows(cursor):
             grouped[str(row["menu_id"])].append(row)
-        return grouped
+        return {
+            menu_id: rank_wiki_passages(
+                rows,
+                selected_groups=criteria.subjective_groups(),
+                preferred_evidence_ids=preferred_evidence_ids_by_menu.get(menu_id, set()),
+                limit=passages_per_menu,
+            )
+            for menu_id, rows in grouped.items()
+        }
 
     def _build_concept_ranked_pool(
         self,
@@ -3262,6 +3367,7 @@ class OracleYobiRepository:
         *,
         session_id: str,
         criteria: RecommendationCriteriaV2,
+        profile: Profile,
         mode: RecommendationMode,
         limit: int,
         family: RecommendationReleaseFamily,
@@ -3278,21 +3384,127 @@ class OracleYobiRepository:
         )
         query_count += 2
         session_filter_ms = int((monotonic() - session_filter_started) * 1000)
-        candidate_query = build_concept_candidate_query(
-            dialect="oracle",
-            criteria=criteria,
-            knowledge_release_id=family.knowledge_release_id,
-            certification_release_id=family.certification_release_id,
-            service_area_id=service_area_id,
-            excluded_menu_ids=excluded,
-            eligibility_as_of=eligibility_as_of,
-            candidate_limit=max(3, limit),
+        channel_limit = max(3, limit)
+        query_text = (
+            " ".join(
+                alias
+                for selected_codes in criteria.subjective_groups().values()
+                for code in selected_codes
+                # Structured preference codes are language-neutral.  Use one
+                # canonical bilingual alias pack so an otherwise identical Korean
+                # and English request has the same semantic retrieval channel.
+                for alias in preference_query_aliases(code, "English")
+            )
+            or "meal menu"
+        )
+        semantic_channel_active = bool(
+            family.embedding_model == self.embedding_provider.model
+            and family.embedding_version == self.embedding_provider.version
+        )
+        semantic_channel_status = "ACTIVE" if semantic_channel_active else "DISABLED_MODEL_MISMATCH"
+        query_vector = (
+            array("f", self.embedding_provider.embed([query_text], "SEARCH_QUERY")[0])
+            if semantic_channel_active
+            else None
         )
         objective_started = monotonic()
         cursor = connection.cursor()
-        cursor.execute(candidate_query.sql, candidate_query.parameters)
-        candidate_rows = _rows(cursor)
-        query_count += 1
+        if criteria.subjective_groups():
+            feature_query = build_candidate_recall_channel_query(
+                dialect="oracle",
+                criteria=criteria,
+                knowledge_release_id=family.knowledge_release_id,
+                certification_release_id=family.certification_release_id,
+                service_area_id=service_area_id,
+                excluded_menu_ids=excluded,
+                eligibility_as_of=eligibility_as_of,
+                candidate_limit=channel_limit,
+                support_channel="MENU_FEATURE",
+            )
+            cursor.execute(feature_query.sql, feature_query.parameters)
+            feature_rows = _rows(cursor)
+            concept_query = build_candidate_recall_channel_query(
+                dialect="oracle",
+                criteria=criteria,
+                knowledge_release_id=family.knowledge_release_id,
+                certification_release_id=family.certification_release_id,
+                service_area_id=service_area_id,
+                excluded_menu_ids=excluded,
+                eligibility_as_of=eligibility_as_of,
+                candidate_limit=channel_limit,
+                support_channel="CONCEPT_SUPPORT",
+            )
+            cursor.execute(concept_query.sql, concept_query.parameters)
+            concept_rows = _rows(cursor)
+            query_count += 2
+        else:
+            feature_rows = []
+            concept_query = build_candidate_recall_channel_query(
+                dialect="oracle",
+                criteria=criteria,
+                knowledge_release_id=family.knowledge_release_id,
+                certification_release_id=family.certification_release_id,
+                service_area_id=service_area_id,
+                excluded_menu_ids=excluded,
+                eligibility_as_of=eligibility_as_of,
+                candidate_limit=channel_limit,
+                support_channel="CONCEPT_SUPPORT",
+            )
+            cursor.execute(concept_query.sql, concept_query.parameters)
+            concept_rows = _rows(cursor)
+            query_count += 1
+        if semantic_channel_active:
+            semantic_query = build_semantic_candidate_query(
+                dialect="oracle",
+                criteria=criteria,
+                knowledge_release_id=family.knowledge_release_id,
+                certification_release_id=family.certification_release_id,
+                service_area_id=service_area_id,
+                excluded_menu_ids=excluded,
+                eligibility_as_of=eligibility_as_of,
+                candidate_limit=channel_limit,
+                query_vector=query_vector,
+                semantic_embedding_model=family.embedding_model,
+                semantic_embedding_version=family.embedding_version,
+                semantic_embedding_dimension=self.embedding_provider.dimension,
+                catalog_release_id=family.catalog_release_id,
+            )
+            cursor.execute(semantic_query.sql, semantic_query.parameters)
+            semantic_rows = _rows(cursor)
+        else:
+            semantic_rows = []
+        feature_channel_ids = [str(row["menu_id"]) for row in feature_rows]
+        concept_channel_ids = [str(row["menu_id"]) for row in concept_rows]
+        semantic_channel_ids = [str(row["menu_id"]) for row in semantic_rows]
+        named_channels = {
+            "MENU_FEATURE": feature_channel_ids,
+            "CONCEPT_SUPPORT": concept_channel_ids,
+            "SEMANTIC": semantic_channel_ids,
+        }
+        channel_fusion_by_menu = candidate_channel_fusion_trace(named_channels)
+        raw_channel_union_count = len(
+            set(feature_channel_ids) | set(concept_channel_ids) | set(semantic_channel_ids)
+        )
+        channel_union_ids = merge_candidate_channels(
+            list(named_channels.values()),
+            limit=channel_limit,
+        )
+        candidate_rows: list[dict[str, Any]] = []
+        if channel_union_ids:
+            grounded_query = build_concept_candidate_query(
+                dialect="oracle",
+                criteria=criteria,
+                knowledge_release_id=family.knowledge_release_id,
+                certification_release_id=family.certification_release_id,
+                service_area_id=service_area_id,
+                excluded_menu_ids=excluded,
+                eligibility_as_of=eligibility_as_of,
+                candidate_limit=None,
+                included_menu_ids=channel_union_ids,
+            )
+            cursor.execute(grounded_query.sql, grounded_query.parameters)
+            candidate_rows = _rows(cursor)
+        query_count += int(semantic_channel_active) + int(bool(channel_union_ids))
         objective_sql_ms = int((monotonic() - objective_started) * 1000)
         if not candidate_rows:
             self._recommendation_retrieval_metrics[session_id] = {
@@ -3303,6 +3515,13 @@ class OracleYobiRepository:
                 "evidence_ms": 0,
                 "query_count": query_count,
                 "selected_category_count": len(criteria.subjective_groups()),
+                "explicit_channel_count": len(set(feature_channel_ids) | set(concept_channel_ids)),
+                "menu_feature_channel_count": len(feature_channel_ids),
+                "concept_support_channel_count": len(concept_channel_ids),
+                "semantic_channel_count": len(semantic_channel_ids),
+                "semantic_channel_status": semantic_channel_status,
+                "raw_channel_union_count": raw_channel_union_count,
+                "channel_union_count": len(channel_union_ids),
                 "fetched_candidate_count": 0,
                 "candidate_merchant_count": 0,
                 "candidate_concept_count": 0,
@@ -3330,6 +3549,69 @@ class OracleYobiRepository:
             strength = float(support["support_strength"])
             if current is None or strength > current[0]:
                 supports_by_menu[menu_id][category] = (strength, support)
+        signal_binds: dict[str, Any] = {}
+        signal_menu_binds: list[str] = []
+        for index, menu_id in enumerate(sorted(candidate_by_id)):
+            key = f"signal_menu_{index}"
+            signal_binds[key] = menu_id
+            signal_menu_binds.append(f":{key}")
+        if semantic_channel_active:
+            signal_binds.update(
+                {
+                    "query_vector": query_vector,
+                    "semantic_embedding_model": family.embedding_model,
+                    "semantic_embedding_version": family.embedding_version,
+                    "semantic_embedding_dimension": self.embedding_provider.dimension,
+                    "semantic_catalog_release_id": family.catalog_release_id,
+                }
+            )
+            semantic_signal_projection = """
+              CASE WHEN semantic_embedding.embedding_vector IS NULL
+                   THEN 0
+                   ELSE 1-VECTOR_DISTANCE(
+                     semantic_embedding.embedding_vector,:query_vector,COSINE
+                   )
+              END AS semantic_score
+            """
+            semantic_signal_join = """
+              LEFT JOIN menu_semantic_embedding semantic_embedding
+                ON semantic_embedding.menu_id=menu.menu_id
+               AND semantic_embedding.catalog_release_id=:semantic_catalog_release_id
+               AND semantic_embedding.embedding_model=:semantic_embedding_model
+               AND semantic_embedding.embedding_version=:semantic_embedding_version
+               AND semantic_embedding.embedding_dimension=:semantic_embedding_dimension
+            """
+        else:
+            semantic_signal_projection = "0 AS semantic_score"
+            semantic_signal_join = ""
+        signal_cursor = connection.cursor()
+        signal_cursor.execute(
+            f"""
+            SELECT menu.menu_id,
+                   {semantic_signal_projection},
+                   COALESCE(menu_source.review_count,merchant_source.review_count,0)
+                     AS review_count,
+                   merchant_source.review_average
+            FROM menu
+            {semantic_signal_join}
+            LEFT JOIN menu_source_detail menu_source ON menu_source.menu_id=menu.menu_id
+            LEFT JOIN merchant_source_detail merchant_source
+              ON merchant_source.merchant_id=menu.merchant_id
+            WHERE menu.menu_id IN ({",".join(signal_menu_binds)})
+            ORDER BY menu.menu_id
+            """,
+            signal_binds,
+        )
+        signals_by_menu = {
+            str(row["menu_id"]): (
+                max(0.0, min(1.0, float(row["semantic_score"] or 0.0))),
+                bayesian_review_prior(
+                    int(row["review_count"] or 0),
+                    float(row["review_average"]) if row.get("review_average") is not None else None,
+                ),
+            )
+            for row in _rows(signal_cursor)
+        }
         rank_inputs = []
         for row in candidate_rows:
             menu_id = str(row["menu_id"])
@@ -3339,6 +3621,7 @@ class OracleYobiRepository:
             }
             if not category_supports:
                 category_supports = {"__objective__": 1.0}
+            semantic_score, review_prior = signals_by_menu.get(menu_id, (0.0, 0.5))
             rank_inputs.append(
                 ConceptRankCandidate(
                     menu_id=menu_id,
@@ -3346,13 +3629,16 @@ class OracleYobiRepository:
                     concept_id=str(row["concept_id"]),
                     category_supports=category_supports,
                     reviewed_evidence_count=int(row["reviewed_evidence_count"]),
+                    semantic_score=semantic_score,
+                    direct_evidence_ratio=float(row["direct_evidence_ratio"]),
+                    review_prior=review_prior,
                 )
             )
         scoring_started = monotonic()
         decisions = rank_concept_candidates(
             rank_inputs,
             has_soft_profile=False,
-            limit=min(3, limit),
+            limit=limit,
         )
         scoring_rerank_ms = int((monotonic() - scoring_started) * 1000)
         evidence_started = monotonic()
@@ -3360,6 +3646,15 @@ class OracleYobiRepository:
             connection,
             release_id=family.knowledge_release_id,
             menu_ids=[decision.menu_id for decision in decisions],
+            criteria=criteria,
+            preferred_evidence_ids_by_menu={
+                menu_id: {
+                    str(support["evidence_id"])
+                    for _category, (_strength, support) in supports.items()
+                    if str(support["evidence_scope"]) == "CONCEPT_GENERAL"
+                }
+                for menu_id, supports in supports_by_menu.items()
+            },
             passages_per_menu=passages_per_menu,
         )
         if decisions:
@@ -3375,26 +3670,32 @@ class OracleYobiRepository:
                 )
                 for chunk in wiki_by_menu.get(decision.menu_id, [])
             ]
-            if not wiki_passages:
+            if not wiki_passages and not criteria.subjective_groups():
                 continue
             criterion_evidence = []
+            direct_feature_facts: list[EvidenceReference] = []
             for category, (_strength, support) in sorted(
                 supports_by_menu.get(decision.menu_id, {}).items()
             ):
+                reference = EvidenceReference(
+                    evidence_id=str(support["evidence_id"]),
+                    evidence_type=(
+                        "MENU_FACT"
+                        if str(support["evidence_scope"]) == "MENU_DIRECT"
+                        else "WIKI_PASSAGE"
+                    ),
+                    content=str(support["content"]),
+                    score=round(float(support["support_strength"]), 6),
+                )
                 criterion_evidence.append(
                     CriterionEvidence(
                         category_code=cast(Any, category),
                         selected_value_code=str(support["option_code"]),
-                        evidence=[
-                            EvidenceReference(
-                                evidence_id=str(support["evidence_chunk_id"]),
-                                evidence_type="WIKI_PASSAGE",
-                                content=str(support["content"]),
-                                score=round(float(support["support_strength"]), 6),
-                            )
-                        ],
+                        evidence=[reference],
                     )
                 )
+                if reference.evidence_type == "MENU_FACT":
+                    direct_feature_facts.append(reference)
             facts = [
                 EvidenceReference(
                     evidence_id=f"fact_{decision.menu_id}_price",
@@ -3410,15 +3711,37 @@ class OracleYobiRepository:
                         else "The source did not provide a reviewed spice level."
                     ),
                 ),
+                *direct_feature_facts,
+            ]
+            channel_fusion = channel_fusion_by_menu.get(
+                decision.menu_id,
+                {"channel_ranks": {}, "rrf_contributions": {}, "rrf_score": 0.0},
+            )
+            retrieval_channels = [
+                channel for channel in named_channels if channel in channel_fusion["channel_ranks"]
             ]
             trace = {
                 **decision.trace_payload(),
                 "qualified_candidate_count": len(candidate_rows),
                 "support_manifest_sha256": family.support_manifest_sha256,
+                "feature_manifest_sha256": family.feature_manifest_sha256,
+                "semantic_channel_status": semantic_channel_status,
+                "retrieval_channels": retrieval_channels,
+                "channel_fusion": channel_fusion,
+                "channel_candidate_counts": {
+                    "menu_feature": len(feature_channel_ids),
+                    "concept_support": len(concept_channel_ids),
+                    "semantic": len(semantic_channel_ids),
+                    "raw_union": raw_channel_union_count,
+                    "bounded_union_before_grounding": len(channel_union_ids),
+                },
             }
             menu = self._menu_summary(
                 row,
-                [f"Matches selected {item.category_code.replace('_', ' ')}" for item in criterion_evidence]
+                [
+                    f"Matches selected {item.category_code.replace('_', ' ')}"
+                    for item in criterion_evidence
+                ]
                 or ["Matches the selected objective filters"],
                 [],
                 EvidenceStatus.UNKNOWN,
@@ -3437,7 +3760,9 @@ class OracleYobiRepository:
                     criterion_evidence=criterion_evidence,
                     wiki_passages=wiki_passages,
                     menu_facts=facts,
-                    halal_certified=(True if criteria.dietary_filters.halal_certified_only else None),
+                    halal_certified=(
+                        True if criteria.dietary_filters.halal_certified_only else None
+                    ),
                     vegan_status=("LIKELY_FIT" if criteria.dietary_filters.vegan else "UNKNOWN"),
                     retrieval_score=decision.score,
                     server_rank=decision.rank,
@@ -3460,13 +3785,16 @@ class OracleYobiRepository:
             "evidence_ms": evidence_ms,
             "query_count": query_count,
             "selected_category_count": len(criteria.subjective_groups()),
+            "explicit_channel_count": len(set(feature_channel_ids) | set(concept_channel_ids)),
+            "menu_feature_channel_count": len(feature_channel_ids),
+            "concept_support_channel_count": len(concept_channel_ids),
+            "semantic_channel_count": len(semantic_channel_ids),
+            "semantic_channel_status": semantic_channel_status,
+            "raw_channel_union_count": raw_channel_union_count,
+            "channel_union_count": len(channel_union_ids),
             "fetched_candidate_count": len(candidate_rows),
-            "candidate_merchant_count": len(
-                {str(row["merchant_id"]) for row in candidate_rows}
-            ),
-            "candidate_concept_count": len(
-                {str(row["concept_id"]) for row in candidate_rows}
-            ),
+            "candidate_merchant_count": len({str(row["merchant_id"]) for row in candidate_rows}),
+            "candidate_concept_count": len({str(row["concept_id"]) for row in candidate_rows}),
             "support_row_count": len(support_rows),
             "wiki_row_count": sum(len(rows) for rows in wiki_by_menu.values()),
             "pipeline_ms": int((monotonic() - pipeline_started) * 1000),
@@ -3510,10 +3838,15 @@ class OracleYobiRepository:
                         embedding_model=str(row["embedding_model"]),
                         embedding_version=str(row["embedding_version"]),
                         support_manifest_sha256=str(row.get("support_manifest_sha256") or "0" * 64),
-                        ranking_policy_version=str(row.get("ranking_policy_version") or "legacy-llm-rank-v2"),
+                        feature_manifest_sha256=str(row.get("feature_manifest_sha256") or "0" * 64),
+                        ranking_policy_version=str(
+                            row.get("ranking_policy_version") or "legacy-llm-rank-v2"
+                        ),
                         ranking_policy_sha256=str(row.get("ranking_policy_sha256") or "0" * 64),
                         status=cast(Any, str(row["status"])),
-                        activated_at=_datetime(row["activated_at"]) if row.get("activated_at") else None,
+                        activated_at=_datetime(row["activated_at"])
+                        if row.get("activated_at")
+                        else None,
                     )
             if family is None:
                 raise RuntimeError("RECOMMENDATION_RELEASE_NOT_READY")
@@ -3587,7 +3920,7 @@ class OracleYobiRepository:
                 merchant_count = 0
                 reasons = unsupported_reasons
             else:
-                candidate_query = build_concept_candidate_query(
+                preview_query = build_concept_preview_count_query(
                     dialect="oracle",
                     criteria=criteria,
                     knowledge_release_id=family.knowledge_release_id,
@@ -3595,9 +3928,7 @@ class OracleYobiRepository:
                     service_area_id=service_area_id,
                     excluded_menu_ids=excluded,
                     eligibility_as_of=_now(),
-                    candidate_limit=None,
                 )
-                preview_query = build_concept_preview_query(candidate_query)
                 cursor.execute(preview_query.sql, preview_query.parameters)
                 row = cursor.fetchone()
                 menu_count = int(row[0]) if row else 0
@@ -6712,11 +7043,10 @@ class OracleYobiRepository:
                 cursor.execute(
                     """
                     SELECT COUNT(*) FROM menu
-                    WHERE embedding_vector IS NULL OR embedding_model IS NULL
-                      OR embedding_dimension IS NULL OR embedding_version IS NULL
+                    WHERE semantic_text IS NULL OR DBMS_LOB.GETLENGTH(semantic_text)=0
                     """
                 )
-                missing_vectors = int(cursor.fetchone()[0])
+                missing_semantic_text = int(cursor.fetchone()[0])
                 cursor.execute(
                     """
                     SELECT COUNT(*) FROM menu
@@ -6745,6 +7075,32 @@ class OracleYobiRepository:
                     catalog_release_id=external["catalog_release_id"],
                 )
                 active_family_row = _row(cursor)
+                semantic_embedding_count = 0
+                semantic_embedding_manifest_count = 0
+                semantic_embedding_invalid_count = 0
+                if active_family_row is not None:
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*),COUNT(DISTINCT embedding_manifest_sha256),
+                               SUM(CASE WHEN embedding_vector IS NULL
+                                          OR LENGTH(semantic_text_sha256)<>64
+                                          OR LENGTH(embedding_manifest_sha256)<>64
+                                        THEN 1 ELSE 0 END)
+                        FROM menu_semantic_embedding
+                        WHERE catalog_release_id=:catalog_release_id
+                          AND embedding_model=:embedding_model
+                          AND embedding_version=:embedding_version
+                          AND embedding_dimension=:embedding_dimension
+                        """,
+                        catalog_release_id=external["catalog_release_id"],
+                        embedding_model=self.embedding_provider.model,
+                        embedding_version=self.embedding_provider.version,
+                        embedding_dimension=self.embedding_provider.dimension,
+                    )
+                    semantic_embedding_row = cursor.fetchone()
+                    semantic_embedding_count = int(semantic_embedding_row[0] or 0)
+                    semantic_embedding_manifest_count = int(semantic_embedding_row[1] or 0)
+                    semantic_embedding_invalid_count = int(semantic_embedding_row[2] or 0)
                 release_id = str(source_release["release_id"]) if source_release else ""
                 cursor.execute(
                     """
@@ -6787,6 +7143,33 @@ class OracleYobiRepository:
                 )
                 reviewed_knowledge = cursor.fetchone()
                 cursor.execute(
+                    "SELECT COUNT(*) FROM menu_preference_feature "
+                    "WHERE knowledge_release_id=:release_id",
+                    release_id=release_id,
+                )
+                feature_count = int(cursor.fetchone()[0])
+                cursor.execute(
+                    "SELECT COUNT(*) FROM menu_preference_feature_evidence "
+                    "WHERE knowledge_release_id=:release_id",
+                    release_id=release_id,
+                )
+                feature_evidence_count = int(cursor.fetchone()[0])
+                cursor.execute(
+                    "SELECT COUNT(*),COUNT(DISTINCT menu_id) "
+                    "FROM menu_concept_membership "
+                    "WHERE knowledge_release_id=:release_id",
+                    release_id=release_id,
+                )
+                membership_counts = cursor.fetchone()
+                membership_count = int(membership_counts[0])
+                membership_menu_count = int(membership_counts[1])
+                cursor.execute(
+                    "SELECT COUNT(*) FROM menu_wiki_eligibility "
+                    "WHERE knowledge_release_id=:release_id",
+                    release_id=release_id,
+                )
+                wiki_eligible_menu_count = int(cursor.fetchone()[0])
+                cursor.execute(
                     """
                     SELECT (SELECT COUNT(*) FROM merchant WHERE is_synthetic<>0)
                          + (SELECT COUNT(*) FROM menu WHERE is_synthetic<>0)
@@ -6816,18 +7199,16 @@ class OracleYobiRepository:
                         expected_external
                         and expected_external == declared_external == actual_external
                     ),
-                    "external_provenance_exact": external_menu_count
-                    == actual_external["menu"]
+                    "external_provenance_exact": external_menu_count == actual_external["menu"]
                     and synthetic_core == 0,
                     "unknown_fields_preserved_as_null": unknown_fields_preserved
                     == actual_external["menu"],
-                    "menu_vectors_complete": missing_vectors == 0,
+                    "catalog_semantic_text_complete": missing_semantic_text == 0,
                     "required_options_valid": invalid_required_options == 0,
                     "source_release_catalog_compatible": bool(
                         source_release
                         and source_release["status"] == "READY"
-                        and source_release["catalog_version"]
-                        == external["catalog_release_id"]
+                        and source_release["catalog_version"] == external["catalog_release_id"]
                     ),
                     "single_demo_address_ready": address_status["ready"] is True,
                     "package_hashes_present": all(
@@ -6843,8 +7224,7 @@ class OracleYobiRepository:
                 }
                 recommendation_checks = {
                     "recommendation_family_active": active_family_row is not None,
-                    "classification_coverage_complete": classified_count
-                    == actual_external["menu"],
+                    "classification_coverage_complete": classified_count == actual_external["menu"],
                     "high_confidence_mapping_present": mapped_count > 0,
                     "unmapped_reasons_complete": blank_unmapped_reasons == 0,
                     "reviewed_wiki_documents_present": bool(
@@ -6865,12 +7245,34 @@ class OracleYobiRepository:
                         and len(str(active_family_row.get("support_manifest_sha256") or "")) == 64
                         and str(active_family_row.get("support_manifest_sha256")) != "0" * 64
                     ),
+                    "menu_preference_features_present": feature_count > 0,
+                    "menu_preference_evidence_present": feature_evidence_count > 0,
+                    "menu_concept_memberships_present": membership_count > 0,
+                    "wiki_eligibility_exactly_covers_membership_menus": (
+                        wiki_eligible_menu_count == membership_menu_count
+                        and membership_menu_count > 0
+                    ),
+                    "feature_manifest_valid": bool(
+                        active_family_row
+                        and len(str(active_family_row.get("feature_manifest_sha256") or "")) == 64
+                        and str(active_family_row.get("feature_manifest_sha256")) != "0" * 64
+                    ),
                     "ranking_policy_active": bool(
                         active_family_row
                         and str(active_family_row.get("ranking_policy_version"))
                         == RANKING_POLICY_VERSION
                         and len(str(active_family_row.get("ranking_policy_sha256") or "")) == 64
                         and str(active_family_row.get("ranking_policy_sha256")) != "0" * 64
+                    ),
+                    "semantic_embedding_identity_compatible": bool(
+                        active_family_row
+                        and str(active_family_row["embedding_model"])
+                        == self.embedding_provider.model
+                        and str(active_family_row["embedding_version"])
+                        == self.embedding_provider.version
+                        and semantic_embedding_count == actual_external["menu"]
+                        and semantic_embedding_manifest_count == 1
+                        and semantic_embedding_invalid_count == 0
                     ),
                 }
                 external_checks = {**source_integrity_checks, **recommendation_checks}
@@ -6894,7 +7296,14 @@ class OracleYobiRepository:
                     "source_integrity_ready": all(source_integrity_checks.values()),
                     "recommendation_ready": all(recommendation_checks.values()),
                     "canonical_ready": all(source_integrity_checks.values()),
-                    "vector_ready": missing_vectors == 0,
+                    "vector_ready": recommendation_checks[
+                        "semantic_embedding_identity_compatible"
+                    ],
+                    "semantic_channel_status": (
+                        "READY"
+                        if recommendation_checks["semantic_embedding_identity_compatible"]
+                        else "DISABLED_MODEL_MISMATCH"
+                    ),
                     "embedding_model": self.embedding_provider.model,
                     "last_seed_time": str(last_seed_time) if last_seed_time else None,
                     "knowledge_ready": all(recommendation_checks.values()),
@@ -6905,7 +7314,28 @@ class OracleYobiRepository:
                         "mapped_menus": mapped_count,
                         "unmapped_menus": unmapped_count,
                         "source_fact_rows": source_fact_rows,
+                        "menu_preference_features": feature_count,
+                        "menu_preference_feature_evidence": feature_evidence_count,
+                        "menu_concept_memberships": membership_count,
+                        "menu_concept_membership_menus": membership_menu_count,
+                        "wiki_eligible_menus": wiki_eligible_menu_count,
+                        "menu_semantic_embeddings": semantic_embedding_count,
+                        "menu_semantic_embedding_manifests": (
+                            semantic_embedding_manifest_count
+                        ),
                     },
+                    "feature_count": feature_count,
+                    "wiki_eligible_menu_count": wiki_eligible_menu_count,
+                    "feature_manifest_sha256": (
+                        str(active_family_row.get("feature_manifest_sha256"))
+                        if active_family_row
+                        else None
+                    ),
+                    "ranking_policy_version": (
+                        str(active_family_row.get("ranking_policy_version"))
+                        if active_family_row
+                        else None
+                    ),
                     "knowledge_release_id": (
                         str(source_release["release_id"]) if source_release else None
                     ),
@@ -6913,14 +7343,10 @@ class OracleYobiRepository:
                         str(source_release["embedding_model"]) if source_release else None
                     ),
                     "knowledge_embedding_dimension": (
-                        int(source_release["embedding_dimension"])
-                        if source_release
-                        else None
+                        int(source_release["embedding_dimension"]) if source_release else None
                     ),
                     "knowledge_embedding_version": (
-                        str(source_release["embedding_version"])
-                        if source_release
-                        else None
+                        str(source_release["embedding_version"]) if source_release else None
                     ),
                     "source_limitations": [
                         "NO_REVIEWED_INGREDIENT_DATA",

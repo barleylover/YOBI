@@ -30,7 +30,15 @@ def split_statements(sql: str) -> list[str]:
         statement = raw_statement.strip()
         if not statement:
             continue
-        if statement.upper().startswith(("BEGIN", "DECLARE")):
+        first_code_line = next(
+            (
+                line.lstrip().upper()
+                for line in statement.splitlines()
+                if line.strip() and not line.lstrip().startswith("--")
+            ),
+            "",
+        )
+        if first_code_line.startswith(("BEGIN", "DECLARE")):
             statements.append(statement)
         else:
             statements.append(statement.rstrip(";"))

@@ -68,7 +68,9 @@ def server_rank_golden_failures(path: Path = SERVER_RANK_GOLDEN_PATH) -> int:
     failures = int(policy.get("version") != RANKING_POLICY_VERSION)
     failures += int(policy.get("sha256") != RANKING_POLICY_SHA256)
     failures += int(policy.get("hard_constraint_accuracy_required") != 1.0)
-    failures += int(policy.get("frozen_result_limit") != 3)
+    failures += int(policy.get("server_candidate_limit") != 100)
+    failures += int(policy.get("llm_shortlist_limit") != 15)
+    failures += int(policy.get("final_result_limit") != 3)
     failures += int(fixture.get("baseline_boundary", {}).get("old_path_outcome") != "NO_MATCH")
 
     for case in fixture.get("golden_cases", []):
@@ -84,7 +86,7 @@ def server_rank_golden_failures(path: Path = SERVER_RANK_GOLDEN_PATH) -> int:
                 for item in case.get("candidates", [])
             ],
             has_soft_profile=False,
-            limit=int(policy.get("frozen_result_limit", 3)),
+            limit=int(policy.get("final_result_limit", 3)),
         )
         failures += int(
             [decision.menu_id for decision in decisions] != case.get("expected_order")

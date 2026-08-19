@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 from app.core.config import Settings
 from app.db.concept_query import (
     build_concept_candidate_query,
-    build_concept_preview_query,
+    build_concept_preview_count_query,
 )
 from app.domain.structured_recommendation import RecommendationCriteriaV2
 from build_external_knowledge_release import (
@@ -38,7 +38,7 @@ from build_external_knowledge_release import (
     verify_release_family,
 )
 
-CANDIDATE_LIMIT = 24
+CANDIDATE_LIMIT = 100
 CORE_CATEGORIES = (
     "cuisine_origins",
     "flavors",
@@ -51,13 +51,16 @@ CORE_CATEGORIES = (
 EXPECTED_INDEXES = (
     "IDX_CONCEPT_PREF_LOOKUP",
     "IDX_CONCEPT_PREF_CONCEPT",
-    "IDX_MENU_CONCEPT_HIGH",
+    "IDX_MENU_PREF_FEATURE_LOOKUP",
+    "IDX_MENU_PREF_FEATURE_MENU",
+    "IDX_MENU_CONCEPT_MEMBERSHIP_LOOKUP",
     "IDX_MENU_RECOMMEND_FILTER",
     "IDX_MENU_SOURCE_RESTRICT",
 )
 REQUIRED_PLAN_TABLES = (
     "CONCEPT_PREFERENCE_SUPPORT",
-    "MENU_CONCEPT_MAP",
+    "MENU_PREFERENCE_FEATURE",
+    "MENU_CONCEPT_MEMBERSHIP",
     "MENU",
     "MERCHANT",
 )
@@ -65,11 +68,30 @@ _BIND_PATTERN = re.compile(r":([A-Za-z][A-Za-z0-9_]*)")
 
 
 def _oracle_required_tables_planned(object_names: set[str]) -> bool:
-    explicit_tables = set(REQUIRED_PLAN_TABLES) - {"MENU_CONCEPT_MAP"}
-    mapping_access_present = bool(
-        {"MENU_CONCEPT_MAP", "IDX_MENU_CONCEPT_HIGH"} & object_names
+    explicit_tables = set(REQUIRED_PLAN_TABLES) - {
+        "MENU_PREFERENCE_FEATURE",
+        "MENU_CONCEPT_MEMBERSHIP",
+    }
+    feature_access_present = bool(
+        {
+            "MENU_PREFERENCE_FEATURE",
+            "IDX_MENU_PREF_FEATURE_LOOKUP",
+            "IDX_MENU_PREF_FEATURE_MENU",
+        }
+        & object_names
     )
-    return explicit_tables <= object_names and mapping_access_present
+    membership_access_present = bool(
+        {
+            "MENU_CONCEPT_MEMBERSHIP",
+            "IDX_MENU_CONCEPT_MEMBERSHIP_LOOKUP",
+        }
+        & object_names
+    )
+    return (
+        explicit_tables <= object_names
+        and feature_access_present
+        and membership_access_present
+    )
 
 
 def _criteria(category_code: str, option_code: str) -> RecommendationCriteriaV2:
@@ -98,7 +120,8 @@ def _criteria(category_code: str, option_code: str) -> RecommendationCriteriaV2:
 
 def _source_checks(sql: str, *, backend: str) -> dict[str, bool]:
     normalized = " ".join(sql.lower().split())
-    support_position = normalized.find("from menu_concept_map mapping")
+    feature_position = normalized.find("from menu_preference_feature feature")
+    membership_position = normalized.find("from menu_concept_membership membership")
     menu_position = normalized.find("from menu join merchant")
     limit_text = (
         "fetch first :candidate_limit rows only"
@@ -107,11 +130,14 @@ def _source_checks(sql: str, *, backend: str) -> dict[str, bool]:
     )
     return {
         "menu_star_absent": "menu.*" not in normalized,
-        "concept_support_first": (
-            support_position >= 0
+        "grounded_channels_first": (
+            feature_position >= 0
+            and membership_position >= 0
             and menu_position >= 0
-            and support_position < menu_position
+            and feature_position < menu_position
+            and membership_position < menu_position
             and "join concept_preference_support support" in normalized
+            and "support_status='contradicted'" in normalized
         ),
         "database_limit_bound": limit_text in normalized,
     }
@@ -131,7 +157,7 @@ def _representative_context(
     scope: str,
 ) -> tuple[str, str, str, str, str]:
     if scope == "staged":
-        external_plan = build_external_plan(cursor)
+        external_plan = build_external_plan(cursor, oracle=oracle)
         staged_verification = verify_release_family(
             cursor,
             oracle,
@@ -274,9 +300,10 @@ def _candidate_query(
     dict[str, Any],
     dict[str, bool],
 ]:
+    criteria = _criteria(category_code, option_code)
     query = build_concept_candidate_query(
         dialect="oracle" if backend == "oracle" else "sqlite",
-        criteria=_criteria(category_code, option_code),
+        criteria=criteria,
         knowledge_release_id=knowledge_release_id,
         certification_release_id=certification_release_id,
         service_area_id=service_area_id,
@@ -284,7 +311,15 @@ def _candidate_query(
         eligibility_as_of=datetime.now(timezone.utc),
         candidate_limit=CANDIDATE_LIMIT,
     )
-    preview = build_concept_preview_query(query)
+    preview = build_concept_preview_count_query(
+        dialect="oracle" if backend == "oracle" else "sqlite",
+        criteria=criteria,
+        knowledge_release_id=knowledge_release_id,
+        certification_release_id=certification_release_id,
+        service_area_id=service_area_id,
+        excluded_menu_ids=set(),
+        eligibility_as_of=datetime.now(timezone.utc),
+    )
     checks = _source_checks(query.sql, backend=backend)
     return (
         query.sql,
@@ -337,8 +372,9 @@ def _oracle_plan(connection: oracledb.Connection, *, scope: str) -> dict[str, An
             SELECT index_name FROM user_indexes
             WHERE index_name IN (
               'IDX_CONCEPT_PREF_LOOKUP','IDX_CONCEPT_PREF_CONCEPT',
-              'IDX_MENU_CONCEPT_HIGH','IDX_MENU_RECOMMEND_FILTER',
-              'IDX_MENU_SOURCE_RESTRICT'
+              'IDX_MENU_PREF_FEATURE_LOOKUP','IDX_MENU_PREF_FEATURE_MENU',
+              'IDX_MENU_CONCEPT_MEMBERSHIP_LOOKUP',
+              'IDX_MENU_RECOMMEND_FILTER','IDX_MENU_SOURCE_RESTRICT'
             )
             """
         )
@@ -439,7 +475,13 @@ def _sqlite_plan(path: Path, *, scope: str) -> dict[str, Any]:
                 "actual_plan_present": bool(rows),
                 "required_tables_planned": all(
                     any(token in detail for detail in details)
-                    for token in ("SUPPORT", "MAPPING", "MENU", "MERCHANT")
+                    for token in (
+                        "SUPPORT",
+                        "FEATURE",
+                        "CONCEPT_MEMBERSHIP",
+                        "MENU",
+                        "MERCHANT",
+                    )
                 ),
                 "expected_indexes_available": set(EXPECTED_INDEXES)
                 <= available_indexes,

@@ -183,7 +183,7 @@ export const api = {
     request<RecommendationBatchV2>(`/api/v1/sessions/${sessionId}/recommendations`, {
       method: "POST",
       body: JSON.stringify(input),
-    }, { timeoutMs: 15_000, signal }),
+    }, { timeoutMs: 30_000, signal }),
   getRecommendationRequest: (sessionId: string, requestId: string, signal?: AbortSignal) =>
     request<RecommendationBatchV2>(
       `/api/v1/sessions/${sessionId}/recommendation-requests/${encodeURIComponent(requestId)}`,

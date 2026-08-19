@@ -24,8 +24,8 @@
 ---
 # Yogurt
 
-Yogurt is a cultured food or drink family with plain, sweetened, frozen and topping-based formats in the catalog.
+Yogurt is a cultured food or drink family with plain, sweetened, frozen and topping-based formats. Spoonable bowls, drinks and frozen desserts can therefore share the same broad name.
 
-It is tangy and creamy or drinkable, usually served cool. Dairy-free versions exist, so the name alone is not a dairy guarantee.
+It is usually served cool or frozen, with a tangy, sour or sweet flavour and a soft, thick and creamy or drinkable texture. Dairy-free versions exist, so the name alone is not a dairy guarantee.
 
 This is general culinary guidance, not a statement about one merchant's recipe, ingredients, certification, allergens, portion or menu-specific spice level. Check the current merchant information before ordering.

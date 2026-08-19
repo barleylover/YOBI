@@ -1,0 +1,43 @@
+{
+  "constraints": {
+    "explicit_plus_minimum_at_least": 0.55,
+    "review_prior_at_most": 0.05,
+    "semantic_at_most": 0.25
+  },
+  "dataset_manifest_sha256": "3d93ea9db9bfce61c451480d00d48460a5066b662005c16c295346cd84dce4ac",
+  "grid_step": 0.05,
+  "holdout_silver_metrics": {
+    "mean_retrieval_latency_ms": 1646.256506,
+    "ndcg_at_3": 1.0,
+    "negative_false_positive_rate": 0,
+    "positive_three_result_coverage": 1,
+    "precision_at_3": 1.0,
+    "recall_at_20": 1.0,
+    "weights": {
+      "direct_evidence_ratio": 0.15,
+      "explicit": 0.35,
+      "minimum_category_support": 0.2,
+      "review_prior": 0.05,
+      "semantic": 0.25
+    }
+  },
+  "policy_sha256": "ed921a0a6a7e3af190186cf8032b0a192331e22c23c2bb189d089bf533829a05",
+  "policy_version": "yobi-hybrid-rank-v2",
+  "query_count": 140,
+  "schema_version": "1",
+  "winner": {
+    "mean_retrieval_latency_ms": 1542.052472,
+    "ndcg_at_3": 1.0,
+    "negative_false_positive_rate": 0,
+    "positive_three_result_coverage": 0.984,
+    "precision_at_3": 0.994666666667,
+    "recall_at_20": 1.0,
+    "weights": {
+      "direct_evidence_ratio": 0.15,
+      "explicit": 0.35,
+      "minimum_category_support": 0.2,
+      "review_prior": 0.05,
+      "semantic": 0.25
+    }
+  }
+}

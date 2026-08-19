@@ -45,6 +45,41 @@ from app.genai.recommendation_generator import (
 from app.services.demo_control import DemoControl
 
 
+def compact_generation_payload(
+    item: EvidencePoolItem,
+    *,
+    max_wiki_passages: int,
+) -> dict[str, Any]:
+    """Keep grounding fields while dropping persistence-only ranking metadata."""
+
+    payload = item.generation_payload()
+    payload["wiki_passages"] = payload["wiki_passages"][:max_wiki_passages]
+    for operational_key in (
+        "ranking_trace",
+        "knowledge_release_id",
+        "catalog_release_id",
+        "recommendation_release_family_id",
+        "menu_facts",
+    ):
+        payload.pop(operational_key, None)
+    criterion_evidence = payload.get("criterion_evidence", {})
+    if isinstance(criterion_evidence, dict):
+        for category in criterion_evidence.values():
+            if not isinstance(category, dict):
+                continue
+            for value in category.values():
+                if not isinstance(value, dict):
+                    continue
+                references = value.get("evidence", [])
+                if isinstance(references, list):
+                    value["evidence"] = [
+                        {key: field for key, field in reference.items() if key != "content"}
+                        for reference in references
+                        if isinstance(reference, dict)
+                    ]
+    return payload
+
+
 class StructuredRecommendationService:
     """V2 orchestration: eligibility/retrieval first, one generation dispatch second."""
 
@@ -62,6 +97,9 @@ class StructuredRecommendationService:
         self.generator = generator or RecommendationGenerator(settings)
         self._preference_selection_metrics: dict[str, dict[str, float | int]] = {}
         self._comparison_locks: dict[str, Lock] = {}
+        self._request_locks: dict[str, Lock] = {}
+        self._request_registry_lock = Lock()
+        self._active_request_keys: set[str] = set()
 
     def commit_criteria(
         self,
@@ -149,12 +187,37 @@ class StructuredRecommendationService:
         profile: Profile,
         request: RecommendationRequestInput,
     ) -> RecommendationBatchV2:
-        started = monotonic()
+        """Run the recommendation synchronously for CLI/smoke compatibility.
+
+        The public HTTP route uses :meth:`begin_recommendation` and schedules
+        :meth:`process_reserved_recommendation` after returning ``PENDING``.
+        Keeping this wrapper preserves deterministic unit tests and operational
+        harnesses without making the browser hold one long-lived request open.
+        """
+
+        pending, should_process = self.begin_recommendation(session, profile, request)
+        if not should_process:
+            return pending
+        return self.process_reserved_recommendation(session, profile, request)
+
+    def begin_recommendation(
+        self,
+        session: Session,
+        profile: Profile,
+        request: RecommendationRequestInput,
+    ) -> tuple[RecommendationBatchV2, bool]:
+        """Reserve one idempotent request and return immediately.
+
+        The boolean is true only when this process claims the request for
+        background work. A duplicate POST can therefore resume a CREATED row
+        after a process restart, while the database dispatch transition still
+        prevents a second provider call.
+        """
+
         criteria_record = self.repository.get_recommendation_criteria(
             session.session_id,
             request.criteria_version,
         )
-        criteria_ms = int((monotonic() - started) * 1000)
         if criteria_record is None:
             raise KeyError("RECOMMENDATION_CRITERIA_NOT_FOUND")
         request_hash = self._request_hash(session, profile, criteria_record, request)
@@ -163,7 +226,79 @@ class StructuredRecommendationService:
             request,
             request_hash,
         )
-        if record.duplicate or record.status is not RecommendationRequestStatus.CREATED:
+        should_process = (
+            record.status is RecommendationRequestStatus.CREATED
+            and self._claim_request_processing(session.session_id, request.request_id)
+        )
+        return self._live_batch(record), should_process
+
+    def process_reserved_recommendation(
+        self,
+        session: Session,
+        profile: Profile,
+        request: RecommendationRequestInput,
+    ) -> RecommendationBatchV2:
+        """Finish one already-reserved request exactly once.
+
+        FastAPI executes this synchronous function in its background thread
+        pool. The per-request lock protects the single-worker deployment from
+        accidental duplicate scheduling while the database reservation remains
+        the cross-request idempotency boundary.
+        """
+
+        lock_key = self._request_lock_key(session.session_id, request.request_id)
+        lock = self._request_locks.setdefault(lock_key, Lock())
+        try:
+            with lock:
+                try:
+                    return self._process_reserved_recommendation(session, profile, request)
+                except Exception as exc:
+                    return self._fail_unhandled_background_request(
+                        session=session,
+                        request=request,
+                        exc=exc,
+                    )
+        finally:
+            with self._request_registry_lock:
+                self._active_request_keys.discard(lock_key)
+                if self._request_locks.get(lock_key) is lock:
+                    self._request_locks.pop(lock_key, None)
+
+    @staticmethod
+    def _request_lock_key(session_id: str, request_id: str) -> str:
+        return f"{session_id}:{request_id}"
+
+    def _claim_request_processing(self, session_id: str, request_id: str) -> bool:
+        """Claim one process-local worker slot for a persisted CREATED row."""
+
+        lock_key = self._request_lock_key(session_id, request_id)
+        with self._request_registry_lock:
+            if lock_key in self._active_request_keys:
+                return False
+            self._active_request_keys.add(lock_key)
+            return True
+
+    def _process_reserved_recommendation(
+        self,
+        session: Session,
+        profile: Profile,
+        request: RecommendationRequestInput,
+    ) -> RecommendationBatchV2:
+        started = monotonic()
+        criteria_record = self.repository.get_recommendation_criteria(
+            session.session_id,
+            request.criteria_version,
+        )
+        criteria_ms = int((monotonic() - started) * 1000)
+        if criteria_record is None:
+            raise KeyError("RECOMMENDATION_CRITERIA_NOT_FOUND")
+        record = self.repository.get_recommendation_request(
+            session.session_id,
+            request.request_id,
+        )
+        if record is None:
+            raise KeyError("RECOMMENDATION_REQUEST_NOT_FOUND")
+        if record.status is not RecommendationRequestStatus.CREATED:
             return self._live_batch(record)
 
         retrieval_started = monotonic()
@@ -172,7 +307,7 @@ class StructuredRecommendationService:
             profile,
             criteria_record.criteria,
             request.mode,
-            self.settings.recommendation_evidence_pool_limit,
+            self.settings.recommendation_candidate_limit,
             release_family_id=record.release_family_id,
             eligibility_as_of=record.eligibility_as_of,
             raw_hits_per_value=self.settings.recommendation_raw_hits_per_value,
@@ -184,11 +319,12 @@ class StructuredRecommendationService:
             "get_recommendation_retrieval_metrics",
             None,
         )
-        retrieval_metrics = (
-            metrics_reader(session.session_id) if callable(metrics_reader) else {}
-        )
+        retrieval_metrics = metrics_reader(session.session_id) if callable(metrics_reader) else {}
         freeze_started = monotonic()
-        evidence_pool = self._freeze_server_candidates(evidence_pool)
+        evidence_pool = self._freeze_server_candidates(
+            evidence_pool,
+            limit=self.settings.recommendation_llm_shortlist_limit,
+        )
         freeze_ms = int((monotonic() - freeze_started) * 1000)
         if not evidence_pool:
             exhausted = request.mode in {
@@ -233,23 +369,44 @@ class StructuredRecommendationService:
             request.request_id,
             evidence_pool,
         )
-        if dispatched.status is not RecommendationRequestStatus.DISPATCHED:
+        if (
+            dispatched.status is not RecommendationRequestStatus.DISPATCHED
+            or dispatched.duplicate
+        ):
             return self._batch_from_record(dispatched)
 
         soft_profile_context = {"preferred_language": profile.preferred_language}
         provider_started = monotonic()
+        provider_metrics: dict[str, int] = {}
+
+        def mark_provider_call() -> None:
+            called = self.repository.mark_recommendation_provider_called(
+                session.session_id,
+                request.request_id,
+            )
+            if called.dispatch_count != 1:
+                raise RuntimeError("RECOMMENDATION_PROVIDER_CALL_NOT_RECORDED")
+
         try:
             if self.demo_control.mode in {"force_fallback", "force_genai_timeout"}:
                 raise RuntimeError("DEMO_FORCED_RECOMMENDATION_FALLBACK")
+            if not self.settings.recommendation_llm_selection_enabled:
+                raise RuntimeError("RECOMMENDATION_LLM_SELECTION_DISABLED")
             generated = self.generator.generate(
                 criteria=criteria_record.criteria.model_dump(mode="json"),
                 soft_profile_context=soft_profile_context,
                 evidence_pool=pool_payload,
                 locale=profile.preferred_language,
+                before_provider_call=mark_provider_call,
             )
+            provider_metrics = generated.provider_metrics
             if generated.status is RecommendationGenerationStatus.NO_MATCH:
                 raise ValueError("GENERATOR_NO_MATCH_NOT_AUTHORIZED")
-            result_json = self._validated_result_payload(generated, evidence_pool)
+            result_json = self._validated_result_payload(
+                generated,
+                evidence_pool,
+                max_wiki_passages=self.settings.recommendation_llm_passages_per_menu,
+            )
             status = RecommendationRequestStatus.COMPLETED
             snapshot = self._snapshot_for_result(
                 session=session,
@@ -266,11 +423,25 @@ class StructuredRecommendationService:
                 status,
                 result_json=result_json,
                 snapshot=snapshot,
+                provider_metrics=provider_metrics,
             )
             persistence_ms = int((monotonic() - persistence_started) * 1000)
         except Exception as exc:
             provider_ms = int((monotonic() - provider_started) * 1000)
             failure_code = self._failure_code(exc)
+            grounding_rejection_code = getattr(exc, "safe_reason_code", None)
+            grounding_rejection_stage = getattr(exc, "safe_reason_stage", None)
+            grounding_rejection_detail = getattr(exc, "safe_reason_detail", None)
+            safe_metadata = getattr(exc, "safe_metadata", None)
+            if isinstance(safe_metadata, dict):
+                provider_metrics = {
+                    str(key): int(value)
+                    for key, value in safe_metadata.items()
+                    if isinstance(key, str)
+                    and isinstance(value, int)
+                    and not isinstance(value, bool)
+                    and value >= 0
+                }
             fallback_json = self._search_fallback_payload(
                 criteria_record,
                 evidence_pool,
@@ -291,6 +462,20 @@ class StructuredRecommendationService:
                 result_json=fallback_json,
                 snapshot=fallback_snapshot,
                 failure_code=failure_code,
+                provider_metrics=provider_metrics,
+                grounding_rejection_code=(
+                    grounding_rejection_code if isinstance(grounding_rejection_code, str) else None
+                ),
+                grounding_rejection_stage=(
+                    grounding_rejection_stage
+                    if isinstance(grounding_rejection_stage, str)
+                    else None
+                ),
+                grounding_rejection_detail=(
+                    grounding_rejection_detail
+                    if isinstance(grounding_rejection_detail, str)
+                    else None
+                ),
             )
             persistence_ms = int((monotonic() - persistence_started) * 1000)
         self._log_terminal_timing(
@@ -304,16 +489,86 @@ class StructuredRecommendationService:
             provider_ms=provider_ms,
             persistence_ms=persistence_ms,
             started=started,
-            final_count=len(evidence_pool),
+            final_count=len((completed.result_json or {}).get("recommendations", [])),
+        )
+        return self._live_batch(completed)
+
+    def _fail_unhandled_background_request(
+        self,
+        *,
+        session: Session,
+        request: RecommendationRequestInput,
+        exc: Exception,
+    ) -> RecommendationBatchV2:
+        """Persist a safe terminal state when retrieval/setup fails unexpectedly."""
+
+        record = self.repository.get_recommendation_request(
+            session.session_id,
+            request.request_id,
+        )
+        if record is None:
+            raise exc
+        if record.status in {
+            RecommendationRequestStatus.COMPLETED,
+            RecommendationRequestStatus.NO_RESULTS,
+            RecommendationRequestStatus.NO_MATCH,
+            RecommendationRequestStatus.SEARCH_FALLBACK,
+            RecommendationRequestStatus.FAILED,
+            RecommendationRequestStatus.UNKNOWN_AFTER_DISPATCH,
+        }:
+            return self._live_batch(record)
+
+        provider_result_unknown = (
+            record.status is RecommendationRequestStatus.DISPATCHED and record.dispatch_count == 1
+        )
+        terminal_status = (
+            RecommendationRequestStatus.UNKNOWN_AFTER_DISPATCH
+            if provider_result_unknown
+            else RecommendationRequestStatus.FAILED
+        )
+        failure_code = (
+            "DISPATCH_RESULT_UNKNOWN"
+            if provider_result_unknown
+            else (
+                "GENERATION_SETUP_FAILED"
+                if record.status is RecommendationRequestStatus.DISPATCHED
+                else "RETRIEVAL_FAILED"
+            )
+        )
+        try:
+            completed = self.repository.complete_recommendation_request(
+                session.session_id,
+                request.request_id,
+                terminal_status,
+                failure_code=failure_code,
+            )
+        except (RuntimeError, ValueError):
+            canonical = self.repository.get_recommendation_request(
+                session.session_id,
+                request.request_id,
+            )
+            if canonical is None:
+                raise exc from None
+            completed = canonical
+        log_event(
+            logging.getLogger("yobi"),
+            event="structured_recommendation_background_failed",
+            session_id_hash=hashlib.sha256(session.session_id.encode()).hexdigest(),
+            request_id_hash=hashlib.sha256(request.request_id.encode()).hexdigest(),
+            safe_error_code=failure_code,
+            exception_type=type(exc).__name__,
         )
         return self._live_batch(completed)
 
     @staticmethod
     def _freeze_server_candidates(
         evidence_pool: list[EvidencePoolItem],
+        *,
+        limit: int,
     ) -> list[EvidencePoolItem]:
         frozen: list[EvidencePoolItem] = []
-        for rank, item in enumerate(evidence_pool[:3], start=1):
+        wiki_grounded_pool = [item for item in evidence_pool if item.wiki_passages]
+        for rank, item in enumerate(wiki_grounded_pool[:limit], start=1):
             trace = {
                 **item.ranking_trace,
                 "rank": rank,
@@ -357,7 +612,13 @@ class StructuredRecommendationService:
             "generation_dispatch_count": record.dispatch_count,
             "ranking_policy_version": record.ranking_policy_version,
             "support_manifest_sha256": record.support_manifest_sha256,
+            "feature_manifest_sha256": record.feature_manifest_sha256,
             "safe_error_code": record.failure_code,
+            "grounding_rejection_code": record.ranking_trace_json.get("grounding_rejection_code"),
+            "grounding_rejection_stage": record.ranking_trace_json.get("grounding_rejection_stage"),
+            "grounding_rejection_detail": record.ranking_trace_json.get(
+                "grounding_rejection_detail"
+            ),
         }
         # New-policy repositories expose measured SQL/support/rerank/evidence
         # stages.  Legacy/fake repositories omit them instead of emitting
@@ -376,6 +637,7 @@ class StructuredRecommendationService:
             "candidate_concept_count",
             "support_row_count",
             "wiki_row_count",
+            "semantic_channel_status",
         ):
             if key in retrieval_metrics:
                 fields[key] = retrieval_metrics[key]
@@ -389,22 +651,6 @@ class StructuredRecommendationService:
         record = self.repository.get_recommendation_request(session_id, request_id)
         if (
             record is not None
-            and record.status is RecommendationRequestStatus.CREATED
-            and record.created_at
-            <= datetime.now(timezone.utc)
-            - timedelta(seconds=self.settings.recommendation_request_orphan_seconds)
-        ):
-            try:
-                record = self.repository.complete_recommendation_request(
-                    session_id,
-                    request_id,
-                    RecommendationRequestStatus.FAILED,
-                    failure_code="RETRIEVAL_OWNER_LOST",
-                )
-            except (RuntimeError, ValueError):
-                record = self.repository.get_recommendation_request(session_id, request_id)
-        if (
-            record is not None
             and record.status is RecommendationRequestStatus.DISPATCHED
             and record.dispatched_at is not None
             and record.dispatched_at
@@ -412,11 +658,18 @@ class StructuredRecommendationService:
             - timedelta(seconds=self.settings.recommendation_request_orphan_seconds)
         ):
             try:
+                provider_called = record.dispatch_count == 1
                 record = self.repository.complete_recommendation_request(
                     session_id,
                     request_id,
-                    RecommendationRequestStatus.UNKNOWN_AFTER_DISPATCH,
-                    failure_code="DISPATCH_RESULT_UNKNOWN",
+                    (
+                        RecommendationRequestStatus.UNKNOWN_AFTER_DISPATCH
+                        if provider_called
+                        else RecommendationRequestStatus.FAILED
+                    ),
+                    failure_code=(
+                        "DISPATCH_RESULT_UNKNOWN" if provider_called else "PROVIDER_CALL_OWNER_LOST"
+                    ),
                 )
             except (RuntimeError, ValueError):
                 # A concurrent owner may have committed while the stale read was
@@ -425,6 +678,37 @@ class StructuredRecommendationService:
         if record is None:
             return None
         return self._live_batch(record)
+
+    def recover_request(
+        self,
+        session: Session,
+        profile: Profile,
+        request_id: str,
+    ) -> tuple[RecommendationBatchV2 | None, RecommendationRequestInput | None]:
+        """Read a request and claim resumable pre-dispatch work when necessary.
+
+        A provider-dispatched request is never resumed: ``get_request`` keeps
+        the existing unknown-result timeout contract for that state. Only a
+        persisted CREATED row can be reconstructed and scheduled again, which
+        makes browser polling recover a request after an app process restart.
+        """
+
+        record = self.repository.get_recommendation_request(session.session_id, request_id)
+        if record is None:
+            return None, None
+        if record.status is RecommendationRequestStatus.CREATED:
+            resumable = RecommendationRequestInput(
+                request_id=record.request_id,
+                expected_state_version=record.state_version,
+                criteria_version=record.criteria_version,
+                mode=record.mode,
+            )
+            should_process = self._claim_request_processing(
+                session.session_id,
+                request_id,
+            )
+            return self._live_batch(record), resumable if should_process else None
+        return self.get_request(session.session_id, request_id), None
 
     def compare_recommendations(
         self,
@@ -463,8 +747,7 @@ class StructuredRecommendationService:
             raise ValueError("RECOMMENDATION_COMPARISON_REQUIRES_TWO_MENUS")
         copy = localized_recommendation_fallback_copy(profile.preferred_language)
         evidence_items = [
-            self._comparison_evidence(item, profile.preferred_language)
-            for item in recommendations
+            self._comparison_evidence(item, profile.preferred_language) for item in recommendations
         ]
         try:
             if self.demo_control.mode in {"force_fallback", "force_genai_timeout"}:
@@ -576,9 +859,7 @@ class StructuredRecommendationService:
                 RecommendationComparisonItemV2(
                     menu_id=menu_id,
                     name=name,
-                    key_difference=copy.price_difference.format(
-                        price=int(menu.get("price") or 0)
-                    ),
+                    key_difference=copy.price_difference.format(price=int(menu.get("price") or 0)),
                     taste_texture=(
                         copy.general_reference.format(passage=passages[0])
                         if passages
@@ -703,14 +984,11 @@ class StructuredRecommendationService:
         if record.criteria.price_bands:
             values.append(
                 "/".join(
-                    PREFERENCE_OPTIONS[code].labels[locale]
-                    for code in record.criteria.price_bands
+                    PREFERENCE_OPTIONS[code].labels[locale] for code in record.criteria.price_bands
                 )
             )
         if record.criteria.max_spice_level < 5:
-            values.append(
-                copy.max_spice.format(level=record.criteria.max_spice_level)
-            )
+            values.append(copy.max_spice.format(level=record.criteria.max_spice_level))
         if record.criteria.dietary_filters.halal_certified_only:
             values.append(copy.halal_only)
         if record.criteria.dietary_filters.vegan:
@@ -718,49 +996,37 @@ class StructuredRecommendationService:
         return "; ".join(values) or copy.criteria_default
 
     def _generation_payload(self, item: EvidencePoolItem) -> dict[str, Any]:
-        """Bound Wiki prose bodies while retaining criterion-to-evidence IDs."""
+        """Send only fields needed for bounded selection and grounded prose."""
 
-        payload = item.generation_payload()
-        payload["wiki_passages"] = payload["wiki_passages"][
-            : self.settings.recommendation_passages_per_menu
-        ]
-        criterion_evidence = payload.get("criterion_evidence", {})
-        if isinstance(criterion_evidence, dict):
-            for category in criterion_evidence.values():
-                if not isinstance(category, dict):
-                    continue
-                for value in category.values():
-                    if not isinstance(value, dict):
-                        continue
-                    references = value.get("evidence", [])
-                    if isinstance(references, list):
-                        value["evidence"] = [
-                            {key: field for key, field in reference.items() if key != "content"}
-                            for reference in references
-                            if isinstance(reference, dict)
-                        ]
-        return payload
+        return compact_generation_payload(
+            item,
+            max_wiki_passages=self.settings.recommendation_llm_passages_per_menu,
+        )
 
     @staticmethod
     def _validated_result_payload(
         generated: Any,
         evidence_pool: list[EvidencePoolItem],
+        *,
+        max_wiki_passages: int,
     ) -> dict[str, Any]:
-        generated_by_id = {item.menu_id: item for item in generated.recommendations}
+        pool_by_id = {item.menu.menu_id: item for item in evidence_pool}
         recommendations: list[dict[str, Any]] = []
-        for rank, pool_item in enumerate(evidence_pool, start=1):
-            generated_item = generated_by_id[pool_item.menu.menu_id]
+        for rank, generated_item in enumerate(generated.recommendations, start=1):
+            pool_item = pool_by_id.get(generated_item.menu_id)
+            if pool_item is None:
+                raise ValueError("GENERATED_MENU_OUTSIDE_SERVER_SHORTLIST")
+            wiki_passages = pool_item.wiki_passages[:max_wiki_passages]
+            if not wiki_passages:
+                raise ValueError("GENERATED_MENU_WIKI_EVIDENCE_MISSING")
             recommendations.append(
                 {
                     **generated_item.model_dump(mode="json"),
                     "rank": rank,
                     "menu_id": pool_item.menu.menu_id,
                     "menu": pool_item.menu.model_dump(mode="json"),
-                    "wiki_passages": [
-                        passage.model_dump(mode="json")
-                        for passage in pool_item.wiki_passages
-                        if passage.evidence_id in generated_item.wiki_evidence_ids
-                    ],
+                    "wiki_evidence_ids": [passage.evidence_id for passage in wiki_passages],
+                    "wiki_passages": [passage.model_dump(mode="json") for passage in wiki_passages],
                     "halal_certified": pool_item.halal_certified,
                     "halal_scope_label": pool_item.halal_scope_label,
                     "vegan_status": pool_item.vegan_status,

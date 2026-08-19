@@ -4,19 +4,28 @@ import inspect
 import json
 import re
 import sqlite3
+from array import array
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from app.db.browse_rankings import food_ranking_sql, synthetic_demo_ranking_metrics
-from app.db.concept_query import build_concept_candidate_query, build_concept_preview_query
+from app.db.concept_query import (
+    build_candidate_recall_channel_query,
+    build_concept_candidate_query,
+    build_concept_preview_count_query,
+    build_concept_preview_query,
+    build_semantic_candidate_query,
+)
 from app.db.oracle_repository import OracleYobiRepository
 from app.db.sqlite_repository import SQLiteYobiRepository
 from app.domain.concept_ranking import (
     RANKING_POLICY_SHA256,
     RANKING_POLICY_VERSION,
     ConceptRankCandidate,
+    candidate_channel_fusion_trace,
+    merge_candidate_channels,
     rank_concept_candidates,
 )
 from app.domain.structured_recommendation import RecommendationCriteriaV2
@@ -52,6 +61,34 @@ def _connection() -> sqlite3.Connection:
           knowledge_release_id TEXT, concept_id TEXT, category_code TEXT,
           option_code TEXT, support_status TEXT, support_strength REAL,
           evidence_chunk_id TEXT
+        );
+        CREATE TABLE menu_preference_feature (
+          knowledge_release_id TEXT, feature_id TEXT, menu_id TEXT,
+          category_code TEXT, option_code TEXT, support_status TEXT,
+          support_strength REAL, evidence_scope TEXT
+        );
+        CREATE TABLE menu_concept_membership (
+          knowledge_release_id TEXT, menu_id TEXT, concept_id TEXT,
+          membership_role TEXT
+        );
+        CREATE TABLE menu_wiki_eligibility (
+          knowledge_release_id TEXT, menu_id TEXT,
+          reviewed_chunk_count INTEGER, compiled_at TEXT,
+          PRIMARY KEY (knowledge_release_id, menu_id)
+        );
+        CREATE TABLE dish_concept_closure (
+          release_id TEXT, ancestor_concept_id TEXT, descendant_concept_id TEXT,
+          depth INTEGER, inherit_claims INTEGER,
+          PRIMARY KEY (release_id, ancestor_concept_id, descendant_concept_id)
+        );
+        CREATE TABLE knowledge_document (
+          release_id TEXT, document_id TEXT, source_type TEXT, review_status TEXT,
+          PRIMARY KEY (release_id, document_id)
+        );
+        CREATE TABLE knowledge_chunk (
+          release_id TEXT, chunk_id TEXT, document_id TEXT, concept_id TEXT,
+          facet TEXT, metadata_json TEXT,
+          PRIMARY KEY (release_id, chunk_id)
         );
         """
     )
@@ -96,6 +133,33 @@ def _insert_menu(
     connection.execute(
         "INSERT INTO menu_concept_map VALUES (?,?,?,?,?)",
         (menu_id, "knowledge-v1", concept_id, "MAPPED", "high"),
+    )
+    connection.execute(
+        "INSERT INTO menu_concept_membership VALUES (?,?,?,?)",
+        ("knowledge-v1", menu_id, concept_id, "PRIMARY"),
+    )
+    connection.execute(
+        "INSERT OR IGNORE INTO dish_concept_closure VALUES (?,?,?,?,?)",
+        ("knowledge-v1", concept_id, concept_id, 0, 1),
+    )
+    connection.execute(
+        "INSERT OR IGNORE INTO knowledge_document VALUES (?,?,?,?)",
+        ("knowledge-v1", f"document-{concept_id}", "SYNTHETIC_WIKI", "REVIEWED_DEMO"),
+    )
+    connection.execute(
+        "INSERT OR IGNORE INTO knowledge_chunk VALUES (?,?,?,?,?,?)",
+        (
+            "knowledge-v1",
+            f"wiki-{concept_id}",
+            f"document-{concept_id}",
+            concept_id,
+            "character",
+            '{"recommendation_visibility":"PUBLIC_RAG"}',
+        ),
+    )
+    connection.execute(
+        "INSERT INTO menu_wiki_eligibility VALUES (?,?,?,?)",
+        ("knowledge-v1", menu_id, 1, "2026-08-19T00:00:00+00:00"),
     )
 
 
@@ -165,6 +229,44 @@ def test_same_category_is_max_or_then_cross_categories_are_and() -> None:
         connection.close()
 
 
+def test_wiki_eligibility_is_applied_before_candidate_ranking() -> None:
+    connection = _connection()
+    try:
+        _insert_menu(
+            connection,
+            menu_id="menu-grounded",
+            merchant_id="merchant-grounded",
+            concept_id="grounded",
+        )
+        _insert_menu(
+            connection,
+            menu_id="menu-without-wiki",
+            merchant_id="merchant-without-wiki",
+            concept_id="without-wiki",
+        )
+        _support(connection, "grounded", "flavors", "SPICY", 0.8)
+        _support(connection, "without-wiki", "flavors", "SPICY", 1.0)
+        connection.execute(
+            "DELETE FROM knowledge_chunk WHERE concept_id='without-wiki'"
+        )
+        connection.execute(
+            "DELETE FROM menu_wiki_eligibility WHERE menu_id='menu-without-wiki'"
+        )
+
+        query = _query(
+            RecommendationCriteriaV2(flavors=["SPICY"], max_spice_level=5),
+            limit=100,
+        )
+        rows = connection.execute(query.sql, query.parameters).fetchall()
+
+        assert [row["menu_id"] for row in rows] == ["menu-grounded"]
+        assert "menu_wiki_eligibility" in query.sql
+        assert "wiki_eligible.menu_id=menu.menu_id" in query.sql
+        assert "knowledge_chunk" not in query.sql
+    finally:
+        connection.close()
+
+
 def test_candidate_window_caps_each_merchant_at_twenty_five_percent() -> None:
     connection = _connection()
     try:
@@ -208,13 +310,257 @@ def test_exact_score_tiebreak_and_concept_first_diversity_relaxation() -> None:
     )
 
     assert [item.menu_id for item in decisions] == ["a", "b", "c"]
-    assert decisions[0].score == 1.0
+    assert decisions[0].score == pytest.approx(0.575)
     assert decisions[1].diversity_reason == "merchant_relaxed_new_concept"
     assert decisions[2].diversity_reason == "concept_relaxed_new_merchant"
-    assert all(item.trace_payload()["ranking_policy_version"] == RANKING_POLICY_VERSION for item in decisions)
-    assert RANKING_POLICY_SHA256 == (
-        "5515c9c6877641a111e29ba418890b166b84374101877005749257eae826e191"
+    assert all(
+        item.trace_payload()["ranking_policy_version"] == RANKING_POLICY_VERSION
+        for item in decisions
     )
+    assert RANKING_POLICY_SHA256 == (
+        "d557ecf2735e2cfa8e350eefa37e3686db7165c170f4d2965ee14e6bb7c688bf"
+    )
+
+
+def test_diversity_cannot_replace_stronger_direct_grounding() -> None:
+    decisions = rank_concept_candidates(
+        [
+            ConceptRankCandidate(
+                "direct-a",
+                "merchant-1",
+                "concept-1",
+                {"flavor": 0.90},
+                1,
+                semantic_score=0.50,
+                direct_evidence_ratio=1.0,
+            ),
+            ConceptRankCandidate(
+                "general-b",
+                "merchant-2",
+                "concept-2",
+                {"flavor": 0.95},
+                1,
+                semantic_score=0.50,
+                direct_evidence_ratio=0.0,
+            ),
+            ConceptRankCandidate(
+                "direct-c",
+                "merchant-1",
+                "concept-3",
+                {"flavor": 0.88},
+                1,
+                semantic_score=0.50,
+                direct_evidence_ratio=1.0,
+            ),
+        ],
+        has_soft_profile=False,
+        limit=3,
+    )
+
+    assert [item.menu_id for item in decisions[:2]] == ["direct-a", "direct-c"]
+
+
+def test_candidate_channel_union_is_bounded_deterministic_and_order_symmetric() -> None:
+    menu_feature = ["menu-a", "menu-b", "menu-c"]
+    concept_support = ["menu-b", "menu-d", "menu-e"]
+    semantic = ["menu-c", "menu-d", "menu-a"]
+
+    first = merge_candidate_channels(
+        [menu_feature, concept_support, semantic],
+        limit=4,
+    )
+    permuted = merge_candidate_channels(
+        [semantic, menu_feature, concept_support],
+        limit=4,
+    )
+
+    assert first == permuted == ["menu-b", "menu-a", "menu-c", "menu-d"]
+    assert len(first) == 4
+
+
+def test_candidate_channel_fusion_trace_records_ranks_and_rrf_contributions() -> None:
+    trace = candidate_channel_fusion_trace(
+        {
+            "MENU_FEATURE": ["menu-a", "menu-b"],
+            "CONCEPT_SUPPORT": ["menu-b", "menu-c"],
+            "SEMANTIC": ["menu-c", "menu-a"],
+        }
+    )
+
+    assert trace["menu-a"]["channel_ranks"] == {
+        "MENU_FEATURE": 1,
+        "SEMANTIC": 2,
+    }
+    assert trace["menu-a"]["rrf_score"] == pytest.approx(1 / 61 + 1 / 62)
+    assert set(trace["menu-b"]["rrf_contributions"]) == {
+        "MENU_FEATURE",
+        "CONCEPT_SUPPORT",
+    }
+
+
+def test_three_candidate_channels_are_independent_and_final_grounding_drops_auxiliary_only() -> (
+    None
+):
+    connection = _connection()
+    try:
+        for suffix in ("aux", "direct", "concept"):
+            _insert_menu(
+                connection,
+                menu_id=f"menu-{suffix}",
+                merchant_id=f"merchant-{suffix}",
+                concept_id=f"concept-{suffix}",
+            )
+        connection.executemany(
+            "INSERT INTO menu_preference_feature VALUES (?,?,?,?,?,?,?,?)",
+            [
+                (
+                    "knowledge-v1",
+                    "feature-aux",
+                    "menu-aux",
+                    "flavors",
+                    "SPICY",
+                    "REVIEW_REQUIRED",
+                    0.4,
+                    "SECTION_CONTEXT",
+                ),
+                (
+                    "knowledge-v1",
+                    "feature-direct",
+                    "menu-direct",
+                    "flavors",
+                    "SPICY",
+                    "SUPPORTED",
+                    0.9,
+                    "MENU_DIRECT",
+                ),
+            ],
+        )
+        _support(connection, "concept-concept", "flavors", "SPICY", 0.7)
+        criteria = RecommendationCriteriaV2(flavors=["SPICY"], max_spice_level=5)
+
+        def menu_ids(channel: str) -> list[str]:
+            query = build_concept_candidate_query(
+                dialect="sqlite",
+                criteria=criteria,
+                knowledge_release_id="knowledge-v1",
+                certification_release_id="certification-v1",
+                service_area_id=None,
+                excluded_menu_ids=set(),
+                eligibility_as_of=datetime.now(timezone.utc),
+                candidate_limit=None,
+                support_channel=channel,  # type: ignore[arg-type]
+            )
+            return [
+                str(row["menu_id"])
+                for row in connection.execute(query.sql, query.parameters).fetchall()
+            ]
+
+        assert menu_ids("MENU_FEATURE") == ["menu-direct", "menu-aux"]
+        assert menu_ids("CONCEPT_SUPPORT") == ["menu-concept"]
+        assert menu_ids("COMBINED") == ["menu-direct", "menu-concept"]
+    finally:
+        connection.close()
+
+
+def test_optimized_channel_and_preview_queries_preserve_grounding_counts() -> None:
+    connection = _connection()
+    try:
+        for suffix in ("direct", "concept", "unrelated"):
+            _insert_menu(
+                connection,
+                menu_id=f"menu-{suffix}",
+                merchant_id=f"merchant-{suffix}",
+                concept_id=f"concept-{suffix}",
+            )
+        connection.execute(
+            "INSERT INTO menu_preference_feature VALUES (?,?,?,?,?,?,?,?)",
+            (
+                "knowledge-v1",
+                "feature-direct",
+                "menu-direct",
+                "flavors",
+                "SPICY",
+                "SUPPORTED",
+                0.9,
+                "MENU_DIRECT",
+            ),
+        )
+        _support(connection, "concept-concept", "flavors", "SPICY", 0.7)
+        criteria = RecommendationCriteriaV2(flavors=["SPICY"], max_spice_level=5)
+        common = {
+            "dialect": "sqlite",
+            "criteria": criteria,
+            "knowledge_release_id": "knowledge-v1",
+            "certification_release_id": "certification-v1",
+            "service_area_id": None,
+            "excluded_menu_ids": set(),
+            "eligibility_as_of": datetime.now(timezone.utc),
+        }
+        feature = build_candidate_recall_channel_query(
+            **common,  # type: ignore[arg-type]
+            candidate_limit=100,
+            support_channel="MENU_FEATURE",
+        )
+        concept = build_candidate_recall_channel_query(
+            **common,  # type: ignore[arg-type]
+            candidate_limit=100,
+            support_channel="CONCEPT_SUPPORT",
+        )
+        preview = build_concept_preview_count_query(**common)  # type: ignore[arg-type]
+
+        assert [
+            row["menu_id"] for row in connection.execute(feature.sql, feature.parameters).fetchall()
+        ] == ["menu-direct"]
+        assert [
+            row["menu_id"] for row in connection.execute(concept.sql, concept.parameters).fetchall()
+        ] == ["menu-concept"]
+        counts = connection.execute(preview.sql, preview.parameters).fetchone()
+        assert counts is not None
+        assert tuple(counts) == (2, 2)
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("support_channel", ["MENU_FEATURE", "CONCEPT_SUPPORT"])
+def test_oracle_grounded_channel_bind_names_match_parameters_exactly(
+    support_channel: str,
+) -> None:
+    query = build_candidate_recall_channel_query(
+        dialect="oracle",
+        criteria=RecommendationCriteriaV2(flavors=["SPICY"], max_spice_level=5),
+        knowledge_release_id="knowledge-v1",
+        certification_release_id="certification-v1",
+        service_area_id="area-1",
+        excluded_menu_ids={"seen-a"},
+        eligibility_as_of=datetime.now(timezone.utc),
+        candidate_limit=100,
+        support_channel=support_channel,  # type: ignore[arg-type]
+    )
+
+    assert set(re.findall(r":([A-Za-z][A-Za-z0-9_$#]*)", query.sql)) == set(query.parameters)
+
+
+@pytest.mark.parametrize(
+    "criteria",
+    [
+        RecommendationCriteriaV2(flavors=["SPICY"], max_spice_level=5),
+        RecommendationCriteriaV2(price_bands=["FROM_10000_TO_19999"], max_spice_level=5),
+    ],
+)
+def test_oracle_optimized_preview_bind_names_match_parameters_exactly(
+    criteria: RecommendationCriteriaV2,
+) -> None:
+    query = build_concept_preview_count_query(
+        dialect="oracle",
+        criteria=criteria,
+        knowledge_release_id="knowledge-v1",
+        certification_release_id="certification-v1",
+        service_area_id="area-1",
+        excluded_menu_ids={"seen-a"},
+        eligibility_as_of=datetime.now(timezone.utc),
+    )
+
+    assert set(re.findall(r":([A-Za-z][A-Za-z0-9_$#]*)", query.sql)) == set(query.parameters)
 
 
 def test_oracle_query_is_bounded_sql_first_and_has_no_unused_binds() -> None:
@@ -244,6 +590,60 @@ def test_oracle_query_is_bounded_sql_first_and_has_no_unused_binds() -> None:
     assert "eligibility_as_of" not in query.parameters
     assert query.parameters["excluded_menu_0"] == "seen-a"
     assert query.parameters["excluded_menu_1"] == "seen-b"
+
+
+def test_oracle_semantic_channel_is_hard_filtered_bounded_and_vector_ranked() -> None:
+    query = build_semantic_candidate_query(
+        dialect="oracle",
+        criteria=RecommendationCriteriaV2(
+            flavors=["SPICY"],
+            price_bands=["FROM_10000_TO_19999"],
+            max_spice_level=3,
+        ),
+        knowledge_release_id="knowledge-v1",
+        certification_release_id="certification-v1",
+        service_area_id="area-1",
+        excluded_menu_ids={"seen-a"},
+        eligibility_as_of=datetime.now(timezone.utc),
+        candidate_limit=100,
+        query_vector=array("f", [0.0] * 1536),
+        semantic_embedding_model="cohere.embed-v4.0",
+        semantic_embedding_version="oci-native-embedtext-v1",
+        semantic_embedding_dimension=1536,
+        catalog_release_id="catalog-v1",
+    )
+    lowered = query.sql.lower()
+
+    assert "vector_distance(semantic_embedding.embedding_vector,:query_vector,cosine)" in lowered
+    assert "fetch first :candidate_limit rows only" in lowered
+    assert "menu.availability='available'" in lowered
+    assert "coalesce(source_detail.soldout,0)=0" in lowered
+    assert "menu.spice_level<=:max_spice_level" in lowered
+    assert "join menu_semantic_embedding semantic_embedding" in lowered
+    assert "semantic_embedding.embedding_model=:semantic_embedding_model" in lowered
+    assert "semantic_embedding.embedding_version=:semantic_embedding_version" in lowered
+    assert "semantic_embedding.embedding_dimension=:semantic_embedding_dimension" in lowered
+    assert "semantic_embedding.catalog_release_id=:semantic_catalog_release_id" in lowered
+    assert "concept_preference_support" not in lowered
+    assert set(re.findall(r":([A-Za-z][A-Za-z0-9_$#]*)", query.sql)) == set(query.parameters)
+
+
+def test_grounding_query_can_restrict_the_semantic_union_before_final_ranking() -> None:
+    query = build_concept_candidate_query(
+        dialect="sqlite",
+        criteria=RecommendationCriteriaV2(flavors=["SPICY"], max_spice_level=5),
+        knowledge_release_id="knowledge-v1",
+        certification_release_id="certification-v1",
+        service_area_id=None,
+        excluded_menu_ids=set(),
+        eligibility_as_of=datetime.now(timezone.utc),
+        candidate_limit=None,
+        included_menu_ids=["menu-b", "menu-a", "menu-b"],
+    )
+
+    assert "menu.menu_id IN (:included_menu_0,:included_menu_1)" in query.sql
+    assert query.parameters["included_menu_0"] == "menu-b"
+    assert query.parameters["included_menu_1"] == "menu-a"
 
 
 @pytest.mark.parametrize(
@@ -281,7 +681,7 @@ def test_oracle_candidate_and_preview_bind_names_match_parameters_exactly(
 
 
 @pytest.mark.parametrize("dialect", ["sqlite", "oracle"])
-def test_exact_only_query_preaggregates_reviewed_concepts_before_menu_join(
+def test_exact_only_query_uses_materialized_wiki_eligibility_before_menu_join(
     dialect: str,
 ) -> None:
     query = build_concept_candidate_query(
@@ -300,11 +700,15 @@ def test_exact_only_query_preaggregates_reviewed_concepts_before_menu_join(
     preview = build_concept_preview_query(query)
     lowered = query.sql.lower()
 
-    assert "objective_concept as" in lowered
-    assert "join objective_concept objective_support" in lowered
+    assert "objective_grounding as" in lowered
+    assert "candidate_membership as" in lowered
+    assert "partition by membership.menu_id" in lowered
+    assert "when 'primary' then 1" in lowered
+    assert "join objective_grounding objective_support" in lowered
+    assert "from menu_wiki_eligibility" in lowered
     assert "join knowledge_chunk objective_chunk" not in lowered
     assert "group by menu.menu_id" not in lowered
-    assert "count(distinct chunk.chunk_id)" in lowered
+    assert "reviewed_chunk_count" in lowered
     assert "from qualified" in preview.sql.lower()
     assert "candidate_limit" not in preview.parameters
     assert "per_merchant_limit" not in preview.parameters
@@ -371,11 +775,7 @@ def test_synthetic_demo_ranking_sql_is_stable_and_source_counts_take_priority() 
 def test_blind_server_rank_golden_summary_matches_exact_policy() -> None:
     fixture = json.loads(
         (
-            ROOT
-            / "backend"
-            / "evaluation"
-            / "fixtures"
-            / "server_rank_golden_summary.json"
+            ROOT / "backend" / "evaluation" / "fixtures" / "server_rank_golden_summary.json"
         ).read_text(encoding="utf-8")
     )
     assert fixture["baseline_boundary"]["old_path_outcome"] == "NO_MATCH"
@@ -397,16 +797,10 @@ def test_blind_server_rank_golden_summary_matches_exact_policy() -> None:
         )
 
         assert [item.menu_id for item in decisions] == case["expected_order"]
-        assert len({item.merchant_id for item in decisions}) == case[
-            "expected_distinct_merchants"
-        ]
-        assert len({item.concept_id for item in decisions}) == case[
-            "expected_distinct_concepts"
-        ]
+        assert len({item.merchant_id for item in decisions}) == case["expected_distinct_merchants"]
+        assert len({item.concept_id for item in decisions}) == case["expected_distinct_concepts"]
         assert all(0 <= item.score <= 1 for item in decisions)
-    assert all(
-        row["expected_server_ids_unchanged"] for row in fixture["llm_fault_matrix"]
-    )
+    assert all(row["expected_server_ids_unchanged"] for row in fixture["llm_fault_matrix"])
     assert fixture["latency_evidence"]["oci_benchmark_required_for_release_claim"] is True
 
 
