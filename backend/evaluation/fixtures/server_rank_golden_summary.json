@@ -1,15 +1,17 @@
 {
-  "schema_version": "1",
+  "schema_version": "2",
   "baseline_boundary": {
     "old_active_mapping_count": 0,
     "old_path_outcome": "NO_MATCH",
     "comparison_status": "NOT_COMPARABLE_BECAUSE_THE_OLD_ACTIVE_RELEASE_HAD_NO_MAPPED_MENUS"
   },
   "server_policy": {
-    "version": "yobi-concept-rank-v1",
-    "sha256": "5515c9c6877641a111e29ba418890b166b84374101877005749257eae826e191",
+    "version": "yobi-hybrid-rank-v2",
+    "sha256": "d557ecf2735e2cfa8e350eefa37e3686db7165c170f4d2965ee14e6bb7c688bf",
     "hard_constraint_accuracy_required": 1.0,
-    "frozen_result_limit": 3
+    "server_candidate_limit": 100,
+    "llm_shortlist_limit": 15,
+    "final_result_limit": 3
   },
   "golden_cases": [
     {

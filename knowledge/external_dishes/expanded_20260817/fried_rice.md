@@ -23,8 +23,8 @@
 ---
 # Fried rice
 
-Fried rice is a broad rice-dish family in which cooked grains are stir-fried with seasoning and optional vegetables or protein.
+Fried rice is a broad rice-dish family in which cooked rice grains are stir-fried over heat with seasoning and optional vegetables or protein. The wok or pan preparation distinguishes it from a topped rice bowl.
 
-It is served hot or warm with separated, savoury grains. Cuisine, oil, protein and sauces vary by product.
+It is served hot or warm with separated, soft or chewy grains and a savoury, sometimes smoky profile. Cuisine, oil, protein, sauces and spice level vary by product.
 
 This is general culinary guidance, not a statement about one merchant's recipe, ingredients, certification, allergens, portion or menu-specific spice level. Check the current merchant information before ordering.

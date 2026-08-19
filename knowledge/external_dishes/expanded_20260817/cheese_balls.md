@@ -23,8 +23,8 @@
 ---
 # Cheese balls
 
-Cheese balls are bite-sized savoury snacks with a cheese-style centre or flavour, commonly enclosed in dough or a crumbed shell and cooked until browned.
+Cheese balls are bite-sized savoury snacks with a cheese-style centre or flavour, commonly enclosed in dough or a crumbed shell. Restaurant versions may be fried or baked until the outside is browned.
 
-They are served warm with a crisp or chewy exterior and soft, rich centre. The exact dairy and coating ingredients require product information.
+They are usually served warm or hot with a crisp or chewy exterior and a soft, thick and rich centre. The exact cheese, dairy, coating and cooking method require product information.
 
 This is general culinary guidance, not a statement about one merchant's recipe, ingredients, certification, allergens, portion or menu-specific spice level. Check the current merchant information before ordering.

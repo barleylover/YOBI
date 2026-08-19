@@ -22,13 +22,17 @@ def test_release_archive_contains_knowledge_and_all_migrations() -> None:
     assert "010_structured_hybrid_rag_recommendation.sql" in source
     assert "011_external_catalog_import.sql" in source
     assert "012_concept_preference_support_and_server_ranking.sql" in source
+    assert "013_menu_preference_features_and_hybrid_rank.sql" in source
+    assert "014_wiki_eligibility_indexes.sql" in source
     assert "persist_runtime_release_policy" in source
+    assert "persist_runtime_compartment_identity" in source
+    assert 'persist_runtime_compartment_identity(sys.argv[1])' in source
     assert "actual_migration_list" in source
-    assert "Migration directory must contain exactly 001-012" in source
-    assert 'status["expected_migration_count"] == status["applied_migration_count"] == 12' in source
+    assert "Migration directory must contain exactly 001-014" in source
+    assert 'status["expected_migration_count"] == status["applied_migration_count"] == 14' in source
     assert 'status["latest_expected_migration"]' in source
     assert 'status["latest_applied_migration"]' in source
-    assert '== "012"' in source
+    assert '== "014"' in source
     assert 'raise SystemExit("MIGRATION_LEDGER_NOT_EXACT")' in source
     assert "assert status[" not in source
     runtime_import = source.index('import app.main; print("Verified Python 3.9 application imports.")')
@@ -45,6 +49,8 @@ def test_release_archive_contains_knowledge_and_all_migrations() -> None:
     assert "--activate-staged" in source
     assert "--scope staged --verify" in source
     assert "--scope active --verify" in source
+    assert "recommendation_v2_live_harness.py\" predeploy" in source
+    assert '--release-family-id "$new_recommendation_release_family_id"' in source
     assert "verify-external-gates" in source
     assert "release_gate_contract.py" in source
     assert source.index('"$new_release/scripts/manage_demo_address.py" --apply') < source.index(
@@ -52,6 +58,9 @@ def test_release_archive_contains_knowledge_and_all_migrations() -> None:
     )
     assert source.index("--stage-only") < source.index("--scope staged --verify")
     assert source.index("--scope staged --verify") < source.index(
+        'sudo ln -sfn "$new_release" /opt/yobi/current'
+    )
+    assert source.index('"$new_release/scripts/recommendation_v2_live_harness.py" predeploy') < source.index(
         'sudo ln -sfn "$new_release" /opt/yobi/current'
     )
     assert source.index('sudo ln -sfn "$new_release" /opt/yobi/current') < source.index(
@@ -72,6 +81,18 @@ def test_deploy_loads_runtime_environment_without_shell_source() -> None:
     assert (
         'readonly POST_QUALITY_REVIEW_DEPLOY="${YOBI_POST_QUALITY_REVIEW_DEPLOY:-false}"'
         in source
+    )
+    assert (
+        'readonly MENU_SEMANTIC_BACKFILL="${YOBI_MENU_SEMANTIC_BACKFILL:-false}"'
+        in source
+    )
+    assert "Menu semantic backfill requires the approved zero-provider provisional mode" in source
+    assert "Remote menu semantic backfill requires zero-provider provisional mode" in source
+    assert '--embedding-provider oci --dispatch-interval-seconds 1 --apply' in source
+    assert source.index(
+        '--embedding-provider oci --dispatch-interval-seconds 1 --apply'
+    ) < source.index(
+        '--embedding-provider oci --verify-only'
     )
     assert 'if [[ "$quality_five_only" != "true" \\' in source
     assert '&& "$post_quality_review_deploy" != "true" ]]; then' in source

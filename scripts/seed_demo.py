@@ -36,6 +36,7 @@ from app.knowledge.catalog_seed import (
 )
 from app.knowledge.oracle_store import load_oracle_release
 from app.knowledge.preference_support import (
+    SUPPORT_METHOD_VERSION,
     build_synthetic_support_rows,
     preference_alias_matches,
     support_manifest_sha256,
@@ -857,7 +858,7 @@ def verify(connection: oracledb.Connection) -> dict[str, Any]:
               'knowledge:' || document.document_id || ':' || chunk.chunk_id
             )
             OR support.review_status<>'REVIEWED_DEMO'
-            OR support.support_method_version<>'yobi-reviewed-wiki-support-v1'
+            OR support.support_method_version<>:support_method_version
             OR support.is_synthetic<>1
             OR chunk.chunk_id IS NULL
             OR LOWER(chunk.facet)='safety'
@@ -870,6 +871,7 @@ def verify(connection: oracledb.Connection) -> dict[str, Any]:
           )
         """,
         release_id=active_release_id or "none",
+        support_method_version=SUPPORT_METHOD_VERSION,
     )
     invalid_concept_support_count = int(cursor.fetchone()[0])
     cursor.execute(

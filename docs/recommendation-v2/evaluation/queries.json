@@ -1,0 +1,5749 @@
+[
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "KOREAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-cuisine_origins-korean-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "KOREAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-cuisine_origins-korean-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "CHINESE"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-cuisine_origins-chinese-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "CHINESE"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-cuisine_origins-chinese-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "WESTERN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-cuisine_origins-western-en",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "WESTERN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-cuisine_origins-western-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "SOUTHEAST_ASIAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-cuisine_origins-southeast_asian-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "SOUTHEAST_ASIAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-cuisine_origins-southeast_asian-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "MEXICAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-cuisine_origins-mexican-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "MEXICAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-cuisine_origins-mexican-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "JAPANESE"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-cuisine_origins-japanese-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "JAPANESE"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-cuisine_origins-japanese-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "ITALIAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-cuisine_origins-italian-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "ITALIAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-cuisine_origins-italian-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "AMERICAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-cuisine_origins-american-en",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "AMERICAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-cuisine_origins-american-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SPICY"
+      ],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-flavors-spicy-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SPICY"
+      ],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-flavors-spicy-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SWEET"
+      ],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-flavors-sweet-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SWEET"
+      ],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-flavors-sweet-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SALTY"
+      ],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-flavors-salty-en",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SALTY"
+      ],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-flavors-salty-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SOUR"
+      ],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-flavors-sour-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SOUR"
+      ],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-flavors-sour-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "NUTTY_SAVORY"
+      ],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-flavors-nutty_savory-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "NUTTY_SAVORY"
+      ],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-flavors-nutty_savory-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "CLEAN_MILD"
+      ],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-flavors-clean_mild-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "CLEAN_MILD"
+      ],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-flavors-clean_mild-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "BEEF"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-main_ingredients-beef-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "BEEF"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-main_ingredients-beef-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "PORK"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-main_ingredients-pork-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "PORK"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-main_ingredients-pork-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "CHICKEN"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-main_ingredients-chicken-en",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "CHICKEN"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-main_ingredients-chicken-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "FISH_SEAFOOD"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-main_ingredients-fish_seafood-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "FISH_SEAFOOD"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-main_ingredients-fish_seafood-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "VEGETABLE"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-main_ingredients-vegetable-en",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "VEGETABLE"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-main_ingredients-vegetable-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "RICE"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-food_forms-rice-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "RICE"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-food_forms-rice-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "NOODLES"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-food_forms-noodles-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "NOODLES"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-food_forms-noodles-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "SOUP"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-food_forms-soup-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "SOUP"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-food_forms-soup-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "STEW_HOTPOT"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-food_forms-stew_hotpot-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "STEW_HOTPOT"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-food_forms-stew_hotpot-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "BREAD"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-food_forms-bread-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "BREAD"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-food_forms-bread-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "SALAD"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-food_forms-salad-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "SALAD"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-food_forms-salad-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "GRILLED_DISH"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-food_forms-grilled_dish-en",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "GRILLED_DISH"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-food_forms-grilled_dish-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "BOWL_POKE"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-food_forms-bowl_poke-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "BOWL_POKE"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-food_forms-bowl_poke-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "DESSERT_BAKERY"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-food_forms-dessert_bakery-en",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "DESSERT_BAKERY"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-food_forms-dessert_bakery-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "FRIED_SNACK"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-food_forms-fried_snack-en",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "FRIED_SNACK"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-food_forms-fried_snack-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "HOT"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-temperatures-hot-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "HOT"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-temperatures-hot-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "WARM"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-temperatures-warm-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "WARM"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-temperatures-warm-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "ROOM_TEMPERATURE"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-temperatures-room_temperature-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "ROOM_TEMPERATURE"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-temperatures-room_temperature-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "COOL"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-temperatures-cool-en",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "COOL"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-temperatures-cool-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "FROZEN"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-temperatures-frozen-en",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "FROZEN"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-temperatures-frozen-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [
+        "UNDER_10000"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-price_bands-under_10000-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [
+        "UNDER_10000"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-price_bands-under_10000-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_10000_TO_19999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-price_bands-from_10000_to_19999-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_10000_TO_19999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-price_bands-from_10000_to_19999-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_20000_TO_29999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-price_bands-from_20000_to_29999-en",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_20000_TO_29999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-price_bands-from_20000_to_29999-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [
+        "OVER_30000"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-price_bands-over_30000-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [
+        "OVER_30000"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-price_bands-over_30000-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "CRISPY"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-textures-crispy-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "CRISPY"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-textures-crispy-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "CHEWY"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-textures-chewy-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "CHEWY"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-textures-chewy-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "SOFT"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-textures-soft-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "SOFT"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-textures-soft-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "CRUNCHY"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-textures-crunchy-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "CRUNCHY"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-textures-crunchy-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "THICK_RICH"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-textures-thick_rich-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "THICK_RICH"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-textures-thick_rich-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [
+        "GRILLED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-cooking_methods-grilled-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [
+        "GRILLED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-cooking_methods-grilled-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [
+        "BOILED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-cooking_methods-boiled-en",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [
+        "BOILED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-cooking_methods-boiled-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [
+        "SIMMERED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-cooking_methods-simmered-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [
+        "SIMMERED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-cooking_methods-simmered-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [
+        "STEAMED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-cooking_methods-steamed-en",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [
+        "STEAMED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-cooking_methods-steamed-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [
+        "FRIED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-cooking_methods-fried-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [
+        "FRIED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-cooking_methods-fried-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [
+        "STIR_FRIED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-cooking_methods-stir_fried-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [
+        "STIR_FRIED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-cooking_methods-stir_fried-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [
+        "BAKED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "single-cooking_methods-baked-en",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "single_option",
+    "criteria": {
+      "cooking_methods": [
+        "BAKED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "single-cooking_methods-baked-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SPICY"
+      ],
+      "food_forms": [
+        "NOODLES"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-01-1",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SPICY"
+      ],
+      "food_forms": [
+        "NOODLES"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "cross-01-2",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SPICY"
+      ],
+      "food_forms": [
+        "NOODLES"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_10000_TO_19999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-01-3",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "FRIED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "CHICKEN"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "CRISPY"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-02-1",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "FRIED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "CHICKEN"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "CRISPY"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "cross-02-2",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "FRIED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "CHICKEN"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_10000_TO_19999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "CRISPY"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-02-3",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "CLEAN_MILD"
+      ],
+      "food_forms": [
+        "SOUP"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "HOT"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-03-1",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "CLEAN_MILD"
+      ],
+      "food_forms": [
+        "SOUP"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "HOT"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "cross-03-2",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "CLEAN_MILD"
+      ],
+      "food_forms": [
+        "SOUP"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_10000_TO_19999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "HOT"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-03-3",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "ITALIAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "NOODLES"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-04-1",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "ITALIAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "NOODLES"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "cross-04-2",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "ITALIAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "NOODLES"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_10000_TO_19999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-04-3",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SWEET"
+      ],
+      "food_forms": [
+        "DESSERT_BAKERY"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "FROZEN"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-05-1",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SWEET"
+      ],
+      "food_forms": [
+        "DESSERT_BAKERY"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "FROZEN"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "cross-05-2",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SWEET"
+      ],
+      "food_forms": [
+        "DESSERT_BAKERY"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_10000_TO_19999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "FROZEN"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-05-3",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "KOREAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "NUTTY_SAVORY"
+      ],
+      "food_forms": [
+        "RICE"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-06-1",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "KOREAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "NUTTY_SAVORY"
+      ],
+      "food_forms": [
+        "RICE"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "cross-06-2",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "KOREAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "NUTTY_SAVORY"
+      ],
+      "food_forms": [
+        "RICE"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_10000_TO_19999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-06-3",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "JAPANESE"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "FISH_SEAFOOD"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-07-1",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "JAPANESE"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "FISH_SEAFOOD"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "cross-07-2",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "JAPANESE"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "FISH_SEAFOOD"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_10000_TO_19999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-07-3",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "GRILLED"
+      ],
+      "cuisine_origins": [
+        "AMERICAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "BREAD"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-08-1",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "GRILLED"
+      ],
+      "cuisine_origins": [
+        "AMERICAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "BREAD"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "cross-08-2",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "GRILLED"
+      ],
+      "cuisine_origins": [
+        "AMERICAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "BREAD"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_10000_TO_19999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-08-3",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "STIR_FRIED"
+      ],
+      "cuisine_origins": [
+        "CHINESE"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "NOODLES"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-09-1",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "STIR_FRIED"
+      ],
+      "cuisine_origins": [
+        "CHINESE"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "NOODLES"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "cross-09-2",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "STIR_FRIED"
+      ],
+      "cuisine_origins": [
+        "CHINESE"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "NOODLES"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_10000_TO_19999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-09-3",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "SOUTHEAST_ASIAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "NOODLES",
+        "SOUP"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-10-1",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "SOUTHEAST_ASIAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "NOODLES",
+        "SOUP"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "cross-10-2",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "SOUTHEAST_ASIAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "NOODLES",
+        "SOUP"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_10000_TO_19999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-10-3",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "MEXICAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "BEEF"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-11-1",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "MEXICAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "BEEF"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "cross-11-2",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "MEXICAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "BEEF"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_10000_TO_19999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-11-3",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "GRILLED"
+      ],
+      "cuisine_origins": [
+        "KOREAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "PORK"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-12-1",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "GRILLED"
+      ],
+      "cuisine_origins": [
+        "KOREAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "PORK"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "cross-12-2",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "GRILLED"
+      ],
+      "cuisine_origins": [
+        "KOREAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "PORK"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_10000_TO_19999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-12-3",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SALTY"
+      ],
+      "food_forms": [],
+      "main_ingredients": [
+        "FISH_SEAFOOD"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-13-1",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SALTY"
+      ],
+      "food_forms": [],
+      "main_ingredients": [
+        "FISH_SEAFOOD"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "cross-13-2",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SALTY"
+      ],
+      "food_forms": [],
+      "main_ingredients": [
+        "FISH_SEAFOOD"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_10000_TO_19999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-13-3",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SOUR"
+      ],
+      "food_forms": [
+        "SALAD"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-14-1",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SOUR"
+      ],
+      "food_forms": [
+        "SALAD"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "cross-14-2",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SOUR"
+      ],
+      "food_forms": [
+        "SALAD"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_10000_TO_19999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-14-3",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "CLEAN_MILD"
+      ],
+      "food_forms": [
+        "SALAD"
+      ],
+      "main_ingredients": [
+        "VEGETABLE"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-15-1",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "CLEAN_MILD"
+      ],
+      "food_forms": [
+        "SALAD"
+      ],
+      "main_ingredients": [
+        "VEGETABLE"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "cross-15-2",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "CLEAN_MILD"
+      ],
+      "food_forms": [
+        "SALAD"
+      ],
+      "main_ingredients": [
+        "VEGETABLE"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_10000_TO_19999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-15-3",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "BAKED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SWEET"
+      ],
+      "food_forms": [
+        "DESSERT_BAKERY"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-16-1",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "BAKED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SWEET"
+      ],
+      "food_forms": [
+        "DESSERT_BAKERY"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "cross-16-2",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "BAKED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SWEET"
+      ],
+      "food_forms": [
+        "DESSERT_BAKERY"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_10000_TO_19999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-16-3",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "FRIED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "FRIED_SNACK"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "CRISPY"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-17-1",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "FRIED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "FRIED_SNACK"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "CRISPY"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "cross-17-2",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "FRIED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "FRIED_SNACK"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_10000_TO_19999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "CRISPY"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-17-3",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "STIR_FRIED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "NOODLES"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "CHEWY"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-18-1",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "STIR_FRIED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "NOODLES"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "CHEWY"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "cross-18-2",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "STIR_FRIED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "NOODLES"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_10000_TO_19999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "CHEWY"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-18-3",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "SIMMERED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "SOUP"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "SOFT"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-19-1",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "SIMMERED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "SOUP"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "SOFT"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "cross-19-2",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "SIMMERED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "SOUP"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_10000_TO_19999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "SOFT"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-19-3",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "SIMMERED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "STEW_HOTPOT"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "THICK_RICH"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-20-1",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "SIMMERED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "STEW_HOTPOT"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "THICK_RICH"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "cross-20-2",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "cross_category",
+    "criteria": {
+      "cooking_methods": [
+        "SIMMERED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "STEW_HOTPOT"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [
+        "FROM_10000_TO_19999"
+      ],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "THICK_RICH"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "cross-20-3",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "negative",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SPICY"
+      ],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 1,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "NO_MATCH",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "negative-01",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "negative",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "NOODLES"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 2,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "NO_MATCH",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "negative-02",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "negative",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": true,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "NO_MATCH",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "negative-03",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "negative",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": true
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "NO_MATCH",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "negative-04",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "negative",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "MEXICAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "SOUP"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "FROZEN"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "NO_MATCH",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "negative-05",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "negative",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "ITALIAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "STEW_HOTPOT"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "FROZEN"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "NO_MATCH",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "negative-06",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "negative",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "JAPANESE"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "BREAD"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "HOT"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "NO_MATCH",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "negative-07",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "negative",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "AMERICAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "SOUP"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "CHEWY"
+      ]
+    },
+    "expected_outcome": "NO_MATCH",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "negative-08",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "negative",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "DESSERT_BAKERY"
+      ],
+      "main_ingredients": [
+        "FISH_SEAFOOD"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "FROZEN"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "NO_MATCH",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "negative-09",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "negative",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "SALAD"
+      ],
+      "main_ingredients": [
+        "BEEF"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "FROZEN"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "NO_MATCH",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "negative-10",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "negative",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SPICY"
+      ],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 1,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "NO_MATCH",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "negative-11",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "negative",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "NOODLES"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 2,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "NO_MATCH",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "negative-12",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "negative",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": true,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "NO_MATCH",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "negative-13",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "negative",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": true
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "NO_MATCH",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "negative-14",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "negative",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "MEXICAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "SOUP"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "FROZEN"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "NO_MATCH",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "negative-15",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "negative",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "ITALIAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "STEW_HOTPOT"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "FROZEN"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "NO_MATCH",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "negative-16",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "negative",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "JAPANESE"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "BREAD"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "HOT"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "NO_MATCH",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "negative-17",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "negative",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "AMERICAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "SOUP"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "CHEWY"
+      ]
+    },
+    "expected_outcome": "NO_MATCH",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "negative-18",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "negative",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "DESSERT_BAKERY"
+      ],
+      "main_ingredients": [
+        "FISH_SEAFOOD"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "FROZEN"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "NO_MATCH",
+    "locale": "English",
+    "pair_id": null,
+    "query_id": "negative-19",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "negative",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "SALAD"
+      ],
+      "main_ingredients": [
+        "BEEF"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "FROZEN"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "NO_MATCH",
+    "locale": "한국어",
+    "pair_id": null,
+    "query_id": "negative-20",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "bilingual_equivalence",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SPICY"
+      ],
+      "food_forms": [
+        "NOODLES"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": "equivalence-01",
+    "query_id": "equivalence-01-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "bilingual_equivalence",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SPICY"
+      ],
+      "food_forms": [
+        "NOODLES"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": "equivalence-01",
+    "query_id": "equivalence-01-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "bilingual_equivalence",
+    "criteria": {
+      "cooking_methods": [
+        "FRIED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "CHICKEN"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "CRISPY"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": "equivalence-02",
+    "query_id": "equivalence-02-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "bilingual_equivalence",
+    "criteria": {
+      "cooking_methods": [
+        "FRIED"
+      ],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "CHICKEN"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": [
+        "CRISPY"
+      ]
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": "equivalence-02",
+    "query_id": "equivalence-02-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "bilingual_equivalence",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "CLEAN_MILD"
+      ],
+      "food_forms": [
+        "SOUP"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "HOT"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": "equivalence-03",
+    "query_id": "equivalence-03-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "bilingual_equivalence",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "CLEAN_MILD"
+      ],
+      "food_forms": [
+        "SOUP"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "HOT"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": "equivalence-03",
+    "query_id": "equivalence-03-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "bilingual_equivalence",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "ITALIAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "NOODLES"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": "equivalence-04",
+    "query_id": "equivalence-04-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "bilingual_equivalence",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "ITALIAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "NOODLES"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": "equivalence-04",
+    "query_id": "equivalence-04-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "bilingual_equivalence",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SWEET"
+      ],
+      "food_forms": [
+        "DESSERT_BAKERY"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "FROZEN"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": "equivalence-05",
+    "query_id": "equivalence-05-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "bilingual_equivalence",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "SWEET"
+      ],
+      "food_forms": [
+        "DESSERT_BAKERY"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [
+        "FROZEN"
+      ],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": "equivalence-05",
+    "query_id": "equivalence-05-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "bilingual_equivalence",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "KOREAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "NUTTY_SAVORY"
+      ],
+      "food_forms": [
+        "RICE"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": "equivalence-06",
+    "query_id": "equivalence-06-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "bilingual_equivalence",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "KOREAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [
+        "NUTTY_SAVORY"
+      ],
+      "food_forms": [
+        "RICE"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": "equivalence-06",
+    "query_id": "equivalence-06-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "bilingual_equivalence",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "JAPANESE"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "FISH_SEAFOOD"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": "equivalence-07",
+    "query_id": "equivalence-07-en",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "bilingual_equivalence",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "JAPANESE"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [],
+      "main_ingredients": [
+        "FISH_SEAFOOD"
+      ],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": "equivalence-07",
+    "query_id": "equivalence-07-ko",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "bilingual_equivalence",
+    "criteria": {
+      "cooking_methods": [
+        "GRILLED"
+      ],
+      "cuisine_origins": [
+        "AMERICAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "BREAD"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": "equivalence-08",
+    "query_id": "equivalence-08-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "bilingual_equivalence",
+    "criteria": {
+      "cooking_methods": [
+        "GRILLED"
+      ],
+      "cuisine_origins": [
+        "AMERICAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "BREAD"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": "equivalence-08",
+    "query_id": "equivalence-08-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "bilingual_equivalence",
+    "criteria": {
+      "cooking_methods": [
+        "STIR_FRIED"
+      ],
+      "cuisine_origins": [
+        "CHINESE"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "NOODLES"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": "equivalence-09",
+    "query_id": "equivalence-09-en",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "bilingual_equivalence",
+    "criteria": {
+      "cooking_methods": [
+        "STIR_FRIED"
+      ],
+      "cuisine_origins": [
+        "CHINESE"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "NOODLES"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": "equivalence-09",
+    "query_id": "equivalence-09-ko",
+    "split": "TUNE"
+  },
+  {
+    "cohort": "bilingual_equivalence",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "SOUTHEAST_ASIAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "NOODLES",
+        "SOUP"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "English",
+    "pair_id": "equivalence-10",
+    "query_id": "equivalence-10-en",
+    "split": "HOLDOUT"
+  },
+  {
+    "cohort": "bilingual_equivalence",
+    "criteria": {
+      "cooking_methods": [],
+      "cuisine_origins": [
+        "SOUTHEAST_ASIAN"
+      ],
+      "dietary_filters": {
+        "halal_certified_only": false,
+        "vegan": false
+      },
+      "flavors": [],
+      "food_forms": [
+        "NOODLES",
+        "SOUP"
+      ],
+      "main_ingredients": [],
+      "max_spice_level": 5,
+      "price_bands": [],
+      "schema_version": "2",
+      "spice_reference_country": "KR",
+      "temperatures": [],
+      "textures": []
+    },
+    "expected_outcome": "POSITIVE",
+    "locale": "한국어",
+    "pair_id": "equivalence-10",
+    "query_id": "equivalence-10-ko",
+    "split": "TUNE"
+  }
+]

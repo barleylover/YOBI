@@ -51,11 +51,20 @@ from app.knowledge.authoring import (
     parse_document,
 )
 from app.knowledge.catalog_seed import _taxonomy_rows
+from app.knowledge.menu_features import (
+    FEATURE_EXTRACTOR_VERSION,
+    MEMBERSHIP_EXTRACTOR_VERSION,
+    build_menu_concept_memberships,
+    compile_menu_preference_features,
+    feature_manifest_sha256,
+    reviewed_general_support_matches,
+)
 from app.knowledge.oracle_store import load_oracle_release
+from app.knowledge.preference_support import SUPPORT_METHOD_VERSION
 from app.knowledge.sqlite_store import load_sqlite_release
+from app.rag.providers import OCIEmbeddingProvider
 
-MAPPING_METHOD_VERSION = "yobi-reviewed-name-map-v3"
-SUPPORT_METHOD_VERSION = "yobi-reviewed-wiki-support-v1"
+MAPPING_METHOD_VERSION = "yobi-reviewed-name-map-v4"
 MAPPING_PROVENANCE = "YOBI_DERIVED_DEMO_MAPPING"
 SUPPORT_PROVENANCE = "SYNTHETIC_WIKI"
 
@@ -247,6 +256,8 @@ def compile_external_release(catalog_release_id: str) -> CompiledKnowledgeReleas
         "catalog_release_id": catalog_release_id,
         "mapping_method": MAPPING_METHOD_VERSION,
         "support_method": SUPPORT_METHOD_VERSION,
+        "feature_method": FEATURE_EXTRACTOR_VERSION,
+        "membership_method": MEMBERSHIP_EXTRACTOR_VERSION,
         "documents": [
             {
                 "path": document.path.as_posix(),
@@ -293,8 +304,10 @@ def fetch_catalog_menus(cursor: Any) -> list[dict[str, Any]]:
     return _rows(
         cursor,
         """
-        SELECT menu.menu_id,menu.merchant_id,menu.name_ko,menu.category,
-               menu.price,menu.availability,
+        SELECT menu.menu_id,menu.merchant_id,menu.name_ko,menu.name_en,
+               menu.category,menu.description,menu.cultural_description,
+               menu.semantic_text,menu.price,menu.availability,
+               menu.is_synthetic,menu.data_origin,
                COALESCE(detail.liquor,0) AS liquor,
                COALESCE(detail.is_adult,0) AS is_adult,
                COALESCE(detail.soldout,0) AS soldout
@@ -303,6 +316,40 @@ def fetch_catalog_menus(cursor: Any) -> list[dict[str, Any]]:
         ORDER BY menu.menu_id
         """,
     )
+
+
+def fetch_menu_feature_sources(
+    cursor: Any,
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[dict[str, Any]]]]:
+    sections: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in _rows(
+        cursor,
+        """
+        SELECT item.menu_id,section.source_section_key,section.title,section.description
+        FROM menu_source_section_item item
+        JOIN menu_source_section section
+          ON section.source_section_key=item.source_section_key
+        ORDER BY item.menu_id,section.sort_order,section.source_section_key
+        """,
+    ):
+        row["source_ref"] = f"menu-section:{row['source_section_key']}"
+        sections[str(row["menu_id"])].append(row)
+
+    options: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in _rows(
+        cursor,
+        """
+        SELECT group_row.menu_id,item.option_item_id,item.name_ko,item.name_en,
+               item.description
+        FROM menu_option_group group_row
+        JOIN menu_option_item item ON item.option_group_id=group_row.option_group_id
+        WHERE item.availability='AVAILABLE'
+        ORDER BY group_row.menu_id,group_row.sort_order,item.sort_order,item.option_item_id
+        """,
+    ):
+        row["source_ref"] = f"menu-option:{row['option_item_id']}"
+        options[str(row["menu_id"])].append(row)
+    return dict(sections), dict(options)
 
 
 def _concept_aliases(compiled: CompiledKnowledgeRelease) -> list[dict[str, str]]:
@@ -328,7 +375,12 @@ def _concept_aliases(compiled: CompiledKnowledgeRelease) -> list[dict[str, str]]
             )
     return sorted(
         aliases,
-        key=lambda item: (-len(item["alias"]), item["concept_id"], item["alias"]),
+        key=lambda item: (
+            -len(item["alias"]),
+            item["concept_id"],
+            item["alias"],
+            item["display_alias"],
+        ),
     )
 
 
@@ -550,8 +602,10 @@ def build_support_rows(compiled: CompiledKnowledgeRelease) -> list[dict[str, Any
         chunks = chunks_by_concept.get(concept_id, [])
         evidence: dict[str, Any] | None = None
         for chunk in chunks:
-            content = str(chunk["content"]).casefold()
-            if not terms or any(term in content for term in terms):
+            content = str(chunk["content"])
+            if not terms or any(
+                reviewed_general_support_matches(content, term) for term in terms
+            ):
                 evidence = chunk
                 break
         if evidence is None:
@@ -665,12 +719,100 @@ def _coverage(
     }
 
 
-def build_plan(cursor: Any) -> dict[str, Any]:
+def _menu_embedding_identity(
+    cursor: Any,
+    *,
+    catalog_release_id: str,
+    menu_count: int,
+    oracle: bool,
+    compiled: CompiledKnowledgeRelease,
+) -> dict[str, Any]:
+    """Resolve the immutable menu-vector set used by this recommendation family.
+
+    SQLite mirrors keep their deterministic scorer. Oracle staging is stricter:
+    the complete OCI Cohere set must already exist in the additive embedding
+    table. This prevents a Wiki compiler identity from being mistaken for the
+    menu semantic-vector identity.
+    """
+
+    if not oracle:
+        return {
+            "model": compiled.embedding_model,
+            "version": compiled.embedding_version,
+            "dimension": compiled.embedding_dimension,
+            "manifest_sha256": None,
+            "menu_count": menu_count,
+            "source": "SQLITE_OFFLINE_SCORER",
+        }
+    settings = Settings()
+    model = settings.oci_embed_model
+    version = OCIEmbeddingProvider.version
+    dimension = settings.oci_embed_dimension
+    cursor.execute(
+        """
+        SELECT COUNT(*),COUNT(DISTINCT menu_id),
+               COUNT(DISTINCT embedding_manifest_sha256),
+               MIN(embedding_manifest_sha256),
+               SUM(CASE WHEN embedding_vector IS NULL
+                          OR LENGTH(semantic_text_sha256)<>64
+                          OR LENGTH(embedding_manifest_sha256)<>64
+                        THEN 1 ELSE 0 END)
+        FROM menu_semantic_embedding
+        WHERE catalog_release_id=:catalog_release_id
+          AND embedding_model=:embedding_model
+          AND embedding_version=:embedding_version
+          AND embedding_dimension=:embedding_dimension
+        """,
+        catalog_release_id=catalog_release_id,
+        embedding_model=model,
+        embedding_version=version,
+        embedding_dimension=dimension,
+    )
+    row = cursor.fetchone()
+    row_count = int(row[0] or 0)
+    distinct_menu_count = int(row[1] or 0)
+    manifest_count = int(row[2] or 0)
+    invalid_count = int(row[4] or 0)
+    if (
+        menu_count < 1
+        or row_count != menu_count
+        or distinct_menu_count != menu_count
+        or manifest_count != 1
+        or invalid_count != 0
+    ):
+        raise RuntimeError("COMPLETE_MENU_SEMANTIC_EMBEDDING_REQUIRED")
+    return {
+        "model": model,
+        "version": version,
+        "dimension": dimension,
+        "manifest_sha256": str(row[3]),
+        "menu_count": row_count,
+        "source": "OCI_COHERE_IMMUTABLE_SET",
+    }
+
+
+def build_plan(cursor: Any, oracle: bool = False) -> dict[str, Any]:
     catalog = active_catalog(cursor)
     compiled = compile_external_release(catalog["catalog_release_id"])
     menus = fetch_catalog_menus(cursor)
+    sections_by_menu, options_by_menu = fetch_menu_feature_sources(cursor)
     mappings = classify_menus(menus, compiled)
     supports = build_support_rows(compiled)
+    memberships = build_menu_concept_memberships(
+        knowledge_release_id=compiled.release_id,
+        menus=menus,
+        mappings=mappings,
+        concepts=compiled.concepts,
+    )
+    features, feature_evidence = compile_menu_preference_features(
+        knowledge_release_id=compiled.release_id,
+        menus=menus,
+        mappings=mappings,
+        concept_supports=supports,
+        chunks=compiled.chunks,
+        sections_by_menu=sections_by_menu,
+        options_by_menu=options_by_menu,
+    )
     mapping_reasons = Counter(
         "MAPPED_HIGH" if row["mapping_status"] == "MAPPED" else str(row["unmapped_reason"])
         for row in mappings
@@ -694,12 +836,21 @@ def build_plan(cursor: Any) -> dict[str, Any]:
         )
     }
     support_manifest = support_manifest_sha256(supports)
+    feature_manifest = feature_manifest_sha256(features, feature_evidence, memberships)
     ranking_manifest = sha256_payload(RANKING_POLICY)
     if ranking_manifest != RANKING_POLICY_SHA256:
         raise RuntimeError("canonical ranking policy hash mismatch")
+    menu_embedding_identity = _menu_embedding_identity(
+        cursor,
+        catalog_release_id=str(catalog["catalog_release_id"]),
+        menu_count=len(menus),
+        oracle=oracle,
+        compiled=compiled,
+    )
+    embedding_identity_hash = sha256_payload(menu_embedding_identity)
     family_id = (
         f"external-recommendation-{compiled.release_id.rsplit('-', 1)[-1]}-"
-        f"{support_manifest[:10]}-{ranking_manifest[:10]}"
+        f"{feature_manifest[:10]}-{ranking_manifest[:10]}-{embedding_identity_hash[:10]}"
     )
     return {
         "catalog": catalog,
@@ -707,8 +858,13 @@ def build_plan(cursor: Any) -> dict[str, Any]:
         "menus": menus,
         "mappings": mappings,
         "supports": supports,
+        "memberships": memberships,
+        "features": features,
+        "feature_evidence": feature_evidence,
         "support_manifest_sha256": support_manifest,
+        "feature_manifest_sha256": feature_manifest,
         "ranking_policy_sha256": ranking_manifest,
+        "menu_embedding_identity": menu_embedding_identity,
         "release_family_id": family_id,
         "summary": {
             "catalog_menu_count": len(menus),
@@ -718,10 +874,22 @@ def build_plan(cursor: Any) -> dict[str, Any]:
             "classified_menu_count": len(mappings),
             "mapped_concept_count": len(mapped_concepts),
             "support_row_count": len(supports),
+            "menu_feature_count": len(features),
+            "menu_feature_evidence_count": len(feature_evidence),
+            "menu_concept_membership_count": len(memberships),
+            "feature_counts_by_provenance": dict(
+                sorted(Counter(str(row["provenance_type"]) for row in features).items())
+            ),
+            "feature_counts_by_scope": dict(
+                sorted(Counter(str(row["evidence_scope"]) for row in features).items())
+            ),
             "exposed_preference_coverage": exposed,
             "support_manifest_sha256": support_manifest,
+            "feature_manifest_sha256": feature_manifest,
+            "feature_extractor_version": FEATURE_EXTRACTOR_VERSION,
             "ranking_policy_version": RANKING_POLICY_VERSION,
             "ranking_policy_sha256": ranking_manifest,
+            "menu_embedding_identity": menu_embedding_identity,
             "release_family_id": family_id,
         },
     }
@@ -908,7 +1076,7 @@ def _existing_count(cursor: Any, table: str, column: str, value: str, oracle: bo
 
 
 def ensure_sqlite_contract(connection: sqlite3.Connection) -> None:
-    """Apply the SQLite equivalent of additive migration 012 for offline mirrors."""
+    """Apply SQLite equivalents of additive migrations 012-013 for mirrors."""
 
     zero_hash = "0" * 64
     family_columns = {
@@ -919,6 +1087,7 @@ def ensure_sqlite_contract(connection: sqlite3.Connection) -> None:
     }
     for column, definition in (
         ("support_manifest_sha256", f"TEXT NOT NULL DEFAULT '{zero_hash}'"),
+        ("feature_manifest_sha256", f"TEXT NOT NULL DEFAULT '{zero_hash}'"),
         ("ranking_policy_version", "TEXT NOT NULL DEFAULT 'legacy-llm-rank-v2'"),
         ("ranking_policy_sha256", f"TEXT NOT NULL DEFAULT '{zero_hash}'"),
     ):
@@ -926,6 +1095,20 @@ def ensure_sqlite_contract(connection: sqlite3.Connection) -> None:
             connection.execute(
                 f"ALTER TABLE recommendation_release_family ADD COLUMN {column} {definition}"
             )
+    for table, column, definition in (
+        (
+            "structured_recommendation_request",
+            "feature_manifest_sha256",
+            f"TEXT NOT NULL DEFAULT '{zero_hash}'",
+        ),
+        ("recommendation_snapshot", "feature_manifest_sha256", "TEXT"),
+    ):
+        columns = {
+            str(row[1])
+            for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column not in columns:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
     connection.executescript(
         """
         CREATE TABLE IF NOT EXISTS concept_preference_support (
@@ -956,6 +1139,102 @@ def ensure_sqlite_contract(connection: sqlite3.Connection) -> None:
           );
         CREATE INDEX IF NOT EXISTS idx_concept_pref_concept
           ON concept_preference_support(knowledge_release_id, concept_id, support_status);
+        CREATE TABLE IF NOT EXISTS menu_preference_feature (
+          knowledge_release_id TEXT NOT NULL REFERENCES knowledge_release(release_id),
+          feature_id TEXT NOT NULL,
+          menu_id TEXT NOT NULL REFERENCES menu(menu_id),
+          category_code TEXT NOT NULL,
+          option_code TEXT NOT NULL,
+          support_status TEXT NOT NULL
+            CHECK (support_status IN ('SUPPORTED','CONTRADICTED','REVIEW_REQUIRED')),
+          support_strength REAL NOT NULL CHECK (support_strength >= 0 AND support_strength <= 1),
+          confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+          specificity REAL NOT NULL CHECK (specificity >= 0 AND specificity <= 1),
+          evidence_scope TEXT NOT NULL
+            CHECK (evidence_scope IN ('MENU_DIRECT','SECTION_CONTEXT','OPTION_AVAILABILITY','CONCEPT_GENERAL')),
+          provenance_type TEXT NOT NULL,
+          source_ref TEXT NOT NULL,
+          review_status TEXT NOT NULL,
+          extractor_version TEXT NOT NULL,
+          is_synthetic INTEGER NOT NULL DEFAULT 1 CHECK (is_synthetic IN (0,1)),
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(knowledge_release_id, feature_id),
+          UNIQUE(knowledge_release_id, menu_id, category_code, option_code)
+        );
+        CREATE TABLE IF NOT EXISTS menu_preference_feature_evidence (
+          knowledge_release_id TEXT NOT NULL,
+          evidence_id TEXT NOT NULL,
+          feature_id TEXT NOT NULL,
+          evidence_role TEXT NOT NULL
+            CHECK (evidence_role IN ('SUPPORT','CONTRADICTION','CONTEXT','OVERRIDDEN_GENERAL')),
+          source_type TEXT NOT NULL
+            CHECK (source_type IN ('MENU_NAME','MENU_DESCRIPTION','MENU_SECTION','MENU_OPTION','WIKI_CHUNK')),
+          excerpt TEXT NOT NULL,
+          excerpt_sha256 TEXT NOT NULL,
+          source_ref TEXT NOT NULL,
+          provenance_type TEXT NOT NULL,
+          is_synthetic INTEGER NOT NULL DEFAULT 1 CHECK (is_synthetic IN (0,1)),
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(knowledge_release_id, evidence_id),
+          FOREIGN KEY(knowledge_release_id, feature_id)
+            REFERENCES menu_preference_feature(knowledge_release_id, feature_id)
+        );
+        CREATE TABLE IF NOT EXISTS menu_concept_membership (
+          knowledge_release_id TEXT NOT NULL REFERENCES knowledge_release(release_id),
+          menu_id TEXT NOT NULL REFERENCES menu(menu_id),
+          concept_id TEXT NOT NULL,
+          membership_role TEXT NOT NULL
+            CHECK (membership_role IN ('PRIMARY','COMPONENT','SECONDARY')),
+          confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+          provenance_type TEXT NOT NULL,
+          source_ref TEXT NOT NULL,
+          review_status TEXT NOT NULL,
+          extractor_version TEXT NOT NULL,
+          is_synthetic INTEGER NOT NULL DEFAULT 1 CHECK (is_synthetic IN (0,1)),
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(knowledge_release_id, menu_id, concept_id),
+          FOREIGN KEY(knowledge_release_id, concept_id)
+            REFERENCES dish_concept(release_id, concept_id)
+        );
+        CREATE TABLE IF NOT EXISTS menu_wiki_eligibility (
+          knowledge_release_id TEXT NOT NULL REFERENCES knowledge_release(release_id),
+          menu_id TEXT NOT NULL REFERENCES menu(menu_id),
+          reviewed_chunk_count INTEGER NOT NULL CHECK (reviewed_chunk_count > 0),
+          compiled_at TEXT NOT NULL,
+          PRIMARY KEY(knowledge_release_id, menu_id)
+        );
+        CREATE TABLE IF NOT EXISTS menu_semantic_embedding (
+          catalog_release_id TEXT NOT NULL,
+          menu_id TEXT NOT NULL REFERENCES menu(menu_id),
+          embedding_model TEXT NOT NULL,
+          embedding_version TEXT NOT NULL,
+          embedding_dimension INTEGER NOT NULL CHECK (embedding_dimension = 1536),
+          semantic_text_sha256 TEXT NOT NULL CHECK (length(semantic_text_sha256) = 64),
+          embedding_manifest_sha256 TEXT NOT NULL
+            CHECK (length(embedding_manifest_sha256) = 64),
+          embedding_vector_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY(catalog_release_id,menu_id,embedding_model,embedding_version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_menu_pref_feature_lookup
+          ON menu_preference_feature(
+            knowledge_release_id, category_code, option_code, support_status, menu_id
+          );
+        CREATE INDEX IF NOT EXISTS idx_menu_pref_feature_menu
+          ON menu_preference_feature(knowledge_release_id, menu_id, support_status);
+        CREATE INDEX IF NOT EXISTS idx_menu_pref_evidence_feature
+          ON menu_preference_feature_evidence(knowledge_release_id, feature_id, evidence_role);
+        CREATE INDEX IF NOT EXISTS idx_menu_concept_membership_lookup
+          ON menu_concept_membership(
+            knowledge_release_id, concept_id, membership_role, menu_id
+          );
+        CREATE INDEX IF NOT EXISTS idx_menu_wiki_eligibility_menu
+          ON menu_wiki_eligibility(menu_id, knowledge_release_id);
+        CREATE INDEX IF NOT EXISTS idx_menu_semantic_identity
+          ON menu_semantic_embedding(
+            catalog_release_id,embedding_model,embedding_version,
+            embedding_dimension,menu_id
+          );
         CREATE INDEX IF NOT EXISTS idx_menu_concept_high
           ON menu_concept_map(release_id, mapping_status, confidence_band, concept_id, menu_id);
         CREATE INDEX IF NOT EXISTS idx_menu_recommend_filter
@@ -988,6 +1267,75 @@ def runtime_pointers(cursor: Any, oracle: bool) -> tuple[str | None, str | None]
     )
 
 
+def _compile_wiki_eligibility(cursor: Any, release_id: str, oracle: bool) -> int:
+    """Materialize reviewed public Wiki eligibility for one immutable release."""
+
+    visibility = (
+        "JSON_VALUE(chunk.metadata_json,'$.recommendation_visibility')"
+        if oracle
+        else "json_extract(chunk.metadata_json,'$.recommendation_visibility')"
+    )
+    placeholder = ":release_id" if oracle else "?"
+    now = "SYSTIMESTAMP" if oracle else "datetime('now')"
+    insert_prefix = (
+        "INSERT INTO menu_wiki_eligibility"
+        if oracle
+        else "INSERT OR IGNORE INTO menu_wiki_eligibility"
+    )
+    anti_join = (
+        """
+        LEFT JOIN menu_wiki_eligibility existing
+          ON existing.knowledge_release_id=reviewed.release_id
+         AND existing.menu_id=membership.menu_id
+        WHERE existing.menu_id IS NULL
+        """
+        if oracle
+        else ""
+    )
+    cursor.execute(
+        f"""
+        {insert_prefix} (
+          knowledge_release_id,menu_id,reviewed_chunk_count,compiled_at
+        )
+        SELECT reviewed.release_id,membership.menu_id,
+               COUNT(DISTINCT reviewed.chunk_id),{now}
+        FROM (
+          SELECT chunk.release_id,chunk.chunk_id,
+                 closure.descendant_concept_id
+          FROM knowledge_chunk chunk
+          JOIN knowledge_document document
+            ON document.release_id=chunk.release_id
+           AND document.document_id=chunk.document_id
+          JOIN dish_concept_closure closure
+            ON closure.release_id=chunk.release_id
+           AND closure.ancestor_concept_id=chunk.concept_id
+           AND closure.inherit_claims=1
+          WHERE chunk.release_id={placeholder}
+            AND document.source_type='SYNTHETIC_WIKI'
+            AND document.review_status='REVIEWED_DEMO'
+            AND lower(chunk.facet)<>'safety'
+            AND ({visibility}='PUBLIC_RAG' OR {visibility} IS NULL)
+        ) reviewed
+        JOIN menu_concept_membership membership
+          ON membership.knowledge_release_id=reviewed.release_id
+         AND membership.concept_id=reviewed.descendant_concept_id
+        {anti_join}
+        GROUP BY reviewed.release_id,membership.menu_id
+        """,
+        {"release_id": release_id} if oracle else (release_id,),
+    )
+    count = _existing_count(
+        cursor,
+        "menu_wiki_eligibility",
+        "knowledge_release_id",
+        release_id,
+        oracle,
+    )
+    if count < 1:
+        raise RuntimeError("WIKI_ELIGIBILITY_EMPTY")
+    return count
+
+
 def _stage_verified_plan(
     connection: Any,
     oracle: bool,
@@ -997,13 +1345,13 @@ def _stage_verified_plan(
         ensure_sqlite_contract(connection)
         cursor = connection.cursor()
     pointers_before = runtime_pointers(cursor, oracle)
-    plan = build_plan(cursor)
+    plan = build_plan(cursor, oracle)
     compiled: CompiledKnowledgeRelease = plan["compiled"]
     try:
         if oracle:
-            cursor.execute("SELECT COUNT(*) FROM schema_migration WHERE version='012'")
+            cursor.execute("SELECT COUNT(*) FROM schema_migration WHERE version='014'")
             if int(cursor.fetchone()[0]) != 1:
-                raise RuntimeError("MIGRATION_012_NOT_APPLIED")
+                raise RuntimeError("MIGRATION_014_NOT_APPLIED")
         _insert_taxonomy(cursor, oracle)
         if oracle:
             load_oracle_release(connection, compiled, activate=False)
@@ -1031,6 +1379,46 @@ def _stage_verified_plan(
         elif support_count != len(plan["supports"]):
             raise RuntimeError("IMMUTABLE_SUPPORT_RELEASE_INCOMPLETE")
 
+        membership_count = _existing_count(
+            cursor,
+            "menu_concept_membership",
+            "knowledge_release_id",
+            compiled.release_id,
+            oracle,
+        )
+        if membership_count == 0:
+            _insert_many(cursor, "menu_concept_membership", plan["memberships"], oracle)
+        elif membership_count != len(plan["memberships"]):
+            raise RuntimeError("IMMUTABLE_CONCEPT_MEMBERSHIP_RELEASE_INCOMPLETE")
+        _compile_wiki_eligibility(cursor, compiled.release_id, oracle)
+
+        feature_count = _existing_count(
+            cursor,
+            "menu_preference_feature",
+            "knowledge_release_id",
+            compiled.release_id,
+            oracle,
+        )
+        if feature_count == 0:
+            _insert_many(cursor, "menu_preference_feature", plan["features"], oracle)
+            _insert_many(
+                cursor,
+                "menu_preference_feature_evidence",
+                plan["feature_evidence"],
+                oracle,
+            )
+        elif feature_count != len(plan["features"]):
+            raise RuntimeError("IMMUTABLE_MENU_FEATURE_RELEASE_INCOMPLETE")
+        evidence_count = _existing_count(
+            cursor,
+            "menu_preference_feature_evidence",
+            "knowledge_release_id",
+            compiled.release_id,
+            oracle,
+        )
+        if evidence_count != len(plan["feature_evidence"]):
+            raise RuntimeError("IMMUTABLE_MENU_FEATURE_EVIDENCE_RELEASE_INCOMPLETE")
+
         _ensure_preference_catalog(cursor, oracle)
 
         family_values = {
@@ -1042,9 +1430,10 @@ def _stage_verified_plan(
             "certification_release_id": (
                 f"external-certifications-none-{plan['catalog']['catalog_import_id'][-20:]}"
             ),
-            "embedding_model": compiled.embedding_model,
-            "embedding_version": compiled.embedding_version,
+            "embedding_model": plan["menu_embedding_identity"]["model"],
+            "embedding_version": plan["menu_embedding_identity"]["version"],
             "support_manifest_sha256": plan["support_manifest_sha256"],
+            "feature_manifest_sha256": plan["feature_manifest_sha256"],
             "ranking_policy_version": RANKING_POLICY_VERSION,
             "ranking_policy_sha256": plan["ranking_policy_sha256"],
             "status": "READY",
@@ -1112,7 +1501,9 @@ def activate_staged_plan(
 ) -> dict[str, Any]:
     """Reverify and atomically activate the deterministic staged family."""
 
-    resolved_plan = dict(plan) if plan is not None else build_plan(connection.cursor())
+    resolved_plan = (
+        dict(plan) if plan is not None else build_plan(connection.cursor(), oracle)
+    )
     staged_verification = verify_release_family(
         connection.cursor(),
         oracle,
@@ -1314,9 +1705,11 @@ def verify_release_family(
         cursor.execute(
             """
             SELECT family.release_family_id,family.knowledge_release_id,
-                   family.support_manifest_sha256,family.ranking_policy_version,
+                   family.support_manifest_sha256,family.feature_manifest_sha256,
+                   family.ranking_policy_version,
                    family.ranking_policy_sha256,family.preference_catalog_version,
-                   family.spice_reference_version,family.status
+                   family.spice_reference_version,family.embedding_model,
+                   family.embedding_version,family.catalog_release_id,family.status
             FROM recommendation_runtime_state state
             JOIN recommendation_release_family family
               ON family.release_family_id=state.active_release_family_id
@@ -1335,9 +1728,11 @@ def verify_release_family(
         cursor.execute(
             """
             SELECT family.release_family_id,family.knowledge_release_id,
-                   family.support_manifest_sha256,family.ranking_policy_version,
+                   family.support_manifest_sha256,family.feature_manifest_sha256,
+                   family.ranking_policy_version,
                    family.ranking_policy_sha256,family.preference_catalog_version,
-                   family.spice_reference_version,family.status
+                   family.spice_reference_version,family.embedding_model,
+                   family.embedding_version,family.catalog_release_id,family.status
             FROM recommendation_release_family family
             JOIN knowledge_release knowledge
               ON knowledge.release_id=family.knowledge_release_id
@@ -1348,9 +1743,11 @@ def verify_release_family(
             if oracle
             else """
             SELECT family.release_family_id,family.knowledge_release_id,
-                   family.support_manifest_sha256,family.ranking_policy_version,
+                   family.support_manifest_sha256,family.feature_manifest_sha256,
+                   family.ranking_policy_version,
                    family.ranking_policy_sha256,family.preference_catalog_version,
-                   family.spice_reference_version,family.status
+                   family.spice_reference_version,family.embedding_model,
+                   family.embedding_version,family.catalog_release_id,family.status
             FROM recommendation_release_family family
             JOIN knowledge_release knowledge
               ON knowledge.release_id=family.knowledge_release_id
@@ -1367,10 +1764,14 @@ def verify_release_family(
         family_id,
         release_id,
         support_manifest,
+        feature_manifest,
         policy_version,
         policy_sha,
         preference_catalog_version,
         spice_reference_version,
+        family_embedding_model,
+        family_embedding_version,
+        family_catalog_release_id,
         family_status,
     ) = map(str, active)
     total_menu = _scalar(cursor, "SELECT COUNT(*) FROM menu")
@@ -1505,6 +1906,91 @@ def verify_release_family(
         {"release_id": release_id} if oracle else (release_id,),
     )
     computed_support_manifest = support_manifest_sha256(support_rows)
+    feature_rows = _rows(
+        cursor,
+        """
+        SELECT knowledge_release_id,feature_id,menu_id,category_code,option_code,
+               support_status,support_strength,confidence,specificity,evidence_scope,
+               provenance_type,source_ref,review_status,extractor_version,is_synthetic
+        FROM menu_preference_feature
+        WHERE knowledge_release_id=:release_id
+        ORDER BY menu_id,category_code,option_code
+        """
+        if oracle
+        else """
+        SELECT knowledge_release_id,feature_id,menu_id,category_code,option_code,
+               support_status,support_strength,confidence,specificity,evidence_scope,
+               provenance_type,source_ref,review_status,extractor_version,is_synthetic
+        FROM menu_preference_feature
+        WHERE knowledge_release_id=?
+        ORDER BY menu_id,category_code,option_code
+        """,
+        {"release_id": release_id} if oracle else (release_id,),
+    )
+    feature_evidence_rows = _rows(
+        cursor,
+        """
+        SELECT knowledge_release_id,evidence_id,feature_id,evidence_role,source_type,
+               excerpt,excerpt_sha256,source_ref,provenance_type,is_synthetic
+        FROM menu_preference_feature_evidence
+        WHERE knowledge_release_id=:release_id
+        ORDER BY feature_id,evidence_id
+        """
+        if oracle
+        else """
+        SELECT knowledge_release_id,evidence_id,feature_id,evidence_role,source_type,
+               excerpt,excerpt_sha256,source_ref,provenance_type,is_synthetic
+        FROM menu_preference_feature_evidence
+        WHERE knowledge_release_id=?
+        ORDER BY feature_id,evidence_id
+        """,
+        {"release_id": release_id} if oracle else (release_id,),
+    )
+    membership_rows = _rows(
+        cursor,
+        """
+        SELECT knowledge_release_id,menu_id,concept_id,membership_role,confidence,
+               provenance_type,source_ref,review_status,extractor_version,is_synthetic
+        FROM menu_concept_membership
+        WHERE knowledge_release_id=:release_id
+        ORDER BY menu_id,concept_id
+        """
+        if oracle
+        else """
+        SELECT knowledge_release_id,menu_id,concept_id,membership_role,confidence,
+               provenance_type,source_ref,review_status,extractor_version,is_synthetic
+        FROM menu_concept_membership
+        WHERE knowledge_release_id=?
+        ORDER BY menu_id,concept_id
+        """,
+        {"release_id": release_id} if oracle else (release_id,),
+    )
+    wiki_eligibility_count = _scalar(
+        cursor,
+        "SELECT COUNT(*) FROM menu_wiki_eligibility WHERE knowledge_release_id=:release_id"
+        if oracle
+        else "SELECT COUNT(*) FROM menu_wiki_eligibility WHERE knowledge_release_id=?",
+        {"release_id": release_id} if oracle else (release_id,),
+    )
+    membership_menu_count = len({str(row["menu_id"]) for row in membership_rows})
+    computed_feature_manifest = feature_manifest_sha256(
+        feature_rows,
+        feature_evidence_rows,
+        membership_rows,
+    )
+    invalid_feature = sum(
+        1
+        for row in feature_rows
+        if str(row["extractor_version"]) != FEATURE_EXTRACTOR_VERSION
+        or str(row["support_status"])
+        not in {"SUPPORTED", "CONTRADICTED", "REVIEW_REQUIRED"}
+    )
+    direct_contradictions = sum(
+        1
+        for row in feature_rows
+        if row["support_status"] == "CONTRADICTED"
+        and row["evidence_scope"] == "MENU_DIRECT"
+    )
     all_mapping_provenance = _scalar(
         cursor,
         """
@@ -1560,6 +2046,29 @@ def verify_release_family(
         if oracle
         else (spice_reference_version,),
     )
+    semantic_embedding_count = 0
+    semantic_embedding_manifest_count = 0
+    if oracle:
+        cursor.execute(
+            """
+            SELECT COUNT(*),COUNT(DISTINCT embedding_manifest_sha256)
+            FROM menu_semantic_embedding
+            WHERE catalog_release_id=:catalog_release_id
+              AND embedding_model=:embedding_model
+              AND embedding_version=:embedding_version
+              AND embedding_dimension=:embedding_dimension
+              AND embedding_vector IS NOT NULL
+              AND LENGTH(semantic_text_sha256)=64
+              AND LENGTH(embedding_manifest_sha256)=64
+            """,
+            catalog_release_id=family_catalog_release_id,
+            embedding_model=family_embedding_model,
+            embedding_version=family_embedding_version,
+            embedding_dimension=Settings().oci_embed_dimension,
+        )
+        semantic_row = cursor.fetchone()
+        semantic_embedding_count = int(semantic_row[0] or 0)
+        semantic_embedding_manifest_count = int(semantic_row[1] or 0)
     checks = {
         ("active_release_family" if require_active else "staged_release_family_ready"): True,
         "classification_coverage_100_percent": classified == total_menu and total_menu > 0,
@@ -1574,6 +2083,18 @@ def verify_release_family(
             re.fullmatch(r"[0-9a-f]{64}", support_manifest)
         )
         and support_manifest == computed_support_manifest,
+        "menu_features_exist": bool(feature_rows),
+        "menu_feature_evidence_exists": bool(feature_evidence_rows),
+        "menu_concept_memberships_cover_primary_mappings": len(membership_rows) >= mapped,
+        "wiki_eligibility_exactly_covers_membership_menus": (
+            wiki_eligibility_count == membership_menu_count
+            and membership_menu_count > 0
+        ),
+        "invalid_menu_feature_zero": invalid_feature == 0,
+        "feature_manifest_sha256_exact": bool(
+            re.fullmatch(r"[0-9a-f]{64}", feature_manifest)
+        )
+        and feature_manifest == computed_feature_manifest,
         "ranking_policy_version_exact": policy_version == RANKING_POLICY_VERSION,
         "ranking_policy_sha256_exact": policy_sha == RANKING_POLICY_SHA256,
         "preference_catalog_version_exact": (
@@ -1586,6 +2107,14 @@ def verify_release_family(
             spice_reference_version == f"{PREFERENCE_CATALOG_VERSION}-spice"
         ),
         "spice_references_complete": spice_reference_count == 10,
+        "menu_semantic_embedding_set_complete": (
+            not oracle
+            or (
+                semantic_embedding_count == total_menu
+                and total_menu > 0
+                and semantic_embedding_manifest_count == 1
+            )
+        ),
         "source_specific_fact_invention_zero": source_specific_facts == 0,
     }
     return {
@@ -1599,12 +2128,24 @@ def verify_release_family(
         "support_row_count": support_count,
         "support_manifest_sha256": support_manifest,
         "computed_support_manifest_sha256": computed_support_manifest,
+        "menu_feature_count": len(feature_rows),
+        "menu_feature_evidence_count": len(feature_evidence_rows),
+        "menu_concept_membership_count": len(membership_rows),
+        "menu_concept_membership_menu_count": membership_menu_count,
+        "wiki_eligible_menu_count": wiki_eligibility_count,
+        "direct_contradiction_count": direct_contradictions,
+        "feature_manifest_sha256": feature_manifest,
+        "computed_feature_manifest_sha256": computed_feature_manifest,
         "ranking_policy_version": policy_version,
         "ranking_policy_sha256": policy_sha,
         "preference_catalog_version": preference_catalog_version,
         "preference_option_count": preference_option_count,
         "spice_reference_version": spice_reference_version,
         "spice_reference_count": spice_reference_count,
+        "menu_semantic_embedding_count": semantic_embedding_count,
+        "menu_semantic_embedding_manifest_count": semantic_embedding_manifest_count,
+        "menu_semantic_embedding_model": family_embedding_model,
+        "menu_semantic_embedding_version": family_embedding_version,
         "family_status": family_status,
     }
 
@@ -1710,7 +2251,7 @@ def main() -> None:
                 "transaction_committed": False,
             }
         else:
-            plan = build_plan(connection.cursor())
+            plan = build_plan(connection.cursor(), args.backend == "oracle")
             result = _public_plan(plan["summary"], args.backend, False)
         passed = result.get("pass", True) is not False
         result = {"status": "PASS" if passed else "FAIL", **result}

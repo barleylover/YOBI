@@ -153,12 +153,19 @@ and the final rehearsal remain `PENDING`; do not broaden TCP 22 ingress.
 
 The standard deploy now enforces all of these steps before its ready marker:
 
-1. build an archive containing exactly migrations `001`–`012` while rejecting
+1. build an archive containing exactly migrations `001`–`014` while rejecting
    `.env`, key/wallet paths, `*.db`, `backend/backend`, temporary and cache paths;
 2. verify the archive checksum and exact migration ledger on the VM;
-3. in external mode run the idempotent builder with `--stage-only`; it loads and
-   release-scope verifies the deterministic `READY` knowledge/recommendation family
-   while proving both active data pointers are unchanged;
+3. in external mode verify the previously approved immutable OCI menu-vector set
+   with `backfill_menu_semantic_embeddings.py --verify-only` (zero provider calls).
+   A newly approved immutable Cohere set is created only when the guarded operator
+   explicitly sets `YOBI_MENU_SEMANTIC_BACKFILL=true` together with
+   `YOBI_PROVISIONAL_DEPLOY=true` and `YOBI_ZERO_PROVIDER_PROVISIONAL=true`; the
+   deployment then runs `--apply` once with a one-second inter-batch interval before
+   the mandatory `--verify-only` gate. It then runs the idempotent builder with
+   `--stage-only`; the builder loads and release-scope
+   verifies the `READY` knowledge/recommendation family while proving both active
+   data pointers are unchanged;
 4. run `recommendation_query_plan.py --backend oracle --scope staged --verify`, which
    records only aggregate candidate/merchant and Oracle plan/index estimates (never
    raw SQL, binds, release IDs, DSN, or row IDs), then verify the demo address;
@@ -246,11 +253,15 @@ request. Verification includes the conversation snapshot/event and knowledge rel
 chunk, and runtime-state tables introduced by `005` and `006`. No secret is echoed.
 
 If `/etc/yobi/yobi.env` already exists, do not recreate it. The same resume command
-loads the protected file and does not prompt for secrets. It atomically updates only
-the non-secret release policies `LLM_MAX_RETRIES="1"` and
-`EMBEDDING_PROVIDER="deterministic"` when a legacy file differs or omits either key;
+loads the protected file and does not prompt for secrets. It atomically updates the
+non-secret release policies, including `LLM_MAX_RETRIES="0"`,
+`EMBEDDING_PROVIDER="oci"`, and `OCI_EMBED_AUTH="instance_principal"`, when a
+legacy file differs or omits a key;
 all secret and unrelated lines are preserved and no value is printed. Duplicate
-policy entries fail closed. The protected file remains mode `0600`.
+policy entries fail closed. A legacy file without `OCI_COMPARTMENT_ID` receives only
+the non-secret compartment identity already resolved and validated by the guarded
+deployment; a conflicting identity fails closed. The protected file remains mode
+`0600`.
 
 Progress is recorded as safe metadata in
 `/opt/yobi/shared/control/bootstrap_state.json` (`root:root`, mode `0600`). A transient 429
@@ -304,7 +315,7 @@ state; secret values are never returned to the local shell.
 `deploy/deploy.sh` now builds a release-specific virtual environment before changing
 `/opt/yobi/current`. The release archive includes `knowledge/`, the complete
 `database/migrations/` directory, and the application/evaluation code. Packaging
-fails early unless every immutable/additive migration `001`–`010` and the knowledge
+fails early unless every immutable/additive migration `001`–`014` and the knowledge
 authoring directory are present. The archive SHA-256 becomes part of the release ID;
 the VM verifies the uploaded checksum and records it in a release manifest before
 installation. Each transfer uses a release-and-nonce-specific file under the SSH
@@ -497,8 +508,30 @@ path remains OCI on-demand generation. `GENAI_PROVIDER`, logical generation mode
 `OCI_GENAI_SERVING_MODE`, and optional dedicated endpoint references affect only the
 generation adapter; `EMBEDDING_PROVIDER`, `OCI_EMBED_MODEL`, and
 `OCI_EMBED_DIMENSION` identify retrieval. The current release pins
-`EMBEDDING_PROVIDER=deterministic` for both seed and query vectors; `auto` is not a
-production default.
+`EMBEDDING_PROVIDER=oci`, `OCI_EMBED_AUTH=instance_principal`, and
+`OCI_EMBED_MODEL=cohere.embed-v4.0` for both document and query vectors. `auto` and
+the deterministic fixture provider are not production defaults. A staged family
+must pass the stored provider/model/version/dimension identity checks before
+semantic ranking is enabled.
+
+Menu vectors are release-bound rows in `menu_semantic_embedding`; they are not
+in-place updates to the catalog's `menu` rows. Before the normal deployment, an
+explicitly approved data-staging operation runs:
+
+```bash
+python scripts/backfill_menu_semantic_embeddings.py \
+  --embedding-provider oci --apply \
+  --expected-catalog-release-id '<approved-catalog-release-id>'
+python scripts/backfill_menu_semantic_embeddings.py \
+  --embedding-provider oci --verify-only \
+  --expected-catalog-release-id '<approved-catalog-release-id>'
+```
+
+The apply operation computes all vectors before DML, inserts one immutable set in
+one transaction, and verifies that neither active data pointer changed. It never
+updates catalog rows. A partial/conflicting set is an error; the normal deploy only
+performs the zero-call verification and never starts this backfill implicitly.
+
 Do not provision or select a paid dedicated endpoint without separate approval. A
 fake dedicated-adapter contract test is not live dedicated-endpoint evidence.
 

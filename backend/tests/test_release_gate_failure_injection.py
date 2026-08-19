@@ -129,7 +129,7 @@ def test_post_review_gate_accepts_only_the_reviewed_zero_call_path() -> None:
         )
 
 
-def test_reviewed_quality_five_binds_exact_observation_fix_and_release(
+def test_reviewed_quality_five_is_immutable_and_not_reused_for_v2_source(
     tmp_path: Path,
 ) -> None:
     evidence = (
@@ -138,23 +138,22 @@ def test_reviewed_quality_five_binds_exact_observation_fix_and_release(
         / "evidence"
         / "recommendation_quality_expansion_five_20260817.json"
     )
-    result = release_gate.verify_reviewed_quality_five(
-        evidence,
-        fix_source_path=ROOT
-        / "backend"
-        / "app"
-        / "services"
-        / "structured_recommendation.py",
-        knowledge_release_id="external-knowledge-0ffd2f53ba2e2539ee9c5a27",
-        recommendation_release_family_id=(
-            "external-recommendation-0ffd2f53ba2e2539ee9c5a27-71a41f074c-5515c9c687"
-        ),
-    )
-
-    assert result["executed"] == 5
-    assert result["normal_recommended_count"] == 4
-    assert result["safe_fallback_count"] == 1
-    assert result["additional_provider_dispatch_count_after_review"] == 0
+    with pytest.raises(
+        release_gate.ReleaseGateError,
+        match="QUALITY_FIVE_REMEDIATION_INVALID",
+    ):
+        release_gate.verify_reviewed_quality_five(
+            evidence,
+            fix_source_path=ROOT
+            / "backend"
+            / "app"
+            / "services"
+            / "structured_recommendation.py",
+            knowledge_release_id="external-knowledge-0ffd2f53ba2e2539ee9c5a27",
+            recommendation_release_family_id=(
+                "external-recommendation-0ffd2f53ba2e2539ee9c5a27-71a41f074c-5515c9c687"
+            ),
+        )
 
     tampered = json.loads(evidence.read_text(encoding="utf-8"))
     tampered["additional_provider_dispatch_count_after_review"] = 1
@@ -304,7 +303,8 @@ def test_structured_gate_covers_dynamic_mock_order_and_isolated_fallback() -> No
 
     assert 'isolated_control.set_mode("force_genai_timeout")' in fallback_source
     assert "get_demo_control" not in fallback_source
-    assert "record.dispatch_count != 1" in fallback_source
+    assert "record.dispatch_count != 0" in fallback_source
+    assert "replay_record.dispatch_count != 0" in fallback_source
     assert "STRUCTURED_FALLBACK_SERVER_ORDER_CHANGED" in fallback_source
     assert "STRUCTURED_FALLBACK_PAYLOAD_NOT_DETERMINISTIC" in fallback_source
     assert "STRUCTURED_FALLBACK_PROFILE_CASCADE_CLEANUP_FAILED" in fallback_source

@@ -175,7 +175,7 @@ def run(
         if (
             batch.status != "SEARCH_FALLBACK"
             or record.status is not RecommendationRequestStatus.SEARCH_FALLBACK
-            or record.dispatch_count != 1
+            or record.dispatch_count != 0
             or record.failure_code != "DEMO_FORCED_RECOMMENDATION_FALLBACK"
             or record.snapshot_id != batch.snapshot_id
         ):
@@ -186,7 +186,7 @@ def run(
         ]
         frozen_ids = [item.menu.menu_id for item in frozen_pool[:3]]
         result_ids = [item.menu.menu_id for item in batch.recommendations]
-        if not 1 <= len(result_ids) <= 3 or result_ids != frozen_ids:
+        if len(result_ids) != 3 or result_ids != frozen_ids:
             raise RuntimeError("STRUCTURED_FALLBACK_SERVER_ORDER_CHANGED")
         expected_payload = service._search_fallback_payload(
             criteria_record,
@@ -243,7 +243,7 @@ def run(
             replay is None
             or [item.menu.menu_id for item in replay.recommendations] != result_ids
             or replay_record is None
-            or replay_record.dispatch_count != 1
+            or replay_record.dispatch_count != 0
         ):
             raise RuntimeError("STRUCTURED_FALLBACK_REPLAY_INVALID")
 
@@ -256,7 +256,7 @@ def run(
             "result_count": len(result_ids),
             "server_order_preserved": True,
             "deterministic_explanation": True,
-            "generation_dispatch_count": 1,
+            "generation_dispatch_count": 0,
             "failure_mode_scope": "isolated-process-control",
             "profile_cascade_cleanup": True,
         }

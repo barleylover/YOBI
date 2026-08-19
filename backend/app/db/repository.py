@@ -131,6 +131,12 @@ class YobiRepository(Protocol):
         evidence_pool: list[EvidencePoolItem],
     ) -> RecommendationRequestRecord: ...
 
+    def mark_recommendation_provider_called(
+        self,
+        session_id: str,
+        request_id: str,
+    ) -> RecommendationRequestRecord: ...
+
     def complete_recommendation_request(
         self,
         session_id: str,
@@ -140,6 +146,10 @@ class YobiRepository(Protocol):
         result_json: dict[str, Any] | None = None,
         snapshot: RecommendationSnapshot | None = None,
         failure_code: str | None = None,
+        provider_metrics: dict[str, int] | None = None,
+        grounding_rejection_code: str | None = None,
+        grounding_rejection_stage: str | None = None,
+        grounding_rejection_detail: str | None = None,
     ) -> RecommendationRequestRecord: ...
 
     def get_recommendation_request(
