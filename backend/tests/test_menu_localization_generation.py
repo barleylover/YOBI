@@ -55,6 +55,18 @@ def test_empty_response_retries_the_same_model() -> None:
     assert provider.models == ["xai.grok-4.3", "xai.grok-4.3"]
 
 
+def test_invalid_english_name_retries_before_database_write() -> None:
+    invalid = json.dumps(
+        {"items": [{"menu_id": "menu-1", "name_en": "비빔밥", "name_ja": "ビビンバ"}]}
+    )
+    provider = _Provider([invalid, _valid()])
+
+    result, _ = _generate_batch(provider, _settings(), _batch())
+
+    assert result.items[0].name_en == "Bibimbap"
+    assert provider.models == ["xai.grok-4.3", "xai.grok-4.3"]
+
+
 def test_rate_limit_uses_only_the_fallback_model() -> None:
     provider = _Provider(
         [

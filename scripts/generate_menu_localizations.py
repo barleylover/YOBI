@@ -307,6 +307,9 @@ def _generate_batch(provider: Any, settings: Settings, batch: list[dict[str, Any
                     or len(result.items) != len(batch)
                 ):
                     raise ValueError("LOCALIZATION_BATCH_MENU_IDS_MISMATCH")
+                for item in result.items:
+                    _validate_name(item.name_en, language_code="en")
+                    _validate_name(item.name_ja, language_code="ja")
                 return result, model_id
             except GenAIProviderError as exc:
                 if exc.code is GenAIErrorCode.RATE_LIMIT and index == 0:
