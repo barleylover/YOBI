@@ -59,6 +59,14 @@ def _effective_display_language(preferred_language: str) -> tuple[str, str]:
     return "en", "English"
 
 
+def _utc_datetime(value: datetime) -> datetime:
+    """Normalize Oracle TIMESTAMP values before comparing request deadlines."""
+
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def compact_generation_payload(
     item: EvidencePoolItem,
     *,
@@ -699,7 +707,7 @@ class StructuredRecommendationService:
             record is not None
             and record.status is RecommendationRequestStatus.DISPATCHED
             and record.dispatched_at is not None
-            and record.dispatched_at
+            and _utc_datetime(record.dispatched_at)
             <= datetime.now(timezone.utc)
             - timedelta(seconds=self.settings.recommendation_request_orphan_seconds)
         ):

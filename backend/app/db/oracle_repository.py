@@ -2394,11 +2394,11 @@ class OracleYobiRepository:
         cursor = connection.cursor()
         cursor.execute(
             """
-            SELECT session.meal_need_state_json,profile.dietary_rules_json,
+            SELECT chat.meal_need_state_json,profile.dietary_rules_json,
                    profile.religion_selection,profile.allergy_severity
-            FROM chat_session session JOIN user_profile profile
-              ON profile.profile_id=session.profile_id
-            WHERE session.session_id=:session_id
+            FROM chat_session chat JOIN user_profile profile
+              ON profile.profile_id=chat.profile_id
+            WHERE chat.session_id=:session_id
             """,
             session_id=session_id,
         )
@@ -4982,12 +4982,12 @@ class OracleYobiRepository:
                 """
                 SELECT profile.preferred_language,profile.country_code,
                        family.knowledge_release_id,family.synthetic_enrichment_release_id
-                FROM chat_session session
-                JOIN user_profile profile ON profile.profile_id=session.profile_id
+                FROM chat_session chat
+                JOIN user_profile profile ON profile.profile_id=chat.profile_id
                 JOIN recommendation_runtime_state state ON state.state_key='ACTIVE'
                 JOIN recommendation_release_family family
                   ON family.release_family_id=state.active_release_family_id
-                WHERE session.session_id=:session_id
+                WHERE chat.session_id=:session_id
                 """,
                 session_id=session_id,
             )
@@ -5187,12 +5187,12 @@ class OracleYobiRepository:
                 """
                 SELECT profile.preferred_language,profile.country_code,
                        family.synthetic_enrichment_release_id
-                FROM chat_session session
-                JOIN user_profile profile ON profile.profile_id=session.profile_id
+                FROM chat_session chat
+                JOIN user_profile profile ON profile.profile_id=chat.profile_id
                 JOIN recommendation_runtime_state state ON state.state_key='ACTIVE'
                 JOIN recommendation_release_family family
                   ON family.release_family_id=state.active_release_family_id
-                WHERE session.session_id=:session_id
+                WHERE chat.session_id=:session_id
                 """,
                 session_id=session_id,
             )
@@ -6035,9 +6035,9 @@ class OracleYobiRepository:
             if session_id:
                 cursor.execute(
                     """
-                    SELECT profile.preferred_language FROM chat_session session
-                    JOIN user_profile profile ON profile.profile_id=session.profile_id
-                    WHERE session.session_id=:session_id
+                    SELECT profile.preferred_language FROM chat_session chat
+                    JOIN user_profile profile ON profile.profile_id=chat.profile_id
+                    WHERE chat.session_id=:session_id
                     """,
                     session_id=session_id,
                 )
@@ -6297,12 +6297,12 @@ class OracleYobiRepository:
             cursor.execute(
                 """
                 SELECT profile.preferred_language,family.synthetic_enrichment_release_id
-                FROM chat_session session
-                JOIN user_profile profile ON profile.profile_id=session.profile_id
+                FROM chat_session chat
+                JOIN user_profile profile ON profile.profile_id=chat.profile_id
                 JOIN recommendation_runtime_state state ON state.state_key='ACTIVE'
                 JOIN recommendation_release_family family
                   ON family.release_family_id=state.active_release_family_id
-                WHERE session.session_id=:session_id
+                WHERE chat.session_id=:session_id
                 """,
                 session_id=session_id,
             )
@@ -6358,12 +6358,12 @@ class OracleYobiRepository:
             cursor.execute(
                 """
                 SELECT profile.preferred_language,family.synthetic_enrichment_release_id
-                FROM chat_session session
-                JOIN user_profile profile ON profile.profile_id=session.profile_id
+                FROM chat_session chat
+                JOIN user_profile profile ON profile.profile_id=chat.profile_id
                 JOIN recommendation_runtime_state state ON state.state_key='ACTIVE'
                 JOIN recommendation_release_family family
                   ON family.release_family_id=state.active_release_family_id
-                WHERE session.session_id=:session_id
+                WHERE chat.session_id=:session_id
                 """,
                 session_id=session_id,
             )

@@ -1211,6 +1211,33 @@ def test_stale_dispatched_request_becomes_unknown_without_redispatch() -> None:
     assert provider.calls == []
 
 
+def test_oracle_naive_dispatched_timestamp_is_compared_as_utc() -> None:
+    repository = FakeRecommendationRepository(_criteria())
+    provider = FakeProvider(_recommended_output(["menu-a"]))
+    service = _service(repository, provider)
+    request = _request()
+    repository.requests[request.request_id] = RecommendationRequestRecord(
+        request_id=request.request_id,
+        session_id=_session().session_id,
+        request_hash="d" * 64,
+        criteria_version=request.criteria_version,
+        mode=request.mode,
+        status=RecommendationRequestStatus.DISPATCHED,
+        state_version=request.expected_state_version,
+        release_family_id="recommendation-family-v1",
+        eligibility_as_of=datetime.now(timezone.utc) - timedelta(minutes=5),
+        evidence_pool_json=[],
+        dispatch_count=1,
+        created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        dispatched_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=4),
+    )
+
+    result = service.get_request(_session().session_id, request.request_id)
+
+    assert result is not None
+    assert result.failure_code == "DISPATCH_RESULT_UNKNOWN"
+
+
 def test_stale_shortlist_owner_loss_is_not_reported_as_a_provider_dispatch() -> None:
     repository = FakeRecommendationRepository(_criteria())
     provider = FakeProvider(_recommended_output(["menu-a"]))
