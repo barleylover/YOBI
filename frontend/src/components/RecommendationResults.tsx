@@ -1,18 +1,4 @@
-import {
-  CheckCircle2,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  GitCompareArrows,
-  Leaf,
-  Pencil,
-  RotateCcw,
-  Search,
-  Soup,
-  Sparkles,
-} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import type {
   PreferenceCatalog,
   RecommendationBatchV2,
@@ -20,25 +6,23 @@ import type {
   StructuredRecommendation,
 } from "../types";
 import type { RecommendationCopy } from "../lib/recommendationI18n";
+import type { RedesignCopy } from "../lib/redesignI18n";
 import { asSupportedLanguage, menuName } from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
 import { getComparisonFieldCopy } from "../lib/comparisonI18n";
-import {
-  carouselDeltaForArrow,
-  carouselIndexFromOffset,
-  carouselOffsetForIndex,
-} from "../lib/carouselScroll";
+import { carouselIndexFromOffset } from "../lib/carouselScroll";
+import { BottomSheet } from "./BottomSheet";
 
 interface Props {
   batch: RecommendationBatchV2;
   catalog: PreferenceCatalog;
   copy: RecommendationCopy;
+  v2: RedesignCopy;
   language: string;
   locale: string;
   busy?: boolean;
+  timestamp: string;
   onChoose: (recommendation: StructuredRecommendation) => void;
-  onSimilar: () => void;
-  onEdit: () => void;
   onCompare: () => Promise<RecommendationComparisonV2>;
   onRetry: () => void;
 }
@@ -47,12 +31,12 @@ export function RecommendationResults({
   batch,
   catalog,
   copy,
+  v2,
   language,
   locale,
   busy = false,
+  timestamp,
   onChoose,
-  onSimilar,
-  onEdit,
   onCompare,
   onRetry,
 }: Props) {
@@ -61,7 +45,7 @@ export function RecommendationResults({
   const comparisonCopy = getComparisonFieldCopy(supportedLanguage);
   const carouselRef = useRef<HTMLDivElement>(null);
   const [activeIndex, setActiveIndex] = useState(0);
-  const [evidenceOpen, setEvidenceOpen] = useState<Set<string>>(() => new Set());
+  const [explanationMenuId, setExplanationMenuId] = useState<string | null>(null);
   const [comparison, setComparison] = useState<RecommendationComparisonV2 | null>(null);
   const [comparisonOpen, setComparisonOpen] = useState(false);
   const [comparisonLoading, setComparisonLoading] = useState(false);
@@ -73,30 +57,13 @@ export function RecommendationResults({
 
   useEffect(() => {
     setActiveIndex(0);
-    setEvidenceOpen(new Set());
+    setExplanationMenuId(null);
     setComparison(null);
     setComparisonOpen(false);
     setComparisonError("");
     const carousel = carouselRef.current;
     if (carousel && typeof carousel.scrollTo === "function") carousel.scrollTo({ left: 0 });
   }, [batch.request_id]);
-
-  function toggleEvidence(menuId: string) {
-    setEvidenceOpen((current) => {
-      const next = new Set(current);
-      if (next.has(menuId)) next.delete(menuId); else next.add(menuId);
-      return next;
-    });
-  }
-
-  function moveTo(index: number) {
-    const nextIndex = Math.max(0, Math.min(index, batch.recommendations.length - 1));
-    setActiveIndex(nextIndex);
-    const carousel = carouselRef.current;
-    if (carousel && typeof carousel.scrollTo === "function") {
-      carousel.scrollTo({ left: carouselOffsetForIndex(carousel, nextIndex), behavior: "smooth" });
-    }
-  }
 
   async function toggleComparison() {
     if (batch.recommendations.length < 2) return;
@@ -116,157 +83,199 @@ export function RecommendationResults({
     }
   }
 
+  const explanationItem = batch.recommendations.find((item) => item.menu.menu_id === explanationMenuId) ?? null;
+
   return (
-    <section className="recommendation-results chat-result-experience" aria-labelledby="recommendation-results-title">
-      <div className="assistant-message-row">
-        <div className="assistant-avatar" aria-hidden="true">Y</div>
-        <div className="assistant-message-stack">
-          <strong className="assistant-name">{productCopy.assistantName}</strong>
-          <section className={isFallback ? "assistant-bubble result fallback" : "assistant-bubble result"}>
-            <header className="recommendation-result-heading">
-              {isFallback ? <Search size={22} /> : <Sparkles size={22} />}
-              <div>
-                <p className="eyebrow">{isFallback ? copy.searchFallbackTitle : copy.selectorEyebrow}</p>
-                <h1 id="recommendation-results-title">{isFallback ? copy.searchFallbackTitle : copy.resultsTitle}</h1>
-                <p>{isFallback ? copy.searchFallbackDescription : batch.criteria_summary || productCopy.ready}</p>
-              </div>
-            </header>
-          </section>
-        </div>
-      </div>
-
-      <div className="assistant-message-row recommendation-card-message">
-        <div className="assistant-avatar ghost" aria-hidden="true" />
-        <div className="assistant-message-stack card-stack">
-          <div className="structured-carousel-controls">
-            <button type="button" aria-label={productCopy.previous} onClick={() => moveTo(activeIndex - 1)} disabled={activeIndex === 0}><ChevronLeft size={18} /></button>
-            <span aria-live="polite">{productCopy.cardPosition(activeIndex + 1, batch.recommendations.length)}</span>
-            <button type="button" aria-label={productCopy.next} onClick={() => moveTo(activeIndex + 1)} disabled={activeIndex === batch.recommendations.length - 1}><ChevronRight size={18} /></button>
+    <section className="v2-results" aria-labelledby="recommendation-results-title">
+      <h2 id="recommendation-results-title" className="visually-hidden">
+        {isFallback ? copy.searchFallbackTitle : copy.resultsTitle}
+      </h2>
+      {isFallback && (
+        <div className="v2-bot-message">
+          <img className="v2-bot-avatar" src="/figma/bot-avatar.svg" alt="" />
+          <div className="v2-bot-stack">
+            <p className="v2-bot-name">{productCopy.assistantName}</p>
+            <div className="v2-bubble">
+              <p>{copy.searchFallbackTitle}</p>
+              <p className="v2-bubble-sub">{copy.searchFallbackDescription}</p>
+            </div>
           </div>
+        </div>
+      )}
 
+      <div className="v2-bot-message">
+        <img className="v2-bot-avatar" src="/figma/bot-avatar.svg" alt="" />
+        <div className="v2-bot-stack">
           <div
             ref={carouselRef}
-            className="structured-menu-carousel"
+            className="v2-card-carousel"
             role="region"
             tabIndex={0}
             aria-label={copy.resultsTitle}
-            onKeyDown={(event) => {
-              const delta = carouselDeltaForArrow(event.currentTarget, event.key);
-              if (delta) {
-                event.preventDefault();
-                moveTo(activeIndex + delta);
-              }
-            }}
             onScroll={(event) => {
               const element = event.currentTarget;
               setActiveIndex(carouselIndexFromOffset(element, batch.recommendations.length - 1));
             }}
           >
-            {batch.recommendations.map((item) => {
-              const evidenceVisible = evidenceOpen.has(item.menu.menu_id);
-              const foodDescription = item.description || item.menu.cultural_description || item.menu.description;
+            {batch.recommendations.map((item, index) => {
+              const spiceLevel = item.menu.spice_level;
               return (
-                <article className="structured-menu-card" key={item.menu.menu_id} data-testid={`menu-${item.menu.menu_id}`}>
-                  <div className="menu-artwork" aria-label={`${productCopy.foodDescription} · YOBI`} role="img">
-                    <Soup size={42} />
-                    <span>YOBI K-FOOD</span>
+                <article className="v2-alimtalk-card" key={item.menu.menu_id} data-testid={`menu-${item.menu.menu_id}`}>
+                  <div className="v2-card-strip">
+                    <span>{v2.yobiPick}</span>
+                    <span>{v2.pickCount(index + 1, batch.recommendations.length)}</span>
                   </div>
-                  <div className="structured-menu-content">
-                    <div className="structured-menu-title-row">
-                      <div><h2>{item.title || menuName(item.menu, language)}</h2><p>{menuName(item.menu, language)} · {item.menu.merchant_name}</p></div>
+                  <img className="v2-card-hero" src="/figma/menu-hero.png" alt="" />
+                  <div className="v2-card-body">
+                    <div className="v2-card-title-row">
+                      <div>
+                        <h3>{item.title || menuName(item.menu, language)}</h3>
+                        <p>{menuName(item.menu, language)} · {item.menu.merchant_name}</p>
+                      </div>
                       <strong>₩{item.menu.price.toLocaleString(locale)}</strong>
                     </div>
-
-                    <section className="food-description">
-                      <h3>{productCopy.foodDescription}</h3>
-                      <p>{foodDescription}</p>
-                    </section>
-                    <section className="match-reason"><h3>{copy.matchedPreferences}</h3><p>{isFallback ? copy.searchFallbackDescription : item.selection_reason}</p></section>
-
-                    <div className="structured-menu-facts">
-                      <span>{item.menu.eta_min}–{item.menu.eta_max}′</span>
-                      <span>{productCopy.deliveryFee}: {item.menu.delivery_fee ? `₩${item.menu.delivery_fee.toLocaleString(locale)}` : productCopy.freeDelivery}</span>
-                      <span>{item.menu.spice_level == null ? comparisonCopy.spiceUnverified : `${item.menu.spice_level} / 5`}</span>
-                      {item.halal_certified && <span className="halal-status"><CheckCircle2 size={14} /> {copy.halalCertified}</span>}
-                      {item.vegan_status === "LIKELY_FIT" && <span className="vegan-status"><Leaf size={14} /> {copy.veganLikely}</span>}
-                      {item.vegan_status === "POSSIBLE_WITH_CHECKS" && <span className="vegan-check-status"><Leaf size={14} /> {copy.veganChecks}</span>}
-                    </div>
-                    {item.halal_certified && item.halal_scope_label && <p className="certification-scope"><strong>{copy.halalScope}:</strong> {item.halal_scope_label}</p>}
-                    {item.vegan_warning && <p className="vegan-warning">{item.vegan_warning}</p>}
-
-                    <button className="evidence-toggle" type="button" aria-expanded={evidenceVisible} onClick={() => toggleEvidence(item.menu.menu_id)}>
-                      {evidenceVisible ? copy.hideEvidence : copy.evidence}<ChevronDown size={16} />
-                    </button>
-                    {evidenceVisible && (
-                      <div className="structured-evidence">
-                        {item.matched_criteria.length > 0 && <ul>{item.matched_criteria.map((match) => {
-                          const labels = match.labels?.length
-                            ? match.labels
-                            : match.selected_value_codes.map((code) => valueLabels.get(code)).filter((label): label is string => Boolean(label));
-                          return labels.length ? <li key={match.category_code}>{labels.join(" · ")}</li> : null;
-                        })}</ul>}
-                        {item.wiki_passages.map((passage, index) => <blockquote key={passage.chunk_id ?? passage.evidence_id ?? index}>{passage.content}</blockquote>)}
-                      </div>
+                    <p className="v2-card-reason">
+                      {isFallback ? copy.searchFallbackDescription : item.selection_reason}
+                    </p>
+                    {(item.description || item.menu.cultural_description || item.menu.description) && (
+                      <p className="v2-card-yogiyo">
+                        <span>{v2.yogiyoLabel}</span> {item.description || item.menu.cultural_description || item.menu.description}
+                      </p>
                     )}
-
-                    <button className="primary-button full" type="button" disabled={busy || !batch.snapshot_id} onClick={() => onChoose(item)}>{copy.chooseMenu}</button>
+                    <div className="v2-fact-chips">
+                      <span>{item.menu.eta_min}–{item.menu.eta_max} min</span>
+                      <span>{item.menu.delivery_fee ? `₩${item.menu.delivery_fee.toLocaleString(locale)}` : productCopy.freeDelivery}</span>
+                      {spiceLevel == null
+                        ? <span>{comparisonCopy.spiceUnverified}</span>
+                        : <span className="success">{v2.spiceOk(spiceLevel)}</span>}
+                      {item.halal_certified
+                        ? <span className="success">{v2.halalYes}</span>
+                        : <span className="warn">{v2.halalNo}</span>}
+                      {item.vegan_status === "LIKELY_FIT" && <span className="success">{copy.veganLikely}</span>}
+                      {item.vegan_status === "POSSIBLE_WITH_CHECKS" && <span className="warn">{copy.veganChecks}</span>}
+                    </div>
+                    {item.vegan_warning && <p className="v2-card-warning">{item.vegan_warning}</p>}
+                    <button
+                      type="button"
+                      className="v2-card-secondary"
+                      onClick={() => setExplanationMenuId(item.menu.menu_id)}
+                    >
+                      {v2.viewExplanation}
+                    </button>
+                    <button
+                      type="button"
+                      className="v2-card-primary"
+                      disabled={busy || !batch.snapshot_id}
+                      onClick={() => onChoose(item)}
+                    >
+                      {v2.chooseThisMenu}
+                    </button>
                   </div>
                 </article>
               );
             })}
           </div>
-
           {batch.recommendations.length > 1 && (
-            <div className="carousel-dots" aria-hidden="true">
-              {batch.recommendations.map((item, index) => <span className={activeIndex === index ? "active" : ""} key={item.menu.menu_id} />)}
+            <div className="v2-carousel-dots" aria-hidden="true">
+              {batch.recommendations.map((item, index) => (
+                <span className={activeIndex === index ? "active" : ""} key={item.menu.menu_id} />
+              ))}
             </div>
           )}
+          <p className="v2-timestamp">{timestamp}</p>
         </div>
       </div>
 
+      {batch.recommendations.length > 1 && (
+        <div className="v2-inline-replies">
+          <button type="button" className="v2-quick-reply" onClick={() => void toggleComparison()} disabled={busy || comparisonLoading} aria-pressed={comparisonOpen}>
+            {copy.compare}
+          </button>
+          {isFallback && (
+            <button type="button" className="v2-quick-reply" onClick={onRetry} disabled={busy}>
+              {copy.tryAgain}
+            </button>
+          )}
+        </div>
+      )}
+
       {comparisonOpen && (
-        <div className="assistant-message-row comparison-message">
-          <div className="assistant-avatar" aria-hidden="true">Y</div>
-          <div className="assistant-message-stack">
-            <strong className="assistant-name">{productCopy.assistantName}</strong>
-            <section className="assistant-bubble comparison" aria-live="polite">
-              <header><GitCompareArrows size={18} /><h2>{productCopy.compareTitle}</h2></header>
-              {comparisonLoading && <p>{productCopy.compareLoading}</p>}
-              {comparisonError && <p className="form-error" role="alert">{comparisonError}</p>}
+        <div className="v2-bot-message">
+          <img className="v2-bot-avatar" src="/figma/bot-avatar.svg" alt="" />
+          <div className="v2-bot-stack">
+            <p className="v2-bot-name">{productCopy.assistantName}</p>
+            <div className="v2-bubble" aria-live="polite">
+              <p><strong>{productCopy.compareTitle}</strong></p>
+              {comparisonLoading && <p className="v2-bubble-sub">{productCopy.compareLoading}</p>}
+              {comparisonError && <p className="v2-bubble-sub error">{comparisonError}</p>}
               {comparison && (
                 <>
-                  <p>{comparison.summary}</p>
-                  <div className="comparison-menu-list">
+                  <p className="v2-bubble-sub">{comparison.summary}</p>
+                  <div className="v2-comparison-list">
                     {comparison.items.map((item) => (
                       <article key={item.menu_id}>
-                        <h3>{item.name}</h3>
+                        <h4>{item.name}</h4>
                         <p><strong>{comparisonCopy.keyDifference}</strong>{item.key_difference}</p>
                         <p><strong>{comparisonCopy.tasteTexture}</strong>{item.taste_texture}</p>
                         <p><strong>{comparisonCopy.ingredientsForm}</strong>{item.ingredients_form}</p>
                         <p><strong>{comparisonCopy.spiceHeaviness}</strong>{item.spice_heaviness}</p>
                         <p><strong>{comparisonCopy.eatingContext}</strong>{item.eating_context}</p>
                         <p><strong>{comparisonCopy.bestFor}</strong>{item.best_for}</p>
-                        {item.unverified_dietary_info && <p className="comparison-caution"><strong>{comparisonCopy.needsVerification}</strong>{item.unverified_dietary_info}</p>}
+                        {item.unverified_dietary_info && (
+                          <p className="caution"><strong>{comparisonCopy.needsVerification}</strong>{item.unverified_dietary_info}</p>
+                        )}
                       </article>
                     ))}
                   </div>
                 </>
               )}
-            </section>
+            </div>
           </div>
         </div>
       )}
 
-      {isFallback && <button type="button" className="text-button fallback-retry" onClick={onRetry} disabled={busy}>{copy.tryAgain}</button>}
-
-      {typeof document !== "undefined" && createPortal(
-        <aside className="result-action-rail" aria-label={copy.resultsTitle}>
-          <button type="button" onClick={onSimilar} disabled={busy || comparisonLoading}><RotateCcw size={18} /><span>{copy.similar}</span></button>
-          <button type="button" aria-pressed={comparisonOpen} onClick={() => void toggleComparison()} disabled={busy || comparisonLoading || batch.recommendations.length < 2}><GitCompareArrows size={18} /><span>{copy.compare}</span></button>
-          <button type="button" onClick={onEdit} disabled={busy || comparisonLoading}><Pencil size={18} /><span>{copy.editCriteria}</span></button>
-        </aside>,
-        document.body,
-      )}
+      <BottomSheet open={Boolean(explanationItem)} labelledBy="explanation-sheet-title" onClose={() => setExplanationMenuId(null)}>
+        {explanationItem && (
+          <div className="v2-explanation-sheet">
+            <header>
+              <h2 id="explanation-sheet-title">{v2.additionalExplanation}</h2>
+              <p>{menuName(explanationItem.menu, language)} · {explanationItem.menu.merchant_name}</p>
+            </header>
+            <div className="v2-legend">
+              <span className="warn">{v2.aiGenerated}</span>
+            </div>
+            <div className="v2-explanation-scroll">
+              <div className="v2-explanation-block">
+                <p>{explanationItem.description || explanationItem.menu.cultural_description || explanationItem.menu.description}</p>
+                {explanationItem.matched_criteria.length > 0 && (
+                  <ul>
+                    {explanationItem.matched_criteria.map((match) => {
+                      const labels = match.labels?.length
+                        ? match.labels
+                        : match.selected_value_codes.map((code) => valueLabels.get(code)).filter((label): label is string => Boolean(label));
+                      return labels.length ? <li key={match.category_code}>{labels.join(" · ")}</li> : null;
+                    })}
+                  </ul>
+                )}
+              </div>
+              {explanationItem.wiki_passages.length > 0 && (
+                <div className="v2-explanation-block wiki">
+                  <p className="v2-legend"><span className="success">{v2.wikiEvidence}</span></p>
+                  {explanationItem.wiki_passages.map((passage, index) => (
+                    <blockquote key={passage.chunk_id ?? passage.evidence_id ?? index}>{passage.content}</blockquote>
+                  ))}
+                </div>
+              )}
+              {explanationItem.halal_certified && explanationItem.halal_scope_label && (
+                <p className="v2-explanation-note"><strong>{copy.halalScope}:</strong> {explanationItem.halal_scope_label}</p>
+              )}
+            </div>
+            <button type="button" className="v2-text-button" onClick={() => setExplanationMenuId(null)}>
+              {v2.gotIt}
+            </button>
+          </div>
+        )}
+      </BottomSheet>
     </section>
   );
 }

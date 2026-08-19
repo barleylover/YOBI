@@ -24,23 +24,27 @@ export function DemoQrPage() {
   }, [target]);
 
   return (
-    <main className="center-page">
-      <section className="qr-card">
-        <p className="eyebrow">Live demo entry</p>
-        {png ? (
-          <img className="qr-image" src={png} alt={`QR code for ${target}`} />
-        ) : (
-          <div className="qr-placeholder">YOBI<br />QR</div>
-        )}
-        <h1>Scan to meet YOBI</h1>
-        <p>This code always points to the current deployment origin.</p>
-        <code className="qr-url">{target}</code>
-        {svg && (
-          <a className="secondary-button qr-download" href={svg} download="yobi-demo-qr.svg">
-            Download presentation SVG
-          </a>
-        )}
-      </section>
+    <main className="v2-screen subtle">
+      <div className="v2-body" style={{ alignItems: "center", justifyContent: "center", gap: 14 }}>
+        <section className="v2-summary-card" style={{ alignItems: "center", textAlign: "center", maxWidth: 340 }}>
+          <img src="/figma/logo-mark.svg" alt="YOBI" width={44} height={44} />
+          {png ? (
+            <img src={png} alt={`QR code for ${target}`} style={{ width: 240, height: 240, borderRadius: 18 }} />
+          ) : (
+            <div style={{ width: 240, height: 240, borderRadius: 18, background: "var(--gray-100)" }} />
+          )}
+          <div className="v2-heading" style={{ alignItems: "center", textAlign: "center" }}>
+            <h1 style={{ fontSize: 22 }}>Scan to meet YOBI</h1>
+            <p>This code always points to the current deployment origin.</p>
+          </div>
+          <code style={{ padding: "8px 12px", borderRadius: 10, background: "var(--surface-subtle)", fontSize: 12, color: "var(--text-default)", overflowWrap: "anywhere" }}>{target}</code>
+          {svg && (
+            <a className="v2-cta compact secondary" style={{ textDecoration: "none", width: "100%" }} href={svg} download="yobi-demo-qr.svg">
+              Download presentation SVG
+            </a>
+          )}
+        </section>
+      </div>
     </main>
   );
 }

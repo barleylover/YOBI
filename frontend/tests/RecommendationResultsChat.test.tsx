@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { RecommendationResults } from "../src/components/RecommendationResults";
 import { getProductCopy } from "../src/lib/productI18n";
 import { getRecommendationCopy } from "../src/lib/recommendationI18n";
+import { getRedesignCopy } from "../src/lib/redesignI18n";
 import type { MenuSummary, PreferenceCatalog, RecommendationBatchV2 } from "../src/types";
 
 const menu: MenuSummary = {
@@ -96,11 +97,11 @@ describe("chat-style recommendation results", () => {
         batch={batch}
         catalog={catalog}
         copy={getRecommendationCopy("English")}
+        v2={getRedesignCopy("English")}
+        timestamp="10:05"
         language="English"
         locale="en-US"
         onChoose={vi.fn()}
-        onSimilar={onSimilar}
-        onEdit={onEdit}
         onCompare={onCompare}
         onRetry={vi.fn()}
       />,
@@ -140,11 +141,11 @@ describe("chat-style recommendation results", () => {
         batch={externalBatch}
         catalog={catalog}
         copy={getRecommendationCopy("العربية")}
+        v2={getRedesignCopy("العربية")}
+        timestamp="10:05"
         language="العربية"
         locale="ar"
         onChoose={vi.fn()}
-        onSimilar={vi.fn()}
-        onEdit={vi.fn()}
         onCompare={vi.fn()}
         onRetry={vi.fn()}
       />,
@@ -167,11 +168,11 @@ describe("chat-style recommendation results", () => {
         batch={batch}
         catalog={catalog}
         copy={getRecommendationCopy("العربية")}
+        v2={getRedesignCopy("العربية")}
+        timestamp="10:05"
         language="العربية"
         locale="ar"
         onChoose={vi.fn()}
-        onSimilar={vi.fn()}
-        onEdit={vi.fn()}
         onCompare={vi.fn()}
         onRetry={vi.fn()}
       />,
