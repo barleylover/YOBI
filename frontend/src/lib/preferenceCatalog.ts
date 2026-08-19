@@ -106,6 +106,33 @@ function normalizeCapability(value: unknown) {
   };
 }
 
+function normalizePriceRange(value: unknown) {
+  const item = record(value);
+  const min = Number(item.min);
+  const max = Number(item.max);
+  const step = Number(item.step);
+  if (!Number.isInteger(min) || !Number.isInteger(max) || !Number.isInteger(step)) return undefined;
+  if (min < 0 || max <= min || step !== 1_000) return undefined;
+  return { min, max, step };
+}
+
+function normalizeCountrySpiceProfiles(value: unknown) {
+  if (!Array.isArray(value)) return undefined;
+  const profiles = value.flatMap((entry) => {
+    const item = record(entry);
+    const countryCode = textValue(item.country_code).toUpperCase();
+    const spiceBaseline = Number(item.spice_baseline);
+    if (!/^[A-Z]{2}$/.test(countryCode) || ![1, 2, 3, 4, 5].includes(spiceBaseline)) {
+      return [];
+    }
+    return [{
+      country_code: countryCode as SpiceReferenceCountry,
+      spice_baseline: spiceBaseline as 1 | 2 | 3 | 4 | 5,
+    }];
+  });
+  return profiles.length ? profiles : undefined;
+}
+
 export function normalizePreferenceCatalog(value: unknown, locale: string): PreferenceCatalog {
   const payload = record(value);
   const categoryValues = Array.isArray(payload.categories)
@@ -134,8 +161,10 @@ export function normalizePreferenceCatalog(value: unknown, locale: string): Pref
   const halalCapability = normalizeCapability(rawCapabilities.halal_certified_only ?? rawCapabilities.halal);
   const veganCapability = normalizeCapability(rawCapabilities.vegan);
   const spiceCapability = normalizeCapability(rawCapabilities.max_spice_level ?? rawCapabilities.spice);
+  const priceRange = normalizePriceRange(payload.price_range_krw);
+  const countrySpiceProfiles = normalizeCountrySpiceProfiles(payload.country_spice_profiles);
   return {
-    schema_version: "2",
+    schema_version: payload.schema_version === "3" ? "3" : "2",
     catalog_version: textValue(
       payload.catalog_version ?? payload.preference_catalog_version ?? payload.version,
       "unknown",
@@ -144,6 +173,9 @@ export function normalizePreferenceCatalog(value: unknown, locale: string): Pref
     locale: textValue(payload.locale, locale),
     categories,
     spice_references: spiceReferences,
+    price_range_krw: priceRange,
+    country_spice_profiles: countrySpiceProfiles,
+    synthetic_enrichment_release_id: textValue(payload.synthetic_enrichment_release_id) || null,
     capabilities: halalCapability || veganCapability || spiceCapability ? {
       halal_certified_only: halalCapability,
       vegan: veganCapability,

@@ -5,7 +5,6 @@ import type {
   PreferenceCategoryCode,
   RecommendationCriteriaV2,
   RecommendationPreviewV2,
-  SpiceReferenceCountry,
 } from "../types";
 import type { RecommendationCopy } from "../lib/recommendationI18n";
 import type { RedesignCopy } from "../lib/redesignI18n";
@@ -16,7 +15,6 @@ const CATEGORY_KEYS: PreferenceCategoryCode[] = [
   "main_ingredients",
   "food_forms",
   "temperatures",
-  "price_bands",
   "textures",
   "cooking_methods",
 ];
@@ -37,6 +35,7 @@ interface Props {
   canSubmitUnchanged?: boolean;
   conflictMessage: string;
   notice?: string;
+  initialSection?: WizardSection;
   onChange: (criteria: RecommendationCriteriaV2) => void;
   onValidateAdd?: (criteria: RecommendationCriteriaV2) => Promise<boolean>;
   onComplete: () => void;
@@ -55,18 +54,17 @@ export function PreferenceWizard({
   copy,
   v2,
   busy = false,
-  previewLoading = false,
-  preview = null,
   previewMessage = "",
   canSubmitUnchanged = false,
   conflictMessage,
   notice = "",
+  initialSection = "core",
   onChange,
   onValidateAdd,
   onComplete,
   onBack,
 }: Props) {
-  const [section, setSection] = useState<WizardSection>("core");
+  const [section, setSection] = useState<WizardSection>(initialSection);
   const sectionIndex = SECTION_ORDER.indexOf(section);
 
   const grouped = useMemo(() => ({
@@ -130,9 +128,13 @@ export function PreferenceWizard({
   }
 
   function clearAll() {
+    const priceRange = catalog.price_range_krw ?? { min: 8_000, max: 25_000, step: 1_000 };
     onChange({
       ...criteria,
       ...Object.fromEntries(CATEGORY_KEYS.map((key) => [key, []])),
+      price_bands: [],
+      price_range_krw: { min: priceRange.min, max: priceRange.max },
+      spice_preference: "SIMILAR",
       dietary_filters: { halal_certified_only: false, vegan: false },
     } as RecommendationCriteriaV2);
   }
@@ -191,11 +193,14 @@ export function PreferenceWizard({
     );
   }
 
-  const spiceDisabled = busy || catalog.capabilities?.max_spice_level?.enabled === false;
-  const activeReference = catalog.spice_references.find(
-    (reference) => reference.country === criteria.spice_reference_country,
-  ) ?? catalog.spice_references[0];
-  const activeLevel = activeReference?.levels.find((item) => item.level === criteria.max_spice_level);
+  const priceCatalog = catalog.price_range_krw ?? { min: 8_000, max: 25_000, step: 1_000 };
+  const selectedPrice = criteria.price_range_krw ?? { min: priceCatalog.min, max: priceCatalog.max };
+
+  function changePrice(edge: "min" | "max", value: number) {
+    const min = edge === "min" ? Math.min(value, selectedPrice.max - priceCatalog.step) : selectedPrice.min;
+    const max = edge === "max" ? Math.max(value, selectedPrice.min + priceCatalog.step) : selectedPrice.max;
+    onChange({ ...criteria, price_range_krw: { min, max }, price_bands: [] });
+  }
 
   return (
     <div className="v2-screen subtle v2-wizard">
@@ -244,78 +249,67 @@ export function PreferenceWizard({
 
         {notice && <p className="v2-status" role="status">{notice}</p>}
 
-        <div className="v2-banner" aria-live="polite">
-          <p>
-            {previewLoading && copy.loadingChoices}
-            {!previewLoading && preview && !previewMessage && v2.liveCount(preview.eligible_menu_count, preview.eligible_merchant_count)}
-            {!previewLoading && previewMessage}
-            {!previewLoading && !preview && !previewMessage && copy.multiSelect}
-          </p>
-        </div>
+        {previewMessage && <p className="v2-error" role="status">{previewMessage}</p>}
 
         {section !== "conditions" && grouped[section].map((category) => categoryCard(category))}
 
         {section === "conditions" && (
           <>
-            <section className="v2-pref-card" data-category="max_spice_level">
+            <section className="v2-pref-card" data-category="spice_preference">
               <header>
                 <h2>{copy.spiceTitle}</h2>
-                <div className="spacer" />
-                <span className="v2-inline-clear as-label">{v2.upTo(criteria.max_spice_level)}</span>
               </header>
               <p className="v2-card-help">{copy.spiceHelp}</p>
-              {catalog.spice_references.length > 1 && (
-                <div className="v2-seg-tabs" role="group" aria-label={copy.spiceTitle}>
-                  {catalog.spice_references.map((reference) => (
-                    <button
-                      type="button"
-                      key={reference.country}
-                      aria-selected={criteria.spice_reference_country === reference.country}
-                      onClick={() => onChange({
-                        ...criteria,
-                        spice_reference_country: reference.country as SpiceReferenceCountry,
-                      })}
-                    >
-                      {reference.country === "KR" ? copy.koreanReference : copy.usReference}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <div className="v2-spice-stepper" role="radiogroup" aria-label={copy.spiceTitle}>
-                {([1, 2, 3, 4, 5] as const).map((level, index) => (
-                  <span key={level} className="v2-spice-step">
-                    {index > 0 && <i className={level <= criteria.max_spice_level ? "filled" : ""} />}
-                    <button
-                      type="button"
-                      role="radio"
-                      aria-checked={criteria.max_spice_level === level}
-                      className={level <= criteria.max_spice_level ? "filled" : ""}
-                      disabled={spiceDisabled}
-                      onClick={() => onChange({ ...criteria, max_spice_level: level })}
-                    >
-                      {level}
-                    </button>
-                  </span>
+              <div className="v2-relative-spice" role="radiogroup" aria-label={copy.spiceTitle}>
+                {([
+                  ["LESS", v2.spiceLess],
+                  ["SIMILAR", v2.spiceSimilar],
+                  ["MORE", v2.spiceMore],
+                ] as const).map(([value, label]) => (
+                  <button
+                    type="button"
+                    role="radio"
+                    key={value}
+                    aria-checked={(criteria.spice_preference ?? "SIMILAR") === value}
+                    className={(criteria.spice_preference ?? "SIMILAR") === value ? "selected" : ""}
+                    disabled={busy}
+                    onClick={() => onChange({ ...criteria, spice_preference: value })}
+                  >
+                    {label}
+                  </button>
                 ))}
               </div>
-              <div className="v2-spice-range-labels" aria-hidden="true">
-                <span>{v2.mild}</span>
-                <span>{v2.veryHot}</span>
+            </section>
+
+            <section className="v2-pref-card" data-category="price_range_krw">
+              <header>
+                <h2>{v2.priceRange}</h2>
+                <div className="spacer" />
+                <span className="v2-inline-clear as-label">₩{selectedPrice.min.toLocaleString()}–₩{selectedPrice.max.toLocaleString()}</span>
+              </header>
+              <div className="v2-price-range" aria-label={v2.priceRange}>
+                <input
+                  type="range"
+                  min={priceCatalog.min}
+                  max={priceCatalog.max}
+                  step={priceCatalog.step}
+                  value={selectedPrice.min}
+                  disabled={busy}
+                  aria-label={v2.priceMinimum}
+                  onChange={(event) => changePrice("min", Number(event.target.value))}
+                />
+                <input
+                  type="range"
+                  min={priceCatalog.min}
+                  max={priceCatalog.max}
+                  step={priceCatalog.step}
+                  value={selectedPrice.max}
+                  disabled={busy}
+                  aria-label={v2.priceMaximum}
+                  onChange={(event) => changePrice("max", Number(event.target.value))}
+                />
+                <div className="v2-price-range-labels"><span>₩{priceCatalog.min.toLocaleString()}</span><span>₩{priceCatalog.max.toLocaleString()}</span></div>
               </div>
-              {activeLevel && (
-                <div className="v2-spice-example">
-                  <span className="v2-count-badge large">{activeLevel.level}</span>
-                  <div>
-                    <strong>{activeLevel.label} · <em>{activeLevel.example}</em></strong>
-                    {activeLevel.description && <small>{activeLevel.description}</small>}
-                  </div>
-                </div>
-              )}
-              {catalog.capabilities?.max_spice_level?.enabled === false && (
-                <p className="v2-capability-note" role="status">
-                  {catalog.capabilities.max_spice_level.reason || v2.capabilityUnavailable}
-                </p>
-              )}
             </section>
 
             <section className="v2-pref-card" data-category="dietary">
@@ -357,7 +351,7 @@ export function PreferenceWizard({
               })}
             </section>
 
-            {grouped.conditions.map((category) => categoryCard(category))}
+            {grouped.conditions.filter((category) => category.code !== "price_bands").map((category) => categoryCard(category))}
 
             {hasConflict && <p className="v2-error" role="alert">{conflictMessage}</p>}
           </>

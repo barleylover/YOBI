@@ -83,7 +83,7 @@ const menu: MenuSummary = {
 };
 
 const catalog: PreferenceCatalog = {
-  schema_version: "2",
+  schema_version: "3",
   catalog_version: "catalog-v2-test",
   knowledge_release_id: "knowledge-v2-test",
   locale: "en",
@@ -120,6 +120,15 @@ const catalog: PreferenceCatalog = {
     label: `${country} examples`,
     levels: ([1, 2, 3, 4, 5] as const).map((level) => ({ level, label: `${level}`, example: `Food ${level}` })),
   })),
+  price_range_krw: { min: 8000, max: 25000, step: 1000 },
+  country_spice_profiles: [
+    { country_code: "KR", spice_baseline: 4 },
+    { country_code: "US", spice_baseline: 2 },
+  ],
+  capabilities: {
+    halal_certified_only: { enabled: true },
+    vegan: { enabled: true },
+  },
 };
 
 const criteria = { ...emptyCriteria(profile), cuisine_origins: ["KOREAN"], flavors: ["SWEET"] };
@@ -214,7 +223,7 @@ describe("ChatPage structured recommendation contract", () => {
     vi.spyOn(api, "previewRecommendation").mockResolvedValue(preview);
   }
 
-  it("uses chips instead of free text and submits the catalog-bound v2 criteria before recommending", async () => {
+  it("uses the staged controls and submits catalog-bound v3 criteria before recommending", async () => {
     prepareStore();
     vi.spyOn(api, "getPreferenceCatalog").mockResolvedValue({ catalog, etag: '"catalog-v2-test"', notModified: false });
     vi.spyOn(api, "getConversation").mockResolvedValue(conversation());
@@ -228,22 +237,33 @@ describe("ChatPage structured recommendation contract", () => {
 
     renderPage();
 
-    expect(await screen.findByRole("heading", { name: "What sounds good?" })).toBeInTheDocument();
-    expect(screen.getByTestId("assistant-preference-prompt")).toHaveTextContent("What sounds good?");
+    expect(await screen.findByRole("heading", { name: "What are you craving?" })).toBeInTheDocument();
     for (const cuisine of ["Japanese", "Italian", "American & grill", "Southeast Asian", "Mexican"]) {
       expect(screen.getByRole("button", { name: cuisine })).toBeInTheDocument();
     }
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Korean" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Korean" })).toHaveAttribute("aria-pressed", "true"));
-    expect(screen.getAllByText("8 menus from 4 restaurants currently fit")).toHaveLength(1);
+    expect(screen.queryByText("8 menus from 4 restaurants currently fit")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
     fireEvent.click(screen.getByRole("button", { name: "Sweet" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Sweet" })).toHaveAttribute("aria-pressed", "true"));
-    fireEvent.click(screen.getByRole("button", { name: /Show my recommendations/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByRole("radio", { name: "About the same" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("slider", { name: "Minimum price" })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: /Halal-certified only/ })).toBeEnabled();
+    expect(screen.getByRole("switch", { name: /Vegan options only/ })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: /Find my dish/ }));
 
     await waitFor(() => expect(putCriteria).toHaveBeenCalledWith(
       session.session_id,
-      expect.objectContaining({ cuisine_origins: ["KOREAN"], flavors: ["SWEET"] }),
+      expect.objectContaining({
+        schema_version: "3",
+        cuisine_origins: ["KOREAN"],
+        flavors: ["SWEET"],
+        spice_preference: "SIMILAR",
+        price_range_krw: { min: 8000, max: 25000 },
+      }),
       0,
       catalog.catalog_version,
       expect.stringMatching(/^criteria-/),
@@ -309,6 +329,56 @@ describe("ChatPage structured recommendation contract", () => {
     expect(await screen.findByText("An easy Korean meal")).toBeInTheDocument();
   }, 8_000);
 
+  it("stays on conditions after cancel even when the provider result arrives late", async () => {
+    prepareStore();
+    const pendingBatch: RecommendationBatchV2 = {
+      ...batch,
+      snapshot_id: null,
+      status: "PENDING",
+      phase: "GENERATING",
+      recommendations: [],
+    };
+    useSessionStore.setState({
+      committedCriteria: criteria,
+      draftCriteria: criteria,
+      criteriaVersion: 1,
+      recommendationPhase: "GENERATING",
+      pendingRecommendation: {
+        request_id: pendingBatch.request_id,
+        expected_state_version: pendingBatch.state_version,
+        criteria_version: pendingBatch.criteria_version,
+        mode: "INITIAL",
+      },
+      latestRecommendation: pendingBatch,
+    });
+    vi.spyOn(api, "getPreferenceCatalog").mockResolvedValue({
+      catalog,
+      etag: '"catalog-v2-test"',
+      notModified: false,
+    });
+    vi.spyOn(api, "getConversation").mockResolvedValue(conversation({
+      state_version: pendingBatch.state_version,
+      recommendation_criteria: criteria,
+      criteria_version: 1,
+      latest_recommendation: pendingBatch,
+      active_recommendation: pendingBatch,
+    }));
+    let resolveLate: (value: RecommendationBatchV2) => void = () => undefined;
+    const lateCompletion = new Promise<RecommendationBatchV2>((resolve) => { resolveLate = resolve; });
+    vi.spyOn(api, "getRecommendationRequest").mockReturnValue(lateCompletion);
+    const cancel = vi.spyOn(api, "cancelRecommendationRequest").mockResolvedValue({ cancelled: true });
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel and edit conditions" }));
+
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith(session.session_id, pendingBatch.request_id));
+    expect(await screen.findByRole("radio", { name: "About the same" })).toBeInTheDocument();
+    resolveLate(batch);
+    await waitFor(() => expect(screen.getByRole("radio", { name: "About the same" })).toBeInTheDocument());
+    expect(screen.queryByText("An easy Korean meal")).not.toBeInTheDocument();
+    expect(useSessionStore.getState().recommendationPhase).toBe("SELECTING");
+  });
+
   it("blocks an explicit vegan or halal ingredient conflict before any API mutation", async () => {
     prepareStore();
     vi.spyOn(api, "getPreferenceCatalog").mockResolvedValue({ catalog, etag: '"catalog-v2-test"', notModified: false });
@@ -316,13 +386,15 @@ describe("ChatPage structured recommendation contract", () => {
     const putCriteria = vi.spyOn(api, "putRecommendationCriteria");
 
     renderPage();
-    await screen.findByRole("heading", { name: "What sounds good?" });
+    await screen.findByRole("heading", { name: "What are you craving?" });
     fireEvent.click(screen.getByRole("button", { name: "Pork" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Pork" })).toHaveAttribute("aria-pressed", "true"));
-    fireEvent.click(screen.getByRole("checkbox", { name: /Only show halal-certified restaurants/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("switch", { name: /Halal-certified only/ }));
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("conflicts with the halal or vegan filter"));
-    expect(screen.getByRole("button", { name: /Show my recommendations/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Find my dish/ })).toBeDisabled();
     expect(putCriteria).not.toHaveBeenCalled();
   });
 
@@ -342,12 +414,14 @@ describe("ChatPage structured recommendation contract", () => {
     const createRecommendation = vi.spyOn(api, "createRecommendation");
 
     renderPage();
-    expect(await screen.findByRole("heading", { name: "What sounds good?" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "What are you craving?" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Korean" })).toHaveAttribute("aria-pressed", "true"));
     const hydrationReads = getConversation.mock.calls.length;
-    fireEvent.click(screen.getByRole("button", { name: /Show my recommendations/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: /Find my dish/ }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("available choices were updated");
+    expect(await screen.findByText(/available choices were updated/)).toBeInTheDocument();
     await waitFor(() => expect(getCatalog).toHaveBeenCalledTimes(2));
     expect(getConversation).toHaveBeenCalledTimes(hydrationReads);
     expect(createRecommendation).not.toHaveBeenCalled();
@@ -363,13 +437,13 @@ describe("ChatPage structured recommendation contract", () => {
     vi.spyOn(api, "getConversation").mockResolvedValue(conversation());
 
     renderPage();
-    await screen.findByRole("heading", { name: "What sounds good?" });
+    await screen.findByRole("heading", { name: "What are you craving?" });
     useSessionStore.getState().setDraftCriteria({
       ...emptyCriteria(profile),
       cuisine_origins: ["RETIRED_CUISINE"],
     });
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("available choices were updated");
+    expect(await screen.findByText(/available choices were updated/)).toBeInTheDocument();
     await waitFor(() => expect(useSessionStore.getState().draftCriteria.cuisine_origins).toEqual([]));
   });
 
@@ -378,7 +452,7 @@ describe("ChatPage structured recommendation contract", () => {
     useSessionStore.getState().setDraftCriteria({
       ...emptyCriteria(profile),
       dietary_filters: { halal_certified_only: true, vegan: true },
-      max_spice_level: 2,
+      spice_preference: "MORE",
     });
     vi.spyOn(api, "getPreferenceCatalog").mockResolvedValue({
       catalog: {
@@ -386,7 +460,6 @@ describe("ChatPage structured recommendation contract", () => {
         capabilities: {
           halal_certified_only: { enabled: false, reason: "No certification coverage" },
           vegan: { enabled: false, reason: "No ingredient coverage" },
-          max_spice_level: { enabled: false, reason: "No spice coverage" },
         },
       },
       etag: '"catalog-v2-test"',
@@ -395,10 +468,11 @@ describe("ChatPage structured recommendation contract", () => {
     vi.spyOn(api, "getConversation").mockResolvedValue(conversation());
 
     renderPage();
-    await screen.findByRole("heading", { name: "What sounds good?" });
+    await screen.findByRole("heading", { name: "What are you craving?" });
     await waitFor(() => expect(useSessionStore.getState().draftCriteria).toMatchObject({
       dietary_filters: { halal_certified_only: false, vegan: false },
-      max_spice_level: 5,
+      spice_preference: "MORE",
+      price_range_krw: { min: 8000, max: 25000 },
     }));
   });
 
@@ -427,8 +501,7 @@ describe("ChatPage structured recommendation contract", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Choose this menu" }));
 
     expect(document.querySelector(".rank-bar")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Compare/ })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /Edit choices/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Compare/ })).not.toBeInTheDocument();
 
     await waitFor(() => expect(postEvent).toHaveBeenCalledWith(
       session.session_id,

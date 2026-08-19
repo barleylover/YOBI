@@ -84,4 +84,25 @@ describe("catalog capability contract", () => {
     screen.getByRole("button", { name: "미국 음식 기준" }).click();
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ spice_reference_country: "US" }));
   });
+
+  it("preserves the v3 price range, country baselines, and enrichment identity", () => {
+    const catalog = normalizePreferenceCatalog({
+      ...rawCatalog("en"),
+      schema_version: "3",
+      price_range_krw: { min: 4_000, max: 62_000, step: 1_000 },
+      country_spice_profiles: [
+        { country_code: "US", spice_baseline: 2 },
+        { country_code: "JP", spice_baseline: 1 },
+      ],
+      synthetic_enrichment_release_id: "synthetic-release-v1",
+    }, "en");
+
+    expect(catalog.schema_version).toBe("3");
+    expect(catalog.price_range_krw).toEqual({ min: 4_000, max: 62_000, step: 1_000 });
+    expect(catalog.country_spice_profiles).toEqual([
+      { country_code: "US", spice_baseline: 2 },
+      { country_code: "JP", spice_baseline: 1 },
+    ]);
+    expect(catalog.synthetic_enrichment_release_id).toBe("synthetic-release-v1");
+  });
 });

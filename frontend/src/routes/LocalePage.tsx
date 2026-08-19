@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   LANGUAGES,
-  LANGUAGE_META,
   asSupportedLanguage,
   countryName,
+  effectiveLanguageMeta,
   sortedCountries,
 } from "../lib/locale";
 import { LANGUAGE_ENGLISH_NAMES, getRedesignCopy } from "../lib/redesignI18n";
@@ -22,9 +22,15 @@ export function LocalePage() {
   const [tab, setTab] = useState<PickerTab>(query.get("tab") === "country" ? "country" : "language");
   const [search, setSearch] = useState("");
   const supportedLanguage = asSupportedLanguage(language);
-  const locale = LANGUAGE_META[supportedLanguage].code;
+  const effectiveMeta = effectiveLanguageMeta(supportedLanguage);
+  const locale = effectiveMeta.code;
   const copy = getRedesignCopy(supportedLanguage);
   const countries = useMemo(() => sortedCountries(supportedLanguage), [supportedLanguage]);
+
+  useEffect(() => {
+    document.documentElement.lang = effectiveMeta.code;
+    document.documentElement.dir = effectiveMeta.direction;
+  }, [effectiveMeta.code, effectiveMeta.direction]);
 
   const normalizedSearch = search.trim().toLowerCase();
   const visibleLanguages = LANGUAGES.filter((item) => !normalizedSearch

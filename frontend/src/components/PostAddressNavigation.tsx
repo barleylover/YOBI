@@ -11,7 +11,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { actionableError, api } from "../lib/api";
 import { getDynamicCopy } from "../lib/i18n";
-import { asSupportedLanguage, menuName } from "../lib/locale";
+import { asSupportedLanguage, formatMinuteRange, menuName } from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
 import {
   carouselDeltaForArrow,
@@ -108,7 +108,7 @@ export function PostAddressNavigation({ sessionId, language, locale, disabled = 
       .then((result) => setRanking({ ...result, items: result.items.slice(0, 20) }))
       .catch((cause) => {
         if (cause instanceof Error && cause.message === "REQUEST_ABORTED") return;
-        setError(language === "English" ? actionableError(cause, copy.unavailable) : copy.unavailable);
+        setError(actionableError(cause, copy.unavailable, language));
       })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
@@ -124,7 +124,7 @@ export function PostAddressNavigation({ sessionId, language, locale, disabled = 
       .then(setFeature)
       .catch((cause) => {
         if (cause instanceof Error && cause.message === "REQUEST_ABORTED") return;
-        setError(language === "English" ? actionableError(cause, copy.unavailable) : copy.unavailable);
+        setError(actionableError(cause, copy.unavailable, language));
       })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
@@ -166,7 +166,7 @@ export function PostAddressNavigation({ sessionId, language, locale, disabled = 
 
           {view === "rankings" && (
             <div className="ranking-view">
-              <p className="demo-ranking-notice">{language === "English" ? (ranking?.demo_basis || copy.demoRankingNotice) : copy.demoRankingNotice}</p>
+              <p className="demo-ranking-notice">{copy.demoRankingNotice}</p>
               <div className="ranking-sort-tabs" role="tablist" aria-label={copy.foodRankings}>
                 {([
                   ["review_count", copy.reviews],
@@ -238,7 +238,7 @@ export function PostAddressNavigation({ sessionId, language, locale, disabled = 
                         <h3>{menuName(entry.menu, language)}</h3>
                         <small>{entry.menu.merchant_name}</small>
                         <p>{entry.description || entry.menu.cultural_description || entry.menu.description || dynamicCopy.catalogDescription}</p>
-                        <div><strong>₩{entry.menu.price.toLocaleString(locale)}</strong><span>{entry.menu.eta_min}–{entry.menu.eta_max}′ · ₩{entry.menu.delivery_fee.toLocaleString(locale)} {recommendationCopy.deliveryFee}</span></div>
+                        <div><strong>₩{entry.menu.price.toLocaleString(locale)}</strong><span>{formatMinuteRange(entry.menu.eta_min, entry.menu.eta_max, locale)} · ₩{entry.menu.delivery_fee.toLocaleString(locale)} {recommendationCopy.deliveryFee}</span></div>
                         <button type="button" className="primary-button full" disabled={disabled || !feature?.snapshot_id} onClick={() => void choose(entry.menu, feature!.snapshot_id)}>{copy.selectMenu}</button>
                       </article>
                     ))}

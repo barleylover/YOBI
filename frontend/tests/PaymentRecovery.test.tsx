@@ -51,7 +51,7 @@ const cart: CartPreview = {
   confirmed: true,
 };
 
-describe("truthful Yogiyo handoff boundary", () => {
+describe("Yogiyo handoff", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
@@ -59,7 +59,7 @@ describe("truthful Yogiyo handoff boundary", () => {
     useSessionStore.getState().clear();
   });
 
-  it("ends the demo at one Yogiyo CTA without payment or order creation", async () => {
+  it("uses one Yogiyo CTA without payment or order creation", async () => {
     useSessionStore.setState({ profile, session, addressRefId: "address_handoff_test" });
     vi.spyOn(api, "getCart").mockResolvedValue(cart);
     const createCheckout = vi.spyOn(api, "createCheckout");
@@ -74,18 +74,18 @@ describe("truthful Yogiyo handoff boundary", () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole("heading", { name: "Continue in Yogiyo to order" })).toBeInTheDocument();
-    expect(screen.getByText(/No cart was sent/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Yogiyo" }));
-    expect(await screen.findByRole("heading", { name: /YOBI demo ends here/ })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Ready to order" })).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/demo|mock|synthetic/i);
+    fireEvent.click(screen.getByRole("button", { name: /Open in Yogiyo/ }));
+    expect(await screen.findByRole("heading", { name: "Continue your order in Yogiyo" })).toBeInTheDocument();
+    expect(screen.getByText("Review the basket, then continue to Yogiyo.")).toBeInTheDocument();
     expect(createCheckout).not.toHaveBeenCalled();
     expect(paymentSuccess).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: /^Pay/ })).not.toBeInTheDocument();
-    // The handoff is the terminal mock boundary, not another post-address browsing screen.
     expect(document.querySelector(".post-address-nav")).not.toBeInTheDocument();
   });
 
-  it("redirects legacy payment URLs to the same handoff instead of exposing mock payment", async () => {
+  it("redirects legacy payment URLs to the same handoff without a payment screen", async () => {
     useSessionStore.setState({ profile, session, addressRefId: "address_handoff_test" });
     vi.spyOn(api, "getCart").mockResolvedValue(cart);
 
@@ -95,7 +95,39 @@ describe("truthful Yogiyo handoff boundary", () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole("heading", { name: "Continue in Yogiyo to order" })).toBeInTheDocument();
-    expect(screen.queryByText(/Mock payment/i)).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Ready to order" })).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/demo|mock|synthetic/i);
+  });
+
+  it("keeps localized menu and option names on the Japanese handoff", async () => {
+    const japaneseProfile = { ...profile, preferred_language: "日本語" as const, nationality: "Japan" };
+    const localizedCart: CartPreview = {
+      ...cart,
+      items: [{
+        ...cart.items[0],
+        display_name: "YOBIキンパ",
+        options: [{
+          option_item_id: "option_1",
+          name_en: "No pickles",
+          name_ko: "단무지 제외",
+          display_name: "たくあん抜き",
+          price_delta: 0,
+        }],
+      }],
+    };
+    useSessionStore.setState({ profile: japaneseProfile, session, addressRefId: "address_handoff_test" });
+    vi.spyOn(api, "getCart").mockResolvedValue(localizedCart);
+
+    render(
+      <MemoryRouter initialEntries={["/handoff"]}>
+        <Routes>
+          <Route path="/handoff" element={<HandoffPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect((await screen.findAllByText(/YOBIキンパ/)).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("たくあん抜き")).toBeInTheDocument();
+    expect(screen.queryByText("요비 김밥")).not.toBeInTheDocument();
   });
 });

@@ -6,10 +6,10 @@ test("structured draft survives profile editing without allergy or chat controls
   await startStructuredSession(page);
   const firstChip = await selectFirstPricePreference(page);
   const label = (await firstChip.innerText()).trim();
-  await page.getByRole("button", { name: "Edit my information" }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
 
   await expect(page).toHaveURL(/\/profile\?edit=1/);
-  await expect(page.getByText("Current demo address")).toBeVisible();
+  await expect(page.getByText("Current address")).toBeVisible();
   await expect(page.getByText(/Allerg/i)).toHaveCount(0);
   await expect(page.getByText(/Age range|Religion|Favourite comfort foods/i)).toHaveCount(0);
   await expect(page.getByRole("radio")).toHaveCount(0);
@@ -20,16 +20,16 @@ test("structured draft survives profile editing without allergy or chat controls
   await expect(page.getByRole("textbox")).toHaveCount(0);
 });
 
-test("Korean structured controls include localized filters and five KR/US levels", async ({ page }, testInfo) => {
+test("Korean conditions use three relative spice choices, two price handles and enabled diet switches", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "iPhone 13", "One primary mobile proof is sufficient.");
   await startStructuredSession(page, true);
 
-  await expect(page.getByText("여러 개 선택 가능").first()).toBeVisible();
-  await expect(page.getByRole("checkbox", { name: /할랄 인증 식당만 보기/ })).toBeVisible();
-  await expect(page.getByRole("checkbox", { name: /비건 메뉴 찾기/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: "한국 음식 기준" })).toBeVisible();
-  await expect(page.locator(".spice-reference-choice")).toHaveCount(5);
-  await page.getByRole("button", { name: "미국 음식 기준" }).click();
-  await expect(page.locator(".spice-reference-choice")).toHaveCount(5);
+  await page.getByRole("button", { name: "다음", exact: true }).click();
+  await page.getByRole("button", { name: "다음", exact: true }).click();
+  await expect(page.getByRole("radio")).toHaveCount(3);
+  await expect(page.getByRole("radio", { name: "기준과 비슷하게" })).toBeChecked();
+  await expect(page.locator("[data-category='price_range_krw'] input[type='range']")).toHaveCount(2);
+  await expect(page.getByRole("switch", { name: /할랄 인증만/ })).toBeEnabled();
+  await expect(page.getByRole("switch", { name: /비건 옵션만/ })).toBeEnabled();
   await expect(page.getByRole("textbox")).toHaveCount(0);
 });

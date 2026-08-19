@@ -2,7 +2,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { actionableError, api } from "../lib/api";
 import { useSessionStore } from "../stores/session";
-import type { CartPreview, DietaryFiltersV2, MenuSummary, OptionGroup, OptionItem } from "../types";
+import type {
+  CartPreview,
+  DietaryFiltersV2,
+  MenuSummary,
+  MerchantMenuPresentation,
+  OptionGroup,
+  OptionItem,
+  RestaurantNoteTranslation,
+} from "../types";
 import { useI18n } from "../lib/i18n";
 import { asSupportedLanguage, menuName } from "../lib/locale";
 import { getRecommendationCopy } from "../lib/recommendationI18n";
@@ -28,6 +36,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
   const navigate = useNavigate();
   const setCartQuantity = useSessionStore((state) => state.setCartQuantity);
   const cartQuantity = useSessionStore((state) => state.cartQuantity);
+  const sourceLanguage = useSessionStore((state) => state.profile?.preferred_language) ?? "English";
   const addressSummary = useSessionStore((state) => state.addressSummary);
   const { copy, dynamicCopy, journeyCopy, language, locale } = useI18n();
   const recommendationCopy = getRecommendationCopy(language);
@@ -39,11 +48,15 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
   const [selections, setSelections] = useState<Record<string, string>>({});
   const [note, setNote] = useState(journeyCopy.mildNote);
   const [cart, setCart] = useState<CartPreview | null>(null);
-  const [merchantMenus, setMerchantMenus] = useState<MenuSummary[]>([]);
+  const [merchantMenus, setMerchantMenus] = useState<MerchantMenuPresentation[]>([]);
+  const [nextMenuCursor, setNextMenuCursor] = useState<string | null>(null);
+  const [loadingMoreMenus, setLoadingMoreMenus] = useState(false);
+  const [noteTranslation, setNoteTranslation] = useState<RestaurantNoteTranslation | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const restoreCartOnMount = useRef(cartQuantity > 0);
   const transitionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loadingMoreMenusRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -54,7 +67,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
     setCart(null);
     setError("");
     Promise.all([
-      api.getOptions(activeMenu.menu_id),
+      api.getOptions(activeMenu.menu_id, sessionId),
       restoreCartOnMount.current ? api.getCart(sessionId) : Promise.resolve(null),
     ])
       .then(([result, restoredCart]) => {
@@ -69,7 +82,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
         }
         restoreCartOnMount.current = false;
       })
-      .catch((cause) => { if (active) setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry); });
+      .catch((cause) => { if (active) setError(actionableError(cause, journeyCopy.retry, language)); });
     return () => {
       active = false;
       if (transitionTimer.current !== null) {
@@ -114,7 +127,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
         else setPhase("note");
       }, 160);
     } catch (cause) {
-      setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
+      setError(actionableError(cause, journeyCopy.retry, language));
     } finally {
       setBusy(false);
     }
@@ -140,23 +153,74 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
       setSelections(next);
       setPhase("note");
     } catch (cause) {
-      setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
+      setError(actionableError(cause, journeyCopy.retry, language));
     } finally {
       setBusy(false);
     }
   }
 
   async function addToCart() {
+    if (note.trim() && (noteTranslation?.status !== "SUCCEEDED" || noteTranslation.source_text !== note)) {
+      setError(v2.restaurantNoteHelp);
+      return;
+    }
     setBusy(true);
     try {
-      const restaurantNote = note === journeyCopy.mildNote ? "As mild as possible, please." : note;
-      const preview = await api.addCartItem(sessionId, activeMenu.menu_id, selectedOptionIds, restaurantNote);
+      const preview = await api.addCartItem(
+        sessionId,
+        activeMenu.menu_id,
+        selectedOptionIds,
+        note,
+        noteTranslation?.translation_id,
+      );
       syncCart(preview);
       setPhase("more");
     } catch (cause) {
-      setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
+      setError(actionableError(cause, journeyCopy.retry, language));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function translateNote() {
+    if (!note.trim()) {
+      setNoteTranslation(null);
+      setError("");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      setNoteTranslation(await api.translateRestaurantNote(sessionId, note, sourceLanguage));
+    } catch (cause) {
+      setNoteTranslation(null);
+      setError(actionableError(cause, v2.retryTranslation, language));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadMerchantMenus(cursor: string | null, replace = false) {
+    if (!cart || loadingMoreMenusRef.current) return;
+    loadingMoreMenusRef.current = true;
+    setLoadingMoreMenus(true);
+    setError("");
+    try {
+      const page = await api.getMerchantMenuPresentations(sessionId, activeMenu.merchant_id, {
+        cursor,
+        limit: 12,
+        exclude_menu_ids: cart.items.map((item) => item.menu_id),
+      });
+      setMerchantMenus((current) => {
+        const merged = replace ? page.items : [...current, ...page.items];
+        return Array.from(new Map(merged.map((item) => [item.menu.menu_id, item])).values());
+      });
+      setNextMenuCursor(page.next_cursor ?? null);
+    } catch (cause) {
+      setError(actionableError(cause, journeyCopy.retry, language));
+    } finally {
+      loadingMoreMenusRef.current = false;
+      setLoadingMoreMenus(false);
     }
   }
 
@@ -165,23 +229,26 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
     setBusy(true);
     setError("");
     try {
-      const menus = await api.getMerchantMenus(
-        sessionId,
-        activeMenu.merchant_id,
-        cart.items.map((item) => item.menu_id),
-      );
-      setMerchantMenus(menus);
-      setPhase(menus.length ? "browse" : "delivery");
+      const page = await api.getMerchantMenuPresentations(sessionId, activeMenu.merchant_id, {
+        limit: 12,
+        exclude_menu_ids: cart.items.map((item) => item.menu_id),
+      });
+      setMerchantMenus(page.items);
+      setNextMenuCursor(page.next_cursor ?? null);
+      setPhase(page.items.length ? "browse" : "delivery");
     } catch (cause) {
-      setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
+      setError(actionableError(cause, journeyCopy.retry, language));
     } finally {
       setBusy(false);
     }
   }
 
-  function chooseAdditionalMenu(nextMenu: MenuSummary) {
-    setActiveMenu(nextMenu);
+  function chooseAdditionalMenu(nextMenu: MerchantMenuPresentation) {
+    setActiveMenu({ ...nextMenu.menu, localized_title: nextMenu.localized_title } as MenuSummary);
     setMerchantMenus([]);
+    setNextMenuCursor(null);
+    setNote(journeyCopy.mildNote);
+    setNoteTranslation(null);
   }
 
   async function saveDelivery() {
@@ -191,7 +258,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
       syncCart(preview);
       setPhase("review");
     } catch (cause) {
-      setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
+      setError(actionableError(cause, journeyCopy.retry, language));
     } finally {
       setBusy(false);
     }
@@ -204,7 +271,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
       syncCart(confirmed);
       navigate("/handoff");
     } catch (cause) {
-      setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
+      setError(actionableError(cause, journeyCopy.retry, language));
     } finally {
       setBusy(false);
     }
@@ -217,7 +284,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
     try {
       syncCart(await api.updateCartItem(sessionId, cartItemId, quantity));
     } catch (cause) {
-      setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
+      setError(actionableError(cause, journeyCopy.retry, language));
     } finally {
       setBusy(false);
     }
@@ -231,7 +298,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
       syncCart(preview);
       if (preview.items.length === 0) setPhase(groups.length ? "options" : "note");
     } catch (cause) {
-      setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
+      setError(actionableError(cause, journeyCopy.retry, language));
     } finally {
       setBusy(false);
     }
@@ -261,7 +328,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
             </div>
             <div className="v2-order-body">
               <div className="v2-order-heading">
-                <h3>{language === "한국어" ? currentGroup.name_ko : currentGroup.name_en}</h3>
+                <h3>{currentGroup.display_name || (language === "한국어" ? currentGroup.name_ko : currentGroup.name_en)}</h3>
                 <p>{v2.requiredTapOne}</p>
               </div>
               {currentGroup.items.map((option) => {
@@ -277,8 +344,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
                     >
                       <span className={selected ? "radio checked" : "radio"} aria-hidden="true" />
                       <span className="labels">
-                        <strong>{language === "한국어" ? option.name_ko : option.name_en}</strong>
-                        {language !== "한국어" && <small>{option.name_ko}</small>}
+                        <strong>{option.display_name || (language === "한국어" ? option.name_ko : option.name_en)}</strong>
                       </span>
                       <span className={option.price_delta ? "price strong" : "price"}>
                         {option.price_delta ? `+${won(option.price_delta)}` : journeyCopy.included}
@@ -312,13 +378,28 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
               <h3>{journeyCopy.howSay}</h3>
               <p>{journeyCopy.restaurantNote}</p>
             </div>
-            <textarea className="v2-note-input" value={note} onChange={(event) => setNote(event.target.value)} />
-            <div className="v2-translation-preview">
-              <small>{journeyCopy.messageRestaurant}</small>
-              <strong>최대한 맵지 않게 부탁드립니다.</strong>
-              <p>{journeyCopy.backTranslation}: {note}</p>
-            </div>
-            <button type="button" className="v2-card-primary" onClick={() => void addToCart()} disabled={busy}>
+            <p className="v2-card-help">{v2.restaurantNoteHelp}</p>
+            <textarea
+              className="v2-note-input"
+              value={note}
+              onChange={(event) => { setNote(event.target.value); setNoteTranslation(null); setError(""); }}
+            />
+            <button type="button" className="v2-card-secondary" onClick={() => void translateNote()} disabled={busy || !note.trim()}>
+              {busy ? v2.translatingNote : noteTranslation?.status === "FAILED" ? v2.retryTranslation : v2.translateNote}
+            </button>
+            {noteTranslation?.status === "SUCCEEDED" && (
+              <div className="v2-translation-preview" aria-live="polite">
+                <small>{v2.koreanTranslation}</small>
+                <strong>{noteTranslation.korean_text}</strong>
+                <p>{v2.backTranslation}: {noteTranslation.back_translation}</p>
+              </div>
+            )}
+            <button
+              type="button"
+              className="v2-card-primary"
+              onClick={() => void addToCart()}
+              disabled={busy || Boolean(note.trim() && (noteTranslation?.status !== "SUCCEEDED" || noteTranslation.source_text !== note))}
+            >
               {copy.addCart}
             </button>
           </div>
@@ -353,23 +434,33 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
               <h3>{copy.moreFrom} · {activeMenu.merchant_name}</h3>
               <p>{copy.swipeMore}</p>
             </div>
-            <div className="v2-merchant-menu-list">
+            <div
+              className="v2-merchant-menu-carousel"
+              onScroll={(event) => {
+                const element = event.currentTarget;
+                if (nextMenuCursor && element.scrollWidth - element.scrollLeft - element.clientWidth < 180) {
+                  void loadMerchantMenus(nextMenuCursor);
+                }
+              }}
+            >
               {merchantMenus.map((item) => (
-                <button
-                  type="button"
-                  className="v2-option-row"
-                  key={item.menu_id}
-                  onClick={() => chooseAdditionalMenu(item)}
-                  disabled={busy}
-                >
-                  <span className="labels">
-                    <strong>{menuName(item, language)}</strong>
-                    <small>{item.cultural_description || item.description || dynamicCopy.catalogDescription}</small>
-                  </span>
-                  <span className="price strong">{won(item.price)}</span>
-                </button>
+                <article className="v2-alimtalk-card compact" key={item.menu.menu_id}>
+                  <img className="v2-card-hero" src="/figma/menu-hero.png" alt="" />
+                  <div className="v2-card-body">
+                    <div className="v2-card-title-row">
+                      <div><h4>{item.localized_title || menuName(item.menu, language)}</h4><p>{item.menu.merchant_name}</p></div>
+                      <strong>{won(item.menu.price)}</strong>
+                    </div>
+                    <p className="v2-card-yobi"><span>{v2.yobiLabel}</span> {item.yobi_short_explanation || dynamicCopy.catalogDescription}</p>
+                    {item.source_description && <p className="v2-card-yogiyo"><span>{v2.yogiyoLabel}</span> {item.source_description}</p>}
+                    <button type="button" className="v2-card-primary" onClick={() => chooseAdditionalMenu(item)} disabled={busy}>
+                      {v2.chooseThisMenu}
+                    </button>
+                  </div>
+                </article>
               ))}
             </div>
+            {loadingMoreMenus && <p className="v2-status" role="status">{journeyCopy.loading}</p>}
             <button type="button" className="v2-card-secondary" onClick={() => setPhase("delivery")} disabled={busy}>
               {copy.noMore}
             </button>
@@ -422,23 +513,26 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
                   {v2.editChip}
                 </button>
               </div>
-              {cart.items.map((item) => (
-                <div className="v2-cart-line" key={item.cart_item_id}>
-                  <div className="copy">
-                    <strong>{language === "한국어" ? item.menu_name_ko : item.menu_name}</strong>
-                    <small>{item.options.map((option) => language === "한국어" ? option.name_ko : option.name_en).join(" · ") || journeyCopy.included}</small>
-                  </div>
-                  <div className="controls">
-                    <div className="v2-stepper" aria-label={`${journeyCopy.quantity}: ${item.menu_name}`}>
-                      <button type="button" aria-label={journeyCopy.decrease} onClick={() => void changeQuantity(item.cart_item_id, item.quantity - 1)} disabled={busy || item.quantity <= 1}>−</button>
-                      <span>{item.quantity}</span>
-                      <button type="button" aria-label={journeyCopy.increase} onClick={() => void changeQuantity(item.cart_item_id, item.quantity + 1)} disabled={busy || item.quantity >= 10}>+</button>
+              {cart.items.map((item) => {
+                const displayedItemName = item.display_name || (language === "한국어" ? item.menu_name_ko : item.menu_name);
+                return (
+                  <div className="v2-cart-line" key={item.cart_item_id}>
+                    <div className="copy">
+                      <strong>{displayedItemName}</strong>
+                      <small>{item.options.map((option) => option.display_name || (language === "한국어" ? option.name_ko : option.name_en)).join(" · ") || journeyCopy.included}</small>
                     </div>
-                    <strong>{won(item.line_total)}</strong>
-                    <button type="button" className="remove" aria-label={`${journeyCopy.remove}: ${item.menu_name}`} onClick={() => void removeItem(item.cart_item_id)} disabled={busy}>×</button>
+                    <div className="controls">
+                      <div className="v2-stepper" aria-label={`${journeyCopy.quantity}: ${displayedItemName}`}>
+                        <button type="button" aria-label={journeyCopy.decrease} onClick={() => void changeQuantity(item.cart_item_id, item.quantity - 1)} disabled={busy || item.quantity <= 1}>−</button>
+                        <span>{item.quantity}</span>
+                        <button type="button" aria-label={journeyCopy.increase} onClick={() => void changeQuantity(item.cart_item_id, item.quantity + 1)} disabled={busy || item.quantity >= 10}>+</button>
+                      </div>
+                      <strong>{won(item.line_total)}</strong>
+                      <button type="button" className="remove" aria-label={`${journeyCopy.remove}: ${displayedItemName}`} onClick={() => void removeItem(item.cart_item_id)} disabled={busy}>×</button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
               <div className="v2-divider" />
               <div className="v2-price-row"><span>{v2.subtotal}</span><strong>{won(cart.subtotal)}</strong></div>
               <div className="v2-price-row"><span>{copy.delivery}</span><strong>{won(cart.delivery_fee)}</strong></div>
@@ -453,10 +547,6 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
                   {cart.minimum_order_shortfall ? ` · ${journeyCopy.add} ${won(cart.minimum_order_shortfall)}` : ""}
                 </p>
               )}
-              <div className="v2-demo-warning">
-                <span aria-hidden="true">!</span>
-                <p>{v2.demoOrderWarning}</p>
-              </div>
               <button
                 type="button"
                 className="v2-card-primary"

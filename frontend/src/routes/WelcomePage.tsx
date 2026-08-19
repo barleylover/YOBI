@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { LANGUAGE_META, asSupportedLanguage, countryName } from "../lib/locale";
+import { asSupportedLanguage, countryName, effectiveLanguageMeta } from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
 import { getRedesignCopy } from "../lib/redesignI18n";
 import { useSessionStore } from "../stores/session";
@@ -16,14 +16,15 @@ export function WelcomePage() {
   const editMode = query.get("edit") === "1" && Boolean(profile);
   const returnTo = query.get("returnTo") || "/";
   const supportedLanguage = asSupportedLanguage(language);
-  const locale = LANGUAGE_META[supportedLanguage].code;
+  const effectiveMeta = effectiveLanguageMeta(supportedLanguage);
+  const locale = effectiveMeta.code;
   const productCopy = getProductCopy(supportedLanguage);
   const redesignCopy = getRedesignCopy(supportedLanguage);
 
   useEffect(() => {
-    document.documentElement.lang = LANGUAGE_META[supportedLanguage].code;
-    document.documentElement.dir = LANGUAGE_META[supportedLanguage].direction;
-  }, [supportedLanguage]);
+    document.documentElement.lang = effectiveMeta.code;
+    document.documentElement.dir = effectiveMeta.direction;
+  }, [effectiveMeta.code, effectiveMeta.direction]);
 
   function openLocalePicker(tab: "language" | "country") {
     navigate(`/start?tab=${tab}${editMode ? `&edit=1&returnTo=${encodeURIComponent(returnTo)}` : ""}`);
@@ -80,7 +81,6 @@ export function WelcomePage() {
         <button type="button" className="v2-cta" onClick={start}>
           {productCopy.entry.start}
         </button>
-        <p className="v2-footnote">{redesignCopy.demoFootnote}</p>
       </footer>
     </main>
   );

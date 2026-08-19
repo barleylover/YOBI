@@ -11,13 +11,14 @@ import type {
 
 export function emptyCriteria(profile?: Profile | null): RecommendationCriteriaV2 {
   return {
-    schema_version: "2",
+    schema_version: "3",
     cuisine_origins: [],
     flavors: [],
     main_ingredients: [],
     food_forms: [],
     temperatures: [],
     price_bands: [],
+    price_range_krw: { min: 8_000, max: 25_000 },
     textures: [],
     cooking_methods: [],
     dietary_filters: {
@@ -25,7 +26,8 @@ export function emptyCriteria(profile?: Profile | null): RecommendationCriteriaV
       vegan: false,
     },
     max_spice_level: 3,
-    spice_reference_country: profile?.preferred_language === "한국어" ? "KR" : "US",
+    spice_preference: "SIMILAR",
+    spice_reference_country: (profile?.country_code ?? (profile?.preferred_language === "한국어" ? "KR" : "US")) as RecommendationCriteriaV2["spice_reference_country"],
   };
 }
 

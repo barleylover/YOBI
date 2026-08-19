@@ -1,7 +1,5 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { ChatPage } from "./routes/ChatPage";
-import { DemoControlPage } from "./routes/DemoControlPage";
-import { DemoQrPage } from "./routes/DemoQrPage";
 import { HandoffPage } from "./routes/HandoffPage";
 import { OnboardingPage } from "./routes/OnboardingPage";
 import { LocalePage } from "./routes/LocalePage";
@@ -17,8 +15,6 @@ export default function App() {
       <Route path="/handoff" element={<HandoffPage />} />
       <Route path="/pay/:checkoutId" element={<Navigate to="/handoff" replace />} />
       <Route path="/order/:orderId" element={<Navigate to="/handoff" replace />} />
-      <Route path="/demo/qr" element={<DemoQrPage />} />
-      <Route path="/demo/control" element={<DemoControlPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

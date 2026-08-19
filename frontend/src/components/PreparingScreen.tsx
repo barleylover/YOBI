@@ -1,15 +1,19 @@
+import { useEffect, useState } from "react";
 import type { RedesignCopy } from "../lib/redesignI18n";
 
 interface Props {
   v2: RedesignCopy;
   phase: "RETRIEVING" | "GENERATING" | "RESTORING";
-  conditionsCount: number;
-  eligibleMenus: number | null;
-  subtitle?: string;
   onCancel: () => void;
 }
 
-export function PreparingScreen({ v2, phase, conditionsCount, eligibleMenus, subtitle, onCancel }: Props) {
+export function PreparingScreen({ v2, phase, onCancel }: Props) {
+  const [explaining, setExplaining] = useState(false);
+  useEffect(() => {
+    setExplaining(false);
+    const timer = window.setTimeout(() => setExplaining(true), 5_000);
+    return () => window.clearTimeout(timer);
+  }, []);
   const stageIndex = phase === "GENERATING" ? 1 : 0;
   const stages = [v2.stageChecking, v2.stageReading, v2.stageRanking];
   return (
@@ -17,8 +21,7 @@ export function PreparingScreen({ v2, phase, conditionsCount, eligibleMenus, sub
       <div className="v2-preparing-body">
         <img src="/figma/logo-mark.svg" alt="" width={62} height={62} />
         <div className="v2-preparing-heading">
-          <h1>{v2.findingTitle}</h1>
-          <p>{subtitle ?? v2.matchingSummary(conditionsCount, eligibleMenus)}</p>
+          <h1>{explaining ? v2.makingExplanation : v2.findingMenus}</h1>
         </div>
         <section className="v2-preparing-card" aria-live="polite">
           {stages.map((stage, index) => {

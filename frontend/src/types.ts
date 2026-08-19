@@ -72,6 +72,7 @@ export interface Profile {
   profile_id: string;
   preferred_language: string;
   nationality: string;
+  country_code?: string | null;
   religion_selection: string;
   spice_tolerance: number;
   dietary_rules: string[];
@@ -83,7 +84,11 @@ export interface Profile {
   remember_profile: boolean;
 }
 
-export type SpiceReferenceCountry = "KR" | "US";
+export type SpiceReferenceCountry =
+  | "US" | "GB" | "CA" | "AU" | "NZ" | "IE" | "KR" | "JP" | "CN" | "TW"
+  | "HK" | "SG" | "ES" | "MX" | "AR" | "CO" | "FR" | "BE" | "DE" | "AT"
+  | "CH" | "IT" | "PT" | "BR" | "TH" | "VN" | "ID" | "MY" | "SA" | "AE"
+  | "EG" | "IN" | "RU" | "PH" | "TR" | "NL";
 
 export interface DietaryFiltersV2 {
   halal_certified_only: boolean;
@@ -91,17 +96,19 @@ export interface DietaryFiltersV2 {
 }
 
 export interface RecommendationCriteriaV2 {
-  schema_version: "2";
+  schema_version: "2" | "3";
   cuisine_origins: string[];
   flavors: string[];
   main_ingredients: string[];
   food_forms: string[];
   temperatures: string[];
   price_bands: string[];
+  price_range_krw?: { min: number; max: number } | null;
   textures: string[];
   cooking_methods: string[];
   dietary_filters: DietaryFiltersV2;
   max_spice_level: 1 | 2 | 3 | 4 | 5;
+  spice_preference?: "LESS" | "SIMILAR" | "MORE";
   spice_reference_country: SpiceReferenceCountry;
 }
 
@@ -145,12 +152,18 @@ export interface SpiceReferenceGroup {
 }
 
 export interface PreferenceCatalog {
-  schema_version: "2";
+  schema_version: "2" | "3";
   catalog_version: string;
   knowledge_release_id: string;
   locale: string;
   categories: PreferenceCatalogCategory[];
   spice_references: SpiceReferenceGroup[];
+  price_range_krw?: { min: number; max: number; step: number };
+  country_spice_profiles?: Array<{
+    country_code: SpiceReferenceCountry;
+    spice_baseline: 1 | 2 | 3 | 4 | 5;
+  }>;
+  synthetic_enrichment_release_id?: string | null;
   capabilities?: {
     halal_certified_only?: { enabled: boolean; reason?: string | null };
     vegan?: { enabled: boolean; reason?: string | null };
@@ -203,6 +216,19 @@ export interface StructuredRecommendation {
   title: string;
   selection_reason: string;
   description: string;
+  localized_title?: string | null;
+  yobi_short_explanation?: string | null;
+  yobi_long_explanation?: string | null;
+  source_description?: string | null;
+  review_summary?: string | null;
+  country_preference?: {
+    country_code: string;
+    preference_percent: number;
+    sample_size: number;
+  } | null;
+  evidence_ids?: string[];
+  review_ids?: string[];
+  generation_model?: string | null;
   matched_criteria: CriterionMatch[];
   wiki_passages: RecommendationWikiEvidence[];
   caution_codes: string[];
@@ -281,6 +307,7 @@ export interface MenuSummary {
   merchant_name: string;
   name_en: string;
   name_ko: string;
+  localized_title?: string | null;
   category: string;
   description: string;
   cultural_description: string;
@@ -370,6 +397,7 @@ export interface OptionItem {
   option_item_id: string;
   name_en: string;
   name_ko: string;
+  display_name?: string | null;
   description: string;
   price_delta: number;
   available: boolean;
@@ -384,6 +412,7 @@ export interface OptionGroup {
   option_group_id: string;
   name_en: string;
   name_ko: string;
+  display_name?: string | null;
   description: string;
   required: boolean;
   min_select: number;
@@ -628,9 +657,10 @@ export interface CartPreview {
     menu_id: string;
     menu_name: string;
     menu_name_ko: string;
+    display_name?: string | null;
     quantity: number;
     unit_price: number;
-    options: Array<{ option_item_id: string; name_en: string; name_ko: string; price_delta: number }>;
+    options: Array<{ option_item_id: string; name_en: string; name_ko: string; display_name?: string | null; price_delta: number }>;
     line_total: number;
   }>;
   subtotal: number;
@@ -642,6 +672,40 @@ export interface CartPreview {
   minimum_order_shortfall: number;
   ready_to_checkout: boolean;
   confirmed: boolean;
+}
+
+export interface RestaurantNoteTranslation {
+  translation_id: string;
+  source_text: string;
+  source_language: string;
+  korean_text?: string | null;
+  back_translation?: string | null;
+  model_id: string;
+  status: "SUCCEEDED" | "FAILED";
+  error_code?: string | null;
+  created_at: string;
+}
+
+export interface MerchantMenuPresentation {
+  menu: MenuSummary;
+  localized_title: string;
+  yobi_short_explanation: string;
+  yobi_long_explanation: string;
+  source_description: string;
+  review_summary: string;
+  country_preference: {
+    country_code: string;
+    preference_percent: number;
+    sample_size: number;
+  };
+  evidence_ids: string[];
+  review_ids: string[];
+  generation_model: string;
+}
+
+export interface MerchantMenuPresentationPage {
+  items: MerchantMenuPresentation[];
+  next_cursor?: string | null;
 }
 
 export interface Checkout {

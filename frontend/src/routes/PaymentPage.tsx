@@ -3,13 +3,11 @@ import { ArrowLeft, CheckCircle2, CreditCard, LockKeyhole, XCircle } from "lucid
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { actionableError, api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
-import { getRecommendationCopy } from "../lib/recommendationI18n";
 import { useSessionStore } from "../stores/session";
 import type { Checkout } from "../types";
 
 export function PaymentPage() {
   const { copy, journeyCopy, language } = useI18n();
-  const recommendationCopy = getRecommendationCopy(language);
   const { checkoutId = "" } = useParams();
   const navigate = useNavigate();
   const session = useSessionStore((state) => state.session);
@@ -37,7 +35,7 @@ export function PaymentPage() {
         "CART_NOT_CONFIRMED",
         "IDEMPOTENCY_KEY_REUSED",
       ].includes(code));
-      setMessage(actionableError(cause, journeyCopy.retry));
+      setMessage(actionableError(cause, journeyCopy.retry, language));
     } finally { setBusy(false); }
   }
 
@@ -53,7 +51,6 @@ export function PaymentPage() {
         <button className="primary-button full large" disabled={busy} onClick={() => void pay(true)}>{copy.pay} ₩{checkout.amount.toLocaleString()}</button>
         <button className="text-button full" disabled={busy} onClick={() => void pay(false)}>{copy.simulateFailure}</button>
         <p className="privacy-note"><LockKeyhole size={14} /> {journeyCopy.privacy}</p>
-        <p className="experience-notice">{recommendationCopy.experienceNotice}</p>
       </section>
     </main>
   );

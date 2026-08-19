@@ -3,9 +3,6 @@ import { selectFirstPreferenceAndRecommend, startStructuredSession } from "./str
 
 test("halal and vegan conflicts are resolved explicitly before recommendation", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "iPhone 13", "One primary mobile proof is sufficient.");
-  // This test isolates the client-side hard-conflict contract. The live demo
-  // catalog can legitimately retire PORK support, so keep preview positive
-  // without inventing any menu or recommendation response.
   await page.route("**/structured-recommendations/preview", async (route) => {
     await route.fulfill({
       status: 200,
@@ -22,48 +19,41 @@ test("halal and vegan conflicts are resolved explicitly before recommendation", 
     });
   });
   await startStructuredSession(page);
-  const ingredients = page.locator("details.preference-category").filter({ hasText: "Main ingredient" });
-  if (await ingredients.getAttribute("open") === null) await ingredients.locator("summary").click();
+  const ingredients = page.locator("[data-category='main_ingredients']");
   await ingredients.getByRole("button", { name: "Pork", exact: true }).click();
-  const halal = page.getByRole("checkbox", { name: /Only show halal-certified restaurants/ });
-  if (await halal.isDisabled()) {
-    await expect(halal).toBeDisabled();
-    return;
-  }
-  await expect(ingredients.getByRole("button", { name: "Pork", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  const halal = page.getByRole("switch", { name: /Halal-certified only/ });
   await halal.click();
-  await expect(halal).toBeChecked();
 
   await expect(page.getByRole("alert")).toContainText("conflicts with the halal or vegan filter");
-  await expect(page.getByRole("button", { name: "Show my recommendations" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Find my dish" })).toBeDisabled();
+  await page.getByRole("tab", { name: /Core/ }).click();
   await ingredients.getByRole("button", { name: "Pork", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Show my recommendations" })).toBeEnabled();
+  await page.getByRole("tab", { name: /Conditions/ }).click();
+  await expect(page.getByRole("button", { name: "Find my dish" })).toBeEnabled();
 });
 
-test("result comparison and criteria editing are button-only actions", async ({ page }, testInfo) => {
+test("results omit comparison and selection reason while retaining filter editing", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "iPhone 13", "One primary mobile proof is sufficient.");
   await startStructuredSession(page);
   await selectFirstPreferenceAndRecommend(page);
-  const compare = page.getByRole("button", { name: "Compare these menus" });
-  if (await compare.isEnabled().catch(() => false)) {
-    await compare.click();
-    await expect(page.locator(".comparison-message")).toBeVisible();
-  }
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
-  await page.getByRole("button", { name: "Edit choices" }).click();
-  await expect(page.getByRole("heading", { name: "What sounds good?" })).toBeVisible();
+
+  await expect(page.getByRole("button", { name: "Compare these menus" })).toHaveCount(0);
+  await expect(page.locator(".v2-card-yobi").first()).toBeVisible();
+  await expect(page.locator(".v2-card-yogiyo").first()).toBeVisible();
+  await page.getByRole("button", { name: "Edit filters" }).click();
+  await expect(page.getByRole("heading", { name: "What are you craving?" })).toBeVisible();
   await expect(page.getByRole("textbox")).toHaveCount(0);
 });
 
-test("search fallback keeps menu selection, retry and edit actions", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "iPhone 13", "One primary mobile proof is sufficient.");
-  await page.goto("/demo/control");
-  const modeControl = page.getByRole("button", { name: /force fallback/i });
-  if (!(await modeControl.isVisible().catch(() => false))) test.skip(true, "Demo control is protected in this environment.");
-  await modeControl.click();
+test("provider unavailability yields selectable deterministic results", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "iPhone 13", "One local fallback proof is sufficient.");
   await startStructuredSession(page);
   await selectFirstPreferenceAndRecommend(page);
+
   await expect(page.getByRole("heading", { name: "Closest matching menus" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Try recommendation again" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Edit choices" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Choose this menu" }).first()).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Edit filters" })).toBeVisible();
 });

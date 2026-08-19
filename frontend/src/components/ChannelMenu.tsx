@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { actionableError, api } from "../lib/api";
 import { getDynamicCopy } from "../lib/i18n";
-import { asSupportedLanguage, menuName } from "../lib/locale";
+import { asSupportedLanguage, formatMinuteRange, menuName } from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
 import { getRedesignCopy } from "../lib/redesignI18n";
 import type {
@@ -52,7 +52,7 @@ export function ChannelMenu({ sessionId, language, locale, disabled = false, onC
       .then((result) => setRanking({ ...result, items: result.items.slice(0, 20) }))
       .catch((cause) => {
         if (cause instanceof Error && cause.message === "REQUEST_ABORTED") return;
-        setError(language === "English" ? actionableError(cause, copy.unavailable) : copy.unavailable);
+        setError(actionableError(cause, copy.unavailable, language));
       })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
@@ -67,7 +67,7 @@ export function ChannelMenu({ sessionId, language, locale, disabled = false, onC
       .then(setFeature)
       .catch((cause) => {
         if (cause instanceof Error && cause.message === "REQUEST_ABORTED") return;
-        setError(language === "English" ? actionableError(cause, copy.unavailable) : copy.unavailable);
+        setError(actionableError(cause, copy.unavailable, language));
       })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
@@ -105,7 +105,7 @@ export function ChannelMenu({ sessionId, language, locale, disabled = false, onC
               </button>
               <button type="button" className="v2-menu-item tile" onClick={() => setView("feature")} disabled={disabled}>
                 <img src="/figma/kdh-tile.png" alt="" />
-                <span className="tile-label">KPOP DEMON HUNTERS</span>
+                <span className="tile-label">K-POP ANIMATION</span>
               </button>
             </div>
           </div>
@@ -116,7 +116,7 @@ export function ChannelMenu({ sessionId, language, locale, disabled = false, onC
         <div className="v2-discovery-sheet">
           <header>
             <h2 id="discovery-rankings-title">{copy.foodRankings}</h2>
-            <p>{language === "English" ? (ranking?.demo_basis || copy.demoRankingNotice) : copy.demoRankingNotice}</p>
+            <p>{copy.demoRankingNotice}</p>
           </header>
           <div className="v2-seg-tabs" role="tablist" aria-label={copy.foodRankings}>
             {([
@@ -181,7 +181,7 @@ export function ChannelMenu({ sessionId, language, locale, disabled = false, onC
                     <p>{entry.description || entry.menu.cultural_description || entry.menu.description || dynamicCopy.catalogDescription}</p>
                     <div className="meta">
                       <strong>₩{entry.menu.price.toLocaleString(locale)}</strong>
-                      <span>{entry.menu.eta_min}–{entry.menu.eta_max} min · ₩{entry.menu.delivery_fee.toLocaleString(locale)}</span>
+                      <span>{formatMinuteRange(entry.menu.eta_min, entry.menu.eta_max, locale)} · ₩{entry.menu.delivery_fee.toLocaleString(locale)}</span>
                     </div>
                     <button
                       type="button"

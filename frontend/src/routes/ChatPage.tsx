@@ -22,7 +22,6 @@ import type {
   ConversationView,
   MenuSummary,
   RecommendationBatchV2,
-  RecommendationComparisonV2,
   RecommendationMode,
   RecommendationPreviewV2,
   RecommendationRequestV2,
@@ -91,17 +90,21 @@ export function ChatPage() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewMessage, setPreviewMessage] = useState("");
   const [selectedMenu, setSelectedMenu] = useState<MenuSummary | null>(null);
+  const [wizardStartSection, setWizardStartSection] = useState<"core" | "conditions">("core");
   const [pollRevision, setPollRevision] = useState(0);
   const stateVersionRef = useRef(session?.state_version ?? 0);
   const pollCountRef = useRef(0);
   const pollStartedAtRef = useRef(0);
   const recommendationAbortRef = useRef<AbortController | null>(null);
+  const cancelledRequestIdsRef = useRef(new Set<string>());
+  const cancellationRevisionRef = useRef(0);
   const previewAbortRef = useRef<AbortController | null>(null);
   const previewValidationAbortRef = useRef<AbortController | null>(null);
   const lastPreviewCriteriaRef = useRef("");
   const criteriaRequestKey = `yobi-pending-criteria-request-${sessionId}`;
 
   const applyBatch = useCallback((batch: RecommendationBatchV2) => {
+    if (cancelledRequestIdsRef.current.has(batch.request_id)) return;
     stateVersionRef.current = batch.state_version;
     setLatestRecommendation(batch);
     if (batch.status !== "PENDING") {
@@ -157,6 +160,7 @@ export function ChatPage() {
   }, [applyConversation, sessionId]);
 
   const executeRecommendation = useCallback(async (request: RecommendationRequestV2) => {
+    cancelledRequestIdsRef.current.delete(request.request_id);
     recommendationAbortRef.current?.abort();
     const controller = new AbortController();
     recommendationAbortRef.current = controller;
@@ -177,9 +181,7 @@ export function ChatPage() {
         }
       } catch { /* Keep the stable request id for explicit recovery. */ }
       setRecommendationPhase("ERROR");
-      setError(language === "English"
-        ? actionableError(cause, recommendationCopy.failedDescription)
-        : recommendationCopy.failedDescription);
+      setError(actionableError(cause, recommendationCopy.failedDescription, language));
     } finally {
       if (recommendationAbortRef.current === controller) {
         recommendationAbortRef.current = null;
@@ -253,9 +255,7 @@ export function ChatPage() {
       }
       lastPreviewCriteriaRef.current = JSON.stringify(criteria);
       setPreview(result);
-      setPreviewMessage(result.eligible_menu_count === 0
-        ? productCopy.recommendation.zeroCombination
-        : productCopy.recommendation.previewCount(result.eligible_menu_count, result.eligible_merchant_count));
+      setPreviewMessage(result.eligible_menu_count === 0 ? productCopy.recommendation.zeroCombination : "");
       return true;
     } catch (cause) {
       if (cause instanceof Error && cause.message === "REQUEST_ABORTED") return false;
@@ -354,10 +354,23 @@ export function ChatPage() {
       changed = true;
       visibleSelectionChanged = true;
     }
-    // The v2 server contract requires a spice value. Level 5 is the neutral
-    // no-cap value, so an unavailable control must not silently filter out
-    // menus with unreviewed spice metadata.
-    if (catalog.capabilities?.max_spice_level?.enabled === false && next.max_spice_level !== 5) {
+    if (next.schema_version === "3") {
+      const priceCatalog = catalog.price_range_krw ?? { min: 8_000, max: 25_000, step: 1_000 };
+      const selectedPrice = next.price_range_krw ?? { min: priceCatalog.min, max: priceCatalog.max };
+      const clampedPrice = {
+        min: Math.max(priceCatalog.min, Math.min(selectedPrice.min, priceCatalog.max - priceCatalog.step)),
+        max: Math.min(priceCatalog.max, Math.max(selectedPrice.max, priceCatalog.min + priceCatalog.step)),
+      };
+      if (!next.price_range_krw || next.price_range_krw.min !== clampedPrice.min || next.price_range_krw.max !== clampedPrice.max) {
+        next.price_range_krw = clampedPrice;
+        changed = true;
+      }
+      if (!next.spice_preference) {
+        next.spice_preference = "SIMILAR";
+        changed = true;
+      }
+      next.price_bands = [];
+    } else if (catalog.capabilities?.max_spice_level?.enabled === false && next.max_spice_level !== 5) {
       next.max_spice_level = 5;
       changed = true;
     }
@@ -417,6 +430,7 @@ export function ChatPage() {
 
   async function submitCriteria() {
     if (!catalog || busy) return;
+    const cancellationRevision = cancellationRevisionRef.current;
     setBusy(true);
     setError("");
     setRecommendationPhase("RETRIEVING");
@@ -448,6 +462,10 @@ export function ChatPage() {
         };
       }
       sessionStorage.removeItem(criteriaRequestKey);
+      if (cancellationRevision !== cancellationRevisionRef.current) {
+        setBusy(false);
+        return;
+      }
       stateVersionRef.current = committed.state_version;
       commitCriteria(committed.criteria ?? draftCriteria, committed.criteria_version);
       const request: RecommendationRequestV2 = {
@@ -471,9 +489,7 @@ export function ChatPage() {
         return;
       }
       setRecommendationPhase("ERROR");
-      setError(language === "English"
-        ? actionableError(cause, recommendationCopy.failedDescription)
-        : recommendationCopy.failedDescription);
+      setError(actionableError(cause, recommendationCopy.failedDescription, language));
       setBusy(false);
     }
   }
@@ -486,17 +502,6 @@ export function ChatPage() {
       expected_state_version: stateVersionRef.current,
       criteria_version: criteriaVersion,
       mode,
-    });
-  }
-
-  async function compareRecommendations(): Promise<RecommendationComparisonV2> {
-    const snapshotId = latestRecommendation?.snapshot_id;
-    const requestId = latestRecommendation?.request_id;
-    if (!snapshotId || !requestId) throw new Error("RECOMMENDATION_SNAPSHOT_NOT_FOUND");
-    return api.compareRecommendations(sessionId, {
-      snapshot_id: snapshotId,
-      request_id: requestId,
-      idempotency_key: `comparison-${snapshotId}`,
     });
   }
 
@@ -514,7 +519,7 @@ export function ChatPage() {
       setSelectedMenu(result.selected_menu ?? recommendation.menu);
       setRecommendationPhase("ORDERING");
     } catch (cause) {
-      setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
+      setError(actionableError(cause, journeyCopy.retry, language));
       await refreshConversation().catch(() => undefined);
     } finally {
       setBusy(false);
@@ -534,7 +539,7 @@ export function ChatPage() {
       setRecommendationPhase("ORDERING");
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (cause) {
-      setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
+      setError(actionableError(cause, journeyCopy.retry, language));
       await refreshConversation().catch(() => undefined);
       throw cause;
     } finally {
@@ -560,7 +565,7 @@ export function ChatPage() {
         risk_acknowledged: riskAcknowledged,
       });
     } catch (cause) {
-      setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
+      setError(actionableError(cause, journeyCopy.retry, language));
       await refreshConversation().catch(() => undefined);
       throw cause;
     } finally {
@@ -569,6 +574,7 @@ export function ChatPage() {
   }
 
   function editCriteria() {
+    setWizardStartSection("core");
     if (committedCriteria) setDraftCriteria(committedCriteria);
     setSelectedMenu(null);
     setRecommendationPhase("SELECTING");
@@ -584,17 +590,20 @@ export function ChatPage() {
   }
 
   function cancelRecommendation() {
+    cancellationRevisionRef.current += 1;
+    const requestId = pendingRecommendation?.request_id ?? latestRecommendation?.request_id;
+    if (requestId) {
+      cancelledRequestIdsRef.current.add(requestId);
+      void api.cancelRecommendationRequest(sessionId, requestId).catch(() => undefined);
+    }
     recommendationAbortRef.current?.abort();
-    editCriteria();
+    setPendingRecommendation(null);
+    setBusy(false);
+    setWizardStartSection("conditions");
+    setSelectedMenu(null);
+    setRecommendationPhase("SELECTING");
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
-
-  const draftSelectedCount = [
-    draftCriteria.cuisine_origins, draftCriteria.flavors, draftCriteria.main_ingredients,
-    draftCriteria.food_forms, draftCriteria.temperatures, draftCriteria.price_bands,
-    draftCriteria.textures, draftCriteria.cooking_methods,
-  ].reduce((total, list) => total + list.length, 0)
-    + Number(draftCriteria.dietary_filters.halal_certified_only)
-    + Number(draftCriteria.dietary_filters.vegan);
 
   const showsLoading = hydrating || recommendationPhase === "RETRIEVING" || recommendationPhase === "GENERATING";
 
@@ -633,9 +642,6 @@ export function ChatPage() {
         <PreparingScreen
           v2={v2}
           phase={recommendationPhase === "GENERATING" ? "GENERATING" : "RETRIEVING"}
-          conditionsCount={draftSelectedCount}
-          eligibleMenus={preview?.eligible_menu_count ?? null}
-          subtitle={hydrating ? recommendationCopy.restoring : undefined}
           onCancel={cancelRecommendation}
         />
       </main>
@@ -650,6 +656,7 @@ export function ChatPage() {
           criteria={draftCriteria}
           copy={recommendationCopy}
           v2={v2}
+          initialSection={wizardStartSection}
           busy={busy}
           previewLoading={previewLoading}
           preview={preview}
@@ -709,9 +716,7 @@ export function ChatPage() {
               <p className="v2-bot-name">{productCopy.recommendation.assistantName}</p>
               <div className="v2-bubble">
                 <p>
-                  {latestRecommendation && preview
-                    ? v2.foundSummary(preview.eligible_menu_count, preview.eligible_merchant_count)
-                    : recommendationCopy.resultsTitle}
+                  {recommendationCopy.resultsTitle}
                 </p>
                 {selectedPreferenceLabels.length > 0 && (
                   <div className="v2-bubble-chips" aria-label={recommendationCopy.selectedSummary}>
@@ -728,7 +733,6 @@ export function ChatPage() {
         {showsResults && latestRecommendation && catalog && (
           <RecommendationResults
             batch={latestRecommendation}
-            catalog={catalog}
             copy={recommendationCopy}
             v2={v2}
             language={language}
@@ -736,7 +740,6 @@ export function ChatPage() {
             busy={busy}
             timestamp={messageTime}
             onChoose={(item) => void chooseMenu(item)}
-            onCompare={compareRecommendations}
             onRetry={() => void requestAnother("RETRY")}
           />
         )}
@@ -788,7 +791,6 @@ export function ChatPage() {
           </>
         )}
 
-        <p className="v2-experience-notice">{recommendationCopy.experienceNotice}</p>
       </div>
 
       <div className="v2-quick-replies">
@@ -808,7 +810,7 @@ export function ChatPage() {
               <button
                 type="button"
                 className="v2-quick-reply"
-                onClick={() => pendingRecommendation ? void recoverRecommendation(pendingRecommendation) : void requestAnother("RETRY")}
+                onClick={() => pendingRecommendation ? void retryPendingRecommendation(pendingRecommendation) : void requestAnother("RETRY")}
                 disabled={busy}
               >
                 {recommendationCopy.tryAgain}

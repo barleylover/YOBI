@@ -1,6 +1,6 @@
 import { getExtendedCopy } from "./extendedI18n";
 import { getProfileCopy, getUiCopy } from "./i18n";
-import type { SupportedLanguage } from "./locale";
+import { asEffectiveLanguage, type SupportedLanguage } from "./locale";
 import { getRecommendationCopy } from "./recommendationI18n";
 
 export interface EntryCopy {
@@ -102,7 +102,7 @@ const entryEn: EntryCopy = {
   countryHelp: (language) => `Countries commonly using ${language} appear first.`,
   start: "Get started",
   localeApplies: "Language applies to recommendations, ordering and the pre-payment handoff.",
-  experienceNotice: "Restaurant and order information is prepared for this experience. No real order or charge is made.",
+  experienceNotice: "Review your menu and delivery details before continuing.",
 };
 
 const entryKo: EntryCopy = {
@@ -118,7 +118,7 @@ const entryKo: EntryCopy = {
   countryHelp: () => "선택한 언어를 많이 사용하는 국가가 먼저 표시됩니다.",
   start: "시작하기",
   localeApplies: "선택한 언어는 추천, 주문과 결제 직전 안내까지 적용됩니다.",
-  experienceNotice: "가게와 주문 정보는 체험을 위해 구성되어 있으며 실제 주문이나 결제는 이루어지지 않습니다.",
+  experienceNotice: "계속하기 전 메뉴와 배달 정보를 확인해 주세요.",
 };
 
 const entryVariants: Partial<Record<SupportedLanguage, Partial<EntryCopy>>> = {
@@ -415,12 +415,12 @@ const en: ProductCopy = {
     searchLabel: "Hotel, building or road address",
     searchPlaceholder: "Search a hotel, building or road address",
     chooseImage: "Choose a booking image",
-    useDemoImage: "Use the demo booking image",
-    currentAddress: "Current demo address",
+    useDemoImage: "Use the sample booking image",
+    currentAddress: "Current address",
     keepAddress: "Keep this address",
-    demoNotice: "Demo only: this is a prepared address, not a live nationwide address search.",
+    demoNotice: "Confirm the prepared delivery address before continuing.",
     consent: "I agree to use this address for this session only. It is not stored after you leave.",
-    check: "Find the demo address",
+    check: "Find address",
     select: "Select this address",
     changeLocale: "Change language or country",
   },
@@ -449,17 +449,17 @@ const en: ProductCopy = {
     expand: "Open YOBI discoveries",
     collapse: "Close YOBI discoveries",
     foodRankings: "Food rankings",
-    feature: "K-Demon feature",
+    feature: "K-pop feature",
     close: "Close",
-    demoRankingNotice: "Demo rankings for the current prepared delivery area—not live Yogiyo-wide rankings.",
+    demoRankingNotice: "Rankings for the current delivery area.",
     reviews: "Most reviewed",
     orders: "Most ordered",
     koreanPopularity: "Popular in Korea",
-    loading: "Loading available demo menus…",
+    loading: "Loading available menus…",
     unavailable: "This collection is unavailable right now. No unavailable menu has been substituted.",
-    noFeatureMenus: "No mapped feature menu is currently available in this demo delivery area.",
+    noFeatureMenus: "No mapped feature menu is currently available in this delivery area.",
     featureTitle: "K-food on screen, available near you",
-    featureDescription: "Explore foods featured in K-pop Demon Hunters and only the mapped menus currently available in this demo delivery area.",
+    featureDescription: "Explore foods featured in a popular animated K-pop story and mapped menus currently available in this delivery area.",
     selectMenu: "Choose this menu",
   },
   handoff: {
@@ -468,8 +468,8 @@ const en: ProductCopy = {
     description: "Want to order the Korean menu you picked? Continue in Yogiyo.",
     account: "Sign-up and payment information would be handled in Yogiyo.",
     cta: "Yogiyo",
-    done: "This is the step where the Yogiyo app would open. The YOBI demo ends here.",
-    boundary: "Mock handoff only. No cart was sent, no app or URL was opened, and no payment or order was created.",
+    done: "Continue your order in Yogiyo.",
+    boundary: "Review the basket, then continue to Yogiyo.",
     back: "Back to YOBI",
   },
 };
@@ -485,12 +485,12 @@ const ko: ProductCopy = {
     searchLabel: "호텔, 건물 또는 도로명 주소",
     searchPlaceholder: "호텔, 건물 또는 도로명 주소 검색",
     chooseImage: "예약 이미지 선택",
-    useDemoImage: "데모 예약 이미지 사용",
-    currentAddress: "현재 데모 주소",
+    useDemoImage: "예약 예시 이미지 사용",
+    currentAddress: "현재 주소",
     keepAddress: "이 주소 유지",
-    demoNotice: "데모 전용 주소입니다. 실제 전국 주소 검색 기능이 아닙니다.",
+    demoNotice: "계속하기 전 준비된 배달 주소를 확인해 주세요.",
     consent: "이 주소를 이 세션에서만 사용하는 데 동의합니다. 세션이 끝나면 저장되지 않습니다.",
-    check: "데모 주소 찾기",
+    check: "주소 찾기",
     select: "이 주소 선택",
     changeLocale: "언어 또는 국가 변경",
   },
@@ -519,17 +519,17 @@ const ko: ProductCopy = {
     expand: "YOBI 둘러보기 열기",
     collapse: "YOBI 둘러보기 닫기",
     foodRankings: "음식순위",
-    feature: "케데헌 특집",
+    feature: "K-pop 애니메이션 특집",
     close: "닫기",
-    demoRankingNotice: "현재 데모 배달 지역 기준 순위이며 요기요 전체의 실시간 순위가 아닙니다.",
+    demoRankingNotice: "현재 배달 지역 기준 순위입니다.",
     reviews: "리뷰 많은 순",
     orders: "주문 많은 순",
     koreanPopularity: "한국 인기 순",
-    loading: "주문 가능한 데모 메뉴를 불러오는 중…",
+    loading: "주문 가능한 메뉴를 불러오는 중…",
     unavailable: "지금은 이 목록을 불러올 수 없어요. 주문 불가능한 메뉴로 대체하지 않았습니다.",
-    noFeatureMenus: "현재 데모 배달 지역에는 연결된 특집 메뉴가 없습니다.",
+    noFeatureMenus: "현재 배달 지역에는 연결된 특집 메뉴가 없습니다.",
     featureTitle: "작품 속 K-푸드, 지금 주문 가능한 메뉴",
-    featureDescription: "케이팝 데몬 헌터스에 나온 음식과 현재 데모 지역에서 실제로 선택 가능한 연결 메뉴만 소개합니다.",
+    featureDescription: "인기 K-pop 애니메이션에 나온 음식과 현재 배달 지역에서 선택 가능한 연결 메뉴만 소개합니다.",
     selectMenu: "이 메뉴 선택",
   },
   handoff: {
@@ -538,8 +538,8 @@ const ko: ProductCopy = {
     description: "마음에 든 한국 메뉴를 주문하고 싶다면, 요기요에서 계속하세요.",
     account: "회원가입과 결제정보 등록은 요기요에서 진행됩니다.",
     cta: "요기요",
-    done: "요기요 앱으로 이동하는 단계입니다. YOBI 데모는 여기서 종료됩니다.",
-    boundary: "이동 목업만 제공합니다. 장바구니 전송, 앱·URL 실행, 결제와 주문 생성은 이루어지지 않았습니다.",
+    done: "요기요에서 주문을 계속해 주세요.",
+    boundary: "장바구니를 확인한 뒤 요기요로 이동해 주세요.",
     back: "YOBI로 돌아가기",
   },
 };
@@ -640,7 +640,36 @@ function buildLocalizedProductCopy(language: LocalizedLanguage): ProductCopy {
 }
 
 export function getProductCopy(language: SupportedLanguage): ProductCopy {
-  if (language === "한국어") return ko;
-  if (language === "English") return en;
-  return buildLocalizedProductCopy(language);
+  const effectiveLanguage = asEffectiveLanguage(language);
+  if (effectiveLanguage === "한국어") return ko;
+  if (effectiveLanguage === "English") return en;
+  const copy = buildLocalizedProductCopy("日本語");
+  return {
+    ...copy,
+    entry: {
+      ...copy.entry,
+      experienceNotice: "続ける前にメニューと配達情報を確認してください。",
+    },
+    address: {
+      ...copy.address,
+      description: "検索または予約画像から配達先を確認してください。",
+      useDemoImage: "予約イメージ例を使う",
+      currentAddress: "現在の住所",
+      demoNotice: "続ける前に配達先を確認してください。",
+      check: "住所を検索",
+    },
+    navigation: {
+      ...copy.navigation,
+      demoRankingNotice: "現在の配達エリアを基準にした順位です。",
+      loading: "注文可能なメニューを読み込み中…",
+      noFeatureMenus: "現在の配達エリアに対応する特集メニューはありません。",
+      feature: "K-popアニメ特集",
+      featureDescription: "人気のK-popアニメに登場する料理と、現在の配達エリアで選べるメニューを紹介します。",
+    },
+    handoff: {
+      ...copy.handoff,
+      done: "Yogiyoで注文を続けてください。",
+      boundary: "カートを確認してYogiyoへ進んでください。",
+    },
+  };
 }

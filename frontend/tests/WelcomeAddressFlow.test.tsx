@@ -12,6 +12,7 @@ const profile: Profile = {
   profile_id: "profile_onboarding_test",
   preferred_language: "English",
   nationality: "United States",
+  country_code: "US",
   religion_selection: "Prefer not to say",
   spice_tolerance: 1,
   dietary_rules: [],
@@ -29,7 +30,7 @@ const session: Session = {
 };
 
 const candidate: AddressCandidate = {
-  place_id: "demo_address_1",
+  place_id: "address_candidate_1",
   hotel_name: "YOBI Myeongdong Hotel",
   road_address: "123 YOBI-ro, Jung-gu, Seoul",
   postal_code: "04500",
@@ -38,7 +39,7 @@ const candidate: AddressCandidate = {
   confidence: 1,
   source: "YOBI_DEMO",
   needs_confirmation: true,
-  candidate_token: "demo-address-token",
+  candidate_token: "address-candidate-token",
 };
 
 function LocationEcho() {
@@ -64,9 +65,22 @@ function resetStore() {
   });
 }
 
-describe("merged welcome and neutral demo address flow", () => {
+function renderWelcome() {
+  return render(
+    <MemoryRouter initialEntries={["/"]}>
+      <Routes>
+        <Route path="/" element={<WelcomePage />} />
+        <Route path="/start" element={<LocalePage />} />
+        <Route path="/profile" element={<div>Profile route</div>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+describe("welcome and address flow", () => {
   beforeAll(() => {
     HTMLElement.prototype.scrollIntoView = vi.fn();
+    window.scrollTo = vi.fn();
   });
 
   afterEach(() => {
@@ -78,48 +92,38 @@ describe("merged welcome and neutral demo address flow", () => {
     document.documentElement.dir = "ltr";
   });
 
-  it("keeps language and country on the welcome screen and applies the language immediately", async () => {
+  it("selects Korean through the locale screen and applies it immediately", async () => {
     resetStore();
-    render(
-      <MemoryRouter initialEntries={["/"]}>
-        <Routes>
-          <Route path="/" element={<WelcomePage />} />
-          <Route path="/profile" element={<div>Profile route</div>} />
-        </Routes>
-      </MemoryRouter>,
-    );
+    renderWelcome();
 
-    expect(screen.getByRole("heading", { name: /Hi, I’m YOBI/ })).toBeInTheDocument();
-    expect(screen.getAllByRole("combobox")).toHaveLength(2);
-    expect(screen.getByLabelText("Language").querySelectorAll("option")).toHaveLength(16);
+    expect(screen.getByRole("heading", { name: /Korean food/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Language.*English/ }));
+    fireEvent.click(screen.getByRole("button", { name: /한국어.*Korean/ }));
+    await waitFor(() => expect(document.documentElement).toHaveAttribute("lang", "ko"));
+    fireEvent.click(document.querySelector<HTMLButtonElement>(".v2-appbar-action")!);
 
-    fireEvent.change(screen.getByLabelText("Language"), { target: { value: "한국어" } });
-    expect(await screen.findByRole("heading", { name: /안녕하세요, YOBI예요/ })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /한국 음식/ })).toBeInTheDocument();
     expect(document.documentElement).toHaveAttribute("lang", "ko");
     expect(document.documentElement).toHaveAttribute("dir", "ltr");
     expect(useSessionStore.getState().draftLanguage).toBe("한국어");
 
-    fireEvent.click(screen.getByRole("button", { name: /시작하기/ }));
+    fireEvent.click(screen.getByRole("button", { name: "시작하기" }));
     expect(await screen.findByText("Profile route")).toBeInTheDocument();
   });
 
-  it("switches the merged entry to Arabic RTL without retaining English product copy", async () => {
-    render(
-      <MemoryRouter initialEntries={["/"]}>
-        <Routes>
-          <Route path="/" element={<WelcomePage />} />
-          <Route path="/profile" element={<div>مسار الملف</div>} />
-        </Routes>
-      </MemoryRouter>,
-    );
+  it("keeps Arabic selectable while displaying the English LTR fallback", async () => {
+    renderWelcome();
+    fireEvent.click(screen.getByRole("button", { name: /Language.*English/ }));
+    fireEvent.click(screen.getByRole("button", { name: /العربية.*Arabic/ }));
+    await waitFor(() => expect(document.documentElement).toHaveAttribute("lang", "en"));
+    expect(document.documentElement).toHaveAttribute("dir", "ltr");
+    fireEvent.click(document.querySelector<HTMLButtonElement>(".v2-appbar-action")!);
 
-    fireEvent.change(screen.getByLabelText("Language"), { target: { value: "العربية" } });
-    expect(await screen.findByRole("heading", { name: /مرحبًا، أنا YOBI/ })).toBeInTheDocument();
-    expect(document.documentElement).toHaveAttribute("lang", "ar");
-    expect(document.documentElement).toHaveAttribute("dir", "rtl");
-    expect(screen.getByRole("button", { name: /ابدأ/ })).toBeInTheDocument();
-    expect(screen.queryByText("Order K-food with context, not guesswork.")).not.toBeInTheDocument();
-    expect(useSessionStore.getState().draftCountry).toBe("Saudi Arabia");
+    expect(await screen.findByRole("heading", { name: /Korean food/ })).toBeInTheDocument();
+    expect(document.documentElement).toHaveAttribute("lang", "en");
+    expect(document.documentElement).toHaveAttribute("dir", "ltr");
+    expect(screen.getByRole("button", { name: "Get started" })).toBeInTheDocument();
+    expect(useSessionStore.getState().draftLanguage).toBe("العربية");
   });
 
   it("redirects the retired start route safely while preserving edit and return parameters", async () => {
@@ -135,23 +139,24 @@ describe("merged welcome and neutral demo address flow", () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole("heading", { name: /Hi, I’m YOBI/ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Get started/ }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Done" }).at(-1)!);
+    expect(await screen.findByRole("heading", { name: /Korean food/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Get started" }));
     expect(await screen.findByText(/Profile route \?edit=1/)).toHaveTextContent(
       `returnTo=${encodeURIComponent(`/chat/${session.session_id}`)}`,
     );
   });
 
-  it("removes demographic questions and sends a neutral profile before search address confirmation", async () => {
+  it("creates a neutral profile and confirms a searched address without user-facing boundary labels", async () => {
     resetStore();
     const createProfile = vi.spyOn(api, "createProfile").mockResolvedValue(profile);
     vi.spyOn(api, "createSession").mockResolvedValue(session);
     vi.spyOn(api, "resolveAddress").mockResolvedValue({
       candidates: [candidate],
       low_confidence: false,
-      notice: "Prepared demo address",
+      notice: "Internal fixture notice",
     });
-    vi.spyOn(api, "confirmAddress").mockResolvedValue({ address_ref_id: "address_ref_demo" });
+    vi.spyOn(api, "confirmAddress").mockResolvedValue({ address_ref_id: "address_ref_1" });
 
     render(
       <MemoryRouter initialEntries={["/profile"]}>
@@ -163,50 +168,49 @@ describe("merged welcome and neutral demo address flow", () => {
     );
 
     expect(screen.queryByText(/Age range|Religion|Favourite comfort foods/i)).not.toBeInTheDocument();
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual(expect.arrayContaining(["Search", "Booking image"]));
-    expect(screen.getAllByRole("tab")).toHaveLength(2);
-    fireEvent.click(screen.getByRole("checkbox", { name: /neutral profile/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Find the demo address" }));
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual(["Search address", "Booking image"]);
+    fireEvent.click(screen.getByRole("checkbox", { name: /use this address for this session only/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
 
     await waitFor(() => expect(createProfile).toHaveBeenCalledWith(expect.objectContaining({
+      country_code: "US",
       age_band: "Prefer not to say",
       religion_selection: "Prefer not to say",
       dietary_rules: [],
       favorite_foods: [],
     })));
-    fireEvent.click(await screen.findByRole("button", { name: "Select this address" }));
+    expect(screen.queryByText("Internal fixture notice")).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/demo|mock|synthetic/i);
+    fireEvent.click(await screen.findByRole("button", { name: "Continue with this address" }));
     expect(await screen.findByText("Chat route")).toBeInTheDocument();
-    expect(useSessionStore.getState().addressRefId).toBe("address_ref_demo");
+    expect(useSessionStore.getState().addressRefId).toBe("address_ref_1");
   });
 
-  it("resolves the booking-image path to the same prepared demo address", async () => {
+  it("resolves the sample booking image through the same address confirmation flow", async () => {
     resetStore();
     vi.spyOn(api, "createProfile").mockResolvedValue(profile);
     vi.spyOn(api, "createSession").mockResolvedValue(session);
     const uploadAddress = vi.spyOn(api, "uploadAddress").mockResolvedValue({
       candidates: [candidate],
       low_confidence: false,
-      notice: "Prepared demo address",
+      notice: "Internal fixture notice",
     });
-    vi.spyOn(api, "confirmAddress").mockResolvedValue({ address_ref_id: "address_ref_demo" });
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(new Blob(["demo"], { type: "image/png" }))));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(new Blob(["image"], { type: "image/png" }))));
 
     render(
       <MemoryRouter initialEntries={["/profile"]}>
-        <Routes>
-          <Route path="/profile" element={<OnboardingPage />} />
-          <Route path="/chat/:sessionId" element={<div>Chat route</div>} />
-        </Routes>
+        <Routes><Route path="/profile" element={<OnboardingPage />} /></Routes>
       </MemoryRouter>,
     );
 
-    fireEvent.click(screen.getByRole("checkbox", { name: /neutral profile/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /use this address for this session only/i }));
     fireEvent.click(screen.getByRole("tab", { name: "Booking image" }));
-    fireEvent.click(screen.getByRole("button", { name: "Use the demo booking image" }));
+    fireEvent.click(screen.getByRole("button", { name: "Use the sample booking image" }));
     await waitFor(() => expect(uploadAddress).toHaveBeenCalledWith(
       session.session_id,
-      expect.objectContaining({ name: "yobi-demo-booking.png" }),
+      expect.objectContaining({ type: "image/png" }),
     ));
     expect(await screen.findByText(candidate.road_address)).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/demo|mock|synthetic/i);
   });
 });

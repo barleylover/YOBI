@@ -49,6 +49,17 @@ export function asSupportedLanguage(value: string): SupportedLanguage {
   return (LANGUAGES as readonly string[]).includes(value) ? value as SupportedLanguage : "English";
 }
 
+export type EffectiveLanguage = "English" | "한국어" | "日本語";
+
+export function asEffectiveLanguage(value: string): EffectiveLanguage {
+  const selected = asSupportedLanguage(value);
+  return selected === "한국어" || selected === "日本語" ? selected : "English";
+}
+
+export function effectiveLanguageMeta(value: string) {
+  return LANGUAGE_META[asEffectiveLanguage(value)];
+}
+
 export function sortedCountries(language: SupportedLanguage) {
   const priority = LANGUAGE_COUNTRIES[language];
   return [...COUNTRIES].sort((left, right) => {
@@ -63,9 +74,26 @@ export function sortedCountries(language: SupportedLanguage) {
   });
 }
 
-export function menuName(menu: { name_en: string; name_ko: string }, language: string) {
-  if (language === "한국어") return menu.name_ko || menu.name_en;
+export function menuName(
+  menu: { name_en: string; name_ko: string; localized_title?: string | null },
+  language: string,
+) {
+  if (menu.localized_title) return menu.localized_title;
+  if (asEffectiveLanguage(language) === "한국어") return menu.name_ko || menu.name_en;
   return menu.name_en || menu.name_ko;
+}
+
+export function formatMinuteRange(minimum: number, maximum: number, locale: string) {
+  const formatter = new Intl.NumberFormat(locale, {
+    style: "unit",
+    unit: "minute",
+    unitDisplay: "short",
+  });
+  return `${formatter.format(minimum)}–${formatter.format(maximum)}`;
+}
+
+export function countryCode(country: string) {
+  return COUNTRIES.find(([name]) => name === country)?.[1] ?? "US";
 }
 
 export function countryName(country: string, locale: string) {

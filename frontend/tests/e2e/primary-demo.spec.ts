@@ -20,12 +20,12 @@ test("primary tourist flow selects criteria, recommends once and reaches the ord
 
   await startStructuredSession(page);
   await selectFirstPreferenceAndRecommend(page);
-  await expect(page.locator(".assistant-message-row").first()).toBeVisible();
-  await expect(page.locator(".result-action-rail > button")).toHaveCount(3);
+  await expect(page.locator(".v2-bot-message").first()).toBeVisible();
+  await expect(page.locator(".v2-alimtalk-card")).toHaveCount(3);
   await expect(page.locator(".rank-bar")).toHaveCount(0);
   await expect(page.getByRole("textbox")).toHaveCount(0);
-  const carouselSizing = await page.locator(".structured-menu-carousel").evaluate((carousel) => {
-    const card = carousel.querySelector<HTMLElement>(".structured-menu-card");
+  const carouselSizing = await page.locator(".v2-card-carousel").evaluate((carousel) => {
+    const card = carousel.querySelector<HTMLElement>(".v2-alimtalk-card");
     const style = getComputedStyle(carousel);
     return {
       carouselWidth: carousel.clientWidth,
@@ -35,8 +35,10 @@ test("primary tourist flow selects criteria, recommends once and reaches the ord
   });
   expect(Math.abs(carouselSizing.carouselWidth - carouselSizing.cardWidth)).toBeLessThanOrEqual(2);
   expect(carouselSizing.snapType).toContain("mandatory");
-  await expect(page.getByRole("button", { name: "View Wiki evidence" }).first()).toBeVisible();
-  await expect(page.getByText(/Restaurant and order information is prepared for this experience/i)).toBeVisible();
+  await expect(page.getByText("YOBI:").first()).toBeVisible();
+  await expect(page.getByText("YOGIYO:").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "View additional explanation" }).first()).toBeVisible();
+  await expect(page.locator("body")).not.toContainText(/demo|mock|synthetic/i);
   await page.getByRole("button", { name: "Choose this menu" }).first().click();
   await expect(page.getByTestId("order-flow")).toBeVisible();
   await completeCurrentOptions(page);

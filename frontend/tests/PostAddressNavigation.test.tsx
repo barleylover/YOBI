@@ -12,7 +12,7 @@ const menu: MenuSummary = {
   name_en: "Gimbap discovery",
   name_ko: "김밥 디스커버리",
   category: "Gimbap",
-  description: "Prepared demo menu.",
+  description: "Prepared menu.",
   cultural_description: "Rice and fillings wrapped in seaweed.",
   price: 9000,
   delivery_fee: 2000,
@@ -43,16 +43,16 @@ describe("post-address discovery navigation", () => {
     HTMLElement.prototype.scrollTo = vi.fn();
   });
 
-  it("is collapsed by default and shows at most 20 server-ranked demo entries", async () => {
+  it("is collapsed by default and shows at most 20 server-ranked entries", async () => {
     const items = Array.from({ length: 23 }, (_, index) => ({
       position: index + 1,
-      metric_label: "Demo reviews",
+      metric_label: "Review count",
       metric_value: 100 - index,
       menu: { ...menu, menu_id: `menu_discovery_${index + 1}`, name_en: `Menu ${index + 1}` },
     }));
     const rankings = vi.spyOn(api, "getFoodRankings").mockResolvedValue({
       snapshot_id: "ranking_snapshot_1",
-      demo_basis: "Deterministic prepared demo ranking.",
+      demo_basis: "Backend-only ranking basis.",
       sort: "review_count",
       items,
     });
@@ -63,7 +63,8 @@ describe("post-address discovery navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open YOBI discoveries" }));
     fireEvent.click(screen.getByRole("button", { name: "Food rankings" }));
 
-    expect(await screen.findByText("Deterministic prepared demo ranking.")).toBeInTheDocument();
+    expect(await screen.findByText("Rankings for the current delivery area.")).toBeInTheDocument();
+    expect(screen.queryByText("Backend-only ranking basis.")).not.toBeInTheDocument();
     expect(document.querySelectorAll(".food-ranking-list > li")).toHaveLength(20);
     fireEvent.click(screen.getByRole("tab", { name: "Most ordered" }));
     await waitFor(() => expect(rankings).toHaveBeenLastCalledWith("session_1", "order_count", expect.any(AbortSignal)));
@@ -80,7 +81,7 @@ describe("post-address discovery navigation", () => {
 
     render(<PostAddressNavigation sessionId="session_1" language="English" locale="en-US" onChoose={onChoose} />);
     fireEvent.click(screen.getByRole("button", { name: "Open YOBI discoveries" }));
-    fireEvent.click(screen.getByRole("button", { name: "K-Demon feature" }));
+    fireEvent.click(screen.getByRole("button", { name: "K-pop feature" }));
 
     const hero = await screen.findByRole("img", { name: /K-food on screen/i });
     expect(hero).toHaveAttribute("src", "/yobi-gimbap-feature-hero.png");
@@ -92,9 +93,9 @@ describe("post-address discovery navigation", () => {
   it("traps keyboard focus in the discovery dialog, closes on Escape, and restores the toggle", async () => {
     vi.spyOn(api, "getFoodRankings").mockResolvedValue({
       snapshot_id: "ranking_snapshot_keyboard",
-      demo_basis: "Keyboard demo ranking.",
+      demo_basis: "Keyboard ranking basis.",
       sort: "review_count",
-      items: [{ position: 1, metric_label: "Demo reviews", metric_value: 9, menu }],
+      items: [{ position: 1, metric_label: "Review count", metric_value: 9, menu }],
     });
 
     render(<PostAddressNavigation sessionId="session_1" language="English" locale="en-US" onChoose={vi.fn()} />);
@@ -112,7 +113,7 @@ describe("post-address discovery navigation", () => {
     await waitFor(() => expect(toggle).toHaveFocus());
   });
 
-  it("keeps server metric labels from leaking English into Arabic navigation", async () => {
+  it("uses the English fallback and hides server-authored ranking basis text", async () => {
     const externalMenu = {
       ...menu,
       is_synthetic: false,
@@ -120,9 +121,9 @@ describe("post-address discovery navigation", () => {
     };
     vi.spyOn(api, "getFoodRankings").mockResolvedValue({
       snapshot_id: "ranking_snapshot_ar",
-      demo_basis: "English server demo basis",
+      demo_basis: "English server ranking basis",
       sort: "review_count",
-      items: [{ position: 1, metric_label: "Demo reviews", metric_value: 9, menu: externalMenu }],
+      items: [{ position: 1, metric_label: "Review count", metric_value: 9, menu: externalMenu }],
     });
     const copy = getProductCopy("العربية").navigation;
 
@@ -132,7 +133,7 @@ describe("post-address discovery navigation", () => {
 
     await screen.findByText((_, element) => element?.textContent?.startsWith(`${copy.reviews}:`) ?? false);
     expect(screen.getByText("External catalog detail: crisp seaweed around seasoned rice.")).toBeInTheDocument();
-    expect(screen.queryByText(/Demo reviews|English server demo basis/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Review count|English server ranking basis/)).not.toBeInTheDocument();
     expect(screen.queryByText(/اصطناعي|synthetic/i)).not.toBeInTheDocument();
   });
 
@@ -156,8 +157,8 @@ describe("post-address discovery navigation", () => {
     expect(screen.queryByText(/합성 카탈로그|프로필과 배달 정보에 맞춘/)).not.toBeInTheDocument();
   });
 
-  it("moves the Arabic RTL feature carousel one card with next, previous, and physical arrow keys", async () => {
-    document.documentElement.dir = "rtl";
+  it("uses LTR carousel behavior for a language that falls back to English", async () => {
+    document.documentElement.dir = "ltr";
     const secondMenu = { ...menu, menu_id: "menu_discovery_2", name_en: "Tteokbokki", name_ko: "떡볶이" };
     vi.spyOn(api, "getKpopDemonHuntersFeature").mockResolvedValue({
       snapshot_id: "feature_snapshot_ar_rtl",
@@ -181,14 +182,14 @@ describe("post-address discovery navigation", () => {
     scrollTo.mockClear();
 
     fireEvent.click(screen.getByRole("button", { name: productCopy.recommendation.next }));
-    expect(scrollTo).toHaveBeenLastCalledWith({ left: -390, behavior: "smooth" });
+    expect(scrollTo).toHaveBeenLastCalledWith({ left: 390, behavior: "smooth" });
     expect(await screen.findByText("2 / 2")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: productCopy.recommendation.previous }));
     expect(scrollTo).toHaveBeenLastCalledWith({ left: 0, behavior: "smooth" });
     expect(await screen.findByText("1 / 2")).toBeInTheDocument();
 
-    carousel.scrollLeft = -390;
+    carousel.scrollLeft = 390;
     fireEvent.scroll(carousel);
     expect(await screen.findByText("2 / 2")).toBeInTheDocument();
     carousel.scrollLeft = 0;
@@ -196,10 +197,10 @@ describe("post-address discovery navigation", () => {
     expect(await screen.findByText("1 / 2")).toBeInTheDocument();
 
     carousel.focus();
-    fireEvent.keyDown(carousel, { key: "ArrowLeft" });
-    expect(scrollTo).toHaveBeenLastCalledWith({ left: -390, behavior: "smooth" });
-    expect(await screen.findByText("2 / 2")).toBeInTheDocument();
     fireEvent.keyDown(carousel, { key: "ArrowRight" });
+    expect(scrollTo).toHaveBeenLastCalledWith({ left: 390, behavior: "smooth" });
+    expect(await screen.findByText("2 / 2")).toBeInTheDocument();
+    fireEvent.keyDown(carousel, { key: "ArrowLeft" });
     expect(scrollTo).toHaveBeenLastCalledWith({ left: 0, behavior: "smooth" });
     expect(await screen.findByText("1 / 2")).toBeInTheDocument();
   });

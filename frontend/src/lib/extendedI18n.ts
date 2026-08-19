@@ -1,4 +1,4 @@
-import type { SupportedLanguage } from "./locale";
+import { asEffectiveLanguage, type SupportedLanguage } from "./locale";
 
 export interface SelectionCopy {
   preferNot: string;
@@ -81,8 +81,73 @@ const journeyPacks: Record<SupportedLanguage, JourneyCopy> = {
 };
 
 export function getExtendedCopy(language: SupportedLanguage) {
+  const effectiveLanguage = asEffectiveLanguage(language);
+  const selectionCopy = { ...selectionBase[effectiveLanguage], religionValues };
+  const journeyCopy = { ...journeyPacks[effectiveLanguage] };
+
+  if (effectiveLanguage === "English") {
+    Object.assign(selectionCopy, {
+      useDemoImage: "Use the sample booking image",
+      syntheticPlace: "saved place",
+      demoImageError: "The address could not be checked. Try the hotel search.",
+    });
+    Object.assign(journeyCopy, {
+      catalogReady: "Catalog ready",
+      fallbackMode: "Continue with available menus",
+      syntheticMenu: "Menu",
+      secureCheckout: "Secure checkout",
+      paymentSimulation: "Payment",
+      applePayDemo: "Apple Pay",
+      presentationAvailable: "Available",
+      privacy: "Review the order details before continuing.",
+      paymentFailed: "Payment failed. Your cart is unchanged, so you can retry safely.",
+      mockConfirmed: "Order confirmed",
+      etaDemo: "About 35 minutes",
+      paymentSuccess: "Payment successful",
+    });
+  } else if (effectiveLanguage === "한국어") {
+    Object.assign(selectionCopy, {
+      useDemoImage: "예약 예시 이미지 사용",
+      syntheticPlace: "저장된 장소",
+      demoImageError: "주소를 확인하지 못했어요. 호텔 검색을 이용해 주세요.",
+    });
+    Object.assign(journeyCopy, {
+      catalogReady: "메뉴 준비 완료",
+      fallbackMode: "이용 가능한 메뉴로 계속",
+      syntheticMenu: "메뉴",
+      secureCheckout: "안전한 결제",
+      paymentSimulation: "결제",
+      applePayDemo: "Apple Pay",
+      presentationAvailable: "사용 가능",
+      privacy: "계속하기 전 주문 정보를 확인해 주세요.",
+      paymentFailed: "결제에 실패했어요. 장바구니는 유지되므로 다시 시도할 수 있어요.",
+      mockConfirmed: "주문 확정",
+      etaDemo: "약 35분",
+      paymentSuccess: "결제가 완료됐어요.",
+    });
+  } else {
+    Object.assign(selectionCopy, {
+      useDemoImage: "予約イメージ例を使う",
+      syntheticPlace: "保存済みの場所",
+      demoImageError: "住所を確認できませんでした。ホテル検索をお試しください。",
+    });
+    Object.assign(journeyCopy, {
+      catalogReady: "メニューの準備完了",
+      fallbackMode: "利用可能なメニューで続ける",
+      syntheticMenu: "メニュー",
+      secureCheckout: "安全な決済",
+      paymentSimulation: "決済",
+      applePayDemo: "Apple Pay",
+      presentationAvailable: "利用可能",
+      privacy: "続ける前に注文内容を確認してください。",
+      paymentFailed: "決済に失敗しました。カートは変わっていないため再試行できます。",
+      mockConfirmed: "注文確定",
+      etaDemo: "約35分",
+      paymentSuccess: "決済が完了しました。",
+    });
+  }
   return {
-    selectionCopy: { ...selectionBase[language], religionValues },
-    journeyCopy: journeyPacks[language],
+    selectionCopy,
+    journeyCopy,
   };
 }

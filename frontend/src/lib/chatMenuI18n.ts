@@ -1,4 +1,4 @@
-import type { SupportedLanguage } from "./locale";
+import { asEffectiveLanguage, type SupportedLanguage } from "./locale";
 
 export interface ChatMenuCopy {
   open: string;
@@ -20,16 +20,16 @@ export interface ChatMenuCopy {
 }
 
 const en: ChatMenuCopy = {
-  open:"Chat menu",close:"Close chat menu",weekly:"Weekly ranking",kpop:"K-POP Demon Hunters",editProfile:"Edit my information",
+  open:"Chat menu",close:"Close chat menu",weekly:"Weekly ranking",kpop:"K-pop animation feature",editProfile:"Edit my information",
   weeklyPrompt:"Show me this week's delivery ranking",weeklyResponse:"Here is this week's delivery ranking. Swipe through a nearby delivery menu from each ranked restaurant.",
-  kpopPrompt:"Show me the foods from K-POP Demon Hunters",kpopResponse:"Meet five Korean foods from K-POP Demon Hunters. Swipe through nearby delivery menus for each food.",
+  kpopPrompt:"Show me foods from the K-pop animation feature",kpopResponse:"Meet five Korean foods from a popular K-pop animation story. Swipe through nearby delivery menus for each food.",
   swipe:"Swipe to explore all five menus",rank:"Rank",currentAddress:"Current delivery address",keepAddress:"Keep this address",changeAddress:"Change address",saveChanges:"Save changes",changesSaved:"Your information has been updated.",
 };
 
 const packs: Record<SupportedLanguage, ChatMenuCopy> = {
   English: en,
-  "한국어": {open:"채팅방 메뉴",close:"채팅방 메뉴 닫기",weekly:"금주의 순위",kpop:"K-POP 데몬 헌터스",editProfile:"내 정보 수정",weeklyPrompt:"이번 주 배달 메뉴 순위 보여줘",weeklyResponse:"이번 주 배달 메뉴 순위예요. 순위별 근처 배달 메뉴를 옆으로 넘겨 확인해 보세요.",kpopPrompt:"K-POP 데몬 헌터스에 나온 음식 알려줘",kpopResponse:"K-POP 데몬 헌터스의 한국 음식 다섯 가지를 소개할게요. 음식별 근처 배달 메뉴를 옆으로 넘겨 보세요.",swipe:"옆으로 넘겨 다섯 메뉴 모두 보기",rank:"순위",currentAddress:"현재 배달 주소",keepAddress:"이 주소 그대로 사용",changeAddress:"주소 변경",saveChanges:"변경사항 저장",changesSaved:"내 정보가 수정됐어요."},
-  "日本語": {...en,open:"チャットメニュー",close:"チャットメニューを閉じる",weekly:"今週のランキング",kpop:"K-POP デーモン・ハンターズ",editProfile:"情報を編集",weeklyPrompt:"今週の配達ランキングを見せて",weeklyResponse:"今週の配達ランキングです。各店の近くの配達メニューをスワイプしてご覧ください。",kpopPrompt:"K-POP デーモン・ハンターズの料理を見せて",kpopResponse:"作品に登場する5つの韓国料理をご紹介します。配達メニューをスワイプしてご覧ください。",swipe:"スワイプして5つのメニューを見る",rank:"順位",currentAddress:"現在の配達先",keepAddress:"この住所を使う",changeAddress:"住所を変更",saveChanges:"変更を保存",changesSaved:"情報を更新しました。"},
+  "한국어": {open:"채팅방 메뉴",close:"채팅방 메뉴 닫기",weekly:"금주의 순위",kpop:"K-pop 애니메이션 특집",editProfile:"내 정보 수정",weeklyPrompt:"이번 주 배달 메뉴 순위 보여줘",weeklyResponse:"이번 주 배달 메뉴 순위예요. 순위별 근처 배달 메뉴를 옆으로 넘겨 확인해 보세요.",kpopPrompt:"K-pop 애니메이션 특집 음식 알려줘",kpopResponse:"인기 K-pop 애니메이션 이야기의 한국 음식 다섯 가지를 소개할게요. 음식별 근처 배달 메뉴를 옆으로 넘겨 보세요.",swipe:"옆으로 넘겨 다섯 메뉴 모두 보기",rank:"순위",currentAddress:"현재 배달 주소",keepAddress:"이 주소 그대로 사용",changeAddress:"주소 변경",saveChanges:"변경사항 저장",changesSaved:"내 정보가 수정됐어요."},
+  "日本語": {...en,open:"チャットメニュー",close:"チャットメニューを閉じる",weekly:"今週のランキング",kpop:"K-popアニメ特集",editProfile:"情報を編集",weeklyPrompt:"今週の配達ランキングを見せて",weeklyResponse:"今週の配達ランキングです。各店の近くの配達メニューをスワイプしてご覧ください。",kpopPrompt:"K-popアニメ特集の料理を見せて",kpopResponse:"人気K-popアニメ作品に登場する5つの韓国料理をご紹介します。配達メニューをスワイプしてご覧ください。",swipe:"スワイプして5つのメニューを見る",rank:"順位",currentAddress:"現在の配達先",keepAddress:"この住所を使う",changeAddress:"住所を変更",saveChanges:"変更を保存",changesSaved:"情報を更新しました。"},
   "中文（简体）": {...en,open:"聊天菜单",close:"关闭聊天菜单",weekly:"本周排行",kpop:"K-POP 猎魔女团",editProfile:"修改我的信息",weeklyPrompt:"显示本周外卖排行",weeklyResponse:"这是本周外卖排行。左右滑动查看各店附近可配送菜单。",kpopPrompt:"介绍 K-POP 猎魔女团中的美食",kpopResponse:"为你介绍其中的五种韩国美食。左右滑动查看附近配送菜单。",swipe:"滑动查看全部五个菜单",rank:"排名",currentAddress:"当前配送地址",keepAddress:"保留此地址",changeAddress:"更改地址",saveChanges:"保存更改",changesSaved:"你的信息已更新。"},
   "中文（繁體）": {...en,open:"聊天選單",close:"關閉聊天選單",weekly:"本週排行",kpop:"K-POP 獵魔女團",editProfile:"修改我的資訊",weeklyPrompt:"顯示本週外送排行",weeklyResponse:"這是本週外送排行。左右滑動查看各店附近可配送菜單。",kpopPrompt:"介紹 K-POP 獵魔女團中的美食",kpopResponse:"為你介紹其中的五種韓國美食。左右滑動查看附近外送菜單。",swipe:"滑動查看全部五個菜單",rank:"排名",currentAddress:"目前配送地址",keepAddress:"保留此地址",changeAddress:"更改地址",saveChanges:"儲存變更",changesSaved:"你的資訊已更新。"},
   Español: {...en,open:"Menú del chat",close:"Cerrar menú",weekly:"Ranking semanal",kpop:"K-POP Demon Hunters",editProfile:"Editar mis datos",weeklyPrompt:"Muéstrame el ranking semanal de entregas",weeklyResponse:"Este es el ranking semanal. Desliza para ver un menú cercano de cada restaurante.",kpopPrompt:"Muéstrame la comida de K-POP Demon Hunters",kpopResponse:"Descubre cinco platos coreanos de K-POP Demon Hunters y sus menús cercanos.",swipe:"Desliza para ver los cinco menús",rank:"Puesto",currentAddress:"Dirección actual",keepAddress:"Conservar dirección",changeAddress:"Cambiar dirección",saveChanges:"Guardar cambios",changesSaved:"Tus datos se actualizaron."},
@@ -46,5 +46,5 @@ const packs: Record<SupportedLanguage, ChatMenuCopy> = {
 };
 
 export function getChatMenuCopy(language: SupportedLanguage) {
-  return packs[language];
+  return packs[asEffectiveLanguage(language)];
 }

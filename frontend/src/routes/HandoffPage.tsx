@@ -31,7 +31,7 @@ export function HandoffPage() {
       .then(setCart)
       .catch((cause) => {
         if (cause instanceof Error && cause.message === "REQUEST_ABORTED") return;
-        setError(language === "English" ? actionableError(cause, journeyCopy.retry) : journeyCopy.retry);
+        setError(actionableError(cause, journeyCopy.retry, language));
       })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
@@ -42,7 +42,7 @@ export function HandoffPage() {
   const won = (value: number) => `₩${value.toLocaleString(locale)}`;
   const itemCount = cart?.items.reduce((total, item) => total + item.quantity, 0) ?? 0;
   const firstItemName = cart?.items[0]
-    ? (language === "한국어" ? cart.items[0].menu_name_ko : cart.items[0].menu_name)
+    ? (cart.items[0].display_name || (language === "한국어" ? cart.items[0].menu_name_ko : cart.items[0].menu_name))
     : "";
 
   return (
@@ -75,8 +75,8 @@ export function HandoffPage() {
               <div key={item.cart_item_id}>
                 <div className="v2-summary-line">
                   <div>
-                    <strong>{language === "한국어" ? item.menu_name_ko : item.menu_name} ×{item.quantity}</strong>
-                    <small>{item.options.map((option) => language === "한국어" ? option.name_ko : option.name_en).join(" · ") || journeyCopy.included}</small>
+                    <strong>{item.display_name || (language === "한국어" ? item.menu_name_ko : item.menu_name)} ×{item.quantity}</strong>
+                    <small>{item.options.map((option) => option.display_name || (language === "한국어" ? option.name_ko : option.name_en)).join(" · ") || journeyCopy.included}</small>
                   </div>
                   <strong>{won(item.line_total)}</strong>
                 </div>
@@ -98,13 +98,6 @@ export function HandoffPage() {
             </div>
             <Link to={`/profile?edit=1&returnTo=/handoff`}>{v2.editChip}</Link>
           </section>
-        )}
-
-        {!ended && (
-          <div className="v2-demo-warning standalone">
-            <span aria-hidden="true">!</span>
-            <p>{v2.handoffDemoNotice}</p>
-          </div>
         )}
 
         {ended && (

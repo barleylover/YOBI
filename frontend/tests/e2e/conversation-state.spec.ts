@@ -15,13 +15,13 @@ test("selection is deterministic and calls recommendation only after completion"
   await startStructuredSession(page);
   await expect(page.getByRole("textbox")).toHaveCount(0);
   const firstPrice = await selectFirstPricePreference(page);
-  const secondPrice = firstPrice.locator("xpath=following-sibling::button[1]");
-  await secondPrice.click();
-  await expect(secondPrice).toHaveAttribute("aria-pressed", "true");
+  await expect(firstPrice).toHaveAttribute("aria-pressed", "true");
   expect(recommendationRequests).toHaveLength(0);
   expect(legacyMessageRequests).toEqual([]);
 
-  await page.getByRole("button", { name: "Show my recommendations" }).click();
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await page.getByRole("button", { name: "Find my dish", exact: true }).click();
   await expect.poll(() => recommendationRequests.length).toBe(1);
   expect(recommendationRequests[0]).toMatchObject({ mode: "INITIAL" });
   await expect(page.getByRole("button", { name: "Choose this menu" }).first()).toBeVisible();
@@ -38,9 +38,11 @@ test("different menus keeps committed criteria and creates one SIMILAR request",
 
   await startStructuredSession(page);
   await selectFirstPricePreference(page);
-  await page.getByRole("button", { name: "Show my recommendations" }).click();
-  await expect(page.getByRole("button", { name: "Show different menus" })).toBeVisible();
-  await page.getByRole("button", { name: "Show different menus" }).click();
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await page.getByRole("button", { name: "Find my dish", exact: true }).click();
+  await expect(page.getByRole("button", { name: "See other menus" })).toBeVisible();
+  await page.getByRole("button", { name: "See other menus" }).click();
 
   await expect.poll(() => modes).toEqual(["INITIAL", "SIMILAR"]);
   await expect(page.getByRole("textbox")).toHaveCount(0);

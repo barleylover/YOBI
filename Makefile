@@ -1,5 +1,6 @@
 PYTHON ?= python3
 PNPM ?= pnpm
+VENV ?= $(if $(wildcard .venv/bin/python),.venv,backend/.venv)
 
 .PHONY: setup dev test build e2e evaluate db-bootstrap db-migrate db-seed deploy smoke prewarm demo-reset
 
@@ -12,9 +13,9 @@ dev:
 	./scripts/run_local_demo.sh
 
 test:
-	.venv/bin/ruff check backend scripts
-	.venv/bin/mypy --python-version 3.12 backend/app backend/evaluation scripts
-	.venv/bin/pytest backend/tests
+	$(VENV)/bin/ruff check backend scripts
+	$(VENV)/bin/mypy --python-version 3.12 backend/app backend/evaluation scripts
+	$(VENV)/bin/pytest backend/tests
 	cd frontend && $(PNPM) lint && $(PNPM) test
 
 build:

@@ -1,5 +1,10 @@
 import { useEffect } from "react";
-import { asSupportedLanguage, LANGUAGE_META, type SupportedLanguage } from "./locale";
+import {
+  asEffectiveLanguage,
+  asSupportedLanguage,
+  LANGUAGE_META,
+  type SupportedLanguage,
+} from "./locale";
 import { useSessionStore } from "../stores/session";
 import { getExtendedCopy } from "./extendedI18n";
 import { getChatMenuCopy } from "./chatMenuI18n";
@@ -29,21 +34,21 @@ export interface DynamicCopy {
 
 const en: UiCopy = {
   buddy: "Your Korean food buddy", ready: "Your delivery context is ready", checking: "Checking menu details…",
-  hello: "Hi, I’m YOBI. Tell me what you remember about the food—or how you want tonight’s meal to feel. I’ll translate that into grounded demo choices.",
-  you: "You", ask: "Ask YOBI", placeholder: "I saw a red rice cake dish on the street…", demoQuestion: "Try the demo question",
+  hello: "Hi, I’m YOBI. Tell me what you remember about the food—or how you want tonight’s meal to feel. I’ll turn that into clear menu choices.",
+  you: "You", ask: "Ask YOBI", placeholder: "I saw a red rice cake dish on the street…", demoQuestion: "Try this question",
   orderBuilder: "Order builder", close: "Close", options: "options", delivery: "delivery", review: "review", spice: "Spice level",
   chooseMenu: "Choose this menu", whyMatch: "Why this match", evidence: "Evidence sources", addCart: "Add to cart",
   added: "Added to cart", moreQuestion: "Would you like anything else from this restaurant?", moreDescription: "Browse its remaining compatible menus, or continue to delivery.",
   yesMore: "Yes, show more menus", noDelivery: "No, continue to delivery", moreFrom: "More from this restaurant", swipeMore: "Swipe through compatible menus from the same restaurant.",
   noMore: "No more items — continue to delivery", confirmDelivery: "Confirm delivery details", finalReview: "Final review", readyCheckout: "Ready to checkout",
-  proceedPayment: "Proceed to payment", demoPayment: "Demo payment — no real charge", paymentTitle: "Complete your demo order", pay: "Pay", simulateFailure: "Simulate failure",
+  proceedPayment: "Proceed to payment", demoPayment: "Payment", paymentTitle: "Complete your order", pay: "Pay", simulateFailure: "Try again",
   orderConfirmed: "Your first K-food order is in.", arrival: "Estimated arrival", handoff: "Handoff", anotherOrder: "Start another order", conversation: "View conversation",
 };
 
 const packs: Record<SupportedLanguage, UiCopy> = {
   English: en,
-  "한국어": { buddy:"당신의 한국 음식 친구",ready:"배달 정보가 준비됐어요",checking:"메뉴 정보를 확인하고 있어요…",hello:"안녕하세요, YOBI예요. 기억나는 음식이나 오늘 먹고 싶은 느낌을 알려 주세요. 근거가 확인된 데모 메뉴로 찾아드릴게요.",you:"나",ask:"YOBI에게 묻기",placeholder:"길거리에서 빨간 떡 요리를 봤어요…",demoQuestion:"데모 질문 사용하기",orderBuilder:"주문 만들기",close:"닫기",options:"옵션",delivery:"배달",review:"검토",spice:"맵기 단계",chooseMenu:"이 메뉴 선택",whyMatch:"추천 이유",evidence:"근거 출처",addCart:"장바구니에 담기",added:"장바구니에 담았어요",moreQuestion:"이 가게에서 메뉴를 더 고를까요?",moreDescription:"같은 가게의 조건에 맞는 다른 메뉴를 보거나 배달 단계로 이동하세요.",yesMore:"네, 다른 메뉴 보기",noDelivery:"아니요, 배달 단계로",moreFrom:"이 가게의 다른 메뉴",swipeMore:"같은 가게의 조건에 맞는 메뉴를 옆으로 넘겨 보세요.",noMore:"그만 담고 배달 단계로",confirmDelivery:"배달 정보 확인",finalReview:"최종 검토",readyCheckout:"결제 준비 상태",proceedPayment:"결제로 이동",demoPayment:"데모 결제 · 실제 결제 없음",paymentTitle:"데모 주문 결제하기",pay:"결제",simulateFailure:"결제 실패 시뮬레이션",orderConfirmed:"첫 한국 음식 주문이 접수됐어요.",arrival:"예상 도착",handoff:"전달 방법",anotherOrder:"새 주문 시작",conversation:"대화 보기"},
-  "日本語": { buddy:"韓国料理の相棒",ready:"配達情報の準備ができました",checking:"メニューを確認中…",hello:"こんにちは、YOBIです。覚えている料理や今夜食べたい気分を教えてください。根拠のあるデモ候補をご案内します。",you:"あなた",ask:"YOBIに聞く",placeholder:"街で赤い餅料理を見ました…",demoQuestion:"デモ質問を試す",orderBuilder:"注文を作る",close:"閉じる",options:"オプション",delivery:"配達",review:"確認",spice:"辛さレベル",chooseMenu:"このメニューを選ぶ",whyMatch:"おすすめの理由",evidence:"根拠の出典",addCart:"カートに追加",added:"カートに追加しました",moreQuestion:"この店でほかにも選びますか？",moreDescription:"同じ店の条件に合うメニューを見るか、配達へ進みます。",yesMore:"はい、もっと見る",noDelivery:"いいえ、配達へ",moreFrom:"この店のほかのメニュー",swipeMore:"同じ店のメニューをスワイプして確認できます。",noMore:"追加せず配達へ",confirmDelivery:"配達情報を確認",finalReview:"最終確認",readyCheckout:"決済準備",proceedPayment:"決済へ進む",demoPayment:"デモ決済・実際の請求なし",paymentTitle:"デモ注文を完了",pay:"支払う",simulateFailure:"失敗を試す",orderConfirmed:"初めての韓国料理を注文しました。",arrival:"到着予定",handoff:"受け渡し",anotherOrder:"別の注文を始める",conversation:"会話を見る"},
+  "한국어": { buddy:"당신의 한국 음식 친구",ready:"배달 정보가 준비됐어요",checking:"메뉴 정보를 확인하고 있어요…",hello:"안녕하세요, YOBI예요. 기억나는 음식이나 오늘 먹고 싶은 느낌을 알려 주세요. 쉽게 비교할 수 있는 메뉴를 찾아드릴게요.",you:"나",ask:"YOBI에게 묻기",placeholder:"길거리에서 빨간 떡 요리를 봤어요…",demoQuestion:"이 질문 사용하기",orderBuilder:"주문 만들기",close:"닫기",options:"옵션",delivery:"배달",review:"검토",spice:"맵기 단계",chooseMenu:"이 메뉴 선택",whyMatch:"추천 이유",evidence:"근거 출처",addCart:"장바구니에 담기",added:"장바구니에 담았어요",moreQuestion:"이 가게에서 메뉴를 더 고를까요?",moreDescription:"같은 가게의 조건에 맞는 다른 메뉴를 보거나 배달 단계로 이동하세요.",yesMore:"네, 다른 메뉴 보기",noDelivery:"아니요, 배달 단계로",moreFrom:"이 가게의 다른 메뉴",swipeMore:"같은 가게의 조건에 맞는 메뉴를 옆으로 넘겨 보세요.",noMore:"그만 담고 배달 단계로",confirmDelivery:"배달 정보 확인",finalReview:"최종 검토",readyCheckout:"결제 준비 상태",proceedPayment:"결제로 이동",demoPayment:"결제",paymentTitle:"주문 결제하기",pay:"결제",simulateFailure:"다시 시도",orderConfirmed:"첫 한국 음식 주문이 접수됐어요.",arrival:"예상 도착",handoff:"전달 방법",anotherOrder:"새 주문 시작",conversation:"대화 보기"},
+  "日本語": { buddy:"韓国料理の相棒",ready:"配達情報の準備ができました",checking:"メニューを確認中…",hello:"こんにちは、YOBIです。覚えている料理や今夜食べたい気分を教えてください。わかりやすいメニューをご案内します。",you:"あなた",ask:"YOBIに聞く",placeholder:"街で赤い餅料理を見ました…",demoQuestion:"この質問を試す",orderBuilder:"注文を作る",close:"閉じる",options:"オプション",delivery:"配達",review:"確認",spice:"辛さレベル",chooseMenu:"このメニューを選ぶ",whyMatch:"おすすめの理由",evidence:"根拠の出典",addCart:"カートに追加",added:"カートに追加しました",moreQuestion:"この店でほかにも選びますか？",moreDescription:"同じ店の条件に合うメニューを見るか、配達へ進みます。",yesMore:"はい、もっと見る",noDelivery:"いいえ、配達へ",moreFrom:"この店のほかのメニュー",swipeMore:"同じ店のメニューをスワイプして確認できます。",noMore:"追加せず配達へ",confirmDelivery:"配達情報を確認",finalReview:"最終確認",readyCheckout:"決済準備",proceedPayment:"決済へ進む",demoPayment:"決済",paymentTitle:"注文を完了",pay:"支払う",simulateFailure:"再試行",orderConfirmed:"初めての韓国料理を注文しました。",arrival:"到着予定",handoff:"受け渡し",anotherOrder:"別の注文を始める",conversation:"会話を見る"},
   "中文（简体）": { buddy:"你的韩国美食伙伴",ready:"配送信息已准备好",checking:"正在核对菜单…",hello:"你好，我是 YOBI。告诉我你记得的食物，或今晚想吃什么感觉，我会提供有依据的演示推荐。",you:"你",ask:"问 YOBI",placeholder:"我在街上看到一种红色年糕…",demoQuestion:"试试演示问题",orderBuilder:"创建订单",close:"关闭",options:"选项",delivery:"配送",review:"确认",spice:"辣度等级",chooseMenu:"选择此菜单",whyMatch:"推荐理由",evidence:"依据来源",addCart:"加入购物车",added:"已加入购物车",moreQuestion:"还想在这家店点别的吗？",moreDescription:"查看同店其他符合条件的菜单，或继续配送。",yesMore:"是的，查看更多",noDelivery:"不了，继续配送",moreFrom:"这家店的更多菜单",swipeMore:"左右滑动查看同店菜单。",noMore:"不再添加，继续配送",confirmDelivery:"确认配送信息",finalReview:"最终确认",readyCheckout:"可以结账",proceedPayment:"前往付款",demoPayment:"演示付款，不会真实扣款",paymentTitle:"完成演示订单",pay:"支付",simulateFailure:"模拟失败",orderConfirmed:"你的第一份韩国美食订单已提交。",arrival:"预计送达",handoff:"交付方式",anotherOrder:"开始新订单",conversation:"查看对话"},
   "中文（繁體）": { buddy:"你的韓國美食夥伴",ready:"配送資訊已準備好",checking:"正在核對菜單…",hello:"你好，我是 YOBI。告訴我你記得的食物，或今晚想吃的感覺，我會提供有依據的示範推薦。",you:"你",ask:"問 YOBI",placeholder:"我在街上看到一種紅色年糕…",demoQuestion:"試試示範問題",orderBuilder:"建立訂單",close:"關閉",options:"選項",delivery:"配送",review:"確認",spice:"辣度等級",chooseMenu:"選擇此菜單",whyMatch:"推薦理由",evidence:"依據來源",addCart:"加入購物車",added:"已加入購物車",moreQuestion:"還想在這家店點別的嗎？",moreDescription:"查看同店其他符合條件的菜單，或繼續配送。",yesMore:"是，查看更多",noDelivery:"不了，繼續配送",moreFrom:"這家店的更多菜單",swipeMore:"左右滑動查看同店菜單。",noMore:"不再加入，繼續配送",confirmDelivery:"確認配送資訊",finalReview:"最終確認",readyCheckout:"可以結帳",proceedPayment:"前往付款",demoPayment:"示範付款，不會真實扣款",paymentTitle:"完成示範訂單",pay:"付款",simulateFailure:"模擬失敗",orderConfirmed:"你的第一份韓國美食訂單已送出。",arrival:"預計送達",handoff:"交付方式",anotherOrder:"開始新訂單",conversation:"查看對話"},
   Español: { buddy:"Tu compañero de comida coreana",ready:"Tu contexto de entrega está listo",checking:"Comprobando el menú…",hello:"Hola, soy YOBI. Cuéntame qué comida recuerdas o qué te apetece esta noche y te mostraré opciones de demostración con evidencia.",you:"Tú",ask:"Pregunta a YOBI",placeholder:"Vi un plato rojo de pastel de arroz…",demoQuestion:"Probar la pregunta de demo",orderBuilder:"Crear pedido",close:"Cerrar",options:"opciones",delivery:"entrega",review:"revisión",spice:"Nivel de picante",chooseMenu:"Elegir este menú",whyMatch:"Por qué encaja",evidence:"Fuentes",addCart:"Añadir al carrito",added:"Añadido al carrito",moreQuestion:"¿Quieres algo más de este restaurante?",moreDescription:"Explora otros menús compatibles del mismo local o continúa con la entrega.",yesMore:"Sí, ver más menús",noDelivery:"No, continuar a entrega",moreFrom:"Más de este restaurante",swipeMore:"Desliza para ver menús compatibles del mismo restaurante.",noMore:"Nada más; continuar a entrega",confirmDelivery:"Confirmar entrega",finalReview:"Revisión final",readyCheckout:"Listo para pagar",proceedPayment:"Ir al pago",demoPayment:"Pago demo, sin cargo real",paymentTitle:"Completa tu pedido demo",pay:"Pagar",simulateFailure:"Simular fallo",orderConfirmed:"Tu primer pedido de comida coreana está en marcha.",arrival:"Llegada estimada",handoff:"Entrega",anotherOrder:"Iniciar otro pedido",conversation:"Ver conversación"},
@@ -59,11 +64,11 @@ const packs: Record<SupportedLanguage, UiCopy> = {
   "Русский": { buddy:"Ваш спутник по корейской кухне",ready:"Данные доставки готовы",checking:"Проверяем меню…",hello:"Здравствуйте, я YOBI. Расскажите, какое блюдо вы помните или чего хочется сегодня; я предложу обоснованные демо-варианты.",you:"Вы",ask:"Спросить YOBI",placeholder:"Я видел на улице красные рисовые клёцки…",demoQuestion:"Попробовать демо-вопрос",orderBuilder:"Собрать заказ",close:"Закрыть",options:"опции",delivery:"доставка",review:"проверка",spice:"Уровень остроты",chooseMenu:"Выбрать это меню",whyMatch:"Почему подходит",evidence:"Источники",addCart:"Добавить в корзину",added:"Добавлено в корзину",moreQuestion:"Хотите что-то ещё из этого ресторана?",moreDescription:"Посмотрите другие подходящие блюда того же ресторана или перейдите к доставке.",yesMore:"Да, показать ещё",noDelivery:"Нет, перейти к доставке",moreFrom:"Ещё из этого ресторана",swipeMore:"Листайте подходящие блюда того же ресторана.",noMore:"Больше ничего, к доставке",confirmDelivery:"Подтвердить доставку",finalReview:"Итоговая проверка",readyCheckout:"Готово к оплате",proceedPayment:"Перейти к оплате",demoPayment:"Демо-оплата, без реального списания",paymentTitle:"Завершить демо-заказ",pay:"Оплатить",simulateFailure:"Имитировать сбой",orderConfirmed:"Ваш первый заказ корейской еды принят.",arrival:"Ожидаемое прибытие",handoff:"Передача",anotherOrder:"Новый заказ",conversation:"Посмотреть разговор"},
 };
 
-const profileEn: ProfileCopy = { step:"2 of 2 · Your food & delivery context",title:"What should YOBI keep in mind?",age:"Age range",religion:"Religion (optional)",favourites:"Favourite comfort foods",address:"Delivery address",required:"Required before recommendations",hotel:"Hotel name",image:"Booking image",road:"Road address",consent:"I agree to process this synthetic demo profile and address for this browser session.",check:"Check delivery address",changeLocale:"Change language or country" };
+const profileEn: ProfileCopy = { step:"2 of 2 · Your food & delivery context",title:"What should YOBI keep in mind?",age:"Age range",religion:"Religion (optional)",favourites:"Favourite comfort foods",address:"Delivery address",required:"Required before recommendations",hotel:"Hotel name",image:"Booking image",road:"Road address",consent:"I agree to process this profile and address for this browser session.",check:"Check delivery address",changeLocale:"Change language or country" };
 const profilePacks: Record<SupportedLanguage, ProfileCopy> = {
   English: profileEn,
-  "한국어": {step:"2/2 · 음식 및 배달 정보",title:"YOBI가 무엇을 기억하면 좋을까요?",age:"연령대",religion:"종교 (선택)",favourites:"좋아하는 편안한 음식",address:"배달 주소",required:"추천 전 필수",hotel:"호텔명",image:"예약 이미지",road:"도로명 주소",consent:"이 브라우저 세션에서 합성 데모 프로필과 주소 처리에 동의합니다.",check:"배달 주소 확인",changeLocale:"언어 또는 국가 변경"},
-  "日本語": {step:"2/2・食事と配達情報",title:"YOBIに覚えてほしいことは？",age:"年齢層",religion:"宗教（任意）",favourites:"好きな食べ物",address:"配達先",required:"おすすめ前に必須",hotel:"ホテル名",image:"予約画像",road:"道路住所",consent:"このブラウザで合成デモ情報を処理することに同意します。",check:"配達先を確認",changeLocale:"言語・国を変更"},
+  "한국어": {step:"2/2 · 음식 및 배달 정보",title:"YOBI가 무엇을 기억하면 좋을까요?",age:"연령대",religion:"종교 (선택)",favourites:"좋아하는 편안한 음식",address:"배달 주소",required:"추천 전 필수",hotel:"호텔명",image:"예약 이미지",road:"도로명 주소",consent:"이 브라우저 세션에서 프로필과 주소 처리에 동의합니다.",check:"배달 주소 확인",changeLocale:"언어 또는 국가 변경"},
+  "日本語": {step:"2/2・食事と配達情報",title:"YOBIに覚えてほしいことは？",age:"年齢層",religion:"宗教（任意）",favourites:"好きな食べ物",address:"配達先",required:"おすすめ前に必須",hotel:"ホテル名",image:"予約画像",road:"道路住所",consent:"このブラウザでプロフィールと住所を処理することに同意します。",check:"配達先を確認",changeLocale:"言語・国を変更"},
   "中文（简体）": {step:"第 2/2 步 · 饮食与配送信息",title:"希望 YOBI 记住什么？",age:"年龄段",religion:"宗教（可选）",favourites:"喜欢的家常食物",address:"配送地址",required:"推荐前必填",hotel:"酒店名称",image:"预订图片",road:"道路地址",consent:"我同意在本浏览器会话中处理合成演示信息。",check:"核对配送地址",changeLocale:"更改语言或国家"},
   "中文（繁體）": {step:"第 2/2 步 · 飲食與配送資訊",title:"希望 YOBI 記住什麼？",age:"年齡層",religion:"宗教（選填）",favourites:"喜歡的家常食物",address:"配送地址",required:"推薦前必填",hotel:"飯店名稱",image:"預訂圖片",road:"道路地址",consent:"我同意在本瀏覽器工作階段處理合成示範資訊。",check:"核對配送地址",changeLocale:"更改語言或國家"},
   Español: {step:"2 de 2 · Comida y entrega",title:"¿Qué debe tener en cuenta YOBI?",age:"Rango de edad",religion:"Religión (opcional)",favourites:"Comidas favoritas",address:"Dirección de entrega",required:"Obligatorio antes de recomendar",hotel:"Nombre del hotel",image:"Imagen de reserva",road:"Dirección",consent:"Acepto procesar estos datos sintéticos durante esta sesión.",check:"Comprobar dirección",changeLocale:"Cambiar idioma o país"},
@@ -80,11 +85,11 @@ const profilePacks: Record<SupportedLanguage, ProfileCopy> = {
 };
 
 export function getUiCopy(language: SupportedLanguage) {
-  return packs[language];
+  return packs[asEffectiveLanguage(language)];
 }
 
 export function getProfileCopy(language: SupportedLanguage) {
-  return profilePacks[language];
+  return profilePacks[asEffectiveLanguage(language)];
 }
 
 const dynamicPacks: Record<SupportedLanguage, DynamicCopy> = {
@@ -107,13 +112,14 @@ const dynamicPacks: Record<SupportedLanguage, DynamicCopy> = {
 };
 
 export function getDynamicCopy(language: SupportedLanguage) {
-  return dynamicPacks[language];
+  return dynamicPacks[asEffectiveLanguage(language)];
 }
 
 export function useI18n() {
   const draftLanguage = useSessionStore((state) => state.draftLanguage);
   const profileLanguage = useSessionStore((state) => state.profile?.preferred_language);
-  const language = asSupportedLanguage(profileLanguage ?? draftLanguage);
+  const selectedLanguage = asSupportedLanguage(profileLanguage ?? draftLanguage);
+  const language = asEffectiveLanguage(selectedLanguage);
   const meta = LANGUAGE_META[language];
   useEffect(() => {
     document.documentElement.lang = meta.code;
@@ -121,6 +127,7 @@ export function useI18n() {
   }, [meta.code, meta.direction]);
   return {
     language,
+    selectedLanguage,
     copy: packs[language],
     profileCopy: profilePacks[language],
     dynamicCopy: dynamicPacks[language],

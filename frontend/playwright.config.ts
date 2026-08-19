@@ -1,6 +1,11 @@
 import { defineConfig, devices } from "@playwright/test";
+import { existsSync } from "node:fs";
 
-const appUrl = process.env.YOBI_E2E_BASE_URL ?? "http://127.0.0.1:5173";
+const localApiUrl = "http://127.0.0.1:18000";
+const appUrl = process.env.YOBI_E2E_BASE_URL ?? "http://127.0.0.1:15173";
+const localBackend = existsSync("../scripts/run_local_e2e_backend.sh")
+  ? "../scripts/run_local_e2e_backend.sh"
+  : "scripts/run_local_e2e_backend.sh";
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -21,16 +26,16 @@ export default defineConfig({
     ? undefined
     : [
         {
-          command: "../.venv/bin/uvicorn app.main:app --app-dir ../backend --host 127.0.0.1 --port 8000",
-          url: "http://127.0.0.1:8000/healthz",
+          command: localBackend,
+          url: `${localApiUrl}/healthz`,
           reuseExistingServer: true,
-          timeout: 30_000,
+          timeout: 120_000,
         },
         {
-          command: "pnpm dev --host 127.0.0.1",
+          command: `YOBI_API_PROXY_TARGET=${localApiUrl} pnpm dev --host 127.0.0.1 --port 15173`,
           url: appUrl,
           reuseExistingServer: true,
-          timeout: 30_000,
+          timeout: 120_000,
         },
       ],
   projects: [

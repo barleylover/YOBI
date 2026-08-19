@@ -2,7 +2,7 @@ import { ChangeEvent, FormEvent, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { actionableError, api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
-import { asSupportedLanguage } from "../lib/locale";
+import { asSupportedLanguage, countryCode } from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
 import { getRedesignCopy } from "../lib/redesignI18n";
 import { useSessionStore } from "../stores/session";
@@ -14,7 +14,7 @@ type CreatedContext = { profile: Profile; session: Session };
 export function OnboardingPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { selectionCopy, language } = useI18n();
+  const { selectionCopy, language, selectedLanguage } = useI18n();
   const supportedLanguage = asSupportedLanguage(language);
   const productCopy = getProductCopy(supportedLanguage);
   const redesignCopy = getRedesignCopy(supportedLanguage);
@@ -44,8 +44,9 @@ export function OnboardingPage() {
   async function ensureContext(): Promise<CreatedContext> {
     if (createdContext) return createdContext;
     const body = {
-      preferred_language: language,
+      preferred_language: selectedLanguage,
       nationality: country,
+      country_code: countryCode(country),
       age_band: "Prefer not to say",
       religion_selection: "Prefer not to say",
       dietary_rules: [],
@@ -82,7 +83,7 @@ export function OnboardingPage() {
       const context = await ensureContext();
       finish(addressRefId, addressSummary, context.session);
     } catch (cause) {
-      setError(language === "English" ? actionableError(cause, selectionCopy.addressError) : selectionCopy.addressError);
+      setError(actionableError(cause, selectionCopy.addressError, language));
     } finally {
       setLoading(false);
     }
@@ -91,7 +92,7 @@ export function OnboardingPage() {
   function applyCandidates(result: { candidates: AddressCandidate[]; notice?: string | null }) {
     setCandidates(result.candidates);
     setSelectedCandidateId(result.candidates[0]?.place_id ?? "");
-    setAddressNotice(language === "English" ? (result.notice || productCopy.address.demoNotice) : productCopy.address.demoNotice);
+    setAddressNotice(productCopy.address.demoNotice);
     if (!result.candidates.length) setError(selectionCopy.addressNotFound);
     requestAnimationFrame(() => candidateRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }));
   }
@@ -107,10 +108,10 @@ export function OnboardingPage() {
       const context = await ensureContext();
       const result = addressMode === "upload"
         ? await api.uploadAddress(context.session.session_id, addressImage as File)
-        : await api.resolveAddress(context.session.session_id, searchQuery || "YOBI demo address");
+        : await api.resolveAddress(context.session.session_id, searchQuery || "YOBI Myeongdong Hotel");
       applyCandidates(result);
     } catch (cause) {
-      setError(language === "English" ? actionableError(cause, selectionCopy.addressError) : selectionCopy.addressError);
+      setError(actionableError(cause, selectionCopy.addressError, language));
     } finally {
       setLoading(false);
     }
@@ -125,7 +126,7 @@ export function OnboardingPage() {
       const result = await api.confirmAddress(createdContext.session.session_id, candidate);
       finish(result.address_ref_id, `${candidate.hotel_name} · ${candidate.road_address}`, createdContext.session);
     } catch (cause) {
-      setError(language === "English" ? actionableError(cause, selectionCopy.confirmError) : selectionCopy.confirmError);
+      setError(actionableError(cause, selectionCopy.confirmError, language));
     } finally {
       setLoading(false);
     }
@@ -146,7 +147,7 @@ export function OnboardingPage() {
       );
       applyCandidates(result);
     } catch (cause) {
-      setError(language === "English" ? actionableError(cause, selectionCopy.demoImageError) : selectionCopy.demoImageError);
+      setError(actionableError(cause, selectionCopy.demoImageError, language));
     } finally {
       setLoading(false);
     }

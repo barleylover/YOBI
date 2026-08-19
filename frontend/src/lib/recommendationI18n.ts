@@ -1,4 +1,4 @@
-import type { SupportedLanguage } from "./locale";
+import { asEffectiveLanguage, type SupportedLanguage } from "./locale";
 
 export interface RecommendationCopy {
   selectorEyebrow: string;
@@ -75,7 +75,33 @@ const packs: Record<SupportedLanguage, RecommendationCopy> = {
 };
 
 export function getRecommendationCopy(language: SupportedLanguage) {
-  return packs[language];
+  const effective = asEffectiveLanguage(language);
+  const copy = { ...packs[effective] };
+  if (effective === "English") {
+    return {
+      ...copy,
+      halalHelp: "Menus marked halal-friendly are included.",
+      spiceTitle: "Preferred spice level",
+      spiceHelp: "Compare the menu with the familiar spice baseline for your selected country.",
+      experienceNotice: "Review the menu and delivery details before continuing.",
+    };
+  }
+  if (effective === "한국어") {
+    return {
+      ...copy,
+      halalHelp: "할랄 친화 메뉴만 보여드려요.",
+      spiceTitle: "선호하는 맵기",
+      spiceHelp: "선택한 국가에서 익숙한 맵기를 기준으로 비교해 고르세요.",
+      experienceNotice: "계속하기 전 메뉴와 배달 정보를 확인해 주세요.",
+    };
+  }
+  return {
+    ...copy,
+    halalHelp: "ハラール対応のメニューだけを表示します。",
+    spiceTitle: "好みの辛さ",
+    spiceHelp: "選択した国で慣れ親しんだ辛さを基準に選んでください。",
+    experienceNotice: "続ける前にメニューと配達情報を確認してください。",
+  };
 }
 
 const conflictPacks: Record<SupportedLanguage, string> = {
@@ -98,7 +124,7 @@ const conflictPacks: Record<SupportedLanguage, string> = {
 };
 
 export function getRecommendationConflictCopy(language: SupportedLanguage) {
-  return conflictPacks[language];
+  return conflictPacks[asEffectiveLanguage(language)];
 }
 
 const catalogChangedPacks: Record<SupportedLanguage, string> = {
@@ -121,5 +147,5 @@ const catalogChangedPacks: Record<SupportedLanguage, string> = {
 };
 
 export function getCatalogChangedCopy(language: SupportedLanguage) {
-  return catalogChangedPacks[language];
+  return catalogChangedPacks[asEffectiveLanguage(language)];
 }
