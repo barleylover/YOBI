@@ -29,6 +29,7 @@ from app.genai.contracts import GenAIErrorCode, GenAIProviderError
 from app.genai.providers import choose_genai_provider
 
 BATCH_SIZE = 10
+SCHEMA_ATTEMPTS_PER_MODEL = 3
 PROMPT_VERSION = "menu-localization-v1-wiki-bounded"
 
 
@@ -293,22 +294,28 @@ def _generate_batch(provider: Any, settings: Settings, batch: list[dict[str, Any
         }
     models = [settings.menu_localization_model, settings.oci_genai_fallback_model]
     for index, model_id in enumerate(models):
-        try:
-            response = provider.create_response(model_id, **request)
-            raw = str(getattr(response, "output_text", "")).strip()
-            if raw.startswith("```") and raw.endswith("```"):
-                raw = "\n".join(raw.splitlines()[1:-1]).strip()
-            result = LocalizationBatch.model_validate(json.loads(raw))
-            expected = {str(item["menu_id"]) for item in batch}
-            if {item.menu_id for item in result.items} != expected or len(result.items) != len(batch):
-                raise ValueError("LOCALIZATION_BATCH_MENU_IDS_MISMATCH")
-            return result, model_id
-        except GenAIProviderError as exc:
-            if exc.code is GenAIErrorCode.RATE_LIMIT and index == 0:
-                continue
-            raise
-        except (json.JSONDecodeError, ValidationError) as exc:
-            raise ValueError("LOCALIZATION_RESPONSE_INVALID") from exc
+        for schema_attempt in range(SCHEMA_ATTEMPTS_PER_MODEL):
+            try:
+                response = provider.create_response(model_id, **request)
+                raw = str(getattr(response, "output_text", "")).strip()
+                if raw.startswith("```") and raw.endswith("```"):
+                    raw = "\n".join(raw.splitlines()[1:-1]).strip()
+                result = LocalizationBatch.model_validate(json.loads(raw))
+                expected = {str(item["menu_id"]) for item in batch}
+                if (
+                    {item.menu_id for item in result.items} != expected
+                    or len(result.items) != len(batch)
+                ):
+                    raise ValueError("LOCALIZATION_BATCH_MENU_IDS_MISMATCH")
+                return result, model_id
+            except GenAIProviderError as exc:
+                if exc.code is GenAIErrorCode.RATE_LIMIT and index == 0:
+                    break
+                raise
+            except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+                if schema_attempt + 1 < SCHEMA_ATTEMPTS_PER_MODEL:
+                    continue
+                raise ValueError("LOCALIZATION_RESPONSE_INVALID") from exc
     raise RuntimeError("LOCALIZATION_PROVIDER_UNAVAILABLE")
 
 
