@@ -5,7 +5,11 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from scripts.generate_menu_localizations import _generate_batch, _parse_localization_json
+from scripts.generate_menu_localizations import (
+    _generate_batch,
+    _parse_localization_json,
+    _validate_name,
+)
 
 from app.genai.contracts import GenAIErrorCode, GenAIProviderError
 
@@ -71,6 +75,11 @@ def test_parser_accepts_one_schema_object_inside_provider_commentary() -> None:
     parsed = _parse_localization_json(f"Here is the result:\n{_valid()}\nDone.")
 
     assert parsed["items"][0]["menu_id"] == "menu-1"
+
+
+def test_name_validator_normalizes_provider_sentence_punctuation() -> None:
+    assert _validate_name('"Bibimbap."', language_code="en") == "Bibimbap"
+    assert _validate_name("『ビビンバ。』", language_code="ja") == "『ビビンバ。』"
 
 
 def test_rate_limit_uses_only_the_fallback_model() -> None:

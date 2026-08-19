@@ -83,7 +83,11 @@ def _source_hash(name_ko: str, passages: list[dict[str, str]]) -> str:
 
 def _validate_name(value: str, *, language_code: str) -> str:
     name = " ".join(value.split()).strip()
-    if not name or len(name) > 200 or re.search(r"[.!?。！？\n\r]", name):
+    # Providers occasionally append sentence punctuation even when the JSON
+    # value itself is only a food name. Normalize that harmless formatting
+    # instead of exhausting every retry for the same otherwise-valid batch.
+    name = name.strip(" \t\"'“”‘’").rstrip(".!?。！？").strip()
+    if not name or len(name) > 200 or re.search(r"[\n\r]", name):
         raise ValueError("LOCALIZED_NAME_NOT_A_FOOD_NAME")
     if language_code == "en" and re.search(r"[가-힣]", name):
         raise ValueError("ENGLISH_LOCALIZED_NAME_CONTAINS_HANGUL")
