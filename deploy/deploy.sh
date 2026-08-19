@@ -15,6 +15,7 @@ readonly CODE_ONLY_PROVISIONAL="${YOBI_CODE_ONLY_PROVISIONAL:-false}"
 readonly QUALITY_FIVE_ONLY="${YOBI_QUALITY_FIVE_ONLY:-false}"
 readonly POST_QUALITY_REVIEW_DEPLOY="${YOBI_POST_QUALITY_REVIEW_DEPLOY:-false}"
 readonly MENU_SEMANTIC_BACKFILL="${YOBI_MENU_SEMANTIC_BACKFILL:-false}"
+readonly SYNTHETIC_ENRICHMENT_DEPLOY="${YOBI_SYNTHETIC_ENRICHMENT_DEPLOY:-false}"
 readonly GUARDED_SSH_HOST="${YOBI_GUARDED_SSH_HOST:-}"
 readonly GUARDED_SSH_PORT="${YOBI_GUARDED_SSH_PORT:-}"
 readonly GUARDED_SSH_KNOWN_HOSTS_FILE="${YOBI_GUARDED_SSH_KNOWN_HOSTS_FILE:-}"
@@ -39,6 +40,9 @@ readonly GUARDED_SSH_CONTROL_PATH="${YOBI_GUARDED_SSH_CONTROL_PATH:-}"
 [[ "$MENU_SEMANTIC_BACKFILL" == "true" \
   || "$MENU_SEMANTIC_BACKFILL" == "false" ]] \
   || { printf 'YOBI_MENU_SEMANTIC_BACKFILL must be true or false.\n' >&2; exit 1; }
+[[ "$SYNTHETIC_ENRICHMENT_DEPLOY" == "true" \
+  || "$SYNTHETIC_ENRICHMENT_DEPLOY" == "false" ]] \
+  || { printf 'YOBI_SYNTHETIC_ENRICHMENT_DEPLOY must be true or false.\n' >&2; exit 1; }
 [[ "$QUALITY_FIVE_ONLY" != "true" || "$PROVISIONAL_DEPLOY" != "true" ]] \
   && [[ "$POST_QUALITY_REVIEW_DEPLOY" != "true" \
     || "$PROVISIONAL_DEPLOY" != "true" ]] \
@@ -61,6 +65,10 @@ readonly GUARDED_SSH_CONTROL_PATH="${YOBI_GUARDED_SSH_CONTROL_PATH:-}"
     && "$ZERO_PROVIDER_PROVISIONAL" == "true" \
     && "$CODE_ONLY_PROVISIONAL" == "false" ) ]] \
   || { printf 'Menu semantic backfill requires the approved zero-provider provisional mode.\n' >&2; exit 1; }
+[[ "$SYNTHETIC_ENRICHMENT_DEPLOY" != "true" \
+  || ( "$PROVISIONAL_DEPLOY" == "true" \
+    && "$CODE_ONLY_PROVISIONAL" == "true" ) ]] \
+  || { printf 'Synthetic enrichment deploy requires code-only provisional mode.\n' >&2; exit 1; }
 
 for command in git oci ssh tar shasum python3; do
   command -v "$command" >/dev/null || { printf 'Missing command: %s\n' "$command" >&2; exit 1; }
@@ -138,6 +146,8 @@ fi
 readonly REQUIRED_RELEASE_TOOLS=(
   scripts/backfill_menu_semantic_embeddings.py
   scripts/build_external_knowledge_release.py
+  scripts/build_synthetic_enrichment_release.py
+  scripts/generate_menu_localizations.py
   scripts/catalog_mode.py
   scripts/manage_demo_address.py
   scripts/recommendation_http.py
@@ -168,6 +178,8 @@ readonly EXPECTED_MIGRATIONS=(
   012_concept_preference_support_and_server_ranking.sql
   013_menu_preference_features_and_hybrid_rank.sql
   014_wiki_eligibility_indexes.sql
+  015_synthetic_demo_enrichment.sql
+  016_recommendation_v3_runtime.sql
 )
 for migration in "${EXPECTED_MIGRATIONS[@]}"; do
   [[ -f "$ROOT_DIR/database/migrations/$migration" ]] \
@@ -180,7 +192,7 @@ actual_migration_list="$(
   done | LC_ALL=C sort
 )"
 [[ "$actual_migration_list" == "$expected_migration_list" ]] \
-  || { printf 'Migration directory must contain exactly 001-014.\n' >&2; exit 1; }
+  || { printf 'Migration directory must contain exactly 001-016.\n' >&2; exit 1; }
 
 source_git_commit="$(git -C "$ROOT_DIR" rev-parse --verify HEAD)"
 source_git_branch="$(git -C "$ROOT_DIR" branch --show-current)"
@@ -295,7 +307,7 @@ ssh -t -p "$ssh_port" -i "$SSH_KEY" \
   "${ssh_host_key_options[@]}" \
   "${ssh_connection_options[@]}" \
   "$SSH_USER@$host" \
-  "sudo -n bash -s -- '$RELEASE_ID' '$ARCHIVE_SHA256' '$REMOTE_ARCHIVE' '$SSH_USER' '$ARCHIVE_NONCE' '$RECOVERY_ALLOW_UNREADY_CURRENT' '$PROVISIONAL_DEPLOY' '$ZERO_PROVIDER_PROVISIONAL' '$CODE_ONLY_PROVISIONAL' '$QUALITY_FIVE_ONLY' '$POST_QUALITY_REVIEW_DEPLOY' '$MENU_SEMANTIC_BACKFILL' '$compartment_id' '$source_git_commit'" <<'REMOTE'
+  "sudo -n bash -s -- '$RELEASE_ID' '$ARCHIVE_SHA256' '$REMOTE_ARCHIVE' '$SSH_USER' '$ARCHIVE_NONCE' '$RECOVERY_ALLOW_UNREADY_CURRENT' '$PROVISIONAL_DEPLOY' '$ZERO_PROVIDER_PROVISIONAL' '$CODE_ONLY_PROVISIONAL' '$QUALITY_FIVE_ONLY' '$POST_QUALITY_REVIEW_DEPLOY' '$MENU_SEMANTIC_BACKFILL' '$compartment_id' '$source_git_commit' '$SYNTHETIC_ENRICHMENT_DEPLOY'" <<'REMOTE'
 set -euo pipefail
 [[ "${EUID}" -eq 0 ]] || { printf 'Remote deployment requires root.\n' >&2; exit 1; }
 release_id="$1"
@@ -312,6 +324,7 @@ post_quality_review_deploy="${11}"
 menu_semantic_backfill="${12}"
 oci_compartment_id="${13}"
 source_git_commit="${14}"
+synthetic_enrichment_deploy="${15}"
 [[ "$release_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$ \
   && "$archive_sha256" =~ ^[0-9a-f]{64}$ \
   && "$source_git_commit" =~ ^[0-9a-f]{40}$ \
@@ -331,6 +344,8 @@ source_git_commit="${14}"
     || "$post_quality_review_deploy" == "false" ) \
   && ( "$menu_semantic_backfill" == "true" \
     || "$menu_semantic_backfill" == "false" ) \
+  && ( "$synthetic_enrichment_deploy" == "true" \
+    || "$synthetic_enrichment_deploy" == "false" ) \
   && "$oci_compartment_id" =~ ^ocid1\.compartment\.[A-Za-z0-9._-]+$ \
   && "$remote_archive" == "/home/${upload_user}/.yobi-release-${release_id}-${archive_nonce}.tar.gz" ]] \
   || { printf 'Remote release identity is invalid.\n' >&2; exit 1; }
@@ -356,6 +371,10 @@ source_git_commit="${14}"
     && "$zero_provider_provisional" == "true" \
     && "$code_only_provisional" == "false" ) ]] \
   || { printf 'Remote menu semantic backfill requires zero-provider provisional mode.\n' >&2; exit 1; }
+[[ "$synthetic_enrichment_deploy" != "true" \
+  || ( "$provisional_deploy" == "true" \
+    && "$code_only_provisional" == "true" ) ]] \
+  || { printf 'Remote synthetic enrichment deploy requires code-only provisional mode.\n' >&2; exit 1; }
 
 cleanup_remote_archive() {
   if [[ -n "$remote_archive" ]]; then
@@ -525,10 +544,8 @@ restore_recommendation_release() {
   active_now="$(run_recommendation_manager get-active)" || return 1
   if [[ -n "$old_recommendation_release_family_id" ]]; then
     if [[ "$active_now" == "$old_recommendation_release_family_id" ]]; then
-      recommendation_restore_required=false
-      return 0
-    fi
-    if [[ -n "$active_now" ]]; then
+      :
+    elif [[ -n "$active_now" ]]; then
       run_recommendation_manager activate-ready \
         "$old_recommendation_release_family_id" \
         --expected-current "$active_now" >/dev/null || return 1
@@ -541,6 +558,10 @@ restore_recommendation_release() {
     run_recommendation_manager clear-active --expected-current "$active_now" \
       >/dev/null || return 1
   fi
+  sudo env PYTHONPATH="$new_release/backend:$new_release" \
+    "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
+    "$new_release/scripts/build_synthetic_enrichment_release.py" \
+    --backend oracle --sync-runtime-to-active-family >/dev/null || return 1
   recommendation_restore_required=false
 }
 
@@ -659,13 +680,13 @@ sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \
   'from deploy.secure_bootstrap import Settings, verify_database
 status = verify_database(Settings())
 if not (
-    status["expected_migration_count"] == status["applied_migration_count"] == 14
+    status["expected_migration_count"] == status["applied_migration_count"] == 16
     and status["latest_expected_migration"]
     == status["latest_applied_migration"]
-    == "014"
+    == "016"
 ):
     raise SystemExit("MIGRATION_LEDGER_NOT_EXACT")
-print("Verified exact migrations=001-014 runtime_user=YOBI_APP")'
+print("Verified exact migrations=001-016 runtime_user=YOBI_APP")'
 old_knowledge_release_id="$(run_knowledge_manager get-active)"
 old_recommendation_release_family_id="$(run_recommendation_manager get-active)"
 knowledge_restore_required=true
@@ -687,7 +708,35 @@ if [[ "$catalog_mode" == "external" ]]; then
     sudo env PYTHONPATH="$new_release/backend:$new_release" "${runtime_env_runner[@]}" \
       "$new_release/venv/bin/python" "$new_release/scripts/manage_demo_address.py" \
       --verify-only
-    printf 'CODE-ONLY: reusing active knowledge and recommendation family without provider calls.\n'
+    if [[ "$synthetic_enrichment_deploy" == "true" ]]; then
+      synthetic_release_id="synthetic-enrichment-${source_git_commit:0:12}"
+      sudo env PYTHONPATH="$new_release/backend:$new_release" \
+        "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
+        "$new_release/scripts/build_synthetic_enrichment_release.py" \
+        --backend oracle --release-id "$synthetic_release_id" --apply
+      sudo env PYTHONPATH="$new_release/backend:$new_release" \
+        "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
+        "$new_release/scripts/generate_menu_localizations.py" \
+        --backend oracle --release-id "$synthetic_release_id" --apply
+      enrichment_activation_json="$(sudo env \
+        PYTHONPATH="$new_release/backend:$new_release" \
+        "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
+        "$new_release/scripts/build_synthetic_enrichment_release.py" \
+        --backend oracle --release-id "$synthetic_release_id" --apply --activate)"
+      new_recommendation_release_family_id="$(printf '%s' \
+        "$enrichment_activation_json" | "$new_release/venv/bin/python" -c \
+        'import json,re,sys
+data=json.load(sys.stdin)
+family=str(data.get("recommendation_release_family_id", ""))
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}", family):
+    raise SystemExit("SYNTHETIC_RECOMMENDATION_FAMILY_ID_INVALID")
+print(family)')"
+      printf '%s\n' "$enrichment_activation_json"
+      unset enrichment_activation_json synthetic_release_id
+      printf 'CODE-ONLY+ENRICHMENT: activated additive synthetic enrichment release.\n'
+    else
+      printf 'CODE-ONLY: reusing active knowledge and recommendation family without provider calls.\n'
+    fi
   else
     # The default remains verification-only. A full provider backfill can run
     # only through the explicit, guarded, zero-provider provisional mode.

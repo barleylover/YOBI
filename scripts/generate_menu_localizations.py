@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import oracledb
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -158,6 +159,101 @@ def _load_pending(
     return knowledge_release_id, pending, eligible_count
 
 
+def _oracle_credentials(settings: Settings) -> tuple[str, str, str]:
+    password = settings.db_password.get_secret_value()
+    dsn = settings.adb_dsn.get_secret_value()
+    if settings.db_username != "YOBI_APP" or not password or not dsn:
+        raise RuntimeError("MENU_LOCALIZATION_RUNTIME_CREDENTIALS_REQUIRED")
+    return settings.db_username, password, dsn
+
+
+def _load_pending_oracle(
+    connection: oracledb.Connection, release_id: str
+) -> tuple[str, list[dict[str, Any]], int]:
+    cursor = connection.cursor()
+    cursor.execute(
+        "SELECT knowledge_release_id FROM synthetic_enrichment_release "
+        "WHERE release_id=:release_id",
+        release_id=release_id,
+    )
+    release = cursor.fetchone()
+    if release is None:
+        raise RuntimeError("SYNTHETIC_ENRICHMENT_RELEASE_NOT_FOUND")
+    knowledge_release_id = str(release[0])
+    cursor.execute(
+        "SELECT COUNT(*) FROM menu_wiki_eligibility "
+        "WHERE knowledge_release_id=:knowledge_release_id",
+        knowledge_release_id=knowledge_release_id,
+    )
+    eligible_count = int(cursor.fetchone()[0])
+    cursor.execute(
+        """
+        SELECT menu.menu_id,menu.name_ko
+        FROM menu_wiki_eligibility eligibility
+        JOIN menu ON menu.menu_id=eligibility.menu_id
+        WHERE eligibility.knowledge_release_id=:knowledge_release_id
+          AND (
+            NOT EXISTS (
+              SELECT 1 FROM menu_localization localization
+              WHERE localization.release_id=:release_id
+                AND localization.menu_id=menu.menu_id
+                AND localization.language_code='en'
+                AND localization.validation_status='VALID'
+            ) OR NOT EXISTS (
+              SELECT 1 FROM menu_localization localization
+              WHERE localization.release_id=:release_id
+                AND localization.menu_id=menu.menu_id
+                AND localization.language_code='ja'
+                AND localization.validation_status='VALID'
+            )
+          )
+        ORDER BY menu.menu_id
+        """,
+        knowledge_release_id=knowledge_release_id,
+        release_id=release_id,
+    )
+    menu_rows = cursor.fetchall()
+    pending: list[dict[str, Any]] = []
+    for menu_id, name_ko in menu_rows:
+        cursor.execute(
+            """
+            SELECT chunk_id,content FROM (
+              SELECT DISTINCT chunk.chunk_id,chunk.content
+              FROM menu_concept_membership membership
+              JOIN dish_concept_closure closure
+                ON closure.release_id=membership.knowledge_release_id
+               AND closure.descendant_concept_id=membership.concept_id
+               AND closure.inherit_claims=1
+              JOIN knowledge_chunk chunk
+                ON chunk.release_id=closure.release_id
+               AND chunk.concept_id=closure.ancestor_concept_id
+              WHERE membership.knowledge_release_id=:knowledge_release_id
+                AND membership.menu_id=:menu_id
+              ORDER BY chunk.chunk_id
+            ) WHERE ROWNUM<=3
+            """,
+            knowledge_release_id=knowledge_release_id,
+            menu_id=str(menu_id),
+        )
+        passages = [
+            {
+                "evidence_id": str(chunk_id),
+                "content": str(content.read() if hasattr(content, "read") else content),
+            }
+            for chunk_id, content in cursor.fetchall()
+        ]
+        if not passages:
+            raise RuntimeError(f"WIKI_PASSAGE_REQUIRED:{menu_id}")
+        pending.append(
+            {
+                "menu_id": str(menu_id),
+                "name_ko": str(name_ko),
+                "wiki_passages": passages,
+            }
+        )
+    return knowledge_release_id, pending, eligible_count
+
+
 def _generate_batch(provider: Any, settings: Settings, batch: list[dict[str, Any]]) -> tuple[LocalizationBatch, str]:
     request: dict[str, Any] = {
         "instructions": (
@@ -242,24 +338,90 @@ def _apply_batch(
     )
 
 
+def _apply_batch_oracle(
+    connection: oracledb.Connection,
+    *,
+    release_id: str,
+    source_by_id: dict[str, dict[str, Any]],
+    result: LocalizationBatch,
+    model_id: str,
+) -> None:
+    generated_at = datetime.now(timezone.utc)
+    rows: list[dict[str, Any]] = []
+    for item in result.items:
+        source = source_by_id[item.menu_id]
+        evidence_ids = [passage["evidence_id"] for passage in source["wiki_passages"]]
+        source_hash = _source_hash(str(source["name_ko"]), source["wiki_passages"])
+        for language_code, value in (("en", item.name_en), ("ja", item.name_ja)):
+            rows.append(
+                {
+                    "release_id": release_id,
+                    "menu_id": item.menu_id,
+                    "language_code": language_code,
+                    "display_name": _validate_name(value, language_code=language_code),
+                    "model_id": model_id,
+                    "prompt_version": PROMPT_VERSION,
+                    "wiki_evidence_ids_json": json.dumps(evidence_ids),
+                    "source_hash": source_hash,
+                    "validation_status": "VALID",
+                    "generated_at": generated_at,
+                }
+            )
+    connection.cursor().executemany(
+        """
+        MERGE INTO menu_localization target
+        USING (SELECT :release_id release_id,:menu_id menu_id,
+                      :language_code language_code,:display_name display_name,
+                      :model_id model_id,:prompt_version prompt_version,
+                      :wiki_evidence_ids_json wiki_evidence_ids_json,
+                      :source_hash source_hash,:validation_status validation_status,
+                      :generated_at generated_at FROM dual) source
+        ON (target.release_id=source.release_id AND target.menu_id=source.menu_id
+            AND target.language_code=source.language_code)
+        WHEN MATCHED THEN UPDATE SET
+          target.display_name=source.display_name,target.model_id=source.model_id,
+          target.prompt_version=source.prompt_version,
+          target.wiki_evidence_ids_json=source.wiki_evidence_ids_json,
+          target.source_hash=source.source_hash,
+          target.validation_status=source.validation_status,
+          target.generated_at=source.generated_at
+        WHEN NOT MATCHED THEN INSERT (
+          release_id,menu_id,language_code,display_name,model_id,prompt_version,
+          wiki_evidence_ids_json,source_hash,validation_status,generated_at
+        ) VALUES (
+          source.release_id,source.menu_id,source.language_code,source.display_name,
+          source.model_id,source.prompt_version,source.wiki_evidence_ids_json,
+          source.source_hash,source.validation_status,source.generated_at
+        )
+        """,
+        rows,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--backend", choices=("sqlite", "oracle"), default="sqlite")
     parser.add_argument("--sqlite", type=Path, default=ROOT / "backend/data/yobi_demo.db")
     parser.add_argument("--release-id", required=True)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--max-batches", type=int)
     args = parser.parse_args()
 
-    SQLiteYobiRepository(args.sqlite).initialize()
-    with sqlite3.connect(args.sqlite) as connection:
-        connection.row_factory = sqlite3.Row
-        _, pending, eligible_count = _load_pending(connection, args.release_id)
+    settings = Settings()
+    if args.backend == "oracle":
+        user, password, dsn = _oracle_credentials(settings)
+        with oracledb.connect(user=user, password=password, dsn=dsn) as connection:
+            _, pending, eligible_count = _load_pending_oracle(connection, args.release_id)
+    else:
+        SQLiteYobiRepository(args.sqlite).initialize()
+        with sqlite3.connect(args.sqlite) as connection:
+            connection.row_factory = sqlite3.Row
+            _, pending, eligible_count = _load_pending(connection, args.release_id)
     planned_batches = (len(pending) + BATCH_SIZE - 1) // BATCH_SIZE
     if not args.apply:
         print(json.dumps({"release_id": args.release_id, "pending_menus": len(pending), "planned_batches": planned_batches, "applied": False}, sort_keys=True))
         return
 
-    settings = Settings()
     provider = choose_genai_provider(settings)
     completed_batches = 0
     for offset in range(0, len(pending), BATCH_SIZE):
@@ -267,33 +429,79 @@ def main() -> None:
             break
         batch = pending[offset : offset + BATCH_SIZE]
         result, model_id = _generate_batch(provider, settings, batch)
-        with sqlite3.connect(args.sqlite) as connection:
-            _apply_batch(
-                connection,
-                release_id=args.release_id,
-                source_by_id={str(item["menu_id"]): item for item in batch},
-                result=result,
-                model_id=model_id,
-            )
+        if args.backend == "oracle":
+            user, password, dsn = _oracle_credentials(settings)
+            with oracledb.connect(user=user, password=password, dsn=dsn) as connection:
+                _apply_batch_oracle(
+                    connection,
+                    release_id=args.release_id,
+                    source_by_id={str(item["menu_id"]): item for item in batch},
+                    result=result,
+                    model_id=model_id,
+                )
+                connection.commit()
+        else:
+            with sqlite3.connect(args.sqlite) as connection:
+                _apply_batch(
+                    connection,
+                    release_id=args.release_id,
+                    source_by_id={str(item["menu_id"]): item for item in batch},
+                    result=result,
+                    model_id=model_id,
+                )
         completed_batches += 1
+        print(
+            json.dumps(
+                {
+                    "release_id": args.release_id,
+                    "completed_batches": completed_batches,
+                    "planned_batches": planned_batches,
+                },
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
 
-    with sqlite3.connect(args.sqlite) as connection:
-        valid_count = int(
-            connection.execute(
+    if args.backend == "oracle":
+        user, password, dsn = _oracle_credentials(settings)
+        with oracledb.connect(user=user, password=password, dsn=dsn) as connection:
+            cursor = connection.cursor()
+            cursor.execute(
                 """
                 SELECT COUNT(*) FROM menu_localization
-                WHERE release_id=? AND validation_status='VALID'
+                WHERE release_id=:release_id AND validation_status='VALID'
                   AND language_code IN ('ko','en','ja')
                 """,
-                (args.release_id,),
-            ).fetchone()[0]
-        )
-        ready = valid_count == eligible_count * 3
-        if ready:
-            connection.execute(
-                "UPDATE synthetic_enrichment_release SET status='READY' WHERE release_id=?",
-                (args.release_id,),
+                release_id=args.release_id,
             )
+            valid_count = int(cursor.fetchone()[0])
+            ready = valid_count == eligible_count * 3
+            if ready:
+                cursor.execute(
+                    "UPDATE synthetic_enrichment_release SET status='READY' "
+                    "WHERE release_id=:release_id AND status='LOADING'",
+                    release_id=args.release_id,
+                )
+            connection.commit()
+    else:
+        with sqlite3.connect(args.sqlite) as connection:
+            valid_count = int(
+                connection.execute(
+                    """
+                    SELECT COUNT(*) FROM menu_localization
+                    WHERE release_id=? AND validation_status='VALID'
+                      AND language_code IN ('ko','en','ja')
+                    """,
+                    (args.release_id,),
+                ).fetchone()[0]
+            )
+            ready = valid_count == eligible_count * 3
+            if ready:
+                connection.execute(
+                    "UPDATE synthetic_enrichment_release SET status='READY' WHERE release_id=?",
+                    (args.release_id,),
+                )
     print(json.dumps({"release_id": args.release_id, "completed_batches": completed_batches, "valid_localizations": valid_count, "expected_localizations": eligible_count * 3, "ready": ready, "applied": True}, sort_keys=True))
 
 
