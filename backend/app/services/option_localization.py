@@ -49,6 +49,7 @@ _OPTION_LOCALIZATION_SCHEMA: dict[str, Any] = {
     "required": ["items"],
     "additionalProperties": False,
 }
+_OPTION_LOCALIZATION_BATCH_SIZE = 8
 
 
 class OptionLocalizationService:
@@ -108,23 +109,20 @@ class OptionLocalizationService:
             for item in group.items
         ]
         target_language = "Japanese" if locale == "ja" else "English"
-        request: dict[str, Any] = {
+        base_request: dict[str, Any] = {
             "instructions": (
                 "Translate every restaurant option group and option item into concise, natural "
                 f"{target_language}. Preserve quantities, sizes, negation, brand names, and "
                 "ingredient names. "
                 "Do not add claims or marketing language. Return each kind and object_id exactly once."
             ),
-            "input": [
-                {"role": "user", "content": json.dumps(input_items, ensure_ascii=False)}
-            ],
             "max_output_tokens": min(
                 max(self.settings.structured_recommendation_max_output_tokens, 4_096),
                 self.provider.capabilities.max_output_tokens,
             ),
         }
         if self.provider.capabilities.structured_output:
-            request["text"] = {
+            base_request["text"] = {
                 "format": {
                     "type": "json_schema",
                     "name": "yobi_option_localization_v1",
@@ -132,43 +130,54 @@ class OptionLocalizationService:
                     "strict": True,
                 }
             }
-        expected = {
-            (str(item["kind"]), str(item["object_id"])) for item in input_items
-        }
-        generated: _OptionLocalizationPayload | None = None
+        generated_items: list[_LocalizedOptionName] = []
         selected_model = models[0]
-        for index, model_id in enumerate(models):
-            try:
-                response = self.provider.create_response(model_id, **request)
-                parsed = _OptionLocalizationPayload.model_validate_json(
-                    str(getattr(response, "output_text", ""))
-                )
-                returned = [(item.kind, item.object_id) for item in parsed.items]
-                if len(returned) != len(set(returned)) or set(returned) != expected:
+        for offset in range(0, len(input_items), _OPTION_LOCALIZATION_BATCH_SIZE):
+            batch = input_items[offset : offset + _OPTION_LOCALIZATION_BATCH_SIZE]
+            expected = {
+                (str(item["kind"]), str(item["object_id"])) for item in batch
+            }
+            request = {
+                **base_request,
+                "input": [
+                    {"role": "user", "content": json.dumps(batch, ensure_ascii=False)}
+                ],
+            }
+            generated_batch: _OptionLocalizationPayload | None = None
+            for index, model_id in enumerate(models):
+                try:
+                    response = self.provider.create_response(model_id, **request)
+                    parsed = _OptionLocalizationPayload.model_validate_json(
+                        str(getattr(response, "output_text", ""))
+                    )
+                    returned = [(item.kind, item.object_id) for item in parsed.items]
+                    if len(returned) != len(set(returned)) or set(returned) != expected:
+                        if index + 1 < len(models):
+                            continue
+                        return groups
+                    generated_batch = parsed
+                    if model_id != models[0]:
+                        selected_model = model_id
+                    break
+                except GenAIProviderError:
                     if index + 1 < len(models):
                         continue
                     return groups
-                generated = parsed
-                selected_model = model_id
-                break
-            except GenAIProviderError:
-                if index + 1 < len(models):
-                    continue
+                except (ValidationError, ValueError, TypeError):
+                    if index + 1 < len(models):
+                        continue
+                    return groups
+            if generated_batch is None:
                 return groups
-            except (ValidationError, ValueError, TypeError):
-                if index + 1 < len(models):
-                    continue
-                return groups
-        if generated is None:
-            return groups
+            generated_items.extend(generated_batch.items)
         group_names = {
             item.object_id: item.display_name
-            for item in generated.items
+            for item in generated_items
             if item.kind == "GROUP"
         }
         item_names = {
             item.object_id: item.display_name
-            for item in generated.items
+            for item in generated_items
             if item.kind == "ITEM"
         }
         self.repository.save_option_localizations(

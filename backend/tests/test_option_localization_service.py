@@ -205,3 +205,68 @@ def test_invalid_grok_payload_falls_back_to_120b() -> None:
     assert provider.models == ["xai.grok-4.3", "openai.gpt-oss-120b"]
     assert repository.saved_model_id == "openai.gpt-oss-120b"
     assert result[0].display_name == "辛さレベル"
+
+
+def test_large_option_menu_is_localized_in_bounded_batches() -> None:
+    class LargeOptionRepository(OptionRepository):
+        def get_options(
+            self, menu_id: str, session_id: str | None = None
+        ) -> list[OptionGroup]:
+            del menu_id, session_id
+            return [
+                OptionGroup(
+                    option_group_id="group-large",
+                    name_en="Add-ons",
+                    name_ko="추가 선택",
+                    display_name=self.group_names.get("group-large", "Add-ons"),
+                    description="",
+                    required=False,
+                    min_select=0,
+                    max_select=9,
+                    items=[
+                        OptionItem(
+                            option_item_id=f"item-{index}",
+                            name_en=f"Option {index}",
+                            name_ko=f"옵션 {index}",
+                            display_name=self.item_names.get(f"item-{index}", f"Option {index}"),
+                            description="",
+                            price_delta=0,
+                            available=True,
+                        )
+                        for index in range(9)
+                    ],
+                )
+            ]
+
+    class EchoProvider(OptionProvider):
+        def create_response(self, model: str, **kwargs: Any) -> Any:
+            self.calls += 1
+            self.models.append(model)
+            batch = json.loads(kwargs["input"][0]["content"])
+            return SimpleNamespace(
+                output_text=json.dumps(
+                    {
+                        "items": [
+                            {
+                                "kind": item["kind"],
+                                "object_id": item["object_id"],
+                                "display_name": f"翻訳 {item['name_ko']}",
+                            }
+                            for item in batch
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+            )
+
+    repository = LargeOptionRepository()
+    provider = EchoProvider()
+    result = OptionLocalizationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        provider=provider,
+    ).get_options("menu-large", "session-localized")
+
+    assert provider.calls == 2
+    assert result[0].display_name == "翻訳 추가 선택"
+    assert result[0].items[-1].display_name == "翻訳 옵션 8"
