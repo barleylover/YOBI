@@ -1,3 +1,5 @@
+BEGIN
+  EXECUTE IMMEDIATE q'^
 CREATE TABLE recommendation_provider_attempt (
   session_id VARCHAR2(64) NOT NULL,
   request_id VARCHAR2(100) NOT NULL,
@@ -14,8 +16,12 @@ CREATE TABLE recommendation_provider_attempt (
   PRIMARY KEY (session_id, request_id, attempt_no),
   FOREIGN KEY (session_id, request_id)
     REFERENCES structured_recommendation_request(session_id, request_id) ON DELETE CASCADE
-)
+)^';
+EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; END IF;
+END;
 -- +YOBI STATEMENT
+BEGIN
+  EXECUTE IMMEDIATE q'^
 CREATE TABLE restaurant_note_translation (
   translation_id VARCHAR2(64) PRIMARY KEY,
   session_id VARCHAR2(64) NOT NULL REFERENCES chat_session(session_id) ON DELETE CASCADE,
@@ -29,7 +35,9 @@ CREATE TABLE restaurant_note_translation (
   error_code VARCHAR2(160),
   request_hash VARCHAR2(64) NOT NULL,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL
-)
+)^';
+EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; END IF;
+END;
 -- +YOBI STATEMENT
 BEGIN
   EXECUTE IMMEDIATE 'ALTER TABLE user_profile ADD country_code VARCHAR2(2)';
@@ -51,11 +59,17 @@ BEGIN
 EXCEPTION WHEN OTHERS THEN IF SQLCODE NOT IN (-2264, -2275) THEN RAISE; END IF;
 END;
 -- +YOBI STATEMENT
-CREATE INDEX idx_provider_attempt_request
-  ON recommendation_provider_attempt(session_id, request_id, attempt_no)
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE INDEX idx_provider_attempt_request ON recommendation_provider_attempt(session_id, request_id, attempt_no)';
+EXCEPTION WHEN OTHERS THEN IF SQLCODE NOT IN (-955, -1408) THEN RAISE; END IF;
+END;
 -- +YOBI STATEMENT
-CREATE INDEX idx_note_translation_session
-  ON restaurant_note_translation(session_id, created_at)
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE INDEX idx_note_translation_session ON restaurant_note_translation(session_id, created_at)';
+EXCEPTION WHEN OTHERS THEN IF SQLCODE NOT IN (-955, -1408) THEN RAISE; END IF;
+END;
 -- +YOBI STATEMENT
-CREATE INDEX idx_rec_request_cancelled
-  ON structured_recommendation_request(session_id, client_cancelled_at, created_at)
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE INDEX idx_rec_request_cancelled ON structured_recommendation_request(session_id, client_cancelled_at, created_at)';
+EXCEPTION WHEN OTHERS THEN IF SQLCODE NOT IN (-955, -1408) THEN RAISE; END IF;
+END;
