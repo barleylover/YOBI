@@ -457,8 +457,8 @@ def main() -> None:
     parser.add_argument("--max-batches", type=int)
     parser.add_argument("--workers", type=int, default=1)
     args = parser.parse_args()
-    if not 1 <= args.workers <= 4:
-        parser.error("--workers must be between 1 and 4")
+    if not 1 <= args.workers <= 16:
+        parser.error("--workers must be between 1 and 16")
 
     settings = Settings()
     if args.backend == "oracle":
