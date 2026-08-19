@@ -189,7 +189,22 @@ def test_invalid_grok_payload_falls_back_to_120b() -> None:
             if model == "xai.grok-4.3":
                 self.calls += 1
                 self.models.append(model)
-                return SimpleNamespace(output_text='{"items": []}')
+                batch = json.loads(kwargs["input"][0]["content"])
+                return SimpleNamespace(
+                    output_text=json.dumps(
+                        {
+                            "items": [
+                                {
+                                    "kind": item["kind"],
+                                    "object_id": item["object_id"],
+                                    "display_name": item["name_ko"],
+                                }
+                                for item in batch
+                            ]
+                        },
+                        ensure_ascii=False,
+                    )
+                )
             return super().create_response(model, **kwargs)
 
     repository = OptionRepository()
@@ -205,6 +220,23 @@ def test_invalid_grok_payload_falls_back_to_120b() -> None:
     assert provider.models == ["xai.grok-4.3", "openai.gpt-oss-120b"]
     assert repository.saved_model_id == "openai.gpt-oss-120b"
     assert result[0].display_name == "辛さレベル"
+
+
+def test_cached_korean_copy_is_regenerated_for_japanese() -> None:
+    repository = OptionRepository()
+    repository.group_names = {"group-spice": "맵기 단계"}
+    repository.item_names = {"item-mild": "순한맛"}
+    provider = OptionProvider()
+
+    result = OptionLocalizationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        provider=provider,
+    ).get_options("menu-1", "session-localized")
+
+    assert provider.calls == 1
+    assert result[0].display_name == "辛さレベル"
+    assert result[0].items[0].display_name == "マイルド"
 
 
 def test_large_option_menu_is_localized_in_bounded_batches() -> None:

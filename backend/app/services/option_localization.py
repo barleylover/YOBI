@@ -52,6 +52,18 @@ _OPTION_LOCALIZATION_SCHEMA: dict[str, Any] = {
 _OPTION_LOCALIZATION_BATCH_SIZE = 8
 
 
+def _localized_name_is_usable(
+    display_name: str | None, source_name_ko: str, locale: str
+) -> bool:
+    normalized_display = " ".join((display_name or "").split()).casefold()
+    normalized_source = " ".join(source_name_ko.split()).casefold()
+    if not normalized_display:
+        return False
+    if locale != "ko" and normalized_display == normalized_source:
+        return not any("가" <= character <= "힣" for character in source_name_ko)
+    return True
+
+
 class OptionLocalizationService:
     """Localize visible option names once and reuse the active release cache."""
 
@@ -77,7 +89,15 @@ class OptionLocalizationService:
             return groups
         group_ids = [group.option_group_id for group in groups]
         item_ids = [item.option_item_id for group in groups for item in group.items]
-        if self.repository.option_localizations_complete(
+        cached_names_usable = all(
+            _localized_name_is_usable(group.display_name, group.name_ko, locale)
+            and all(
+                _localized_name_is_usable(item.display_name, item.name_ko, locale)
+                for item in group.items
+            )
+            for group in groups
+        )
+        if cached_names_usable and self.repository.option_localizations_complete(
             session_id, menu_id, group_ids, item_ids
         ):
             return groups
@@ -151,7 +171,24 @@ class OptionLocalizationService:
                         str(getattr(response, "output_text", ""))
                     )
                     returned = [(item.kind, item.object_id) for item in parsed.items]
-                    if len(returned) != len(set(returned)) or set(returned) != expected:
+                    source_names = {
+                        (str(item["kind"]), str(item["object_id"])): str(item["name_ko"])
+                        for item in batch
+                    }
+                    names_usable = all(
+                        _localized_name_is_usable(
+                            item.display_name,
+                            source_names[(item.kind, item.object_id)],
+                            locale,
+                        )
+                        for item in parsed.items
+                        if (item.kind, item.object_id) in source_names
+                    )
+                    if (
+                        len(returned) != len(set(returned))
+                        or set(returned) != expected
+                        or not names_usable
+                    ):
                         if index + 1 < len(models):
                             continue
                         return groups
