@@ -13,6 +13,7 @@ import json
 import re
 import sqlite3
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -435,7 +436,10 @@ def main() -> None:
     parser.add_argument("--release-id", required=True)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--max-batches", type=int)
+    parser.add_argument("--workers", type=int, default=1)
     args = parser.parse_args()
+    if not 1 <= args.workers <= 4:
+        parser.error("--workers must be between 1 and 4")
 
     settings = Settings()
     if args.backend == "oracle":
@@ -454,44 +458,51 @@ def main() -> None:
 
     provider = choose_genai_provider(settings)
     completed_batches = 0
-    for offset in range(0, len(pending), BATCH_SIZE):
-        if args.max_batches is not None and completed_batches >= args.max_batches:
-            break
-        batch = pending[offset : offset + BATCH_SIZE]
+    batches = [pending[offset : offset + BATCH_SIZE] for offset in range(0, len(pending), BATCH_SIZE)]
+    if args.max_batches is not None:
+        batches = batches[: args.max_batches]
+
+    def generate_one(
+        batch: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], LocalizationBatch, str]:
         result, model_id = _generate_batch(provider, settings, batch)
-        if args.backend == "oracle":
-            user, password, dsn = _oracle_credentials(settings)
-            with oracledb.connect(user=user, password=password, dsn=dsn) as connection:
-                _apply_batch_oracle(
-                    connection,
-                    release_id=args.release_id,
-                    source_by_id={str(item["menu_id"]): item for item in batch},
-                    result=result,
-                    model_id=model_id,
-                )
-                connection.commit()
-        else:
-            with sqlite3.connect(args.sqlite) as connection:
-                _apply_batch(
-                    connection,
-                    release_id=args.release_id,
-                    source_by_id={str(item["menu_id"]): item for item in batch},
-                    result=result,
-                    model_id=model_id,
-                )
-        completed_batches += 1
-        print(
-            json.dumps(
-                {
-                    "release_id": args.release_id,
-                    "completed_batches": completed_batches,
-                    "planned_batches": planned_batches,
-                },
-                sort_keys=True,
-            ),
-            file=sys.stderr,
-            flush=True,
-        )
+        return batch, result, model_id
+
+    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+        for batch, result, model_id in executor.map(generate_one, batches):
+            if args.backend == "oracle":
+                user, password, dsn = _oracle_credentials(settings)
+                with oracledb.connect(user=user, password=password, dsn=dsn) as connection:
+                    _apply_batch_oracle(
+                        connection,
+                        release_id=args.release_id,
+                        source_by_id={str(item["menu_id"]): item for item in batch},
+                        result=result,
+                        model_id=model_id,
+                    )
+                    connection.commit()
+            else:
+                with sqlite3.connect(args.sqlite) as connection:
+                    _apply_batch(
+                        connection,
+                        release_id=args.release_id,
+                        source_by_id={str(item["menu_id"]): item for item in batch},
+                        result=result,
+                        model_id=model_id,
+                    )
+            completed_batches += 1
+            print(
+                json.dumps(
+                    {
+                        "release_id": args.release_id,
+                        "completed_batches": completed_batches,
+                        "planned_batches": planned_batches,
+                    },
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
 
     if args.backend == "oracle":
         user, password, dsn = _oracle_credentials(settings)

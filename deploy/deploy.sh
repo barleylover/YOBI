@@ -719,7 +719,7 @@ if [[ "$catalog_mode" == "external" ]]; then
       sudo env PYTHONPATH="$new_release/backend:$new_release" \
         "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
         "$new_release/scripts/generate_menu_localizations.py" \
-        --backend oracle --release-id "$synthetic_release_id" --apply
+        --backend oracle --release-id "$synthetic_release_id" --workers 4 --apply
       enrichment_activation_json="$(sudo env \
         PYTHONPATH="$new_release/backend:$new_release" \
         "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
