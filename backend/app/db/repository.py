@@ -23,11 +23,15 @@ from app.domain.models import (
     Evidence,
     MenuSummary,
     MerchantComparison,
+    MerchantMenuPresentation,
+    MerchantMenuPresentationPage,
+    MerchantMenuPresentationRequest,
     OptionGroup,
     Order,
     Profile,
     ProfileCreate,
     ProfileUpdate,
+    RestaurantNoteTranslation,
     Session,
 )
 from app.domain.structured_recommendation import (
@@ -136,6 +140,43 @@ class YobiRepository(Protocol):
         session_id: str,
         request_id: str,
     ) -> RecommendationRequestRecord: ...
+
+    def record_recommendation_provider_attempt(
+        self,
+        session_id: str,
+        request_id: str,
+        *,
+        attempt_no: int,
+        provider: str,
+        model_id: str,
+        status: str,
+        error_code: str | None,
+        latency_ms: int,
+        input_tokens: int | None,
+        output_tokens: int | None,
+    ) -> None: ...
+
+    def cancel_recommendation_request(self, session_id: str, request_id: str) -> bool: ...
+
+    def get_restaurant_note_translation_by_hash(
+        self, session_id: str, request_hash: str
+    ) -> RestaurantNoteTranslation | None: ...
+
+    def save_restaurant_note_translation(
+        self,
+        session_id: str,
+        *,
+        translation_id: str,
+        source_language: str,
+        source_text: str,
+        korean_text: str | None,
+        back_translation: str | None,
+        provider: str,
+        model_id: str,
+        status: str,
+        error_code: str | None,
+        request_hash: str,
+    ) -> RestaurantNoteTranslation: ...
 
     def complete_recommendation_request(
         self,
@@ -295,7 +336,35 @@ class YobiRepository(Protocol):
         meal_need_state: MealNeedState | None = None,
     ) -> list[MerchantComparison]: ...
 
-    def get_options(self, menu_id: str) -> list[OptionGroup]: ...
+    def get_options(self, menu_id: str, session_id: str | None = None) -> list[OptionGroup]: ...
+
+    def option_localizations_complete(
+        self,
+        session_id: str,
+        menu_id: str,
+        group_ids: list[str],
+        item_ids: list[str],
+    ) -> bool: ...
+
+    def save_option_localizations(
+        self,
+        session_id: str,
+        menu_id: str,
+        group_names: dict[str, str],
+        item_names: dict[str, str],
+        model_id: str,
+    ) -> None: ...
+
+    def list_merchant_menu_presentations(
+        self,
+        session_id: str,
+        merchant_id: str,
+        request: MerchantMenuPresentationRequest,
+    ) -> MerchantMenuPresentationPage: ...
+
+    def save_menu_presentation_cache(
+        self, session_id: str, presentation: MerchantMenuPresentation
+    ) -> None: ...
 
     def resolve_address(
         self, text: str, file_hash: str | None = None

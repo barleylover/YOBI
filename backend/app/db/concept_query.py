@@ -44,6 +44,7 @@ def _hard_eligibility_conditions(
     excluded_menu_ids: set[str],
     included_menu_ids: Sequence[str] | None,
     eligibility_as_of: Any,
+    synthetic_enrichment_release_id: str | None,
     parameters: dict[str, Any],
 ) -> list[str]:
     conditions = [
@@ -75,6 +76,56 @@ def _hard_eligibility_conditions(
                 included_placeholders.append(f":{key}")
                 parameters[key] = menu_id
             conditions.append("menu.menu_id IN (" + ",".join(included_placeholders) + ")")
+
+    if criteria.schema_version == "3":
+        if not synthetic_enrichment_release_id or criteria.price_range_krw is None:
+            conditions.append("1=0")
+            return conditions
+        parameters["synthetic_enrichment_release_id"] = synthetic_enrichment_release_id
+        parameters["price_min_krw"] = criteria.price_range_krw.min
+        parameters["price_max_krw"] = criteria.price_range_krw.max
+        parameters["spice_reference_country"] = criteria.spice_reference_country
+        conditions.extend(
+            [
+                "menu.price BETWEEN :price_min_krw AND :price_max_krw",
+                """EXISTS (
+                  SELECT 1 FROM synthetic_menu_profile synthetic_menu
+                  JOIN synthetic_country_profile synthetic_country
+                    ON synthetic_country.release_id=synthetic_menu.release_id
+                   AND synthetic_country.country_code=:spice_reference_country
+                  WHERE synthetic_menu.release_id=:synthetic_enrichment_release_id
+                    AND synthetic_menu.menu_id=menu.menu_id
+                    AND (
+                      (:spice_preference='LESS'
+                        AND synthetic_menu.spice_level<synthetic_country.spice_baseline)
+                      OR (:spice_preference='SIMILAR'
+                        AND synthetic_menu.spice_level=synthetic_country.spice_baseline)
+                      OR (:spice_preference='MORE'
+                        AND synthetic_menu.spice_level>synthetic_country.spice_baseline)
+                    )
+                )""",
+            ]
+        )
+        parameters["spice_preference"] = criteria.spice_preference
+        if criteria.dietary_filters.halal_certified_only:
+            conditions.append(
+                """EXISTS (
+                  SELECT 1 FROM synthetic_menu_profile synthetic_halal
+                  WHERE synthetic_halal.release_id=:synthetic_enrichment_release_id
+                    AND synthetic_halal.menu_id=menu.menu_id
+                    AND synthetic_halal.halal_fit=1
+                )"""
+            )
+        if criteria.dietary_filters.vegan:
+            conditions.append(
+                """EXISTS (
+                  SELECT 1 FROM synthetic_menu_profile synthetic_vegan
+                  WHERE synthetic_vegan.release_id=:synthetic_enrichment_release_id
+                    AND synthetic_vegan.menu_id=menu.menu_id
+                    AND synthetic_vegan.vegan_fit=1
+                )"""
+            )
+        return conditions
 
     price_conditions = [
         {
@@ -143,6 +194,7 @@ def build_concept_candidate_query(
     candidate_limit: int | None,
     included_menu_ids: Sequence[str] | None = None,
     support_channel: SelectedSupportChannel = "COMBINED",
+    synthetic_enrichment_release_id: str | None = None,
 ) -> ConceptCandidateQuery:
     """Build one grounded candidate channel or the final combined grounding query.
 
@@ -334,6 +386,7 @@ def build_concept_candidate_query(
         excluded_menu_ids=excluded_menu_ids,
         included_menu_ids=included_menu_ids,
         eligibility_as_of=eligibility_as_of,
+        synthetic_enrichment_release_id=synthetic_enrichment_release_id,
         parameters=parameters,
     )
     conditions.append(_reviewed_public_wiki_condition(dialect))
@@ -413,6 +466,7 @@ def build_concept_preview_count_query(
     service_area_id: str | None,
     excluded_menu_ids: set[str],
     eligibility_as_of: Any,
+    synthetic_enrichment_release_id: str | None = None,
 ) -> ConceptCandidateQuery:
     """Count grounded hard-eligible menus without materializing ranking columns."""
 
@@ -495,6 +549,7 @@ def build_concept_preview_count_query(
         excluded_menu_ids=excluded_menu_ids,
         included_menu_ids=None,
         eligibility_as_of=eligibility_as_of,
+        synthetic_enrichment_release_id=synthetic_enrichment_release_id,
         parameters=parameters,
     )
     conditions.append(_reviewed_public_wiki_condition(dialect))
@@ -522,6 +577,7 @@ def build_candidate_recall_channel_query(
     eligibility_as_of: Any,
     candidate_limit: int,
     support_channel: Literal["MENU_FEATURE", "CONCEPT_SUPPORT"],
+    synthetic_enrichment_release_id: str | None = None,
 ) -> ConceptCandidateQuery:
     """Return one cheap recall channel before combined cross-category grounding."""
 
@@ -642,6 +698,7 @@ def build_candidate_recall_channel_query(
         excluded_menu_ids=excluded_menu_ids,
         included_menu_ids=None,
         eligibility_as_of=eligibility_as_of,
+        synthetic_enrichment_release_id=synthetic_enrichment_release_id,
         parameters=parameters,
     )
     conditions.append(_reviewed_public_wiki_condition(dialect))
@@ -696,6 +753,7 @@ def build_semantic_candidate_query(
     semantic_embedding_version: str | None = None,
     semantic_embedding_dimension: int | None = None,
     catalog_release_id: str | None = None,
+    synthetic_enrichment_release_id: str | None = None,
 ) -> ConceptCandidateQuery:
     """Build the independent hard-eligible semantic retrieval channel.
 
@@ -717,6 +775,7 @@ def build_semantic_candidate_query(
         excluded_menu_ids=excluded_menu_ids,
         included_menu_ids=None,
         eligibility_as_of=eligibility_as_of,
+        synthetic_enrichment_release_id=synthetic_enrichment_release_id,
         parameters=parameters,
     )
     conditions.append(_reviewed_public_wiki_condition(dialect))

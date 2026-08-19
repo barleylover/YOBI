@@ -870,7 +870,7 @@ def _run_transcripts(
     coverage: set[str] = set()
     transcripts = _require_list(fixture["transcripts"], "transcripts")
     recorder.metrics["transcript_count"] = len(transcripts)
-    settings = Settings(
+    settings = Settings(  # type: ignore[call-arg]
         _env_file=None,
         oci_genai_api_key=SecretStr(""),
         demo_fallback_enabled=True,

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from app.domain.preference_catalog import SUPPORTED_LOCALES, normalize_preference_locale
 
@@ -23,6 +26,13 @@ class RecommendationFallbackCopy:
     max_spice: str
     halal_only: str
     vegan: str
+
+
+@dataclass(frozen=True)
+class DeterministicPresentationCopy:
+    short_explanation: str
+    long_explanation: str
+    review_summary: str
 
 
 _COPY: dict[str, RecommendationFallbackCopy] = {
@@ -319,6 +329,176 @@ _COPY: dict[str, RecommendationFallbackCopy] = {
 
 def localized_recommendation_fallback_copy(value: str) -> RecommendationFallbackCopy:
     return _COPY[normalize_preference_locale(value)]
+
+
+_SENTENCE_PATTERN = re.compile(r"[^.!?。！？]+[.!?。！？]?")
+_NON_ENGLISH_SCRIPT_PATTERN = re.compile(r"[가-힣぀-ヿ㐀-鿿]")
+_REVIEW_TOPIC_LABELS: dict[str, dict[str, str]] = {
+    "en": {
+        "TASTE": "taste",
+        "TEXTURE": "texture",
+        "VALUE": "value and portion",
+        "PACKAGING": "packaging",
+        "CAVEAT": "a mild caveat",
+    },
+    "ko": {
+        "TASTE": "맛",
+        "TEXTURE": "식감",
+        "VALUE": "가격·양",
+        "PACKAGING": "포장",
+        "CAVEAT": "가벼운 아쉬움",
+    },
+    "ja": {
+        "TASTE": "味",
+        "TEXTURE": "食感",
+        "VALUE": "価格とボリューム",
+        "PACKAGING": "包装",
+        "CAVEAT": "軽い気になる点",
+    },
+}
+
+
+def _presentation_locale(value: str) -> str:
+    normalized = normalize_preference_locale(value)
+    return normalized if normalized in {"ko", "ja"} else "en"
+
+
+def _sentences(value: str, *, locale: str) -> list[str]:
+    terminal = "。" if locale in {"ko", "ja"} else "."
+    sentences: list[str] = []
+    for match in _SENTENCE_PATTERN.findall(" ".join(value.split())):
+        sentence = match.strip()
+        if not sentence:
+            continue
+        if sentence[-1] not in ".!?。！？":
+            sentence += terminal
+        sentences.append(sentence)
+    return sentences
+
+
+def _join_labels(labels: Sequence[str], *, locale: str) -> str:
+    if locale == "en":
+        if len(labels) == 1:
+            return labels[0]
+        if len(labels) == 2:
+            return f"{labels[0]} and {labels[1]}"
+        return f"{', '.join(labels[:-1])}, and {labels[-1]}"
+    return "、".join(labels)
+
+
+def deterministic_presentation_copy(
+    value: str,
+    *,
+    localized_title: str,
+    wiki_passages: Sequence[str],
+    reviews: Sequence[Mapping[str, Any]],
+) -> DeterministicPresentationCopy:
+    """Build locale-safe, schema-valid copy when structured generation is unavailable."""
+
+    locale = _presentation_locale(value)
+    if locale == "en":
+        grounded_text = " ".join(str(passage).strip() for passage in wiki_passages).strip()
+        grounded_sentences = (
+            []
+            if _NON_ENGLISH_SCRIPT_PATTERN.search(grounded_text)
+            else _sentences(grounded_text, locale=locale)
+        )
+        if not grounded_sentences:
+            grounded_sentences = [
+                f"{localized_title} is introduced through the key characteristics "
+                "confirmed in its linked food reference."
+            ]
+        short_sentences = grounded_sentences[:2]
+        long_sentences = grounded_sentences[:4]
+        supporting_sentences = (
+            "This overview stays within the available reference instead of adding "
+            "unverified details.",
+            "The restaurant's original wording is shown separately under YOGIYO.",
+            "It is arranged to help first-time visitors recognize the dish before ordering.",
+        )
+    elif locale == "ko":
+        short_sentences = [
+            f"연결된 음식 자료를 바탕으로 {localized_title}의 핵심 특징을 쉽게 정리했습니다."
+        ]
+        long_sentences = list(short_sentences)
+        supporting_sentences = (
+            "확인된 내용 밖의 재료나 맛을 추가로 추정하지 않았습니다.",
+            "매장이 제공한 원문 설명은 YOGIYO 영역에서 별도로 확인할 수 있습니다.",
+            "처음 접하는 사람도 주문 전에 음식을 쉽게 알아볼 수 있도록 구성했습니다.",
+        )
+    else:
+        short_sentences = [
+            f"{localized_title}は、関連する料理資料で確認できる特徴をわかりやすくまとめた"
+            "メニューです。"
+        ]
+        long_sentences = list(short_sentences)
+        supporting_sentences = (
+            "確認できる内容の範囲を超えて、食材や味を推測していません。",
+            "店舗の原文説明は、YOGIYO欄で別に確認できます。",
+            "初めての方でも、注文前に料理をイメージしやすいように構成しています。",
+        )
+
+    for sentence in supporting_sentences:
+        if len(long_sentences) >= 3:
+            break
+        long_sentences.append(sentence)
+
+    topics: list[str] = []
+    ratings: list[float] = []
+    labels = _REVIEW_TOPIC_LABELS[locale]
+    for review in reviews:
+        topic = str(review.get("topic") or "").upper()
+        if topic in labels and topic not in topics:
+            topics.append(topic)
+        raw_rating = review.get("rating")
+        if not isinstance(raw_rating, (int, float, str)):
+            continue
+        try:
+            rating = float(raw_rating)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= rating <= 5:
+            ratings.append(rating)
+
+    if topics:
+        topic_text = _join_labels([labels[topic] for topic in topics], locale=locale)
+        average = sum(ratings) / len(ratings) if ratings else None
+        if locale == "en":
+            first_review_sentence = f"The available review snippets cover {topic_text}."
+            second_review_sentence = (
+                f"Their average rating is {average:.1f} out of 5."
+                if average is not None
+                else "No consistent numeric rating is available for those snippets."
+            )
+        elif locale == "ko":
+            first_review_sentence = f"제공된 리뷰 조각에서 확인되는 주제는 {topic_text}입니다."
+            second_review_sentence = (
+                f"평균 평점은 5점 만점에 {average:.1f}점입니다."
+                if average is not None
+                else "이 리뷰 조각에서 일관된 숫자 평점은 확인되지 않습니다."
+            )
+        else:
+            first_review_sentence = f"提供されたレビューの抜粋は、{topic_text}に触れています。"
+            second_review_sentence = (
+                f"平均評価は5点満点中{average:.1f}点です。"
+                if average is not None
+                else "これらの抜粋には、一貫した数値評価がありません。"
+            )
+    elif locale == "en":
+        first_review_sentence = "There are not enough review snippets to summarize yet."
+        second_review_sentence = "Please check the restaurant's current reviews before ordering."
+    elif locale == "ko":
+        first_review_sentence = "아직 요약할 만한 리뷰 조각이 충분하지 않습니다."
+        second_review_sentence = "주문 전에 매장의 최신 리뷰를 확인해 주세요."
+    else:
+        first_review_sentence = "現時点では、要約できるレビューの抜粋が十分ではありません。"
+        second_review_sentence = "注文前に店舗の最新レビューをご確認ください。"
+
+    return DeterministicPresentationCopy(
+        short_explanation=" ".join(short_sentences),
+        long_explanation=" ".join(long_sentences[:5]),
+        review_summary=f"{first_review_sentence} {second_review_sentence}",
+    )
 
 
 if set(_COPY) != set(SUPPORTED_LOCALES):

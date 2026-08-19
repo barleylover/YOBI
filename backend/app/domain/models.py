@@ -44,6 +44,7 @@ class EvidenceStatus(str, Enum):
 class ProfileCreate(BaseModel):
     preferred_language: str = "English"
     nationality: str = "United States"
+    country_code: str | None = Field(default=None, min_length=2, max_length=2)
     age_band: str = "Not collected"
     gender: str = "Prefer not to say"
     religion_selection: str = "No specific religion"
@@ -61,6 +62,11 @@ class ProfileCreate(BaseModel):
     def normalize_list(cls, values: list[str]) -> list[str]:
         return [value.strip().lower() for value in values if value.strip()]
 
+    @field_validator("country_code")
+    @classmethod
+    def normalize_country_code(cls, value: str | None) -> str | None:
+        return value.strip().upper() if value else None
+
 
 class Profile(ProfileCreate):
     profile_id: str
@@ -70,6 +76,7 @@ class Profile(ProfileCreate):
 class ProfileUpdate(BaseModel):
     preferred_language: str | None = None
     nationality: str | None = None
+    country_code: str | None = Field(default=None, min_length=2, max_length=2)
     age_band: str | None = None
     gender: str | None = None
     religion_selection: str | None = None
@@ -86,6 +93,11 @@ class ProfileUpdate(BaseModel):
         if values is None:
             return None
         return [value.strip().lower() for value in values if value.strip()]
+
+    @field_validator("country_code")
+    @classmethod
+    def normalize_optional_country_code(cls, value: str | None) -> str | None:
+        return value.strip().upper() if value else None
 
 
 class Session(BaseModel):
@@ -119,6 +131,7 @@ class MenuSummary(BaseModel):
     merchant_name: str
     name_en: str
     name_ko: str
+    localized_title: str | None = None
     category: str
     description: str
     cultural_description: str
@@ -162,6 +175,7 @@ class OptionItem(BaseModel):
     option_item_id: str
     name_en: str
     name_ko: str
+    display_name: str | None = None
     description: str
     price_delta: int
     available: bool
@@ -181,6 +195,7 @@ class OptionGroup(BaseModel):
     option_group_id: str
     name_en: str
     name_ko: str
+    display_name: str | None = None
     description: str
     required: bool
     min_select: int
@@ -255,12 +270,55 @@ class CartItemInput(BaseModel):
     quantity: int = Field(default=1, ge=1, le=10)
     option_item_ids: list[str] = Field(default_factory=list)
     user_note: str = Field(default="", max_length=500)
+    note_translation_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class RestaurantNoteTranslationInput(BaseModel):
+    source_text: str = Field(min_length=1, max_length=500)
+    source_language: str = Field(min_length=2, max_length=16)
+
+
+class RestaurantNoteTranslation(BaseModel):
+    translation_id: str
+    source_text: str
+    source_language: str
+    korean_text: str | None = None
+    back_translation: str | None = None
+    model_id: str
+    status: Literal["SUCCEEDED", "FAILED"]
+    error_code: str | None = None
+    created_at: datetime
+
+
+class MerchantMenuPresentationRequest(BaseModel):
+    cursor: str | None = Field(default=None, max_length=160)
+    limit: int = Field(default=12, ge=1, le=12)
+    exclude_menu_ids: list[str] = Field(default_factory=list, max_length=100)
+
+
+class MerchantMenuPresentation(BaseModel):
+    menu: MenuSummary
+    localized_title: str
+    yobi_short_explanation: str
+    yobi_long_explanation: str
+    source_description: str
+    review_summary: str
+    country_preference: dict[str, Any]
+    evidence_ids: list[str] = Field(default_factory=list)
+    review_ids: list[str] = Field(default_factory=list)
+    generation_model: str
+
+
+class MerchantMenuPresentationPage(BaseModel):
+    items: list[MerchantMenuPresentation]
+    next_cursor: str | None = None
 
 
 class CartItemUpdate(BaseModel):
     quantity: int | None = Field(default=None, ge=1, le=10)
     option_item_ids: list[str] | None = None
     user_note: str | None = Field(default=None, max_length=500)
+    note_translation_id: str | None = Field(default=None, min_length=1, max_length=64)
 
     @model_validator(mode="after")
     def require_change(self) -> CartItemUpdate:
@@ -275,6 +333,7 @@ class CartLine(BaseModel):
     merchant_id: str
     menu_name: str
     menu_name_ko: str
+    display_name: str | None = None
     quantity: int
     unit_price: int
     options: list[dict[str, Any]]

@@ -17,6 +17,7 @@ from app.genai.contracts import (
 )
 from app.genai.recommendation_generator import (
     RECOMMENDATION_GENERATION_JSON_SCHEMA,
+    GeneratedMenuRecommendation,
     RecommendationGenerator,
     RecommendationGroundingRejectionCode,
 )
@@ -206,6 +207,26 @@ def _recommendation(menu_id: str, rank: int, cuisine_id: str, flavor_id: str) ->
     }
 
 
+def test_v3_presentation_copy_enforces_sentence_ranges() -> None:
+    payload = {
+        **_recommendation("dish-a", 1, "chunk-a-cuisine", "chunk-a-flavor"),
+        "localized_title": "Tteokbokki",
+        "yobi_short_explanation": "Chewy rice cakes meet a bold sauce.",
+        "yobi_long_explanation": (
+            "This dish is built around chewy rice cakes. "
+            "Its sauce brings the main flavor. It is commonly served warm."
+        ),
+        "review_summary": "Diners liked the texture. Some found the seasoning strong.",
+    }
+
+    assert GeneratedMenuRecommendation.model_validate(payload).localized_title == "Tteokbokki"
+
+    with pytest.raises(ValueError, match="yobi_long_explanation"):
+        GeneratedMenuRecommendation.model_validate(
+            {**payload, "yobi_long_explanation": "Only one sentence."}
+        )
+
+
 def test_generator_dispatches_once_without_tools_and_allows_bounded_rerank() -> None:
     output = {
         "status": "RECOMMENDED",
@@ -234,7 +255,8 @@ def test_generator_dispatches_once_without_tools_and_allows_bounded_rerank() -> 
     assert "tools" not in provider.calls[0]
     instructions = str(provider.calls[0]["instructions"])
     assert "Return the JSON immediately without analysis or preamble." in instructions
-    assert "selection_reason, and description to one concise sentence each." in instructions
+    assert "yobi_short_explanation in one or two short sentences" in instructions
+    assert "yobi_long_explanation in three to five short sentences" in instructions
     assert provider.calls[0]["text"]["format"]["strict"] is True
     request_payload = json.loads(provider.calls[0]["input"][0]["content"])
     assert request_payload["response_contract"] == provider.calls[0]["text"]["format"][

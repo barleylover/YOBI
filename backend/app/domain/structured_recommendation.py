@@ -18,7 +18,12 @@ PreferenceCategoryCode = Literal[
     "textures",
     "cooking_methods",
 ]
-SpiceReferenceCountry = Literal["KR", "US"]
+SpiceReferenceCountry = Literal[
+    "US", "GB", "CA", "AU", "NZ", "IE", "KR", "JP", "CN", "TW", "HK", "SG",
+    "ES", "MX", "AR", "CO", "FR", "BE", "DE", "AT", "CH", "IT", "PT", "BR",
+    "TH", "VN", "ID", "MY", "SA", "AE", "EG", "IN", "RU", "PH", "TR", "NL",
+]
+SpicePreferenceV3 = Literal["LESS", "SIMILAR", "MORE"]
 VeganEvidenceStatus = Literal[
     "LIKELY_FIT",
     "POSSIBLE_WITH_CHECKS",
@@ -38,20 +43,35 @@ class DietaryFiltersV2(BaseModel):
     vegan: bool = False
 
 
+class PriceRangeKrwV3(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    min: int = Field(ge=0, le=1_000_000)
+    max: int = Field(ge=0, le=1_000_000)
+
+    @model_validator(mode="after")
+    def validate_order(self) -> PriceRangeKrwV3:
+        if self.min > self.max:
+            raise ValueError("PRICE_RANGE_ORDER_INVALID")
+        return self
+
+
 class RecommendationCriteriaV2(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["2"] = "2"
+    schema_version: Literal["2", "3"] = "2"
     cuisine_origins: list[str] = Field(default_factory=list, max_length=20)
     flavors: list[str] = Field(default_factory=list, max_length=20)
     main_ingredients: list[str] = Field(default_factory=list, max_length=20)
     food_forms: list[str] = Field(default_factory=list, max_length=20)
     temperatures: list[str] = Field(default_factory=list, max_length=20)
     price_bands: list[str] = Field(default_factory=list, max_length=10)
+    price_range_krw: PriceRangeKrwV3 | None = None
     textures: list[str] = Field(default_factory=list, max_length=20)
     cooking_methods: list[str] = Field(default_factory=list, max_length=20)
     dietary_filters: DietaryFiltersV2 = Field(default_factory=DietaryFiltersV2)
-    max_spice_level: int = Field(ge=1, le=5)
+    max_spice_level: int = Field(default=5, ge=1, le=5)
+    spice_preference: SpicePreferenceV3 = "SIMILAR"
     spice_reference_country: SpiceReferenceCountry = "KR"
 
     @field_validator(
@@ -70,6 +90,8 @@ class RecommendationCriteriaV2(BaseModel):
 
     @model_validator(mode="after")
     def reject_objective_conflicts(self) -> RecommendationCriteriaV2:
+        if self.schema_version == "3" and self.price_range_krw is None:
+            raise ValueError("PRICE_RANGE_REQUIRED")
         selected_ingredients = set(self.main_ingredients)
         if self.dietary_filters.halal_certified_only and "PORK" in selected_ingredients:
             raise ValueError("HALAL_PORK_CRITERIA_CONFLICT")
@@ -102,6 +124,7 @@ class RecommendationCriteriaV2(BaseModel):
         return bool(
             self.subjective_groups()
             or self.price_bands
+            or self.price_range_krw is not None
             or self.dietary_filters.halal_certified_only
             or self.dietary_filters.vegan
         )
@@ -193,6 +216,7 @@ class RecommendationRequestRecord(BaseModel):
     created_at: datetime
     dispatched_at: datetime | None = None
     completed_at: datetime | None = None
+    client_cancelled_at: datetime | None = None
     duplicate: bool = False
 
 
@@ -232,6 +256,7 @@ class RecommendationReleaseFamily(BaseModel):
     feature_manifest_sha256: str = "0" * 64
     ranking_policy_version: str = "legacy-llm-rank-v2"
     ranking_policy_sha256: str = "0" * 64
+    synthetic_enrichment_release_id: str | None = None
     status: Literal["LOADING", "READY", "ACTIVE", "RETIRED"]
     activated_at: datetime | None = None
 
@@ -264,6 +289,11 @@ class EvidencePoolItem(BaseModel):
     halal_scope_label: str | None = None
     vegan_status: VeganEvidenceStatus | None = None
     vegan_warning: str | None = None
+    localized_title: str | None = None
+    synthetic_spice_level: int | None = Field(default=None, ge=1, le=5)
+    country_spice_baseline: int | None = Field(default=None, ge=1, le=5)
+    country_preference: dict[str, Any] | None = None
+    synthetic_reviews: list[dict[str, Any]] = Field(default_factory=list)
     retrieval_score: float = 0.0
     # Repository retrieval can retain the complete 100-menu candidate union.
     # The service rewrites this to 1..15 when it freezes the LLM shortlist.
@@ -294,10 +324,15 @@ class EvidencePoolItem(BaseModel):
             "display_name": self.menu.name_en,
             "base_price": self.menu.price,
             "spice_level": self.menu.spice_level,
+            "synthetic_spice_level": self.synthetic_spice_level,
+            "country_spice_baseline": self.country_spice_baseline,
             "halal_certified": self.halal_certified,
             "halal_scope_label": self.halal_scope_label,
             "vegan_status": self.vegan_status,
             "vegan_warning": self.vegan_warning,
+            "localized_title": self.localized_title,
+            "country_preference": self.country_preference,
+            "synthetic_reviews": self.synthetic_reviews,
             "criterion_evidence": grouped,
             "wiki_passages": [item.model_dump(mode="json") for item in self.wiki_passages],
             "menu_facts": [item.model_dump(mode="json") for item in self.menu_facts],
@@ -400,6 +435,15 @@ class StructuredRecommendationView(BaseModel):
     title: str
     selection_reason: str
     description: str
+    localized_title: str | None = None
+    yobi_short_explanation: str | None = None
+    yobi_long_explanation: str | None = None
+    source_description: str | None = None
+    review_summary: str | None = None
+    country_preference: dict[str, Any] | None = None
+    evidence_ids: list[str] = Field(default_factory=list)
+    review_ids: list[str] = Field(default_factory=list)
+    generation_model: str | None = None
     matched_criteria: list[dict[str, Any]] = Field(default_factory=list)
     wiki_passages: list[dict[str, Any]] = Field(default_factory=list)
     caution_codes: list[str] = Field(default_factory=list)

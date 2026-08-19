@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
@@ -34,7 +35,32 @@ from app.genai.contracts import GenAIServingMode, ProviderCapabilities
 from app.genai.recommendation_generator import RecommendationGenerator
 from app.main import app
 from app.services.demo_control import DemoControl
-from app.services.structured_recommendation import StructuredRecommendationService
+from app.services.structured_recommendation import (
+    StructuredRecommendationService,
+    _effective_display_language,
+)
+
+
+def test_backend_generation_uses_only_the_three_effective_display_languages() -> None:
+    assert _effective_display_language("한국어") == ("ko", "한국어")
+    assert _effective_display_language("日本語") == ("ja", "日本語")
+    for language in (
+        "English",
+        "中文（简体）",
+        "中文（繁體）",
+        "Español",
+        "Français",
+        "Deutsch",
+        "Italiano",
+        "Português",
+        "ไทย",
+        "Tiếng Việt",
+        "Bahasa Indonesia",
+        "العربية",
+        "हिन्दी",
+        "Русский",
+    ):
+        assert _effective_display_language(language) == ("en", "English")
 
 
 class FakeProvider:
@@ -852,6 +878,11 @@ def test_provider_failure_keeps_the_same_frozen_top_three_and_order() -> None:
         "menu-c",
     ]
     assert result.failure_code == "PROVIDER_UNAVAILABLE"
+    for item in result.recommendations:
+        assert 1 <= len(re.findall(r"[.!?。！？]", item.yobi_short_explanation or "")) <= 2
+        assert 3 <= len(re.findall(r"[.!?。！？]", item.yobi_long_explanation or "")) <= 5
+        assert 2 <= len(re.findall(r"[.!?。！？]", item.review_summary or "")) <= 3
+        assert not re.search(r"[가-힣]", item.review_summary or "")
     assert all(
         item.matched_criteria
         == [
@@ -979,7 +1010,7 @@ def test_invalid_comparison_output_falls_back_with_same_ids_names_and_order() ->
     assert [item.name for item in comparison.items] == ["Dish A", "Dish B", "Dish C"]
 
 
-def test_korean_and_arabic_fallbacks_use_human_localized_copy() -> None:
+def test_korean_and_arabic_fallbacks_follow_effective_display_language() -> None:
     expected = {
         "한국어": {
             "selection": "선택한 선호 조건에 가장 가까운 서버 정렬 결과입니다.",
@@ -990,14 +1021,14 @@ def test_korean_and_arabic_fallbacks_use_human_localized_copy() -> None:
             ),
         },
         "العربية": {
-            "selection": "النتيجة المرتبة من الخادم الأقرب إلى تفضيلاتك المحددة.",
+            "selection": "The closest server-ranked match to your selected preferences.",
             "summary": (
-                "تمت المقارنة باستخدام بيانات القائمة الحالية ومراجع الطعام العامة التي تمت "
-                "مراجعتها. لم يتغير ترتيب التوصيات."
+                "Compared with current menu facts and reviewed general food references. "
+                "The recommendation order is unchanged."
             ),
             "warning": (
-                "لم يتم التحقق من مكونات المطعم أو الشهادة أو التلامس المتبادل ما لم تظهر في "
-                "بيانات الخادم الحالية."
+                "Restaurant ingredients, certification, and cross-contact are unverified "
+                "unless shown in current server facts."
             ),
         },
     }
@@ -1052,7 +1083,8 @@ def test_korean_and_arabic_fallbacks_use_human_localized_copy() -> None:
             ],
         ]
         assert all("=" not in value for value in localized_fields)
-        assert all("unverified" not in value.lower() for value in localized_fields)
+        if language == "한국어":
+            assert all("unverified" not in value.lower() for value in localized_fields)
         if language == "한국어":
             assert [item.name for item in comparison.items] == ["메뉴 A", "메뉴 B", "메뉴 C"]
 
@@ -1063,6 +1095,8 @@ def test_korean_and_arabic_fallbacks_use_human_localized_copy() -> None:
         normal_request = _request(f"recommendation-localized-normal-{index:04d}")
         normal_batch = normal_service.request_recommendation(_session(), profile, normal_request)
         assert normal_batch.snapshot_id is not None
+        if language == "العربية":
+            assert "requested locale/language: English" in normal_provider.calls[0]["instructions"]
         normal_provider.output = {
             "summary": "Locale-specific provider summary.",
             "items": [
@@ -1117,6 +1151,7 @@ def test_generation_soft_profile_context_excludes_sensitive_legacy_fields() -> N
     assert len(provider.calls) == 1
     generation_input = json.loads(provider.calls[0]["input"][0]["content"])
     assert generation_input["soft_profile_context"] == {
+        "country_code": "KR",
         "preferred_language": "English",
     }
     serialized_context = json.dumps(generation_input["soft_profile_context"])

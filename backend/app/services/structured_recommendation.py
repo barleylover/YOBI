@@ -20,7 +20,10 @@ from app.domain.dialogue import (
 )
 from app.domain.models import Profile, Session
 from app.domain.preference_catalog import PREFERENCE_OPTIONS, normalize_preference_locale
-from app.domain.recommendation_copy import localized_recommendation_fallback_copy
+from app.domain.recommendation_copy import (
+    deterministic_presentation_copy,
+    localized_recommendation_fallback_copy,
+)
 from app.domain.structured_recommendation import (
     EvidencePoolItem,
     RecommendationBatchV2,
@@ -43,6 +46,17 @@ from app.genai.recommendation_generator import (
     RecommendationGenerator,
 )
 from app.services.demo_control import DemoControl
+
+
+def _effective_display_language(preferred_language: str) -> tuple[str, str]:
+    """Keep backend-generated copy aligned with the three UI display languages."""
+
+    requested = normalize_preference_locale(preferred_language)
+    if requested == "ko":
+        return "ko", "한국어"
+    if requested == "ja":
+        return "ja", "日本語"
+    return "en", "English"
 
 
 def compact_generation_payload(
@@ -127,7 +141,7 @@ class StructuredRecommendationService:
         metric = self._preference_selection_metrics.pop(session.session_id, None)
         selected_option_count = sum(
             len(values) for values in commit.criteria.subjective_groups().values()
-        ) + len(commit.criteria.price_bands)
+        ) + len(commit.criteria.price_bands) + int(commit.criteria.price_range_krw is not None)
         log_event(
             logging.getLogger("yobi"),
             event="recommendation_preference_committed",
@@ -298,6 +312,8 @@ class StructuredRecommendationService:
         )
         if record is None:
             raise KeyError("RECOMMENDATION_REQUEST_NOT_FOUND")
+        if record.client_cancelled_at is not None:
+            return self._live_batch(record)
         if record.status is not RecommendationRequestStatus.CREATED:
             return self._live_batch(record)
 
@@ -375,7 +391,13 @@ class StructuredRecommendationService:
         ):
             return self._batch_from_record(dispatched)
 
-        soft_profile_context = {"preferred_language": profile.preferred_language}
+        _display_locale, display_language = _effective_display_language(
+            profile.preferred_language
+        )
+        soft_profile_context = {
+            "preferred_language": display_language,
+            "country_code": profile.country_code or criteria_record.criteria.spice_reference_country,
+        }
         provider_started = monotonic()
         provider_metrics: dict[str, int] = {}
 
@@ -387,6 +409,29 @@ class StructuredRecommendationService:
             if called.dispatch_count != 1:
                 raise RuntimeError("RECOMMENDATION_PROVIDER_CALL_NOT_RECORDED")
 
+        def record_provider_attempt(
+            attempt_no: int,
+            model_id: str,
+            attempt_status: str,
+            error_code: str | None,
+            latency_ms: int,
+            usage: dict[str, int],
+        ) -> None:
+            recorder = getattr(self.repository, "record_recommendation_provider_attempt", None)
+            if callable(recorder):
+                recorder(
+                    session.session_id,
+                    request.request_id,
+                    attempt_no=attempt_no,
+                    provider=self.settings.genai_provider,
+                    model_id=model_id,
+                    status=attempt_status,
+                    error_code=error_code,
+                    latency_ms=latency_ms,
+                    input_tokens=usage.get("input_tokens"),
+                    output_tokens=usage.get("output_tokens"),
+                )
+
         try:
             if self.demo_control.mode in {"force_fallback", "force_genai_timeout"}:
                 raise RuntimeError("DEMO_FORCED_RECOMMENDATION_FALLBACK")
@@ -396,8 +441,9 @@ class StructuredRecommendationService:
                 criteria=criteria_record.criteria.model_dump(mode="json"),
                 soft_profile_context=soft_profile_context,
                 evidence_pool=pool_payload,
-                locale=profile.preferred_language,
+                locale=display_language,
                 before_provider_call=mark_provider_call,
+                on_provider_attempt=record_provider_attempt,
             )
             provider_metrics = generated.provider_metrics
             if generated.status is RecommendationGenerationStatus.NO_MATCH:
@@ -679,6 +725,11 @@ class StructuredRecommendationService:
             return None
         return self._live_batch(record)
 
+    def cancel_request(self, session_id: str, request_id: str) -> bool:
+        """Detach the browser from a request without discarding audit results."""
+
+        return self.repository.cancel_recommendation_request(session_id, request_id)
+
     def recover_request(
         self,
         session: Session,
@@ -696,6 +747,8 @@ class StructuredRecommendationService:
         record = self.repository.get_recommendation_request(session.session_id, request_id)
         if record is None:
             return None, None
+        if record.client_cancelled_at is not None:
+            return self._live_batch(record), None
         if record.status is RecommendationRequestStatus.CREATED:
             resumable = RecommendationRequestInput(
                 request_id=record.request_id,
@@ -745,16 +798,19 @@ class StructuredRecommendationService:
         recommendations = list((record.result_json or {}).get("recommendations", []))
         if not 2 <= len(recommendations) <= 3:
             raise ValueError("RECOMMENDATION_COMPARISON_REQUIRES_TWO_MENUS")
-        copy = localized_recommendation_fallback_copy(profile.preferred_language)
+        _display_locale, display_language = _effective_display_language(
+            profile.preferred_language
+        )
+        copy = localized_recommendation_fallback_copy(display_language)
         evidence_items = [
-            self._comparison_evidence(item, profile.preferred_language) for item in recommendations
+            self._comparison_evidence(item, display_language) for item in recommendations
         ]
         try:
             if self.demo_control.mode in {"force_fallback", "force_genai_timeout"}:
                 raise RuntimeError("DEMO_FORCED_COMPARISON_FALLBACK")
             generated = self.generator.compare(
                 evidence_items=evidence_items,
-                locale=profile.preferred_language,
+                locale=display_language,
             )
             response = RecommendationComparisonV2(
                 snapshot_id=request.snapshot_id,
@@ -794,7 +850,7 @@ class StructuredRecommendationService:
     ) -> dict[str, Any]:
         raw_menu = item.get("menu")
         menu: dict[str, Any] = raw_menu if isinstance(raw_menu, dict) else {}
-        locale = normalize_preference_locale(preferred_language)
+        locale, _display_language = _effective_display_language(preferred_language)
         name = (
             str(menu.get("name_ko") or menu.get("name_en") or "MENU")
             if locale == "ko"
@@ -830,8 +886,8 @@ class StructuredRecommendationService:
         recommendations: list[dict[str, Any]],
         preferred_language: str,
     ) -> RecommendationComparisonV2:
-        locale = normalize_preference_locale(preferred_language)
-        copy = localized_recommendation_fallback_copy(preferred_language)
+        locale, display_language = _effective_display_language(preferred_language)
+        copy = localized_recommendation_fallback_copy(display_language)
         items: list[RecommendationComparisonItemV2] = []
         for recommendation in recommendations:
             raw_menu = recommendation.get("menu")
@@ -974,14 +1030,20 @@ class StructuredRecommendationService:
         record: RecommendationCriteriaRecord,
         preferred_language: str,
     ) -> str:
-        locale = normalize_preference_locale(preferred_language)
-        copy = localized_recommendation_fallback_copy(preferred_language)
+        locale, display_language = _effective_display_language(preferred_language)
+        copy = localized_recommendation_fallback_copy(display_language)
         groups = record.criteria.subjective_groups()
         values = [
             "/".join(PREFERENCE_OPTIONS[code].labels[locale] for code in selected)
             for selected in groups.values()
         ]
-        if record.criteria.price_bands:
+        if record.criteria.schema_version == "3" and record.criteria.price_range_krw:
+            values.append(
+                f"KRW {record.criteria.price_range_krw.min:,}–"
+                f"{record.criteria.price_range_krw.max:,}"
+            )
+            values.append(record.criteria.spice_preference.lower())
+        elif record.criteria.price_bands:
             values.append(
                 "/".join(
                     PREFERENCE_OPTIONS[code].labels[locale] for code in record.criteria.price_bands
@@ -1024,9 +1086,24 @@ class StructuredRecommendationService:
                     **generated_item.model_dump(mode="json"),
                     "rank": rank,
                     "menu_id": pool_item.menu.menu_id,
-                    "menu": pool_item.menu.model_dump(mode="json"),
+                    "menu": pool_item.menu.model_copy(
+                        update={"localized_title": generated_item.localized_title}
+                    ).model_dump(mode="json"),
                     "wiki_evidence_ids": [passage.evidence_id for passage in wiki_passages],
                     "wiki_passages": [passage.model_dump(mode="json") for passage in wiki_passages],
+                    "localized_title": generated_item.localized_title,
+                    "yobi_short_explanation": generated_item.yobi_short_explanation,
+                    "yobi_long_explanation": generated_item.yobi_long_explanation,
+                    "source_description": pool_item.menu.description,
+                    "review_summary": generated_item.review_summary,
+                    "country_preference": pool_item.country_preference,
+                    "evidence_ids": [passage.evidence_id for passage in wiki_passages],
+                    "review_ids": [
+                        str(review.get("review_id"))
+                        for review in pool_item.synthetic_reviews
+                        if review.get("review_id")
+                    ],
+                    "generation_model": generated.generation_model,
                     "halal_certified": pool_item.halal_certified,
                     "halal_scope_label": pool_item.halal_scope_label,
                     "vegan_status": pool_item.vegan_status,
@@ -1047,12 +1124,21 @@ class StructuredRecommendationService:
         evidence_pool: list[EvidencePoolItem],
         preferred_language: str,
     ) -> dict[str, Any]:
-        locale = normalize_preference_locale(preferred_language)
-        copy = localized_recommendation_fallback_copy(preferred_language)
+        locale, display_language = _effective_display_language(preferred_language)
+        copy = localized_recommendation_fallback_copy(display_language)
         recommendations: list[dict[str, Any]] = []
         for rank, item in enumerate(evidence_pool[:3], start=1):
             passages = item.wiki_passages[:2]
             description = " ".join(passage.content for passage in passages).strip()
+            localized_title = item.localized_title or (
+                item.menu.name_ko if locale == "ko" else item.menu.name_en
+            )
+            presentation_copy = deterministic_presentation_copy(
+                locale,
+                localized_title=localized_title,
+                wiki_passages=[passage.content for passage in passages],
+                reviews=item.synthetic_reviews,
+            )
             matched_by_category: dict[str, dict[str, list[str]]] = {}
             for criterion in item.criterion_evidence:
                 grouped = matched_by_category.setdefault(
@@ -1068,14 +1154,27 @@ class StructuredRecommendationService:
                 {
                     "rank": rank,
                     "menu_id": item.menu.menu_id,
-                    "menu": item.menu.model_dump(mode="json"),
+                    "menu": item.menu.model_copy(
+                        update={"localized_title": localized_title}
+                    ).model_dump(mode="json"),
                     "title": (
-                        item.menu.name_ko
-                        if locale == "ko" and item.menu.name_ko
-                        else item.menu.name_en
+                        localized_title
                     ),
                     "selection_reason": copy.search_selection_reason,
                     "description": description or item.menu.description,
+                    "localized_title": localized_title,
+                    "yobi_short_explanation": presentation_copy.short_explanation,
+                    "yobi_long_explanation": presentation_copy.long_explanation,
+                    "source_description": item.menu.description,
+                    "review_summary": presentation_copy.review_summary,
+                    "country_preference": item.country_preference,
+                    "evidence_ids": [passage.evidence_id for passage in passages],
+                    "review_ids": [
+                        str(review.get("review_id"))
+                        for review in item.synthetic_reviews
+                        if review.get("review_id")
+                    ],
+                    "generation_model": "DETERMINISTIC_FALLBACK",
                     "matched_criteria": [
                         {
                             "category_code": category_code,

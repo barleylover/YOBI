@@ -6,6 +6,9 @@ from app.db.repository import YobiRepository
 from app.db.sqlite_repository import SQLiteYobiRepository
 from app.services.chat_service import ChatService
 from app.services.demo_control import DemoControl
+from app.services.menu_presentation import MenuPresentationService
+from app.services.option_localization import OptionLocalizationService
+from app.services.restaurant_note_translation import RestaurantNoteTranslationService
 from app.services.structured_recommendation import StructuredRecommendationService
 
 
@@ -38,3 +41,18 @@ def get_structured_recommendation_service() -> StructuredRecommendationService:
         get_settings(),
         get_demo_control(),
     )
+
+
+@lru_cache(maxsize=1)
+def get_restaurant_note_translation_service() -> RestaurantNoteTranslationService:
+    return RestaurantNoteTranslationService(get_repository(), get_settings())
+
+
+@lru_cache(maxsize=1)
+def get_menu_presentation_service() -> MenuPresentationService:
+    return MenuPresentationService(get_repository(), get_settings())
+
+
+@lru_cache(maxsize=1)
+def get_option_localization_service() -> OptionLocalizationService:
+    return OptionLocalizationService(get_repository(), get_settings())

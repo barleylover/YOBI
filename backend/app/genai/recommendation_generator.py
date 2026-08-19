@@ -4,6 +4,7 @@ import json
 import re
 from enum import Enum
 from threading import BoundedSemaphore
+from time import monotonic
 from typing import Any, Callable
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, model_validator
@@ -125,6 +126,11 @@ def _grounding_rejected(
     )
 
 
+def _sentence_count(value: str) -> int:
+    parts = [part for part in re.split(r"(?<=[.!?。！？])\s*", value.strip()) if part]
+    return max(1, len(parts))
+
+
 class MatchedCriterion(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -138,17 +144,59 @@ class GeneratedMenuRecommendation(BaseModel):
 
     rank: int = Field(ge=1, le=3)
     menu_id: str = Field(min_length=1, max_length=160)
-    title: str = Field(min_length=1, max_length=200)
-    selection_reason: str = Field(min_length=1, max_length=1000)
-    description: str = Field(min_length=1, max_length=2000)
+    # The first three fields remain readable for stored v2 snapshots. New v3
+    # generations use the localized YOBI presentation fields below.
+    title: str = Field(default="", max_length=200)
+    selection_reason: str = Field(default="", max_length=1000)
+    description: str = Field(default="", max_length=2000)
+    localized_title: str = Field(min_length=1, max_length=300)
+    yobi_short_explanation: str = Field(min_length=1, max_length=1000)
+    yobi_long_explanation: str = Field(min_length=1, max_length=3000)
+    review_summary: str = Field(min_length=1, max_length=1500)
     matched_criteria: list[MatchedCriterion] = Field(max_length=20)
     caution_codes: list[str] = Field(max_length=20)
+
+    @model_validator(mode="before")
+    @classmethod
+    def upgrade_v2_payload(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        for field_name, minimum, maximum in (
+            ("yobi_short_explanation", 1, 2),
+            ("yobi_long_explanation", 3, 5),
+            ("review_summary", 2, 3),
+        ):
+            if field_name not in value:
+                continue
+            count = _sentence_count(str(value[field_name]))
+            if not minimum <= count <= maximum:
+                raise ValueError(
+                    f"{field_name} must contain between {minimum} and {maximum} sentences"
+                )
+        upgraded = dict(value)
+        title = str(upgraded.get("localized_title") or upgraded.get("title") or "Menu")
+        short = str(
+            upgraded.get("yobi_short_explanation")
+            or upgraded.get("description")
+            or upgraded.get("selection_reason")
+            or title
+        )
+        long = str(upgraded.get("yobi_long_explanation") or upgraded.get("description") or short)
+        upgraded.setdefault("localized_title", title)
+        upgraded.setdefault("yobi_short_explanation", short)
+        upgraded.setdefault("yobi_long_explanation", long)
+        upgraded.setdefault("review_summary", short)
+        upgraded.setdefault("title", title)
+        upgraded.setdefault("description", short)
+        upgraded.setdefault("selection_reason", "")
+        return upgraded
 
 
 class RecommendationGenerationV2(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     _provider_metrics: dict[str, int] = PrivateAttr(default_factory=dict)
+    _generation_model: str | None = PrivateAttr(default=None)
 
     status: RecommendationGenerationStatus
     criteria_summary: str = Field(min_length=1, max_length=1000)
@@ -158,6 +206,10 @@ class RecommendationGenerationV2(BaseModel):
     @property
     def provider_metrics(self) -> dict[str, int]:
         return dict(self._provider_metrics)
+
+    @property
+    def generation_model(self) -> str | None:
+        return self._generation_model
 
     @model_validator(mode="after")
     def validate_status_and_order(self) -> RecommendationGenerationV2:
@@ -209,16 +261,25 @@ RECOMMENDATION_GENERATION_JSON_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "rank": {"type": "integer", "minimum": 1, "maximum": 3},
                     "menu_id": {"type": "string", "minLength": 1, "maxLength": 160},
-                    "title": {"type": "string", "minLength": 1, "maxLength": 200},
-                    "selection_reason": {
+                    "localized_title": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 300,
+                    },
+                    "yobi_short_explanation": {
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 1000,
                     },
-                    "description": {
+                    "yobi_long_explanation": {
                         "type": "string",
                         "minLength": 1,
-                        "maxLength": 2000,
+                        "maxLength": 3000,
+                    },
+                    "review_summary": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1500,
                     },
                     "matched_criteria": {
                         "type": "array",
@@ -257,9 +318,10 @@ RECOMMENDATION_GENERATION_JSON_SCHEMA: dict[str, Any] = {
                 "required": [
                     "rank",
                     "menu_id",
-                    "title",
-                    "selection_reason",
-                    "description",
+                    "localized_title",
+                    "yobi_short_explanation",
+                    "yobi_long_explanation",
+                    "review_summary",
                     "matched_criteria",
                     "caution_codes",
                 ],
@@ -473,6 +535,7 @@ class RecommendationGenerationValidator:
             raise _grounding_rejected(
                 RecommendationGroundingRejectionCode.SHORTLIST_PRICE_INVALID
             ) from None
+        schema_version = str(criteria.get("schema_version") or "2")
         price_bands = {str(value) for value in criteria.get("price_bands", [])}
         price_matches = {
             "UNDER_10000": price < 10_000,
@@ -484,31 +547,71 @@ class RecommendationGenerationValidator:
             raise _grounding_rejected(
                 RecommendationGroundingRejectionCode.SHORTLIST_PRICE_INVALID
             )
-        if price_bands and not any(
+        price_range = criteria.get("price_range_krw")
+        if schema_version == "3":
+            if not isinstance(price_range, dict):
+                raise _grounding_rejected(
+                    RecommendationGroundingRejectionCode.SHORTLIST_PRICE_INVALID
+                )
+            try:
+                minimum = int(price_range["min"])
+                maximum = int(price_range["max"])
+            except (KeyError, TypeError, ValueError):
+                raise _grounding_rejected(
+                    RecommendationGroundingRejectionCode.SHORTLIST_PRICE_INVALID
+                ) from None
+            if price < minimum or price > maximum:
+                raise _grounding_rejected(
+                    RecommendationGroundingRejectionCode.PRICE_BAND_VIOLATION
+                )
+        elif price_bands and not any(
             price_matches.get(band, False) for band in price_bands
         ):
             raise _grounding_rejected(
                 RecommendationGroundingRejectionCode.PRICE_BAND_VIOLATION
             )
 
-        try:
-            max_spice_level = int(criteria.get("max_spice_level", 5))
-        except (TypeError, ValueError):
-            raise _grounding_rejected(
-                RecommendationGroundingRejectionCode.CRITERIA_SPICE_INVALID
-            ) from None
-        raw_spice_level = pool_item.get("spice_level")
-        if max_spice_level < 5:
+        if schema_version == "3":
             try:
-                spice_level = int(raw_spice_level) if raw_spice_level is not None else 6
-            except (TypeError, ValueError):
+                spice_level = int(pool_item["synthetic_spice_level"])
+                baseline = int(pool_item["country_spice_baseline"])
+            except (KeyError, TypeError, ValueError):
                 raise _grounding_rejected(
                     RecommendationGroundingRejectionCode.SHORTLIST_SPICE_INVALID
                 ) from None
-            if spice_level > max_spice_level:
+            preference = str(criteria.get("spice_preference") or "SIMILAR")
+            spice_matches = {
+                "LESS": spice_level < baseline,
+                "SIMILAR": spice_level == baseline,
+                "MORE": spice_level > baseline,
+            }
+            if preference not in spice_matches:
+                raise _grounding_rejected(
+                    RecommendationGroundingRejectionCode.CRITERIA_SPICE_INVALID
+                )
+            if not spice_matches[preference]:
                 raise _grounding_rejected(
                     RecommendationGroundingRejectionCode.SPICE_LEVEL_VIOLATION
                 )
+        else:
+            try:
+                max_spice_level = int(criteria.get("max_spice_level", 5))
+            except (TypeError, ValueError):
+                raise _grounding_rejected(
+                    RecommendationGroundingRejectionCode.CRITERIA_SPICE_INVALID
+                ) from None
+            raw_spice_level = pool_item.get("spice_level")
+            if max_spice_level < 5:
+                try:
+                    spice_level = int(raw_spice_level) if raw_spice_level is not None else 6
+                except (TypeError, ValueError):
+                    raise _grounding_rejected(
+                        RecommendationGroundingRejectionCode.SHORTLIST_SPICE_INVALID
+                    ) from None
+                if spice_level > max_spice_level:
+                    raise _grounding_rejected(
+                        RecommendationGroundingRejectionCode.SPICE_LEVEL_VIOLATION
+                    )
 
         dietary = criteria.get("dietary_filters", {})
         if not isinstance(dietary, dict):
@@ -561,7 +664,12 @@ class RecommendationGenerationValidator:
     @staticmethod
     def _reject_internal_id_leak(recommendation: GeneratedMenuRecommendation) -> None:
         prose = " ".join(
-            [recommendation.title, recommendation.selection_reason, recommendation.description]
+            [
+                recommendation.localized_title,
+                recommendation.yobi_short_explanation,
+                recommendation.yobi_long_explanation,
+                recommendation.review_summary,
+            ]
         )
         if _INTERNAL_ID_PATTERN.search(prose):
             raise _grounding_rejected(
@@ -598,6 +706,9 @@ class RecommendationGenerator:
         evidence_pool: list[dict[str, Any]],
         locale: str,
         before_provider_call: Callable[[], None] | None = None,
+        on_provider_attempt: (
+            Callable[[int, str, str, str | None, int, dict[str, int]], None] | None
+        ) = None,
     ) -> RecommendationGenerationV2:
         if not evidence_pool:
             raise ValueError("EVIDENCE_POOL_EMPTY")
@@ -643,24 +754,73 @@ class RecommendationGenerator:
             request["text"] = recommendation_generation_text_config()
         request_metrics = self._request_metrics(request, shortlist_count=len(evidence_pool))
         self._enforce_input_limit(request, request_metrics=request_metrics)
-        try:
-            with self._request_slots:
-                if before_provider_call is not None:
-                    before_provider_call()
-                response = self.provider.create_response(
-                    self.settings.structured_recommendation_model,
-                    **request,
-                )
-        except GenAIProviderError as exc:
-            exc.safe_metadata = {**request_metrics, **exc.safe_metadata}
-            raise
-        except Exception as exc:
+        response: Any | None = None
+        selected_model = self.settings.structured_recommendation_model
+        models = [selected_model]
+        fallback_model = self.settings.oci_genai_fallback_model.strip()
+        if (
+            fallback_model
+            and fallback_model != selected_model
+            and self.provider.supports_model(fallback_model)
+        ):
+            models.append(fallback_model)
+        with self._request_slots:
+            if before_provider_call is not None:
+                before_provider_call()
+            for attempt_no, model in enumerate(models, start=1):
+                attempt_started = monotonic()
+                try:
+                    response = self.provider.create_response(model, **request)
+                except GenAIProviderError as exc:
+                    latency_ms = int((monotonic() - attempt_started) * 1000)
+                    if on_provider_attempt is not None:
+                        on_provider_attempt(
+                            attempt_no,
+                            model,
+                            "FAILED",
+                            exc.code.value,
+                            latency_ms,
+                            exc.safe_metadata,
+                        )
+                    exc.safe_metadata = {**request_metrics, **exc.safe_metadata}
+                    if exc.code is GenAIErrorCode.RATE_LIMIT and attempt_no < len(models):
+                        continue
+                    raise
+                except Exception as exc:
+                    latency_ms = int((monotonic() - attempt_started) * 1000)
+                    if on_provider_attempt is not None:
+                        on_provider_attempt(
+                            attempt_no,
+                            model,
+                            "FAILED",
+                            GenAIErrorCode.PROVIDER_UNAVAILABLE.value,
+                            latency_ms,
+                            {},
+                        )
+                    raise GenAIProviderError(
+                        GenAIErrorCode.PROVIDER_UNAVAILABLE,
+                        retryable=False,
+                        cause=exc,
+                        safe_metadata=request_metrics,
+                    ) from exc
+                selected_model = model
+                latency_ms = int((monotonic() - attempt_started) * 1000)
+                if on_provider_attempt is not None:
+                    on_provider_attempt(
+                        attempt_no,
+                        model,
+                        "SUCCEEDED",
+                        None,
+                        latency_ms,
+                        self._response_usage_metrics(response),
+                    )
+                break
+        if response is None:
             raise GenAIProviderError(
                 GenAIErrorCode.PROVIDER_UNAVAILABLE,
                 retryable=False,
-                cause=exc,
                 safe_metadata=request_metrics,
-            ) from exc
+            )
         provider_metrics = {
             **request_metrics,
             **self._response_usage_metrics(response),
@@ -700,6 +860,7 @@ class RecommendationGenerator:
             exc.safe_metadata = {**provider_metrics, **exc.safe_metadata}
             raise
         validated._provider_metrics = provider_metrics
+        validated._generation_model = selected_model
         return validated
 
     @staticmethod
@@ -918,8 +1079,10 @@ class RecommendationGenerator:
 You are YOBI's grounded menu recommendation model.
 Return exactly one JSON object matching the provided schema and write every user-facing string in
 the requested locale/language: {locale}.
-Return the JSON immediately without analysis or preamble. Keep criteria_summary, title,
-selection_reason, and description to one concise sentence each.
+Return the JSON immediately without analysis or preamble. Copy each localized_title exactly from
+its evidence_pool item. Write yobi_short_explanation in one or two short sentences and
+yobi_long_explanation in three to five short sentences. Summarize only the supplied
+synthetic_reviews in review_summary using two or three short sentences.
 
 The server has already applied objective eligibility for delivery area, current availability,
 price bands, maximum spice, explicit halal certification scope, and confirmed vegan conflicts.
@@ -932,10 +1095,12 @@ outside the shortlist. Values inside one category mean OR and categories mean AN
 menu must cite valid evidence for every selected category.
 
 For every matched category, cite only evidence IDs attached to that menu and selected value. Use
-the supplied Wiki prose for the explanation, but do not return wiki_evidence_ids; the server binds
+the supplied Wiki prose for both YOBI explanations, but do not return wiki_evidence_ids; the server binds
 the supplied Wiki evidence to each selected menu. General Wiki prose describes the food generally;
 it does not prove a specific restaurant recipe. Do not invent ingredients, prices, availability,
 certifications, restaurants, options, or cultural facts. Do not expose internal IDs in prose.
+Use country_preference and soft_profile_context only to choose familiar wording for that visitor;
+never use nationality to add, remove, or rerank a menu.
 Allergy and allergen guidance is outside this recommendation product. Do not make allergy-safety,
 allergen-absence, or cross-contact claims even if incidental Wiki prose mentions uncertainty.
 

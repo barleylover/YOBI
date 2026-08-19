@@ -68,12 +68,16 @@ from app.domain.models import (
     EvidenceStatus,
     MenuSummary,
     MerchantComparison,
+    MerchantMenuPresentation,
+    MerchantMenuPresentationPage,
+    MerchantMenuPresentationRequest,
     OptionGroup,
     OptionItem,
     Order,
     Profile,
     ProfileCreate,
     ProfileUpdate,
+    RestaurantNoteTranslation,
     Session,
 )
 from app.domain.preference_catalog import (
@@ -81,6 +85,7 @@ from app.domain.preference_catalog import (
     PREFERENCE_CATEGORIES,
     localized_preference_catalog,
     localized_spice_references,
+    normalize_preference_locale,
     preference_option_is_exposable,
     preference_query_aliases,
 )
@@ -89,6 +94,7 @@ from app.domain.recommendation import (
     rerank_menu_candidates,
     wiki_operational_retrieval_score,
 )
+from app.domain.recommendation_copy import deterministic_presentation_copy
 from app.domain.structured_recommendation import (
     CriterionEvidence,
     EvidencePoolItem,
@@ -348,6 +354,8 @@ class SQLiteYobiRepository:
             }
             if "agent_request_key" not in cart_item_columns:
                 connection.execute("ALTER TABLE cart_item ADD COLUMN agent_request_key TEXT")
+            if "note_translation_id" not in cart_item_columns:
+                connection.execute("ALTER TABLE cart_item ADD COLUMN note_translation_id TEXT")
             connection.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_cart_agent_request "
                 "ON cart_item(agent_request_key)"
@@ -384,6 +392,12 @@ class SQLiteYobiRepository:
             ):
                 if column not in session_columns:
                     connection.execute(f"ALTER TABLE chat_session ADD COLUMN {column} {definition}")
+            profile_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(user_profile)").fetchall()
+            }
+            if "country_code" not in profile_columns:
+                connection.execute("ALTER TABLE user_profile ADD COLUMN country_code TEXT")
             snapshot_columns = {
                 row["name"]
                 for row in connection.execute(
@@ -569,6 +583,7 @@ class SQLiteYobiRepository:
             ("feature_manifest_sha256", f"TEXT NOT NULL DEFAULT '{zero_hash}'"),
             ("ranking_policy_version", "TEXT NOT NULL DEFAULT 'legacy-llm-rank-v2'"),
             ("ranking_policy_sha256", f"TEXT NOT NULL DEFAULT '{zero_hash}'"),
+            ("synthetic_enrichment_release_id", "TEXT"),
         ):
             if column not in family_columns:
                 connection.execute(
@@ -588,6 +603,7 @@ class SQLiteYobiRepository:
             ("support_manifest_sha256", f"TEXT NOT NULL DEFAULT '{zero_hash}'"),
             ("feature_manifest_sha256", f"TEXT NOT NULL DEFAULT '{zero_hash}'"),
             ("finalized_at", "TEXT"),
+            ("client_cancelled_at", "TEXT"),
         ):
             if column not in request_columns:
                 connection.execute(
@@ -607,6 +623,8 @@ class SQLiteYobiRepository:
             "menu_source_detail(liquor,is_adult,verified_adult,soldout,menu_id)",
             "CREATE INDEX IF NOT EXISTS idx_rec_request_policy ON "
             "structured_recommendation_request(session_id,ranking_policy_version,status,created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_rec_request_cancelled ON "
+            "structured_recommendation_request(session_id,client_cancelled_at,created_at)",
         ):
             connection.execute(statement)
 
@@ -715,12 +733,53 @@ class SQLiteYobiRepository:
             f"{RECOMMENDATION_RELEASE_FAMILY_PREFIX}:"
             f"{hashlib.sha256(json.dumps(family_identity, sort_keys=True, separators=(',', ':')).encode()).hexdigest()[:24]}"
         )
+        active_enriched_family = connection.execute(
+            """
+            SELECT family.release_family_id
+            FROM recommendation_runtime_state state
+            JOIN recommendation_release_family family
+              ON family.release_family_id=state.active_release_family_id
+            JOIN synthetic_enrichment_release enrichment
+              ON enrichment.release_id=family.synthetic_enrichment_release_id
+            WHERE state.state_key='ACTIVE'
+              AND enrichment.status='ACTIVE'
+              AND family.knowledge_release_id=?
+              AND family.catalog_release_id=?
+              AND family.preference_catalog_version=?
+              AND family.spice_reference_version=?
+              AND family.certification_release_id=?
+              AND family.embedding_model=?
+              AND family.embedding_version=?
+              AND family.support_manifest_sha256=?
+              AND family.feature_manifest_sha256=?
+              AND family.ranking_policy_version=?
+              AND family.ranking_policy_sha256=?
+            """,
+            (
+                knowledge_release_id,
+                CATALOG_VERSION,
+                PREFERENCE_CATALOG_VERSION,
+                SPICE_REFERENCE_VERSION,
+                CERTIFICATION_RELEASE_ID,
+                str(active["embedding_model"]),
+                str(active["embedding_version"]),
+                support_manifest_sha256,
+                feature_manifest_sha256,
+                RANKING_POLICY_VERSION,
+                RANKING_POLICY_SHA256,
+            ),
+        ).fetchone()
+        active_family_id = (
+            str(active_enriched_family["release_family_id"])
+            if active_enriched_family is not None
+            else family_seed
+        )
         connection.execute(
             """
             UPDATE recommendation_release_family SET status='READY'
             WHERE status='ACTIVE' AND release_family_id<>?
             """,
-            (family_seed,),
+            (active_family_id,),
         )
         connection.execute(
             """
@@ -733,7 +792,7 @@ class SQLiteYobiRepository:
               status,activated_at
             ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(release_family_id) DO UPDATE SET
-              status='ACTIVE',activated_at=excluded.activated_at
+              status=excluded.status,activated_at=excluded.activated_at
             """,
             (
                 family_seed,
@@ -748,9 +807,14 @@ class SQLiteYobiRepository:
                 feature_manifest_sha256,
                 RANKING_POLICY_VERSION,
                 RANKING_POLICY_SHA256,
-                "ACTIVE",
+                "ACTIVE" if active_family_id == family_seed else "READY",
                 now,
             ),
+        )
+        connection.execute(
+            "UPDATE recommendation_release_family SET status='ACTIVE' "
+            "WHERE release_family_id=?",
+            (active_family_id,),
         )
         connection.execute(
             """
@@ -760,7 +824,7 @@ class SQLiteYobiRepository:
               active_release_family_id=excluded.active_release_family_id,
               updated_at=excluded.updated_at
             """,
-            (family_seed, now),
+            (active_family_id, now),
         )
 
         supported_preference_codes = cls._supported_preference_codes(connection)
@@ -1307,23 +1371,24 @@ class SQLiteYobiRepository:
 
     def create_profile(self, data: ProfileCreate) -> Profile:
         if not data.consent_demo_data:
-            raise ValueError("Demo data processing consent is required to start a session")
+            raise ValueError("Data processing consent is required to start a session")
         profile_id = _id("profile")
         created_at = _now()
         with self._connection() as connection:
             connection.execute(
                 """
                 INSERT INTO user_profile (
-                  profile_id, preferred_language, nationality, age_band, gender,
+                  profile_id, preferred_language, nationality, country_code, age_band, gender,
                   religion_selection, dietary_rules_json, allergy_severity,
                   spice_tolerance, favorite_foods_json, consent_demo_data,
                   remember_profile, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     profile_id,
                     data.preferred_language,
                     data.nationality,
+                    data.country_code,
                     data.age_band,
                     data.gender,
                     data.religion_selection,
@@ -1362,11 +1427,11 @@ class SQLiteYobiRepository:
             }
         )
         if not merged.consent_demo_data:
-            raise ValueError("Demo data processing consent is required to keep a profile")
+            raise ValueError("Data processing consent is required to keep a profile")
         with self._connection() as connection:
             connection.execute(
                 """
-                UPDATE user_profile SET preferred_language=?, nationality=?, age_band=?, gender=?,
+                UPDATE user_profile SET preferred_language=?, nationality=?, country_code=?, age_band=?, gender=?,
                   religion_selection=?, dietary_rules_json=?, allergy_severity=?,
                   spice_tolerance=?, favorite_foods_json=?, consent_demo_data=?,
                   remember_profile=? WHERE profile_id=?
@@ -1374,6 +1439,7 @@ class SQLiteYobiRepository:
                 (
                     merged.preferred_language,
                     merged.nationality,
+                    merged.country_code,
                     merged.age_band,
                     merged.gender,
                     merged.religion_selection,
@@ -1394,6 +1460,7 @@ class SQLiteYobiRepository:
             profile_id=row["profile_id"],
             preferred_language=row["preferred_language"],
             nationality=row["nationality"],
+            country_code=row["country_code"],
             age_band=row["age_band"],
             gender=row["gender"],
             religion_selection=row["religion_selection"],
@@ -1793,6 +1860,11 @@ class SQLiteYobiRepository:
             completed_at=(
                 datetime.fromisoformat(str(row["completed_at"])) if row["completed_at"] else None
             ),
+            client_cancelled_at=(
+                datetime.fromisoformat(str(row["client_cancelled_at"]))
+                if "client_cancelled_at" in columns and row["client_cancelled_at"]
+                else None
+            ),
             duplicate=duplicate,
         )
 
@@ -2147,6 +2219,140 @@ class SQLiteYobiRepository:
             if row is None:
                 raise RuntimeError("RECOMMENDATION_PROVIDER_CALL_WRITE_FAILED")
             return self._request_record_from_row(row)
+
+    def record_recommendation_provider_attempt(
+        self,
+        session_id: str,
+        request_id: str,
+        *,
+        attempt_no: int,
+        provider: str,
+        model_id: str,
+        status: str,
+        error_code: str | None,
+        latency_ms: int,
+        input_tokens: int | None,
+        output_tokens: int | None,
+    ) -> None:
+        now = _now()
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO recommendation_provider_attempt(
+                  session_id,request_id,attempt_no,provider,model_id,status,error_code,
+                  latency_ms,input_tokens,output_tokens,created_at,completed_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(session_id,request_id,attempt_no) DO UPDATE SET
+                  status=excluded.status,error_code=excluded.error_code,
+                  latency_ms=excluded.latency_ms,input_tokens=excluded.input_tokens,
+                  output_tokens=excluded.output_tokens,completed_at=excluded.completed_at
+                """,
+                (
+                    session_id,
+                    request_id,
+                    attempt_no,
+                    provider,
+                    model_id,
+                    status,
+                    error_code,
+                    latency_ms,
+                    input_tokens,
+                    output_tokens,
+                    now,
+                    now,
+                ),
+            )
+
+    def cancel_recommendation_request(self, session_id: str, request_id: str) -> bool:
+        with self._connection() as connection:
+            updated = connection.execute(
+                """
+                UPDATE structured_recommendation_request
+                SET client_cancelled_at=COALESCE(client_cancelled_at,?)
+                WHERE session_id=? AND request_id=?
+                """,
+                (_now(), session_id, request_id),
+            )
+            return updated.rowcount == 1
+
+    @staticmethod
+    def _restaurant_note_translation_from_row(
+        row: sqlite3.Row,
+    ) -> RestaurantNoteTranslation:
+        return RestaurantNoteTranslation(
+            translation_id=str(row["translation_id"]),
+            source_text=str(row["source_text"]),
+            source_language=str(row["source_language"]),
+            korean_text=str(row["korean_text"]) if row["korean_text"] else None,
+            back_translation=(
+                str(row["back_translation"]) if row["back_translation"] else None
+            ),
+            model_id=str(row["model_id"]),
+            status=cast(Any, str(row["status"])),
+            error_code=str(row["error_code"]) if row["error_code"] else None,
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+        )
+
+    def get_restaurant_note_translation_by_hash(
+        self, session_id: str, request_hash: str
+    ) -> RestaurantNoteTranslation | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM restaurant_note_translation
+                WHERE session_id=? AND request_hash=? AND status='SUCCEEDED'
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (session_id, request_hash),
+            ).fetchone()
+        return self._restaurant_note_translation_from_row(row) if row else None
+
+    def save_restaurant_note_translation(
+        self,
+        session_id: str,
+        *,
+        translation_id: str,
+        source_language: str,
+        source_text: str,
+        korean_text: str | None,
+        back_translation: str | None,
+        provider: str,
+        model_id: str,
+        status: str,
+        error_code: str | None,
+        request_hash: str,
+    ) -> RestaurantNoteTranslation:
+        created_at = _now()
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO restaurant_note_translation(
+                  translation_id,session_id,source_language,source_text,korean_text,
+                  back_translation,provider,model_id,status,error_code,request_hash,created_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    translation_id,
+                    session_id,
+                    source_language,
+                    source_text,
+                    korean_text,
+                    back_translation,
+                    provider,
+                    model_id,
+                    status,
+                    error_code,
+                    request_hash,
+                    created_at,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM restaurant_note_translation WHERE translation_id=?",
+                (translation_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("RESTAURANT_NOTE_TRANSLATION_WRITE_FAILED")
+        return self._restaurant_note_translation_from_row(row)
 
     def complete_recommendation_request(
         self,
@@ -2649,7 +2855,11 @@ class SQLiteYobiRepository:
         *,
         active_only: bool = False,
     ) -> RecommendationRequestRecord | None:
-        active_clause = "AND status IN ('CREATED','DISPATCHED')" if active_only else ""
+        active_clause = (
+            "AND status IN ('CREATED','DISPATCHED') AND client_cancelled_at IS NULL"
+            if active_only
+            else ""
+        )
         with self._connection() as connection:
             row = connection.execute(
                 f"""
@@ -3557,6 +3767,11 @@ class SQLiteYobiRepository:
                 criteria=criteria,
                 knowledge_release_id=str(family["knowledge_release_id"]),
                 certification_release_id=str(family["certification_release_id"]),
+                synthetic_enrichment_release_id=(
+                    str(family["synthetic_enrichment_release_id"])
+                    if family["synthetic_enrichment_release_id"]
+                    else None
+                ),
                 service_area_id=service_area_id,
                 excluded_menu_ids=excluded,
                 eligibility_as_of=eligibility_as_of.isoformat(),
@@ -3571,6 +3786,11 @@ class SQLiteYobiRepository:
                 criteria=criteria,
                 knowledge_release_id=str(family["knowledge_release_id"]),
                 certification_release_id=str(family["certification_release_id"]),
+                synthetic_enrichment_release_id=(
+                    str(family["synthetic_enrichment_release_id"])
+                    if family["synthetic_enrichment_release_id"]
+                    else None
+                ),
                 service_area_id=service_area_id,
                 excluded_menu_ids=excluded,
                 eligibility_as_of=eligibility_as_of.isoformat(),
@@ -3590,6 +3810,11 @@ class SQLiteYobiRepository:
                 criteria=criteria,
                 knowledge_release_id=str(family["knowledge_release_id"]),
                 certification_release_id=str(family["certification_release_id"]),
+                synthetic_enrichment_release_id=(
+                    str(family["synthetic_enrichment_release_id"])
+                    if family["synthetic_enrichment_release_id"]
+                    else None
+                ),
                 service_area_id=service_area_id,
                 excluded_menu_ids=excluded,
                 eligibility_as_of=eligibility_as_of.isoformat(),
@@ -3606,6 +3831,11 @@ class SQLiteYobiRepository:
                 criteria=criteria,
                 knowledge_release_id=str(family["knowledge_release_id"]),
                 certification_release_id=str(family["certification_release_id"]),
+                synthetic_enrichment_release_id=(
+                    str(family["synthetic_enrichment_release_id"])
+                    if family["synthetic_enrichment_release_id"]
+                    else None
+                ),
                 service_area_id=service_area_id,
                 excluded_menu_ids=excluded,
                 eligibility_as_of=eligibility_as_of.isoformat(),
@@ -3665,6 +3895,11 @@ class SQLiteYobiRepository:
                 criteria=criteria,
                 knowledge_release_id=str(family["knowledge_release_id"]),
                 certification_release_id=str(family["certification_release_id"]),
+                synthetic_enrichment_release_id=(
+                    str(family["synthetic_enrichment_release_id"])
+                    if family["synthetic_enrichment_release_id"]
+                    else None
+                ),
                 service_area_id=service_area_id,
                 excluded_menu_ids=excluded,
                 eligibility_as_of=eligibility_as_of.isoformat(),
@@ -3812,9 +4047,73 @@ class SQLiteYobiRepository:
         )
         if decisions:
             query_count += 1
+        synthetic_by_menu: dict[str, sqlite3.Row] = {}
+        synthetic_reviews_by_menu: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        synthetic_release_id = (
+            str(family["synthetic_enrichment_release_id"])
+            if family["synthetic_enrichment_release_id"]
+            else None
+        )
+        country_code = profile.country_code or criteria.spice_reference_country
+        requested_locale = normalize_preference_locale(profile.preferred_language)
+        presentation_locale = requested_locale if requested_locale in {"ko", "ja"} else "en"
+        if decisions and synthetic_release_id:
+            selected_ids = [decision.menu_id for decision in decisions]
+            placeholders = ",".join("?" for _ in selected_ids)
+            synthetic_rows = connection.execute(
+                f"""
+                SELECT profile.menu_id,profile.spice_level,profile.halal_fit,
+                       profile.vegan_fit,localization.display_name,
+                       preference.preference_percent,preference.sample_size,
+                       country.spice_baseline
+                FROM synthetic_menu_profile profile
+                JOIN synthetic_country_profile country
+                  ON country.release_id=profile.release_id
+                 AND country.country_code=?
+                LEFT JOIN menu_localization localization
+                  ON localization.release_id=profile.release_id
+                 AND localization.menu_id=profile.menu_id
+                 AND localization.language_code=?
+                 AND localization.validation_status='VALID'
+                LEFT JOIN synthetic_menu_country_preference preference
+                  ON preference.release_id=profile.release_id
+                 AND preference.menu_id=profile.menu_id
+                 AND preference.country_code=?
+                WHERE profile.release_id=?
+                  AND profile.menu_id IN ({placeholders})
+                """,
+                (
+                    country_code,
+                    presentation_locale,
+                    country_code,
+                    synthetic_release_id,
+                    *selected_ids,
+                ),
+            ).fetchall()
+            synthetic_by_menu = {str(item["menu_id"]): item for item in synthetic_rows}
+            review_rows = connection.execute(
+                f"""
+                SELECT review_id,menu_id,topic,rating,review_text,display_order
+                FROM synthetic_review_snippet
+                WHERE release_id=? AND menu_id IN ({placeholders})
+                ORDER BY menu_id,display_order,review_id
+                """,
+                (synthetic_release_id, *selected_ids),
+            ).fetchall()
+            for review in review_rows:
+                synthetic_reviews_by_menu[str(review["menu_id"])].append(
+                    {
+                        "review_id": str(review["review_id"]),
+                        "topic": str(review["topic"]),
+                        "rating": int(review["rating"]),
+                        "review_text": str(review["review_text"]),
+                    }
+                )
+            query_count += 2
         pool: list[EvidencePoolItem] = []
         for decision in decisions:
             row = candidate_by_id[decision.menu_id]
+            synthetic = synthetic_by_menu.get(decision.menu_id)
             wiki_passages = [
                 EvidenceReference(
                     evidence_id=str(chunk["chunk_id"]),
@@ -3859,7 +4158,9 @@ class SQLiteYobiRepository:
                     evidence_id=f"fact_{decision.menu_id}_spice",
                     evidence_type="MENU_FACT",
                     content=(
-                        f"Reviewed spice level: {int(row['spice_level'])} of 5."
+                        f"Internal spice level: {int(synthetic['spice_level'])} of 5."
+                        if synthetic is not None
+                        else f"Reviewed spice level: {int(row['spice_level'])} of 5."
                         if row["spice_level"] is not None
                         else "The source did not provide a reviewed spice level."
                     ),
@@ -3914,9 +4215,37 @@ class SQLiteYobiRepository:
                     wiki_passages=wiki_passages,
                     menu_facts=facts,
                     halal_certified=(
-                        True if criteria.dietary_filters.halal_certified_only else None
+                        bool(synthetic["halal_fit"])
+                        if synthetic is not None
+                        else True if criteria.dietary_filters.halal_certified_only else None
                     ),
-                    vegan_status=("LIKELY_FIT" if criteria.dietary_filters.vegan else "UNKNOWN"),
+                    vegan_status=(
+                        "LIKELY_FIT"
+                        if synthetic is not None and bool(synthetic["vegan_fit"])
+                        else "UNKNOWN"
+                    ),
+                    localized_title=(
+                        str(synthetic["display_name"])
+                        if synthetic is not None and synthetic["display_name"]
+                        else menu.name_ko if presentation_locale == "ko" else menu.name_en
+                    ),
+                    synthetic_spice_level=(
+                        int(synthetic["spice_level"]) if synthetic is not None else None
+                    ),
+                    country_spice_baseline=(
+                        int(synthetic["spice_baseline"]) if synthetic is not None else None
+                    ),
+                    country_preference=(
+                        {
+                            "country_code": country_code,
+                            "preference_percent": int(synthetic["preference_percent"]),
+                            "sample_size": int(synthetic["sample_size"]),
+                        }
+                        if synthetic is not None
+                        and synthetic["preference_percent"] is not None
+                        else None
+                    ),
+                    synthetic_reviews=synthetic_reviews_by_menu.get(decision.menu_id, []),
                     retrieval_score=decision.score,
                     server_rank=decision.rank,
                     explicit_score=decision.explicit_score,
@@ -3982,7 +4311,17 @@ class SQLiteYobiRepository:
                 raise RuntimeError("RECOMMENDATION_RELEASE_NOT_READY")
             unsupported_reasons: list[str] = []
             release_id = str(family["knowledge_release_id"])
-            if criteria.dietary_filters.halal_certified_only:
+            synthetic_release_id = (
+                str(family["synthetic_enrichment_release_id"])
+                if family["synthetic_enrichment_release_id"]
+                else None
+            )
+            if criteria.schema_version == "3" and synthetic_release_id is None:
+                unsupported_reasons.append("SYNTHETIC_ENRICHMENT_UNAVAILABLE")
+            if (
+                criteria.schema_version == "2"
+                and criteria.dietary_filters.halal_certified_only
+            ):
                 halal_menus = len(
                     self._valid_halal_certifications_in_connection(
                         connection,
@@ -3992,7 +4331,7 @@ class SQLiteYobiRepository:
                 )
                 if halal_menus < 3:
                     unsupported_reasons.append("HALAL_CERTIFICATION_UNAVAILABLE")
-            if criteria.dietary_filters.vegan:
+            if criteria.schema_version == "2" and criteria.dietary_filters.vegan:
                 vegan_capability = connection.execute(
                     """
                     SELECT COUNT(DISTINCT menu.menu_id) vegan_menus,
@@ -4017,7 +4356,7 @@ class SQLiteYobiRepository:
                     and int(vegan_capability["vegan_merchants"] or 0) >= 2
                 ):
                     unsupported_reasons.append("VEGAN_EVIDENCE_UNAVAILABLE")
-            if criteria.max_spice_level < 5:
+            if criteria.schema_version == "2" and criteria.max_spice_level < 5:
                 spice_capability = connection.execute(
                     """
                     SELECT COUNT(DISTINCT menu.menu_id) spice_menus,
@@ -4051,6 +4390,7 @@ class SQLiteYobiRepository:
                     criteria=criteria,
                     knowledge_release_id=str(family["knowledge_release_id"]),
                     certification_release_id=str(family["certification_release_id"]),
+                    synthetic_enrichment_release_id=synthetic_release_id,
                     service_area_id=service_area_id,
                     excluded_menu_ids=excluded,
                     eligibility_as_of=_now(),
@@ -4096,6 +4436,11 @@ class SQLiteYobiRepository:
             feature_manifest_sha256=str(row["feature_manifest_sha256"]),
             ranking_policy_version=str(row["ranking_policy_version"]),
             ranking_policy_sha256=str(row["ranking_policy_sha256"]),
+            synthetic_enrichment_release_id=(
+                str(row["synthetic_enrichment_release_id"])
+                if row["synthetic_enrichment_release_id"]
+                else None
+            ),
             status=cast(Any, str(row["status"])),
             activated_at=(
                 datetime.fromisoformat(str(row["activated_at"])) if row["activated_at"] else None
@@ -4272,13 +4617,42 @@ class SQLiteYobiRepository:
                 """,
                 (family.knowledge_release_id,),
             ).fetchone()
-            halal_menus = len(
+            _halal_menus = len(
                 self._valid_halal_certifications_in_connection(
                     connection,
                     release_family_id=family.release_family_id,
                     instant=_now(),
                 )
             )
+            synthetic_price_bounds = None
+            synthetic_country_rows: list[sqlite3.Row] = []
+            synthetic_capability = None
+            if family.synthetic_enrichment_release_id:
+                synthetic_price_bounds = connection.execute(
+                    """
+                    SELECT MIN(menu.price) min_price,MAX(menu.price) max_price
+                    FROM synthetic_menu_profile profile
+                    JOIN menu ON menu.menu_id=profile.menu_id
+                    WHERE profile.release_id=? AND menu.availability='AVAILABLE'
+                    """,
+                    (family.synthetic_enrichment_release_id,),
+                ).fetchone()
+                synthetic_country_rows = connection.execute(
+                    """
+                    SELECT country_code,spice_baseline
+                    FROM synthetic_country_profile
+                    WHERE release_id=? ORDER BY country_code
+                    """,
+                    (family.synthetic_enrichment_release_id,),
+                ).fetchall()
+                synthetic_capability = connection.execute(
+                    """
+                    SELECT SUM(halal_fit) halal_menus,SUM(vegan_fit) vegan_menus,
+                           COUNT(*) menu_count
+                    FROM synthetic_menu_profile WHERE release_id=?
+                    """,
+                    (family.synthetic_enrichment_release_id,),
+                ).fetchone()
         active_codes = frozenset(str(row["option_code"]) for row in rows)
         exposed_codes = (
             frozenset(
@@ -4318,36 +4692,61 @@ class SQLiteYobiRepository:
                         "reviewed_document_count": document_count,
                     }
                 )
-        spice_enabled = bool(
+        _spice_enabled = bool(
             capability_rows
             and int(capability_rows["spice_menus"] or 0) >= 3
             and int(capability_rows["spice_merchants"] or 0) >= 2
         )
-        vegan_enabled = bool(
+        _vegan_enabled = bool(
             capability_rows
             and int(capability_rows["vegan_menus"] or 0) >= 3
             and int(capability_rows["vegan_merchants"] or 0) >= 2
         )
         payload["capabilities"] = {
             "halal_certified_only": {
-                "enabled": halal_menus >= 3,
+                "enabled": bool(
+                    synthetic_capability
+                    and int(synthetic_capability["halal_menus"] or 0) >= 3
+                ),
                 "disabled_reason": None
-                if halal_menus >= 3
-                else "No verifiable formal certification coverage is available.",
+                if synthetic_capability
+                and int(synthetic_capability["halal_menus"] or 0) >= 3
+                else "Enrichment data is not ready.",
             },
             "vegan": {
-                "enabled": vegan_enabled,
+                "enabled": bool(
+                    synthetic_capability
+                    and int(synthetic_capability["vegan_menus"] or 0) >= 3
+                ),
                 "disabled_reason": None
-                if vegan_enabled
-                else "Reviewed menu-level ingredient coverage is unavailable.",
+                if synthetic_capability
+                and int(synthetic_capability["vegan_menus"] or 0) >= 3
+                else "Enrichment data is not ready.",
             },
             "max_spice_level": {
-                "enabled": spice_enabled,
+                "enabled": bool(synthetic_country_rows),
                 "disabled_reason": None
-                if spice_enabled
-                else "Reviewed menu-level spice values are unavailable.",
+                if synthetic_country_rows
+                else "Enrichment data is not ready.",
             },
         }
+        if synthetic_price_bounds and synthetic_price_bounds["min_price"] is not None:
+            minimum = int(synthetic_price_bounds["min_price"])
+            maximum = int(synthetic_price_bounds["max_price"])
+            payload["price_range_krw"] = {
+                "min": (minimum // 1000) * 1000,
+                "max": ((maximum + 999) // 1000) * 1000,
+                "step": 1000,
+            }
+        payload["country_spice_profiles"] = [
+            {
+                "country_code": str(row["country_code"]),
+                "spice_baseline": int(row["spice_baseline"]),
+            }
+            for row in synthetic_country_rows
+        ]
+        payload["schema_version"] = "3"
+        payload["synthetic_enrichment_release_id"] = family.synthetic_enrichment_release_id
         payload["spice_reference_version"] = family.spice_reference_version
         payload["knowledge_release_id"] = family.knowledge_release_id
         payload["support_manifest_sha256"] = family.support_manifest_sha256
@@ -5537,6 +5936,259 @@ class SQLiteYobiRepository:
             )
         return rerank_menu_candidates(candidates, safety_state, merchant_areas, limit)
 
+    def list_merchant_menu_presentations(
+        self,
+        session_id: str,
+        merchant_id: str,
+        request: MerchantMenuPresentationRequest,
+    ) -> MerchantMenuPresentationPage:
+        with self._connection() as connection:
+            context = connection.execute(
+                """
+                SELECT profile.preferred_language,profile.country_code,
+                       family.knowledge_release_id,family.synthetic_enrichment_release_id
+                FROM chat_session session
+                JOIN user_profile profile ON profile.profile_id=session.profile_id
+                JOIN recommendation_runtime_state state ON state.state_key='ACTIVE'
+                JOIN recommendation_release_family family
+                  ON family.release_family_id=state.active_release_family_id
+                WHERE session.session_id=?
+                """,
+                (session_id,),
+            ).fetchone()
+            if context is None:
+                raise KeyError("SESSION_NOT_FOUND")
+            release_id = str(context["synthetic_enrichment_release_id"] or "")
+            if not release_id:
+                raise RuntimeError("SYNTHETIC_ENRICHMENT_UNAVAILABLE")
+            requested_locale = normalize_preference_locale(str(context["preferred_language"]))
+            language_code = requested_locale if requested_locale in {"ko", "ja"} else "en"
+            country_code = str(context["country_code"] or "US")
+            parameters: list[Any] = [
+                release_id,
+                language_code,
+                release_id,
+                country_code,
+                str(context["knowledge_release_id"]),
+                merchant_id,
+                request.cursor or "",
+            ]
+            exclude_sql = ""
+            if request.exclude_menu_ids:
+                exclude_sql = (
+                    f" AND menu.menu_id NOT IN ({','.join('?' for _ in request.exclude_menu_ids)})"
+                )
+                parameters.extend(request.exclude_menu_ids)
+            parameters.append(request.limit + 1)
+            rows = connection.execute(
+                f"""
+                SELECT menu.*,COALESCE(merchant.name_en,merchant.name_ko) merchant_name,
+                       merchant.delivery_fee,merchant.eta_min,merchant.eta_max,
+                       localization.display_name,preference.preference_percent,
+                       preference.sample_size
+                FROM menu_wiki_eligibility eligibility
+                JOIN menu ON menu.menu_id=eligibility.menu_id
+                JOIN merchant ON merchant.merchant_id=menu.merchant_id
+                LEFT JOIN menu_localization localization
+                  ON localization.release_id=? AND localization.menu_id=menu.menu_id
+                 AND localization.language_code=? AND localization.validation_status='VALID'
+                LEFT JOIN synthetic_menu_country_preference preference
+                  ON preference.release_id=? AND preference.menu_id=menu.menu_id
+                 AND preference.country_code=?
+                WHERE eligibility.knowledge_release_id=?
+                  AND menu.merchant_id=? AND menu.availability='AVAILABLE'
+                  AND menu.menu_id>? {exclude_sql}
+                ORDER BY menu.menu_id
+                LIMIT ?
+                """,
+                parameters,
+            ).fetchall()
+            has_more = len(rows) > request.limit
+            visible_rows = rows[: request.limit]
+            items: list[MerchantMenuPresentation] = []
+            for row in visible_rows:
+                menu_id = str(row["menu_id"])
+                passage_rows = connection.execute(
+                    """
+                    SELECT chunk.chunk_id,chunk.content
+                    FROM menu_concept_membership membership
+                    JOIN dish_concept_closure closure
+                      ON closure.release_id=membership.knowledge_release_id
+                     AND closure.descendant_concept_id=membership.concept_id
+                     AND closure.inherit_claims=1
+                    JOIN knowledge_chunk chunk
+                      ON chunk.release_id=closure.release_id
+                     AND chunk.concept_id=closure.ancestor_concept_id
+                    JOIN knowledge_document document
+                      ON document.release_id=chunk.release_id
+                     AND document.document_id=chunk.document_id
+                    WHERE membership.knowledge_release_id=? AND membership.menu_id=?
+                      AND document.source_type='SYNTHETIC_WIKI'
+                      AND document.review_status='REVIEWED_DEMO'
+                      AND lower(chunk.facet)<>'safety'
+                    ORDER BY closure.depth,chunk.chunk_index,chunk.chunk_id LIMIT 2
+                    """,
+                    (str(context["knowledge_release_id"]), menu_id),
+                ).fetchall()
+                reviews = connection.execute(
+                    """
+                    SELECT review_id,topic,rating,review_text FROM synthetic_review_snippet
+                    WHERE release_id=? AND menu_id=? ORDER BY display_order LIMIT 3
+                    """,
+                    (release_id, menu_id),
+                ).fetchall()
+                title = str(
+                    row["display_name"]
+                    or (row["name_ko"] if language_code == "ko" else row["name_en"])
+                    or row["name_ko"]
+                )
+                passage_texts = [str(passage["content"]) for passage in passage_rows]
+                presentation_copy = deterministic_presentation_copy(
+                    language_code,
+                    localized_title=title,
+                    wiki_passages=passage_texts,
+                    reviews=[
+                        {"topic": review["topic"], "rating": review["rating"]}
+                        for review in reviews
+                    ],
+                )
+                short = presentation_copy.short_explanation
+                long = presentation_copy.long_explanation
+                review_summary = presentation_copy.review_summary
+                evidence_ids = [str(passage["chunk_id"]) for passage in passage_rows]
+                review_ids = [str(review["review_id"]) for review in reviews]
+                source_hash = hashlib.sha256(
+                    json.dumps(
+                        {
+                            "localized_title": title,
+                            "source_description": str(row["description"] or ""),
+                            "evidence_ids": evidence_ids,
+                            "review_ids": review_ids,
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ).encode()
+                ).hexdigest()
+                cached = connection.execute(
+                    """
+                    SELECT * FROM menu_presentation_cache
+                    WHERE release_id=? AND menu_id=? AND language_code=?
+                      AND country_code=? AND source_hash=?
+                    ORDER BY created_at DESC LIMIT 1
+                    """,
+                    (release_id, menu_id, language_code, country_code, source_hash),
+                ).fetchone()
+                if cached is not None:
+                    title = str(cached["localized_title"])
+                    short = str(cached["short_explanation"])
+                    long = str(cached["long_explanation"])
+                    review_summary = str(cached["review_summary"])
+                menu = self._menu_summary(
+                    row,
+                    ["More from this restaurant"],
+                    [],
+                    EvidenceStatus.UNKNOWN,
+                    0.5,
+                )
+                items.append(
+                    MerchantMenuPresentation(
+                        menu=menu,
+                        localized_title=title,
+                        yobi_short_explanation=short,
+                        yobi_long_explanation=long,
+                        source_description=str(row["description"] or ""),
+                        review_summary=review_summary,
+                        country_preference={
+                            "country_code": country_code,
+                            "preference_percent": int(row["preference_percent"] or 54),
+                            "sample_size": int(row["sample_size"] or 120),
+                        },
+                        evidence_ids=evidence_ids,
+                        review_ids=review_ids,
+                        generation_model=(
+                            str(cached["model_id"])
+                            if cached is not None
+                            else "DETERMINISTIC_WIKI_FALLBACK"
+                        ),
+                    )
+                )
+        return MerchantMenuPresentationPage(
+            items=items,
+            next_cursor=(str(visible_rows[-1]["menu_id"]) if has_more and visible_rows else None),
+        )
+
+    def save_menu_presentation_cache(
+        self, session_id: str, presentation: MerchantMenuPresentation
+    ) -> None:
+        with self._connection() as connection:
+            context = connection.execute(
+                """
+                SELECT profile.preferred_language,profile.country_code,
+                       family.synthetic_enrichment_release_id
+                FROM chat_session session
+                JOIN user_profile profile ON profile.profile_id=session.profile_id
+                JOIN recommendation_runtime_state state ON state.state_key='ACTIVE'
+                JOIN recommendation_release_family family
+                  ON family.release_family_id=state.active_release_family_id
+                WHERE session.session_id=?
+                """,
+                (session_id,),
+            ).fetchone()
+            if context is None or not context["synthetic_enrichment_release_id"]:
+                raise RuntimeError("SYNTHETIC_ENRICHMENT_UNAVAILABLE")
+            release_id = str(context["synthetic_enrichment_release_id"])
+            requested_locale = normalize_preference_locale(str(context["preferred_language"]))
+            language_code = requested_locale if requested_locale in {"ko", "ja"} else "en"
+            country_code = str(context["country_code"] or "US")
+            source_hash = hashlib.sha256(
+                json.dumps(
+                    {
+                        "localized_title": presentation.localized_title,
+                        "source_description": presentation.source_description,
+                        "evidence_ids": presentation.evidence_ids,
+                        "review_ids": presentation.review_ids,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
+            cache_key = hashlib.sha256(
+                f"{release_id}|{presentation.menu.menu_id}|{language_code}|{country_code}".encode()
+            ).hexdigest()
+            connection.execute(
+                """
+                INSERT INTO menu_presentation_cache(
+                  cache_key,release_id,menu_id,language_code,country_code,localized_title,
+                  short_explanation,long_explanation,review_summary,evidence_ids_json,
+                  review_ids_json,model_id,source_hash,created_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(cache_key) DO UPDATE SET
+                  localized_title=excluded.localized_title,
+                  short_explanation=excluded.short_explanation,
+                  long_explanation=excluded.long_explanation,
+                  review_summary=excluded.review_summary,
+                  evidence_ids_json=excluded.evidence_ids_json,
+                  review_ids_json=excluded.review_ids_json,model_id=excluded.model_id,
+                  source_hash=excluded.source_hash,created_at=excluded.created_at
+                """,
+                (
+                    cache_key,
+                    release_id,
+                    presentation.menu.menu_id,
+                    language_code,
+                    country_code,
+                    presentation.localized_title,
+                    presentation.yobi_short_explanation,
+                    presentation.yobi_long_explanation,
+                    presentation.review_summary,
+                    json.dumps(presentation.evidence_ids),
+                    json.dumps(presentation.review_ids),
+                    presentation.generation_model,
+                    source_hash,
+                    _now(),
+                ),
+            )
+
     def get_evidence(self, menu_id: str) -> list[Evidence]:
         with self._connection() as connection:
             rows = connection.execute(
@@ -6286,12 +6938,26 @@ class SQLiteYobiRepository:
             )
         return comparisons
 
-    def get_options(self, menu_id: str) -> list[OptionGroup]:
+    def get_options(self, menu_id: str, session_id: str | None = None) -> list[OptionGroup]:
         with self._connection() as connection:
+            language_code = "en"
+            if session_id:
+                language_row = connection.execute(
+                    """
+                    SELECT profile.preferred_language FROM chat_session session
+                    JOIN user_profile profile ON profile.profile_id=session.profile_id
+                    WHERE session.session_id=?
+                    """,
+                    (session_id,),
+                ).fetchone()
+                if language_row:
+                    requested = normalize_preference_locale(str(language_row[0]))
+                    language_code = requested if requested in {"ko", "ja"} else "en"
             family = connection.execute(
                 """
                 SELECT family.release_family_id,family.knowledge_release_id,
-                       family.certification_release_id
+                       family.certification_release_id,
+                       family.synthetic_enrichment_release_id
                 FROM recommendation_runtime_state state
                 JOIN recommendation_release_family family
                   ON family.release_family_id=state.active_release_family_id
@@ -6305,6 +6971,7 @@ class SQLiteYobiRepository:
             base_vegan_warning: str | None = None
             halal_certification_preserved: bool | None = None
             option_effects: dict[str, list[sqlite3.Row]] = defaultdict(list)
+            synthetic_option_states: dict[str, tuple[bool, bool]] = {}
             if family is not None:
                 base_vegan_status, base_vegan_warning, _ = self._v2_vegan_classifications(
                     connection,
@@ -6336,8 +7003,53 @@ class SQLiteYobiRepository:
                 ).fetchall()
                 for effect in effect_rows:
                     option_effects[str(effect["option_item_id"])].append(effect)
+                if family["synthetic_enrichment_release_id"]:
+                    synthetic_release_id = str(family["synthetic_enrichment_release_id"])
+                    menu_profile = connection.execute(
+                        """
+                        SELECT halal_fit,vegan_fit FROM synthetic_menu_profile
+                        WHERE release_id=? AND menu_id=?
+                        """,
+                        (synthetic_release_id, menu_id),
+                    ).fetchone()
+                    if menu_profile is not None:
+                        halal_certification_preserved = bool(menu_profile["halal_fit"])
+                        base_vegan_status = (
+                            "LIKELY_FIT" if menu_profile["vegan_fit"] else "CONFLICT"
+                        )
+                        base_vegan_warning = (
+                            None
+                            if menu_profile["vegan_fit"]
+                            else "This menu is not marked as vegan-friendly."
+                        )
+                    synthetic_option_states = {
+                        str(row["option_item_id"]): (
+                            bool(row["halal_conflict"]),
+                            bool(row["vegan_conflict"]),
+                        )
+                        for row in connection.execute(
+                            """
+                            SELECT profile.option_item_id,profile.halal_conflict,
+                                   profile.vegan_conflict
+                            FROM synthetic_option_profile profile
+                            JOIN menu_option_item item
+                              ON item.option_item_id=profile.option_item_id
+                            JOIN menu_option_group groups
+                              ON groups.option_group_id=item.option_group_id
+                            WHERE profile.release_id=? AND groups.menu_id=?
+                            """,
+                            (synthetic_release_id, menu_id),
+                        ).fetchall()
+                    }
 
             def v2_option_state(item_id: str) -> tuple[str | None, str | None]:
+                synthetic_state = synthetic_option_states.get(item_id)
+                if synthetic_state is not None:
+                    return (
+                        ("CONFLICT", "This option is not marked as vegan-friendly.")
+                        if synthetic_state[1]
+                        else (base_vegan_status, base_vegan_warning)
+                    )
                 effects = option_effects.get(item_id, [])
                 animal_adds = [
                     effect
@@ -6370,6 +7082,47 @@ class SQLiteYobiRepository:
                 "SELECT * FROM menu_option_group WHERE menu_id = ? ORDER BY sort_order",
                 (menu_id,),
             ).fetchall()
+            group_localizations: dict[str, str] = {}
+            item_localizations: dict[str, str] = {}
+            if family is not None and family["synthetic_enrichment_release_id"]:
+                group_localizations = {
+                    str(row["option_group_id"]): str(row["display_name"])
+                    for row in connection.execute(
+                        """
+                        SELECT localization.option_group_id,localization.display_name
+                        FROM option_group_localization localization
+                        JOIN menu_option_group groups
+                          ON groups.option_group_id=localization.option_group_id
+                        WHERE localization.release_id=?
+                          AND localization.language_code=? AND groups.menu_id=?
+                        """,
+                        (
+                            str(family["synthetic_enrichment_release_id"]),
+                            language_code,
+                            menu_id,
+                        ),
+                    ).fetchall()
+                }
+                item_localizations = {
+                    str(row["option_item_id"]): str(row["display_name"])
+                    for row in connection.execute(
+                        """
+                        SELECT localization.option_item_id,localization.display_name
+                        FROM option_item_localization localization
+                        JOIN menu_option_item item
+                          ON item.option_item_id=localization.option_item_id
+                        JOIN menu_option_group groups
+                          ON groups.option_group_id=item.option_group_id
+                        WHERE localization.release_id=?
+                          AND localization.language_code=? AND groups.menu_id=?
+                        """,
+                        (
+                            str(family["synthetic_enrichment_release_id"]),
+                            language_code,
+                            menu_id,
+                        ),
+                    ).fetchall()
+                }
             result = []
             for group in groups:
                 items = connection.execute(
@@ -6393,6 +7146,12 @@ class SQLiteYobiRepository:
                         option_group_id=group["option_group_id"],
                         name_en=_catalog_text(group["name_en"], group["name_ko"]),
                         name_ko=group["name_ko"],
+                        display_name=group_localizations.get(
+                            str(group["option_group_id"]),
+                            str(group["name_ko"])
+                            if language_code == "ko"
+                            else _catalog_text(group["name_en"], group["name_ko"]),
+                        ),
                         description=_catalog_text(group["description"]),
                         required=bool(group["required"]),
                         min_select=group["min_select"],
@@ -6402,6 +7161,12 @@ class SQLiteYobiRepository:
                                 option_item_id=item["option_item_id"],
                                 name_en=_catalog_text(item["name_en"], item["name_ko"]),
                                 name_ko=item["name_ko"],
+                                display_name=item_localizations.get(
+                                    str(item["option_item_id"]),
+                                    str(item["name_ko"])
+                                    if language_code == "ko"
+                                    else _catalog_text(item["name_en"], item["name_ko"]),
+                                ),
                                 description=_catalog_text(item["description"]),
                                 price_delta=item["price_delta"],
                                 available=item["availability"] == "AVAILABLE",
@@ -6411,7 +7176,13 @@ class SQLiteYobiRepository:
                                     if item["conflicting_rules_csv"]
                                     else []
                                 ),
-                                halal_certification_preserved=(halal_certification_preserved),
+                                halal_certification_preserved=(
+                                    False
+                                    if synthetic_option_states.get(
+                                        str(item["option_item_id"]), (False, False)
+                                    )[0]
+                                    else halal_certification_preserved
+                                ),
                                 vegan_status=cast(
                                     Any,
                                     v2_states[str(item["option_item_id"])][0],
@@ -6423,6 +7194,173 @@ class SQLiteYobiRepository:
                     )
                 )
         return result
+
+    def option_localizations_complete(
+        self,
+        session_id: str,
+        menu_id: str,
+        group_ids: list[str],
+        item_ids: list[str],
+    ) -> bool:
+        with self._connection() as connection:
+            context = connection.execute(
+                """
+                SELECT profile.preferred_language,family.synthetic_enrichment_release_id
+                FROM chat_session session
+                JOIN user_profile profile ON profile.profile_id=session.profile_id
+                JOIN recommendation_runtime_state state ON state.state_key='ACTIVE'
+                JOIN recommendation_release_family family
+                  ON family.release_family_id=state.active_release_family_id
+                WHERE session.session_id=?
+                """,
+                (session_id,),
+            ).fetchone()
+            if context is None or not context["synthetic_enrichment_release_id"]:
+                return False
+            requested = normalize_preference_locale(str(context["preferred_language"]))
+            language_code = requested if requested in {"ko", "ja"} else "en"
+            localized_groups = {
+                str(row[0])
+                for row in connection.execute(
+                    """
+                    SELECT localization.option_group_id
+                    FROM option_group_localization localization
+                    JOIN menu_option_group groups
+                      ON groups.option_group_id=localization.option_group_id
+                    WHERE localization.release_id=? AND localization.language_code=?
+                      AND groups.menu_id=?
+                    """,
+                    (
+                        str(context["synthetic_enrichment_release_id"]),
+                        language_code,
+                        menu_id,
+                    ),
+                )
+            }
+            localized_items = {
+                str(row[0])
+                for row in connection.execute(
+                    """
+                    SELECT localization.option_item_id
+                    FROM option_item_localization localization
+                    JOIN menu_option_item item
+                      ON item.option_item_id=localization.option_item_id
+                    JOIN menu_option_group groups
+                      ON groups.option_group_id=item.option_group_id
+                    WHERE localization.release_id=? AND localization.language_code=?
+                      AND groups.menu_id=?
+                    """,
+                    (
+                        str(context["synthetic_enrichment_release_id"]),
+                        language_code,
+                        menu_id,
+                    ),
+                )
+            }
+        return localized_groups == set(group_ids) and localized_items == set(item_ids)
+
+    def save_option_localizations(
+        self,
+        session_id: str,
+        menu_id: str,
+        group_names: dict[str, str],
+        item_names: dict[str, str],
+        model_id: str,
+    ) -> None:
+        with self._connection() as connection:
+            context = connection.execute(
+                """
+                SELECT profile.preferred_language,family.synthetic_enrichment_release_id
+                FROM chat_session session
+                JOIN user_profile profile ON profile.profile_id=session.profile_id
+                JOIN recommendation_runtime_state state ON state.state_key='ACTIVE'
+                JOIN recommendation_release_family family
+                  ON family.release_family_id=state.active_release_family_id
+                WHERE session.session_id=?
+                """,
+                (session_id,),
+            ).fetchone()
+            if context is None or not context["synthetic_enrichment_release_id"]:
+                raise RuntimeError("SYNTHETIC_ENRICHMENT_UNAVAILABLE")
+            requested = normalize_preference_locale(str(context["preferred_language"]))
+            language_code = requested if requested in {"ko", "ja"} else "en"
+            group_rows = connection.execute(
+                """
+                SELECT option_group_id,name_en,name_ko FROM menu_option_group
+                WHERE menu_id=?
+                """,
+                (menu_id,),
+            ).fetchall()
+            item_rows = connection.execute(
+                """
+                SELECT item.option_item_id,item.name_en,item.name_ko
+                FROM menu_option_item item
+                JOIN menu_option_group groups
+                  ON groups.option_group_id=item.option_group_id
+                WHERE groups.menu_id=?
+                """,
+                (menu_id,),
+            ).fetchall()
+            if {str(row["option_group_id"]) for row in group_rows} != set(group_names):
+                raise ValueError("OPTION_LOCALIZATION_GROUP_IDS_MISMATCH")
+            if {str(row["option_item_id"]) for row in item_rows} != set(item_names):
+                raise ValueError("OPTION_LOCALIZATION_ITEM_IDS_MISMATCH")
+            release_id = str(context["synthetic_enrichment_release_id"])
+            generated_at = _now()
+            for row in group_rows:
+                source_hash = hashlib.sha256(
+                    json.dumps(
+                        [row["name_ko"], row["name_en"], language_code],
+                        ensure_ascii=False,
+                    ).encode()
+                ).hexdigest()
+                connection.execute(
+                    """
+                    INSERT INTO option_group_localization(
+                      release_id,option_group_id,language_code,display_name,
+                      model_id,source_hash,generated_at
+                    ) VALUES (?,?,?,?,?,?,?)
+                    ON CONFLICT(release_id,option_group_id,language_code) DO UPDATE SET
+                      display_name=excluded.display_name,model_id=excluded.model_id,
+                      source_hash=excluded.source_hash,generated_at=excluded.generated_at
+                    """,
+                    (
+                        release_id,
+                        row["option_group_id"],
+                        language_code,
+                        group_names[str(row["option_group_id"])],
+                        model_id,
+                        source_hash,
+                        generated_at,
+                    ),
+                )
+            for row in item_rows:
+                source_hash = hashlib.sha256(
+                    json.dumps(
+                        [row["name_ko"], row["name_en"], language_code],
+                        ensure_ascii=False,
+                    ).encode()
+                ).hexdigest()
+                connection.execute(
+                    """
+                    INSERT INTO option_item_localization(
+                      release_id,option_item_id,language_code,display_name,
+                      model_id,source_hash,generated_at
+                    ) VALUES (?,?,?,?,?,?,?)
+                    ON CONFLICT(release_id,option_item_id,language_code) DO UPDATE SET
+                      display_name=excluded.display_name,model_id=excluded.model_id,
+                      source_hash=excluded.source_hash,generated_at=excluded.generated_at
+                    """,
+                    (
+                        release_id,
+                        row["option_item_id"],
+                        language_code,
+                        item_names[str(row["option_item_id"])],
+                        model_id,
+                        source_hash,
+                        generated_at,
+                    ),
+                )
 
     def resolve_address(self, text: str, file_hash: str | None = None) -> list[AddressCandidate]:
         normalized = normalize_address_text(text)
@@ -6620,6 +7558,33 @@ class SQLiteYobiRepository:
             raise ValueError("OPTION_GROUP_MAX_EXCEEDED")
         return menu, options, (int(menu["price"]) + option_total) * item.quantity
 
+    @staticmethod
+    def _validated_note_translation(
+        connection: sqlite3.Connection,
+        session_id: str,
+        item: CartItemInput,
+    ) -> tuple[str, str | None]:
+        if not item.user_note.strip():
+            return "", None
+        if not item.note_translation_id:
+            raise ValueError("RESTAURANT_NOTE_TRANSLATION_REQUIRED")
+        row = connection.execute(
+            """
+            SELECT korean_text,source_text,status
+            FROM restaurant_note_translation
+            WHERE translation_id=? AND session_id=?
+            """,
+            (item.note_translation_id, session_id),
+        ).fetchone()
+        if (
+            row is None
+            or str(row["status"]) != "SUCCEEDED"
+            or str(row["source_text"]) != item.user_note
+            or not row["korean_text"]
+        ):
+            raise ValueError("RESTAURANT_NOTE_TRANSLATION_REQUIRED")
+        return str(row["korean_text"]), item.note_translation_id
+
     def add_cart_item(
         self,
         session_id: str,
@@ -6651,6 +7616,9 @@ class SQLiteYobiRepository:
                         raise ValueError("IDEMPOTENCY_KEY_REUSED")
                     return self.get_cart(session_id)
             menu, options, line_total = self._cart_item_values(connection, item)
+            korean_note, note_translation_id = self._validated_note_translation(
+                connection, session_id, item
+            )
             other_merchant = connection.execute(
                 """
                 SELECT 1 FROM cart_item WHERE cart_id = ? AND merchant_id <> ? LIMIT 1
@@ -6665,8 +7633,8 @@ class SQLiteYobiRepository:
                 INSERT INTO cart_item (
                   cart_item_id, cart_id, menu_id, merchant_id, quantity, unit_price,
                   menu_snapshot_json, option_snapshot_json, line_total, user_note,
-                  korean_note, agent_request_key, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  korean_note, note_translation_id, agent_request_key, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     cart_item_id,
@@ -6684,7 +7652,8 @@ class SQLiteYobiRepository:
                     json.dumps(options),
                     line_total,
                     item.user_note,
-                    self._translate_note(item.user_note),
+                    korean_note,
+                    note_translation_id,
                     agent_request_key,
                     _now(),
                 ),
@@ -6718,12 +7687,21 @@ class SQLiteYobiRepository:
                     else [str(option["option_item_id"]) for option in current_options]
                 ),
                 user_note=item.user_note if item.user_note is not None else existing["user_note"],
+                note_translation_id=(
+                    item.note_translation_id
+                    if item.note_translation_id is not None
+                    else existing["note_translation_id"]
+                ),
             )
             menu, options, line_total = self._cart_item_values(connection, replacement)
+            korean_note, note_translation_id = self._validated_note_translation(
+                connection, session_id, replacement
+            )
             connection.execute(
                 """
                 UPDATE cart_item SET quantity=?,unit_price=?,menu_snapshot_json=?,
-                  option_snapshot_json=?,line_total=?,user_note=?,korean_note=?
+                  option_snapshot_json=?,line_total=?,user_note=?,korean_note=?,
+                  note_translation_id=?
                 WHERE cart_item_id=?
                 """,
                 (
@@ -6738,7 +7716,8 @@ class SQLiteYobiRepository:
                     json.dumps(options),
                     line_total,
                     replacement.user_note,
-                    self._translate_note(replacement.user_note),
+                    korean_note,
+                    note_translation_id,
                     cart_item_id,
                 ),
             )
@@ -6818,7 +7797,8 @@ class SQLiteYobiRepository:
             profile_row = connection.execute(
                 """
                 SELECT p.dietary_rules_json, p.allergy_severity,
-                       p.religion_selection, s.meal_need_state_json
+                       p.religion_selection, p.country_code,p.preferred_language,
+                       s.meal_need_state_json
                 FROM chat_session s JOIN user_profile p ON p.profile_id=s.profile_id
                 WHERE s.session_id=?
                 """,
@@ -6827,7 +7807,8 @@ class SQLiteYobiRepository:
             structured_criteria_row = connection.execute(
                 """
                 SELECT criteria.criteria_json,family.release_family_id,
-                       family.knowledge_release_id,family.certification_release_id
+                       family.knowledge_release_id,family.certification_release_id,
+                       family.synthetic_enrichment_release_id
                 FROM recommendation_snapshot snapshot
                 JOIN session_recommendation_criteria criteria
                   ON criteria.session_id=snapshot.session_id
@@ -6925,6 +7906,92 @@ class SQLiteYobiRepository:
                             f"Remove {row['menu_name']} to continue; it conflicts with current "
                             "meal constraints or grounded safety facts."
                         )
+            elif (
+                structured_criteria is not None
+                and structured_criteria_row is not None
+                and structured_criteria.schema_version == "3"
+            ):
+                synthetic_release_id = str(
+                    structured_criteria_row["synthetic_enrichment_release_id"] or ""
+                )
+                if not synthetic_release_id:
+                    blocking_dietary_conflicts.append(
+                        "The active menu profile is unavailable. Refresh the recommendation."
+                    )
+                else:
+                    country_code = structured_criteria.spice_reference_country
+                    baseline_row = connection.execute(
+                        """
+                        SELECT spice_baseline FROM synthetic_country_profile
+                        WHERE release_id=? AND country_code=?
+                        """,
+                        (synthetic_release_id, country_code),
+                    ).fetchone()
+                    spice_baseline = int(baseline_row["spice_baseline"]) if baseline_row else 3
+                    price_range = structured_criteria.price_range_krw
+                    for row in rows:
+                        menu_id = str(row["menu_id"])
+                        profile = connection.execute(
+                            """
+                            SELECT spice_level,halal_fit,vegan_fit
+                            FROM synthetic_menu_profile WHERE release_id=? AND menu_id=?
+                            """,
+                            (synthetic_release_id, menu_id),
+                        ).fetchone()
+                        current_menu = connection.execute(
+                            "SELECT price FROM menu WHERE menu_id=?", (menu_id,)
+                        ).fetchone()
+                        conflict = profile is None or current_menu is None
+                        if price_range and current_menu is not None:
+                            price = int(current_menu["price"])
+                            conflict = conflict or not (price_range.min <= price <= price_range.max)
+                        if profile is not None:
+                            spice = int(profile["spice_level"])
+                            preference = structured_criteria.spice_preference or "SIMILAR"
+                            spice_matches = (
+                                spice < spice_baseline
+                                if preference == "LESS"
+                                else spice > spice_baseline
+                                if preference == "MORE"
+                                else spice == spice_baseline
+                            )
+                            conflict = conflict or not spice_matches
+                            conflict = conflict or bool(
+                                structured_criteria.dietary_filters.halal_certified_only
+                                and not profile["halal_fit"]
+                            )
+                            conflict = conflict or bool(
+                                structured_criteria.dietary_filters.vegan
+                                and not profile["vegan_fit"]
+                            )
+                        selected_ids = [
+                            str(option["option_item_id"])
+                            for option in json.loads(row["option_snapshot_json"])
+                        ]
+                        if selected_ids:
+                            placeholders = ",".join("?" for _ in selected_ids)
+                            option_profiles = connection.execute(
+                                f"""
+                                SELECT halal_conflict,vegan_conflict
+                                FROM synthetic_option_profile
+                                WHERE release_id=? AND option_item_id IN ({placeholders})
+                                """,
+                                (synthetic_release_id, *selected_ids),
+                            ).fetchall()
+                            conflict = conflict or any(
+                                structured_criteria.dietary_filters.halal_certified_only
+                                and option["halal_conflict"]
+                                or structured_criteria.dietary_filters.vegan
+                                and option["vegan_conflict"]
+                                for option in option_profiles
+                            )
+                        if conflict:
+                            warning = (
+                                f"Remove {row['menu_name']} to continue; it no longer matches "
+                                "your saved price, spice, or dietary choices."
+                            )
+                            dietary_conflicts.append(warning)
+                            blocking_dietary_conflicts.append(warning)
             elif structured_criteria is not None and structured_criteria_row is not None:
                 menu_ids = [str(row["menu_id"]) for row in rows]
                 valid_certifications = self._valid_halal_certifications_in_connection(
@@ -7015,6 +8082,38 @@ class SQLiteYobiRepository:
                     service_area_conflict = True
             if structured_criteria is None:
                 blocking_dietary_conflicts = list(dietary_conflicts)
+            cart_menu_localizations: dict[str, str] = {}
+            cart_option_localizations: dict[str, str] = {}
+            synthetic_release_id = (
+                str(structured_criteria_row["synthetic_enrichment_release_id"] or "")
+                if structured_criteria_row is not None
+                else ""
+            )
+            if synthetic_release_id and profile_row is not None:
+                requested_locale = normalize_preference_locale(
+                    str(profile_row["preferred_language"])
+                )
+                language_code = requested_locale if requested_locale in {"ko", "ja"} else "en"
+                cart_menu_localizations = {
+                    str(item["menu_id"]): str(item["display_name"])
+                    for item in connection.execute(
+                        """
+                        SELECT menu_id,display_name FROM menu_localization
+                        WHERE release_id=? AND language_code=? AND validation_status='VALID'
+                        """,
+                        (synthetic_release_id, language_code),
+                    ).fetchall()
+                }
+                cart_option_localizations = {
+                    str(item["option_item_id"]): str(item["display_name"])
+                    for item in connection.execute(
+                        """
+                        SELECT option_item_id,display_name FROM option_item_localization
+                        WHERE release_id=? AND language_code=?
+                        """,
+                        (synthetic_release_id, language_code),
+                    ).fetchall()
+                }
         items = [
             CartLine(
                 cart_item_id=row["cart_item_id"],
@@ -7022,9 +8121,18 @@ class SQLiteYobiRepository:
                 merchant_id=row["merchant_id"],
                 menu_name=row["menu_name"],
                 menu_name_ko=row["menu_name_ko"],
+                display_name=cart_menu_localizations.get(str(row["menu_id"])),
                 quantity=row["quantity"],
                 unit_price=row["unit_price"],
-                options=json.loads(row["option_snapshot_json"]),
+                options=[
+                    {
+                        **option,
+                        "display_name": cart_option_localizations.get(
+                            str(option["option_item_id"])
+                        ),
+                    }
+                    for option in json.loads(row["option_snapshot_json"])
+                ],
                 line_total=row["line_total"],
             )
             for row in rows
@@ -7125,7 +8233,7 @@ class SQLiteYobiRepository:
         cart = connection.execute(
             """
             SELECT c.*, p.dietary_rules_json, p.allergy_severity,
-                   p.religion_selection, s.meal_need_state_json
+                   p.religion_selection, p.country_code, s.meal_need_state_json
             FROM cart c
             JOIN chat_session s ON s.session_id = c.session_id
             JOIN user_profile p ON p.profile_id = s.profile_id
@@ -7158,7 +8266,8 @@ class SQLiteYobiRepository:
         structured_criteria_row = connection.execute(
             """
             SELECT criteria.criteria_json,family.release_family_id,
-                   family.knowledge_release_id,family.certification_release_id
+                   family.knowledge_release_id,family.certification_release_id,
+                   family.synthetic_enrichment_release_id
             FROM recommendation_snapshot snapshot
             JOIN session_recommendation_criteria criteria
               ON criteria.session_id=snapshot.session_id
@@ -7197,9 +8306,35 @@ class SQLiteYobiRepository:
                 release_family_id=str(structured_criteria_row["release_family_id"]),
                 instant=_now(),
             )
-            if structured_criteria is not None and structured_criteria_row is not None
+            if structured_criteria is not None
+            and structured_criteria.schema_version == "2"
+            and structured_criteria_row is not None
             else {}
         )
+        synthetic_release_id = (
+            str(structured_criteria_row["synthetic_enrichment_release_id"] or "")
+            if structured_criteria is not None
+            and structured_criteria.schema_version == "3"
+            and structured_criteria_row is not None
+            else ""
+        )
+        country_spice_baseline = 3
+        if structured_criteria is not None and structured_criteria.schema_version == "3":
+            if not synthetic_release_id:
+                raise ValueError("CART_MENU_NO_LONGER_ELIGIBLE")
+            baseline = connection.execute(
+                """
+                SELECT spice_baseline FROM synthetic_country_profile
+                WHERE release_id=? AND country_code=?
+                """,
+                (
+                    synthetic_release_id,
+                    structured_criteria.spice_reference_country,
+                ),
+            ).fetchone()
+            if baseline is None:
+                raise ValueError("CART_MENU_NO_LONGER_ELIGIBLE")
+            country_spice_baseline = int(baseline["spice_baseline"])
         merchant_ids: set[str] = set()
         subtotal = 0
         changed = False
@@ -7220,7 +8355,39 @@ class SQLiteYobiRepository:
             if not address_service_area or menu["merchant_service_area_id"] != address_service_area:
                 raise ValueError("CART_SERVICE_AREA_MISMATCH")
             merchant_ids.add(menu["merchant_id"])
-            if structured_criteria is not None:
+            if structured_criteria is not None and structured_criteria.schema_version == "3":
+                synthetic_profile = connection.execute(
+                    """
+                    SELECT spice_level,halal_fit,vegan_fit
+                    FROM synthetic_menu_profile
+                    WHERE release_id=? AND menu_id=?
+                    """,
+                    (synthetic_release_id, menu["menu_id"]),
+                ).fetchone()
+                if synthetic_profile is None:
+                    raise ValueError("CART_MENU_NO_LONGER_ELIGIBLE")
+                price_range = structured_criteria.price_range_krw
+                if price_range is None or not price_range.min <= int(menu["price"]) <= price_range.max:
+                    raise ValueError("CART_MENU_NO_LONGER_ELIGIBLE")
+                spice_level = int(synthetic_profile["spice_level"])
+                spice_matches = (
+                    spice_level < country_spice_baseline
+                    if structured_criteria.spice_preference == "LESS"
+                    else spice_level > country_spice_baseline
+                    if structured_criteria.spice_preference == "MORE"
+                    else spice_level == country_spice_baseline
+                )
+                if not spice_matches:
+                    raise ValueError("CART_MENU_NO_LONGER_ELIGIBLE")
+                if (
+                    structured_criteria.dietary_filters.halal_certified_only
+                    and not synthetic_profile["halal_fit"]
+                ) or (
+                    structured_criteria.dietary_filters.vegan
+                    and not synthetic_profile["vegan_fit"]
+                ):
+                    raise ValueError("CART_DIETARY_CONFLICT")
+            elif structured_criteria is not None:
                 if (
                     menu["spice_level"] is not None
                     and int(menu["spice_level"]) > structured_criteria.max_spice_level
@@ -7269,6 +8436,22 @@ class SQLiteYobiRepository:
                         (option_id,),
                     ).fetchone()
                     if conflict:
+                        raise ValueError("CART_DIETARY_CONFLICT")
+                if structured_criteria is not None and structured_criteria.schema_version == "3":
+                    synthetic_option = connection.execute(
+                        """
+                        SELECT halal_conflict,vegan_conflict
+                        FROM synthetic_option_profile
+                        WHERE release_id=? AND option_item_id=?
+                        """,
+                        (synthetic_release_id, option_id),
+                    ).fetchone()
+                    if synthetic_option is not None and (
+                        structured_criteria.dietary_filters.halal_certified_only
+                        and synthetic_option["halal_conflict"]
+                        or structured_criteria.dietary_filters.vegan
+                        and synthetic_option["vegan_conflict"]
+                    ):
                         raise ValueError("CART_DIETARY_CONFLICT")
                 group_id = str(option["option_group_id"])
                 selected_counts[group_id] = selected_counts.get(group_id, 0) + 1

@@ -312,7 +312,7 @@ def run(base_url: str) -> None:
                         "menu_id": selected_menu_id,
                         "quantity": 1,
                         "option_item_ids": option_item_ids,
-                        "user_note": "Please prepare this demo order as selected.",
+                        "user_note": "",
                     },
                 )
             )

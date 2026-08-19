@@ -209,7 +209,7 @@ def test_update_cart_tool_uses_repository_pricing_and_can_clear(repository, prof
                 "quantity": 2,
                 "option_item_id": None,
                 "option_item_ids": option_ids,
-                "note": "As mild as possible",
+                "note": "",
             }
         ),
     )["cart"]

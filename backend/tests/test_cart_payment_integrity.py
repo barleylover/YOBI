@@ -68,7 +68,7 @@ def _ready_cart(repository: SQLiteYobiRepository, profile_data: ProfileCreate) -
                 "oi_001_01_cheese_add",
                 "oi_001_01_fishcake_remove",
             ],
-            user_note="As mild as possible, please.",
+            user_note="",
         ),
     )
     candidate = repository.resolve_address("YOBI Myeongdong Hotel")[0]
@@ -89,7 +89,7 @@ def test_concurrent_agent_cart_replay_adds_exactly_one_line(
     item = CartItemInput(
         menu_id="menu_001_01",
         option_item_ids=["oi_001_01_spice_mild", "oi_001_01_size_regular"],
-        user_note="Keep it mild.",
+        user_note="",
     )
 
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -677,7 +677,7 @@ def test_cart_item_can_be_updated_and_deleted(
     updated = repository.update_cart_item(
         session_id,
         item_id,
-        CartItemUpdate(quantity=2, user_note="No disposable cutlery."),
+        CartItemUpdate(quantity=2, user_note=""),
     )
 
     assert updated.items[0].quantity == 2

@@ -36,7 +36,10 @@ from app.db.repository import YobiRepository
 from app.dependencies import (
     get_chat_service,
     get_demo_control,
+    get_menu_presentation_service,
+    get_option_localization_service,
     get_repository,
+    get_restaurant_note_translation_service,
     get_structured_recommendation_service,
 )
 from app.domain.address import normalize_address_text
@@ -49,10 +52,14 @@ from app.domain.models import (
     Checkout,
     CheckoutCreate,
     DeliveryPreferenceInput,
+    MerchantMenuPresentationPage,
+    MerchantMenuPresentationRequest,
     Order,
     Profile,
     ProfileCreate,
     ProfileUpdate,
+    RestaurantNoteTranslation,
+    RestaurantNoteTranslationInput,
     Session,
     UserMessage,
 )
@@ -74,6 +81,9 @@ from app.genai.recommendation_generator import GROUNDING_DIAGNOSTICS_VERSION
 from app.services.address_ocr import AddressCandidateTokenCodec, choose_address_ocr
 from app.services.chat_service import ChatService
 from app.services.demo_control import DemoControl, FailureMode
+from app.services.menu_presentation import MenuPresentationService
+from app.services.option_localization import OptionLocalizationService
+from app.services.restaurant_note_translation import RestaurantNoteTranslationService
 from app.services.structured_recommendation import StructuredRecommendationService
 
 _RELEASE_ID_PATTERN = re.compile(r"^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$")
@@ -125,7 +135,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title="YOBI MVP API",
     version="0.1.0",
-    description="Synthetic-data food concierge and mock ordering API",
+    description="Multilingual food concierge and ordering API",
     lifespan=lifespan,
 )
 settings = get_settings()
@@ -196,6 +206,40 @@ class AddressConfirm(BaseModel):
 
 class AddressCandidateView(AddressCandidate):
     candidate_token: str
+
+
+def _address_candidate_view(
+    session_id: str,
+    candidate: AddressCandidate,
+    codec: AddressCandidateTokenCodec,
+    source_image_hash: str | None,
+) -> AddressCandidateView:
+    display_candidate = candidate
+    if candidate.place_id.startswith("hotel_demo_"):
+        suffix = candidate.place_id.rsplit("_", 1)[-1]
+        ordinal = int(suffix) if suffix.isdigit() else 1
+        display_candidate = candidate.model_copy(
+            update={
+                "hotel_name": (
+                    "YOBI Myeongdong Hotel"
+                    if candidate.place_id == DEMO_ADDRESS_PLACE_ID
+                    else f"YOBI Myeongdong Stay {ordinal:02d}"
+                ),
+                "road_address": (
+                    "서울특별시 중구 을지로 21"
+                    if candidate.place_id == DEMO_ADDRESS_PLACE_ID
+                    else f"서울특별시 중구 퇴계로 {100 + ordinal}"
+                ),
+            }
+        )
+    return AddressCandidateView(
+        **display_candidate.model_dump(),
+        candidate_token=codec.encode(
+            session_id,
+            candidate,
+            source_image_hash,
+        ),
+    )
 
 
 class AddressUploadResult(BaseModel):
@@ -607,6 +651,39 @@ def get_structured_recommendation_request(
 
 
 @app.post(
+    "/api/v1/sessions/{session_id}/recommendation-requests/{request_id}/cancel",
+)
+def cancel_structured_recommendation_request(
+    session_id: str,
+    request_id: str,
+    repository: YobiRepository = Depends(get_repository),
+    recommendation_service: StructuredRecommendationService = Depends(
+        get_structured_recommendation_service
+    ),
+) -> dict[str, bool]:
+    _require_session(repository, session_id)
+    if not recommendation_service.cancel_request(session_id, request_id):
+        raise _not_found("RECOMMENDATION_REQUEST_NOT_FOUND")
+    return {"cancelled": True}
+
+
+@app.post(
+    "/api/v1/sessions/{session_id}/restaurant-note-translations",
+    response_model=RestaurantNoteTranslation,
+)
+def translate_restaurant_note(
+    session_id: str,
+    data: RestaurantNoteTranslationInput,
+    repository: YobiRepository = Depends(get_repository),
+    translation_service: RestaurantNoteTranslationService = Depends(
+        get_restaurant_note_translation_service
+    ),
+) -> RestaurantNoteTranslation:
+    _require_session(repository, session_id)
+    return translation_service.translate(session_id, data)
+
+
+@app.post(
     "/api/v1/sessions/{session_id}/recommendation-comparisons",
     response_model=RecommendationComparisonV2,
 )
@@ -718,12 +795,12 @@ def stream_message(
             return
         if turn.cards:
             yield 'event: status\ndata: {"text":"Checking menu details…"}\n\n'
-            yield 'event: tool_started\ndata: {"label":"Reviewing grounded demo data…"}\n\n'
+            yield 'event: tool_started\ndata: {"label":"Reviewing grounded menu data…"}\n\n'
             yield 'event: tool_completed\ndata: {"label":"Grounded check complete"}\n\n'
         else:
             yield 'event: status\ndata: {"text":"Understanding your meal needs…"}\n\n'
         if turn.fallback_used:
-            yield 'event: warning\ndata: {"text":"Demo continuity mode is active."}\n\n'
+            yield 'event: warning\ndata: {"text":"Continuing with the available menu data."}\n\n'
         for start in range(0, len(turn.text), 80):
             chunk = turn.text[start : start + 80]
             yield f"event: text_delta\ndata: {json.dumps({'text': chunk})}\n\n"
@@ -823,9 +900,17 @@ def post_conversation_event(
 
 @app.get("/api/v1/menus/{menu_id}/options")
 def get_menu_options(
-    menu_id: str, repository: YobiRepository = Depends(get_repository)
+    menu_id: str,
+    session_id: str | None = Query(default=None),
+    repository: YobiRepository = Depends(get_repository),
+    option_service: OptionLocalizationService = Depends(get_option_localization_service),
 ) -> list[dict[str, Any]]:
-    return [group.model_dump(mode="json") for group in repository.get_options(menu_id)]
+    if session_id is not None:
+        _require_session(repository, session_id)
+    return [
+        group.model_dump(mode="json")
+        for group in option_service.get_options(menu_id, session_id)
+    ]
 
 
 @app.get("/api/v1/menus/{menu_id}/evidence")
@@ -854,6 +939,23 @@ def list_merchant_menus(
             meal_need_state=session.meal_need_state,
         )
     ]
+
+
+@app.post(
+    "/api/v1/sessions/{session_id}/merchants/{merchant_id}/menu-presentations",
+    response_model=MerchantMenuPresentationPage,
+)
+def list_merchant_menu_presentations(
+    session_id: str,
+    merchant_id: str,
+    data: MerchantMenuPresentationRequest,
+    repository: YobiRepository = Depends(get_repository),
+    presentation_service: MenuPresentationService = Depends(
+        get_menu_presentation_service
+    ),
+) -> MerchantMenuPresentationPage:
+    _require_session(repository, session_id)
+    return presentation_service.list_presentations(session_id, merchant_id, data)
 
 
 def _validate_image(
@@ -945,10 +1047,7 @@ async def upload_address(
         ]
     codec = AddressCandidateTokenCodec(current_settings)
     views = [
-        AddressCandidateView(
-            **candidate.model_dump(),
-            candidate_token=codec.encode(session_id, candidate, digest),
-        )
+        _address_candidate_view(session_id, candidate, codec, digest)
         for candidate in candidates
     ]
     fixed_demo_candidate = bool(candidates and candidates[0].place_id == DEMO_ADDRESS_PLACE_ID)
@@ -959,8 +1058,8 @@ async def upload_address(
         candidates=views,
         low_confidence=low_confidence,
         notice=(
-            "Demo only: this booking image uses the prepared YOBI Myeongdong delivery address. "
-            "Confirm it to continue."
+            "This booking image uses the prepared YOBI Myeongdong delivery address. "
+            "Confirm the address to continue."
             if fixed_demo_candidate
             else "The booking image matched a grounded address candidate. Confirm the address."
             if not low_confidence
@@ -984,10 +1083,7 @@ def resolve_address_text(
     candidates = repository.resolve_address(data.text)
     codec = AddressCandidateTokenCodec(current_settings)
     views = [
-        AddressCandidateView(
-            **candidate.model_dump(),
-            candidate_token=codec.encode(session_id, candidate, None),
-        )
+        _address_candidate_view(session_id, candidate, codec, None)
         for candidate in candidates
     ]
     fixed_demo_candidate = bool(candidates and candidates[0].place_id == DEMO_ADDRESS_PLACE_ID)
@@ -998,10 +1094,10 @@ def resolve_address_text(
         candidates=views,
         low_confidence=low_confidence,
         notice=(
-            "Demo only: address search uses the prepared YOBI Myeongdong delivery address. "
-            "Confirm it to continue."
+            "Address search found the prepared YOBI Myeongdong delivery address. "
+            "Confirm the address to continue."
             if fixed_demo_candidate
-            else "We found a demo place candidate. Confirm the full road address."
+            else "We found a matching place. Confirm the full road address."
             if not low_confidence
             else "No confident place match was found. Enter or edit the address manually."
         ),

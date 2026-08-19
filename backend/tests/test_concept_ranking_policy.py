@@ -76,6 +76,16 @@ def _connection() -> sqlite3.Connection:
           reviewed_chunk_count INTEGER, compiled_at TEXT,
           PRIMARY KEY (knowledge_release_id, menu_id)
         );
+        CREATE TABLE synthetic_country_profile (
+          release_id TEXT, country_code TEXT, spice_baseline INTEGER,
+          familiarity_coefficient REAL,
+          PRIMARY KEY (release_id, country_code)
+        );
+        CREATE TABLE synthetic_menu_profile (
+          release_id TEXT, menu_id TEXT, spice_level INTEGER,
+          halal_fit INTEGER, vegan_fit INTEGER, generation_version TEXT,
+          PRIMARY KEY (release_id, menu_id)
+        );
         CREATE TABLE dish_concept_closure (
           release_id TEXT, ancestor_concept_id TEXT, descendant_concept_id TEXT,
           depth INTEGER, inherit_claims INTEGER,
@@ -184,7 +194,12 @@ def _support(
     )
 
 
-def _query(criteria: RecommendationCriteriaV2, *, limit: int | None):
+def _query(
+    criteria: RecommendationCriteriaV2,
+    *,
+    limit: int | None,
+    synthetic_enrichment_release_id: str | None = None,
+):
     return build_concept_candidate_query(
         dialect="sqlite",
         criteria=criteria,
@@ -194,6 +209,32 @@ def _query(criteria: RecommendationCriteriaV2, *, limit: int | None):
         excluded_menu_ids=set(),
         eligibility_as_of=datetime.now(timezone.utc),
         candidate_limit=limit,
+        synthetic_enrichment_release_id=synthetic_enrichment_release_id,
+    )
+
+
+def _insert_synthetic_profile(
+    connection: sqlite3.Connection,
+    *,
+    menu_id: str,
+    spice_level: int,
+    halal_fit: bool = True,
+    vegan_fit: bool = True,
+) -> None:
+    connection.execute(
+        "INSERT OR IGNORE INTO synthetic_country_profile VALUES (?,?,?,?)",
+        ("enrichment-v1", "US", 3, 0.75),
+    )
+    connection.execute(
+        "INSERT INTO synthetic_menu_profile VALUES (?,?,?,?,?,?)",
+        (
+            "enrichment-v1",
+            menu_id,
+            spice_level,
+            int(halal_fit),
+            int(vegan_fit),
+            "synthetic-v1",
+        ),
     )
 
 
@@ -265,6 +306,137 @@ def test_wiki_eligibility_is_applied_before_candidate_ranking() -> None:
         assert "knowledge_chunk" not in query.sql
     finally:
         connection.close()
+
+
+@pytest.mark.parametrize(
+    ("spice_preference", "expected_menu_id"),
+    [("LESS", "menu-less"), ("SIMILAR", "menu-similar"), ("MORE", "menu-more")],
+)
+def test_v3_price_spice_and_synthetic_dietary_filters(
+    spice_preference: str,
+    expected_menu_id: str,
+) -> None:
+    connection = _connection()
+    try:
+        for menu_id, spice_level in (
+            ("menu-less", 2),
+            ("menu-similar", 3),
+            ("menu-more", 4),
+        ):
+            _insert_menu(
+                connection,
+                menu_id=menu_id,
+                merchant_id=f"merchant-{menu_id}",
+                concept_id=f"concept-{menu_id}",
+            )
+            _insert_synthetic_profile(
+                connection,
+                menu_id=menu_id,
+                spice_level=spice_level,
+            )
+
+        selected_spice = {"LESS": 2, "SIMILAR": 3, "MORE": 4}[spice_preference]
+        _insert_menu(
+            connection,
+            menu_id="menu-dietary-blocked",
+            merchant_id="merchant-dietary-blocked",
+            concept_id="concept-dietary-blocked",
+        )
+        _insert_synthetic_profile(
+            connection,
+            menu_id="menu-dietary-blocked",
+            spice_level=selected_spice,
+            halal_fit=False,
+            vegan_fit=False,
+        )
+        _insert_menu(
+            connection,
+            menu_id="menu-price-blocked",
+            merchant_id="merchant-price-blocked",
+            concept_id="concept-price-blocked",
+        )
+        _insert_synthetic_profile(
+            connection,
+            menu_id="menu-price-blocked",
+            spice_level=selected_spice,
+        )
+
+        # One otherwise matching row fails the v3 price gate and another fails
+        # both synthetic dietary switches.
+        connection.execute(
+            "UPDATE menu SET price=30000 WHERE menu_id='menu-price-blocked'"
+        )
+
+        criteria = RecommendationCriteriaV2.model_validate(
+            {
+                "schema_version": "3",
+                "price_range_krw": {"min": 8000, "max": 25000},
+                "spice_preference": spice_preference,
+                "spice_reference_country": "US",
+                "dietary_filters": {
+                    "halal_certified_only": True,
+                    "vegan": True,
+                },
+            }
+        )
+        query = _query(
+            criteria,
+            limit=None,
+            synthetic_enrichment_release_id="enrichment-v1",
+        )
+        rows = connection.execute(query.sql, query.parameters).fetchall()
+
+        assert [row["menu_id"] for row in rows] == [expected_menu_id]
+        assert "menu.price BETWEEN :price_min_krw AND :price_max_krw" in query.sql
+        assert "synthetic_menu.spice_level" in query.sql
+        assert "synthetic_halal.halal_fit=1" in query.sql
+        assert "synthetic_vegan.vegan_fit=1" in query.sql
+    finally:
+        connection.close()
+
+
+def test_v3_query_fails_closed_without_active_synthetic_release() -> None:
+    criteria = RecommendationCriteriaV2.model_validate(
+        {
+            "schema_version": "3",
+            "price_range_krw": {"min": 8000, "max": 25000},
+            "spice_preference": "SIMILAR",
+            "spice_reference_country": "US",
+        }
+    )
+
+    query = _query(criteria, limit=None)
+
+    assert "1=0" in query.sql
+    assert "synthetic_enrichment_release_id" not in query.parameters
+
+
+def test_v3_requires_ordered_price_range_and_v2_snapshot_remains_readable() -> None:
+    with pytest.raises(ValueError, match="PRICE_RANGE_REQUIRED"):
+        RecommendationCriteriaV2.model_validate({"schema_version": "3"})
+    with pytest.raises(ValueError, match="PRICE_RANGE_ORDER_INVALID"):
+        RecommendationCriteriaV2.model_validate(
+            {
+                "schema_version": "3",
+                "price_range_krw": {"min": 25000, "max": 8000},
+            }
+        )
+
+    restored_v2 = RecommendationCriteriaV2.model_validate(
+        {
+            "schema_version": "2",
+            "price_bands": ["FROM_10000_TO_19999"],
+            "max_spice_level": 3,
+            "dietary_filters": {
+                "halal_certified_only": False,
+                "vegan": False,
+            },
+        }
+    )
+
+    assert restored_v2.schema_version == "2"
+    assert restored_v2.price_range_krw is None
+    assert restored_v2.max_spice_level == 3
 
 
 def test_candidate_window_caps_each_merchant_at_twenty_five_percent() -> None:
@@ -657,8 +829,20 @@ def test_grounding_query_can_restrict_the_semantic_union_before_final_ranking() 
             price_bands=["UNDER_10000"],
             max_spice_level=5,
         ),
+        RecommendationCriteriaV2.model_validate(
+            {
+                "schema_version": "3",
+                "price_range_krw": {"min": 8000, "max": 25000},
+                "spice_preference": "SIMILAR",
+                "spice_reference_country": "US",
+                "dietary_filters": {
+                    "halal_certified_only": True,
+                    "vegan": True,
+                },
+            }
+        ),
     ],
-    ids=["subjective", "objective-price-only"],
+    ids=["subjective", "objective-price-only", "v3-synthetic-objectives"],
 )
 def test_oracle_candidate_and_preview_bind_names_match_parameters_exactly(
     criteria: RecommendationCriteriaV2,
@@ -672,6 +856,7 @@ def test_oracle_candidate_and_preview_bind_names_match_parameters_exactly(
         excluded_menu_ids={"seen-a"},
         eligibility_as_of=datetime.now(timezone.utc),
         candidate_limit=24,
+        synthetic_enrichment_release_id="enrichment-v1",
     )
     preview = build_concept_preview_query(candidate)
 

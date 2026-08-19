@@ -141,7 +141,16 @@ def test_arbitrary_search_and_booking_image_use_prepared_demo_address(repository
         assert searched.status_code == 200
         assert searched.json()["low_confidence"] is False
         assert searched.json()["candidates"][0]["place_id"] == "hotel_demo_01"
-        assert "Demo only" in searched.json()["notice"]
+        assert searched.json()["candidates"][0]["hotel_name"] == "YOBI Myeongdong Hotel"
+        assert searched.json()["candidates"][0]["road_address"] == "서울특별시 중구 을지로 21"
+        rendered_candidates = " ".join(
+            f"{item['hotel_name']} {item['road_address']}"
+            for item in searched.json()["candidates"]
+        )
+        assert "demo" not in rendered_candidates.lower()
+        assert "데모" not in rendered_candidates
+        assert "prepared YOBI Myeongdong delivery address" in searched.json()["notice"]
+        assert "Demo" not in searched.json()["notice"]
         assert "manually" not in searched.json()["notice"]
 
         uploaded = client.post(
@@ -157,7 +166,14 @@ def test_arbitrary_search_and_booking_image_use_prepared_demo_address(repository
         assert uploaded.status_code == 200
         assert uploaded.json()["low_confidence"] is False
         assert uploaded.json()["candidates"][0]["place_id"] == "hotel_demo_01"
-        assert "Demo only" in uploaded.json()["notice"]
+        rendered_candidates = " ".join(
+            f"{item['hotel_name']} {item['road_address']}"
+            for item in uploaded.json()["candidates"]
+        )
+        assert "demo" not in rendered_candidates.lower()
+        assert "데모" not in rendered_candidates
+        assert "prepared YOBI Myeongdong delivery address" in uploaded.json()["notice"]
+        assert "Demo" not in uploaded.json()["notice"]
         assert "manually" not in uploaded.json()["notice"]
     finally:
         app.dependency_overrides.clear()
