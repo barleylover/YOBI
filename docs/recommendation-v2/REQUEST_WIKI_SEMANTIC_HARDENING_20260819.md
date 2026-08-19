@@ -2,7 +2,7 @@
 
 작성일: 2026-08-19  
 작업 브랜치: `codex/recommendation-v2-hybrid`  
-상태: 로컬 구현 및 검증. 운영 OCI 데이터 변경·모델 호출·배포 없음.
+상태: 운영 OCI 배포 완료. 릴리스 `20260819T041159Z-147947c74fd4`가 활성 `PROVISIONAL`이며, 사전 Grok 1회 통과 후 사후 5회 게이트는 4/5 품질 통과·지연 목표 실패로 최종 `FAIL`이다.
 
 ## 1. 이번 개선의 결론
 
@@ -70,7 +70,7 @@
 
 배포 환경 생성·복원 스크립트도 `EMBEDDING_PROVIDER=oci`와 instance-principal 인증을 고정한다. 이전 protected env에 `OCI_COMPARTMENT_ID`가 없으면 잘못된 provider로 자동 전환하지 않고 배포 전에 중단한다.
 
-중요: 현재 운영 OCI vector를 이번 작업에서 다시 생성하지 않았다. 일반 deploy도 예상치 못한 대량 provider 호출을 하지 않으며, `--verify-only`로 완전한 불변 집합이 있는지만 확인한다. 운영 semantic 검색을 실제 Cohere Embed 4로 전환하려면 승인된 별도 staged backfill을 먼저 실행해야 한다.
+운영 적용에서는 승인된 staged backfill을 실행해 15,085개 메뉴 vector를 96개 이하 batch, 158회 provider dispatch, 자동 retry 0으로 생성했다. 불변 집합 manifest는 `6027fe3f8f01733be8a7ba60b9ed4af16b2e3f8714c83f4256a2eae76106f9e4`이며, 즉시 실행한 `--verify-only`는 15,085/15,085와 semantic text hash mismatch 0, active pointer 불변을 확인했다. 이후 동일 집합은 `ALREADY_PRESENT`로 검증되어 재호출되지 않았다.
 
 ## 5. 사용자 조건과 가장 관련 있는 Wiki passage 선택
 
@@ -118,17 +118,18 @@ Unicode NFKC, casefold, 단어 경계를 사용하므로 `heat`가 `wheat`에 �
 
 별도 15,085-menu repository 성능 smoke는 warm retrieval 60건 중앙값 838.2ms·최대 1,174.0ms, NO_MATCH 20건 중앙값 33.0ms·최대 45.6ms였다. process-cold 2건은 중앙값 1,203.1ms·최대 1,232.1ms였다. warm 20회/시나리오와 cold 2회는 정식 P95 최소 표본보다 작으므로 percentile 통과 주장은 하지 않고 `INCONCLUSIVE`로 기록했다.
 
-## 8. 운영 적용 전 남은 안전 게이트
+## 8. 운영 적용 게이트 결과
 
-1. migration 014의 Oracle 실행 계획과 기존 인덱스 중복 여부 확인
-2. `backfill_menu_semantic_embeddings.py --embedding-provider oci --apply`로 불변 vector 집합 생성
-3. `--verify-only`로 provider/model/version/dimension/count/manifest와 pointer 불변성 확인
-4. 신규 staged knowledge/recommendation family 생성
-5. staged readiness에서 `vector_ready=true` 확인
-6. 실제 Grok 요청 전후 provider dispatch count와 동일 request 중복 호출 없음 확인
-7. 이상이 없을 때만 활성 release pointer 변경
+1. Oracle additive migration 014 적용 및 migration ledger 검증: 통과
+2. OCI Cohere Embed 4 불변 vector backfill·verify-only: 통과
+3. staged knowledge/recommendation family 생성과 count/manifest 검증: 통과
+4. staged query plan과 hard filter 검증: 통과
+5. 사전 Grok probe 1회, retry 0: 통과
+6. 새 app/family 활성화와 local/public health/readiness: 통과
+7. 사후 Grok 5회, 60초 간격, retry 0: 4건 Grok 선택 통과, 1건 OCI rate limit fallback
+8. 사후 지연 목표 median 8초·max 10초: 실패
 
-이번 변경은 이 운영 게이트를 자동으로 넘거나 운영 DB를 덮어쓰지 않는다.
+기존 데이터는 삭제하지 않았고, 이전 app release는 수동 rollback 대상으로 보존했다. 사후 게이트 실패 정책에 따라 새 릴리스는 자동 롤백하지 않고 활성 `PROVISIONAL`로 유지했다.
 
 추가로 로컬 초기화의 preference 노출 계산도 raw Wiki/menu 문장 전체를 50개 옵션 alias와 반복 비교하던 방식에서 이미 컴파일된 `concept_preference_support + menu_concept_membership + menu_wiki_eligibility` 집계로 변경했다. 동일한 600-menu fixture에서 초기화 실측은 약 6.2초에서 약 2.1초로 감소했다.
 
@@ -141,4 +142,29 @@ Unicode NFKC, casefold, 단어 경계를 사용하므로 `heat`가 `wheat`에 �
 - frontend ESLint: 통과
 - frontend TypeScript/Vite production build: 통과
 - Git diff whitespace 검사: 통과
-- 운영 OCI write, OCI embedding 호출, Grok 호출, 배포: 수행하지 않음
+- 운영 OCI write·embedding backfill·Grok 1+5 호출·배포: 수행 완료
+
+## 10. 운영 배포와 실제 1+5 결과
+
+- application release: `20260819T041159Z-147947c74fd4`
+- deployed source commit: `f2a529cd8ef28ea72569a6fc26f84366abb0a9d5`
+- recommendation family: `external-recommendation-9db4e004e8ec633257c9ee33-d1ca4461e2-d557ecf273-a76a689867`
+- knowledge release: `external-knowledge-9db4e004e8ec633257c9ee33`
+- feature manifest: `d1ca4461e26474ed16006f0a6a4a5ae13db5de8cacf8456991df8ac4fd48e6cc`
+- postdeploy artifact SHA-256: `e5dcf0595dc8314c1cb25d2628d3095f1c13e302e344f779c9b68dbb12e9364b`
+
+사전 staged-family probe는 `SPICY + FRIED + CHICKEN`으로 provider 1회, retry 0 계약을 통과한 뒤에만 active pointer가 변경됐다. 사후 게이트는 고정 5건을 정확히 한 번씩, 60초 간격으로 실행했다.
+
+| case | 결과 | 지연 | 선택 상태 | 원인 |
+|---|---|---:|---|---|
+| Korean `SPICY + NOODLES` | 실패 | 4.55초 | deterministic fallback | OCI `RATE_LIMIT` |
+| English `CRISPY + CHICKEN + FRIED` | 통과 | 20.26초 | `GROK_SELECTED` | 계약·근거·다양성 통과 |
+| Korean `CLEAN_MILD + SOUP + HOT` | 통과 | 21.83초 | `GROK_SELECTED` | 계약·근거·다양성 통과 |
+| English `ITALIAN + NOODLES + 10k–19k` | 통과 | 27.06초 | `GROK_SELECTED` | 계약·근거·다양성 통과 |
+| Korean `SWEET + FROZEN + DESSERT` | 통과 | 21.28초 | `GROK_SELECTED` | 계약·근거·다양성 통과 |
+
+5건 모두 dispatch count 1, 총 provider call 5, retry 0, shortlist 15, 최종 결과 3개, 매장 3개였다. 성공 4건은 선택 카테고리 근거를 모두 충족했고 grounding rejection은 없었다. 측정 가능한 성공 4건의 사용량은 input 28,933, output 7,068, total 36,001 token이었다. 전체 latency median은 21.28초, max는 27.06초로 목표를 통과하지 못했다.
+
+공개 `/`, `/healthz`, `/readyz`, `/demo/qr`는 HTTP 200, 인증 없는 `/api/v1/demo/status`는 403이었다. readiness는 Grok 4.3, feature 61,341개, Wiki eligible menu 4,558개, semantic embedding 15,085개와 모든 데이터 무결성 check 통과를 보고했다. 임시 LB 경로 제거 후 TCP 22=0, TCP 80 불변, LB 수 복원도 확인했다.
+
+자동 rollback은 수행하지 않았다. 수동 rollback 명령은 `sudo -n /opt/yobi/current/deploy/rollback.sh`이다. 추가 Grok 호출 없이 rate-limit 용량과 20초대 모델 지연을 다음 개선 대상으로 남긴다.
