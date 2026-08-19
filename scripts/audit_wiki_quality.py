@@ -6,12 +6,11 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "backend"))
 
 from app.knowledge.wiki_quality import audit_wiki_quality
-
-from scripts.build_external_knowledge_release import (
+from build_external_knowledge_release import (
     _authored_documents,
     build_support_rows,
     compile_external_release,

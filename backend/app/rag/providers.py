@@ -107,7 +107,7 @@ class OCIEmbeddingProvider:
             truncate="END",
             input_type=mode,
         )
-        import oci  # type: ignore[import-untyped]
+        import oci
 
         response = self._client_for_request().embed_text(
             details,
