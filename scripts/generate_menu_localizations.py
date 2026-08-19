@@ -31,6 +31,7 @@ from app.genai.providers import choose_genai_provider
 
 BATCH_SIZE = 10
 SCHEMA_ATTEMPTS_PER_MODEL = 10
+WIKI_PASSAGES_PER_MENU = 1
 PROMPT_VERSION = "menu-localization-v1-wiki-bounded"
 
 
@@ -164,7 +165,7 @@ def _load_pending(
                   ON chunk.release_id=closure.release_id
                  AND chunk.concept_id=closure.ancestor_concept_id
                 WHERE membership.knowledge_release_id=? AND membership.menu_id=?
-                ORDER BY chunk.chunk_id LIMIT 3
+                ORDER BY chunk.chunk_id LIMIT 1
                 """,
                 (knowledge_release_id, row["menu_id"]),
             ).fetchall()
@@ -268,7 +269,7 @@ def _load_pending_oracle(
                     "content": str(content.read() if hasattr(content, "read") else content),
                 }
             )
-            if len(passages) == 3:
+            if len(passages) == WIKI_PASSAGES_PER_MENU:
                 break
         if not passages:
             raise RuntimeError(f"WIKI_PASSAGE_REQUIRED:{menu_id}")
