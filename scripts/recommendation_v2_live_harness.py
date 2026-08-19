@@ -45,6 +45,7 @@ from app.services.structured_recommendation import (
     StructuredRecommendationService,
     compact_generation_payload,
 )
+from recommendation_http import await_recommendation_response
 from recommendation_performance_smoke import (
     Scenario,
     _criteria_for,
@@ -569,11 +570,12 @@ def run_postdeploy(
                             "mode": "INITIAL",
                         },
                     )
-                    if response.status_code == 200:
-                        candidate = response.json()
-                        batch = candidate if isinstance(candidate, dict) else {}
-                    else:
-                        transport_error = f"HTTP_{response.status_code}"
+                    batch = await_recommendation_response(
+                        context.client,
+                        session_id=context.session_id,
+                        initial_response=response,
+                        error_prefix="V2_LIVE",
+                    )
                 except Exception as exc:  # noqa: BLE001 - never redispatch
                     transport_error = type(exc).__name__.upper()
                 latency_ms = round((perf_counter() - started) * 1_000, 3)

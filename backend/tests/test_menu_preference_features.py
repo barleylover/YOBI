@@ -6,6 +6,7 @@ from app.knowledge.menu_features import (
     feature_manifest_sha256,
     normalize_preference_text,
     preference_term_matches,
+    reviewed_general_support_matches,
 )
 
 
@@ -32,6 +33,21 @@ def test_normalization_is_nfkc_casefolded_and_latin_aliases_use_word_boundaries(
     assert preference_term_matches("cupcake", "cake") is False
     assert preference_term_matches("pork-cutlet", "pork") is True
     assert preference_term_matches("매운떡볶이", "매운") is True
+
+
+def test_general_wiki_support_rejects_possible_negated_and_variable_claims() -> None:
+    assert reviewed_general_support_matches("The broth is commonly served hot.", "served hot")
+    assert not reviewed_general_support_matches("The broth may be served hot.", "served hot")
+    assert not reviewed_general_support_matches("The dish is not spicy.", "spicy")
+    assert not reviewed_general_support_matches("Heat varies by menu.", "heat")
+    assert reviewed_general_support_matches(
+        "It is commonly served hot, although some versions are served cool.",
+        "served hot",
+    )
+    assert not reviewed_general_support_matches(
+        "It is commonly served hot, although some versions are served cool.",
+        "served cool",
+    )
 
 
 def test_compiler_blocks_savory_cake_and_espresso_false_positives() -> None:

@@ -12,10 +12,14 @@ import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
-sys.path.insert(0, str(BACKEND))
+SCRIPTS = ROOT / "scripts"
+for path in (BACKEND, SCRIPTS):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from app.dependencies import get_repository
 from app.domain.structured_recommendation import RecommendationRequestStatus
+from recommendation_http import await_recommendation_response
 
 
 def _require(response: httpx.Response, expected: int = 200) -> dict:
@@ -221,16 +225,20 @@ def run(base_url: str) -> None:
                     },
                 )
             )
-            batch = _require(
-                client.post(
-                    f"/api/v1/sessions/{session_id}/recommendations",
-                    json={
-                        "request_id": recommendation_request_id,
-                        "expected_state_version": commit["state_version"],
-                        "criteria_version": commit["criteria_version"],
-                        "mode": "INITIAL",
-                    },
-                )
+            response = client.post(
+                f"/api/v1/sessions/{session_id}/recommendations",
+                json={
+                    "request_id": recommendation_request_id,
+                    "expected_state_version": commit["state_version"],
+                    "criteria_version": commit["criteria_version"],
+                    "mode": "INITIAL",
+                },
+            )
+            batch = await_recommendation_response(
+                client,
+                session_id=session_id,
+                initial_response=response,
+                error_prefix="STRUCTURED_SMOKE",
             )
             if batch.get("status") != "RECOMMENDED":
                 raise RuntimeError("STRUCTURED_SMOKE_NORMAL_RESULT_REQUIRED")

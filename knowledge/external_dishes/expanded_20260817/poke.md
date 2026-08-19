@@ -24,8 +24,8 @@
 ---
 # Poke bowl
 
-A poke bowl is a composed bowl meal commonly pairing a rice or vegetable base with cut toppings and sauce. Contemporary menus include seafood, meat, tofu and vegetable versions.
+A poke bowl is a composed bowl meal commonly pairing a rice or vegetable base with cut toppings and sauce. Contemporary menus include seafood, meat, tofu and vegetable versions, making the rice, protein and dressing product-specific.
 
-It is usually served cool or at room temperature with soft grains and crisp toppings. The word poke does not guarantee raw fish, a specific sauce or a particular protein.
+It is usually served cool or at room temperature, combining soft or chewy grains with crisp or crunchy toppings. The word poke does not guarantee raw fish, a specific sauce, a particular protein or a clean-and-mild flavour.
 
 This is general culinary guidance, not a statement about one merchant's recipe, ingredients, certification, allergens, portion or menu-specific spice level. Check the current merchant information before ordering.

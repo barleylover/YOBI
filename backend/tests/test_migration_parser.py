@@ -46,6 +46,7 @@ def test_release_discovers_conversation_and_knowledge_migrations() -> None:
     assert "011_external_catalog_import.sql" in names
     assert "012_concept_preference_support_and_server_ranking.sql" in names
     assert "013_menu_preference_features_and_hybrid_rank.sql" in names
+    assert "014_wiki_eligibility_indexes.sql" in names
 
 
 def test_conversation_migration_is_append_only_and_partial_rerun_safe() -> None:
@@ -203,6 +204,26 @@ def test_menu_feature_hybrid_rank_migration_is_additive_and_rerun_safe() -> None
     assert all(
         "SQLCODE != -955" in statement or "SQLCODE != -1430" in statement
         for statement in statements
+    )
+
+
+def test_wiki_eligibility_index_migration_is_additive_and_rerun_safe() -> None:
+    path = ROOT / "database" / "migrations" / "014_wiki_eligibility_indexes.sql"
+    source = path.read_text(encoding="utf-8")
+    statements = migrate.split_statements(source)
+
+    assert "DROP " not in source.upper()
+    assert len(statements) == 7
+    assert "CREATE TABLE menu_wiki_eligibility" in source
+    assert "CREATE TABLE menu_semantic_embedding" in source
+    assert "LEFT JOIN menu_wiki_eligibility existing" in source
+    assert "idx_dish_closure_ancestor" in source
+    assert "idx_menu_concept_membership_concept" in source
+    assert "idx_menu_wiki_eligibility_menu" in source
+    assert all(
+        "SQLCODE != -955" in statement
+        for index, statement in enumerate(statements)
+        if index != 2
     )
 
 

@@ -23,8 +23,8 @@
 ---
 # Rice bowl
 
-A rice bowl is a meal format placing a cooked topping, sauce or composed ingredients over rice.
+A rice bowl is a meal format placing a cooked topping, sauce or composed ingredients over a base of rice. Stir-fried, grilled, simmered, raw and vegetable toppings can all appear in this form.
 
-It is generally warm and combines soft rice with textures determined by the topping. The broad format does not establish cuisine, protein or sauce.
+It is generally served warm or hot and combines soft or chewy rice with textures determined by the topping. The broad format does not establish cuisine, protein, sauce, cooking method or spice level.
 
 This is general culinary guidance, not a statement about one merchant's recipe, ingredients, certification, allergens, portion or menu-specific spice level. Check the current merchant information before ordering.

@@ -30,8 +30,8 @@
 ---
 # Pasta
 
-Pasta is an Italian noodle family shaped into many forms and paired with sauces, broths or baked preparations.
+Pasta is an Italian noodle family shaped into strands, tubes, sheets and filled forms, then paired with sauces, broths or baked preparations. The noodles may be boiled before finishing in sauce or assembled into a baked dish.
 
-It may be light and tangy, savoury, spicy or thick and creamy, and is generally served warm or hot. The menu name must identify the actual sauce and ingredients.
+Pasta is generally served warm or hot with a soft or chewy bite. It may taste light and tangy, savoury, spicy, or thick and creamy, so the menu name must identify the actual sauce, ingredients and cooking style.
 
 This is general culinary guidance, not a statement about one merchant's recipe, ingredients, certification, allergens, portion or menu-specific spice level. Check the current merchant information before ordering.

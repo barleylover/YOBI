@@ -17,6 +17,25 @@ class ConceptCandidateQuery:
     parameters: dict[str, Any]
 
 
+def _reviewed_public_wiki_condition(dialect: SqlDialect) -> str:
+    """Require a menu to have at least one reviewed, public Wiki passage.
+
+    This condition belongs in every recall channel so Wiki-less menus cannot
+    consume the bounded top-100 union before the service freezes its shortlist.
+    The immutable release compiler materializes the expensive
+    passage -> concept closure -> menu join once. Runtime queries therefore do
+    one indexed lookup instead of repeatedly parsing chunk metadata JSON.
+    """
+
+    del dialect  # The materialized eligibility contract is identical in both databases.
+    return """EXISTS (
+      SELECT 1 FROM menu_wiki_eligibility wiki_eligible
+      WHERE wiki_eligible.knowledge_release_id=:knowledge_release_id
+        AND wiki_eligible.menu_id=menu.menu_id
+        AND wiki_eligible.reviewed_chunk_count>0
+    )"""
+
+
 def _hard_eligibility_conditions(
     *,
     criteria: RecommendationCriteriaV2,
@@ -142,15 +161,9 @@ def build_concept_candidate_query(
     if selected:
         parameters.update(
             {
-                "include_menu_feature": int(
-                    support_channel in {"COMBINED", "MENU_FEATURE"}
-                ),
-                "include_concept_support": int(
-                    support_channel in {"COMBINED", "CONCEPT_SUPPORT"}
-                ),
-                "allow_auxiliary_feature": int(
-                    support_channel == "MENU_FEATURE"
-                ),
+                "include_menu_feature": int(support_channel in {"COMBINED", "MENU_FEATURE"}),
+                "include_concept_support": int(support_channel in {"COMBINED", "CONCEPT_SUPPORT"}),
+                "allow_auxiliary_feature": int(support_channel == "MENU_FEATURE"),
             }
         )
         parameters["selected_category_count"] = len(criteria.subjective_groups())
@@ -160,7 +173,9 @@ def build_concept_candidate_query(
                 values.append(f"(:selected_category_{index},:selected_option_{index})")
                 parameters[f"selected_category_{index}"] = category
                 parameters[f"selected_option_{index}"] = option
-            selected_cte = "selected(category_code,option_code) AS (VALUES " + ",".join(values) + ")"
+            selected_cte = (
+                "selected(category_code,option_code) AS (VALUES " + ",".join(values) + ")"
+            )
         else:
             values = []
             for index, (category, option) in enumerate(selected):
@@ -266,23 +281,16 @@ def build_concept_candidate_query(
           SUM(support.reviewed_evidence_count) AS reviewed_evidence_count,
           AVG(support.direct_supported) AS direct_evidence_ratio
         """
-        support_having = (
-            "HAVING COUNT(DISTINCT support.category_code)=:selected_category_count"
-        )
+        support_having = "HAVING COUNT(DISTINCT support.category_code)=:selected_category_count"
     else:
         selected_cte = "selected AS (SELECT NULL category_code,NULL option_code WHERE 1=0)"
         if dialect == "oracle":
-            selected_cte = "selected AS (SELECT NULL category_code,NULL option_code FROM dual WHERE 1=0)"
-        public_visibility = (
-            "json_extract(chunk.metadata_json,'$.recommendation_visibility')"
-            if dialect == "sqlite"
-            else "JSON_VALUE(chunk.metadata_json,'$.recommendation_visibility')"
-        )
-        # Exact/objective-only requests do not need to multiply every menu row by
-        # every knowledge chunk.  Pre-aggregate the small reviewed concept set once,
-        # then join it to mapped menus.  This preserves the evidence eligibility
-        # boundary while keeping price-only preview and retrieval bounded.
-        support_ctes = f""",
+            selected_cte = (
+                "selected AS (SELECT NULL category_code,NULL option_code FROM dual WHERE 1=0)"
+            )
+        # Exact/objective-only requests use the release-compiled eligibility
+        # relation. No passage metadata JSON is parsed on the request path.
+        support_ctes = """,
       candidate_membership AS (
         SELECT menu_id,concept_id
         FROM (
@@ -298,34 +306,17 @@ def build_concept_candidate_query(
         )
         WHERE membership_rank=1
       ),
-      objective_concept AS (
-        SELECT closure.release_id,
-               closure.descendant_concept_id AS concept_id,
-               COUNT(DISTINCT chunk.chunk_id) AS reviewed_evidence_count
-        FROM dish_concept_closure closure
-        JOIN knowledge_chunk chunk
-          ON chunk.release_id=closure.release_id
-         AND chunk.concept_id=closure.ancestor_concept_id
-        JOIN knowledge_document document
-          ON document.release_id=chunk.release_id
-         AND document.document_id=chunk.document_id
-        WHERE closure.release_id=:knowledge_release_id
-          AND closure.inherit_claims=1
-          AND document.source_type='SYNTHETIC_WIKI'
-          AND document.review_status='REVIEWED_DEMO'
-          AND lower(chunk.facet)<>'safety'
-          AND (
-            {public_visibility}='PUBLIC_RAG'
-            OR {public_visibility} IS NULL
-          )
-        GROUP BY closure.release_id,closure.descendant_concept_id
+      objective_grounding AS (
+        SELECT menu_id,reviewed_chunk_count AS reviewed_evidence_count
+        FROM menu_wiki_eligibility
+        WHERE knowledge_release_id=:knowledge_release_id
+          AND reviewed_chunk_count>0
       )"""
         support_join = """
           JOIN candidate_membership membership
             ON membership.menu_id=menu.menu_id
-          JOIN objective_concept objective_support
-            ON objective_support.release_id=:knowledge_release_id
-           AND objective_support.concept_id=membership.concept_id
+          JOIN objective_grounding objective_support
+            ON objective_support.menu_id=menu.menu_id
         """
         support_projection = """
           membership.concept_id AS concept_id,
@@ -345,6 +336,7 @@ def build_concept_candidate_query(
         eligibility_as_of=eligibility_as_of,
         parameters=parameters,
     )
+    conditions.append(_reviewed_public_wiki_condition(dialect))
 
     group_by = """
       menu.menu_id,menu.merchant_id,merchant.name_en,merchant.name_ko,
@@ -399,7 +391,7 @@ def build_concept_candidate_query(
         JOIN merchant ON merchant.merchant_id=menu.merchant_id
         LEFT JOIN menu_source_detail source_detail ON source_detail.menu_id=menu.menu_id
         {support_join}
-        WHERE {' AND '.join(conditions)}
+        WHERE {" AND ".join(conditions)}
         {group_by_clause}
         {support_having}
       ){diversity_cte}
@@ -437,18 +429,14 @@ def build_concept_preview_count_query(
             parameters[f"selected_category_{index}"] = category
             parameters[f"selected_option_{index}"] = option
             if dialect == "sqlite":
-                values.append(
-                    f"(:selected_category_{index},:selected_option_{index})"
-                )
+                values.append(f"(:selected_category_{index},:selected_option_{index})")
             else:
                 values.append(
                     f"SELECT :selected_category_{index} category_code,"
                     f":selected_option_{index} option_code FROM dual"
                 )
         selected_cte = (
-            "selected(category_code,option_code) AS (VALUES "
-            + ",".join(values)
-            + ")"
+            "selected(category_code,option_code) AS (VALUES " + ",".join(values) + ")"
             if dialect == "sqlite"
             else "selected AS (" + " UNION ALL ".join(values) + ")"
         )
@@ -492,37 +480,12 @@ def build_concept_preview_count_query(
           )
         """
     else:
-        public_visibility = (
-            "json_extract(chunk.metadata_json,'$.recommendation_visibility')"
-            if dialect == "sqlite"
-            else "JSON_VALUE(chunk.metadata_json,'$.recommendation_visibility')"
-        )
-        grounding_ctes = f"""
-          reviewed_concept AS (
-            SELECT DISTINCT closure.descendant_concept_id AS concept_id
-            FROM dish_concept_closure closure
-            JOIN knowledge_chunk chunk
-              ON chunk.release_id=closure.release_id
-             AND chunk.concept_id=closure.ancestor_concept_id
-            JOIN knowledge_document document
-              ON document.release_id=chunk.release_id
-             AND document.document_id=chunk.document_id
-            WHERE closure.release_id=:knowledge_release_id
-              AND closure.inherit_claims=1
-              AND document.source_type='SYNTHETIC_WIKI'
-              AND document.review_status='REVIEWED_DEMO'
-              AND lower(chunk.facet)<>'safety'
-              AND (
-                {public_visibility}='PUBLIC_RAG'
-                OR {public_visibility} IS NULL
-              )
-          ),
+        grounding_ctes = """
           grounded_menu AS (
-            SELECT DISTINCT membership.menu_id
-            FROM menu_concept_membership membership
-            JOIN reviewed_concept
-              ON reviewed_concept.concept_id=membership.concept_id
-            WHERE membership.knowledge_release_id=:knowledge_release_id
+            SELECT menu_id
+            FROM menu_wiki_eligibility
+            WHERE knowledge_release_id=:knowledge_release_id
+              AND reviewed_chunk_count>0
           )
         """
     conditions = _hard_eligibility_conditions(
@@ -534,6 +497,7 @@ def build_concept_preview_count_query(
         eligibility_as_of=eligibility_as_of,
         parameters=parameters,
     )
+    conditions.append(_reviewed_public_wiki_condition(dialect))
     sql = f"""
       WITH {grounding_ctes}
       SELECT COUNT(*) AS eligible_menu_count,
@@ -542,7 +506,7 @@ def build_concept_preview_count_query(
       JOIN menu ON menu.menu_id=grounding.menu_id
       JOIN merchant ON merchant.merchant_id=menu.merchant_id
       LEFT JOIN menu_source_detail source_detail ON source_detail.menu_id=menu.menu_id
-      WHERE {' AND '.join(conditions)}
+      WHERE {" AND ".join(conditions)}
     """
     return ConceptCandidateQuery(sql=sql, parameters=parameters)
 
@@ -581,18 +545,14 @@ def build_candidate_recall_channel_query(
             parameters[f"selected_category_{index}"] = category
             parameters[f"selected_option_{index}"] = option
             if dialect == "sqlite":
-                values.append(
-                    f"(:selected_category_{index},:selected_option_{index})"
-                )
+                values.append(f"(:selected_category_{index},:selected_option_{index})")
             else:
                 values.append(
                     f"SELECT :selected_category_{index} category_code,"
                     f":selected_option_{index} option_code FROM dual"
                 )
         selected_cte = (
-            "selected(category_code,option_code) AS (VALUES "
-            + ",".join(values)
-            + ")"
+            "selected(category_code,option_code) AS (VALUES " + ",".join(values) + ")"
             if dialect == "sqlite"
             else "selected AS (" + " UNION ALL ".join(values) + ")"
         )
@@ -663,44 +623,16 @@ def build_candidate_recall_channel_query(
     else:
         if support_channel != "CONCEPT_SUPPORT":
             raise ValueError("OBJECTIVE_MENU_FEATURE_CHANNEL_UNAVAILABLE")
-        public_visibility = (
-            "json_extract(chunk.metadata_json,'$.recommendation_visibility')"
-            if dialect == "sqlite"
-            else "JSON_VALUE(chunk.metadata_json,'$.recommendation_visibility')"
-        )
-        support_ctes = f"""
-          reviewed_concept AS (
-            SELECT closure.descendant_concept_id AS concept_id,
-                   COUNT(DISTINCT chunk.chunk_id) AS reviewed_evidence_count
-            FROM dish_concept_closure closure
-            JOIN knowledge_chunk chunk
-              ON chunk.release_id=closure.release_id
-             AND chunk.concept_id=closure.ancestor_concept_id
-            JOIN knowledge_document document
-              ON document.release_id=chunk.release_id
-             AND document.document_id=chunk.document_id
-            WHERE closure.release_id=:knowledge_release_id
-              AND closure.inherit_claims=1
-              AND document.source_type='SYNTHETIC_WIKI'
-              AND document.review_status='REVIEWED_DEMO'
-              AND lower(chunk.facet)<>'safety'
-              AND (
-                {public_visibility}='PUBLIC_RAG'
-                OR {public_visibility} IS NULL
-              )
-            GROUP BY closure.descendant_concept_id
-          ),
+        support_ctes = """
           grounded AS (
-            SELECT membership.menu_id,1.0 AS explicit_score,
+            SELECT eligibility.menu_id,1.0 AS explicit_score,
                    1.0 AS min_category_support,
-                   reviewed_concept.reviewed_evidence_count,
+                   eligibility.reviewed_chunk_count AS reviewed_evidence_count,
                    0.0 AS direct_evidence_ratio,
                    1 AS matched_category_count
-            FROM menu_concept_membership membership
-            JOIN reviewed_concept
-              ON reviewed_concept.concept_id=membership.concept_id
-            WHERE membership.knowledge_release_id=:knowledge_release_id
-              AND membership.membership_role='PRIMARY'
+            FROM menu_wiki_eligibility eligibility
+            WHERE eligibility.knowledge_release_id=:knowledge_release_id
+              AND eligibility.reviewed_chunk_count>0
           )
         """
     conditions = _hard_eligibility_conditions(
@@ -712,6 +644,7 @@ def build_candidate_recall_channel_query(
         eligibility_as_of=eligibility_as_of,
         parameters=parameters,
     )
+    conditions.append(_reviewed_public_wiki_condition(dialect))
     limit_clause = (
         "LIMIT :candidate_limit"
         if dialect == "sqlite"
@@ -725,7 +658,7 @@ def build_candidate_recall_channel_query(
         JOIN menu ON menu.menu_id=grounded.menu_id
         JOIN merchant ON merchant.merchant_id=menu.merchant_id
         LEFT JOIN menu_source_detail source_detail ON source_detail.menu_id=menu.menu_id
-        WHERE {' AND '.join(conditions)}
+        WHERE {" AND ".join(conditions)}
       ),
       merchant_limited AS (
         SELECT qualified.*,
@@ -752,25 +685,31 @@ def build_semantic_candidate_query(
     *,
     dialect: SqlDialect,
     criteria: RecommendationCriteriaV2,
+    knowledge_release_id: str,
     certification_release_id: str,
     service_area_id: str | None,
     excluded_menu_ids: set[str],
     eligibility_as_of: Any,
     candidate_limit: int,
     query_vector: Any | None = None,
+    semantic_embedding_model: str | None = None,
+    semantic_embedding_version: str | None = None,
+    semantic_embedding_dimension: int | None = None,
+    catalog_release_id: str | None = None,
 ) -> ConceptCandidateQuery:
     """Build the independent hard-eligible semantic retrieval channel.
 
     Oracle ranks persisted Cohere menu vectors in SQL. SQLite returns the same
     hard-eligible population for the deterministic offline mirror scorer.
-    Grounding is deliberately not joined here: callers union channel IDs and
-    then re-run the concept query over that bounded set, which removes every
-    semantic-only item lacking per-category direct or reviewed concept evidence.
+    Wiki eligibility is applied here before the bounded recall union. Callers
+    still re-run the selected-category grounding query over the union, which
+    removes semantic-only items lacking per-category direct or reviewed concept
+    evidence.
     """
 
     if candidate_limit < 1:
         raise ValueError("SEMANTIC_CANDIDATE_LIMIT_INVALID")
-    parameters: dict[str, Any] = {}
+    parameters: dict[str, Any] = {"knowledge_release_id": knowledge_release_id}
     conditions = _hard_eligibility_conditions(
         criteria=criteria,
         certification_release_id=certification_release_id,
@@ -780,15 +719,38 @@ def build_semantic_candidate_query(
         eligibility_as_of=eligibility_as_of,
         parameters=parameters,
     )
+    conditions.append(_reviewed_public_wiki_condition(dialect))
     if dialect == "oracle":
         if query_vector is None:
             raise ValueError("SEMANTIC_QUERY_VECTOR_REQUIRED")
+        if not semantic_embedding_model or not semantic_embedding_version:
+            raise ValueError("SEMANTIC_EMBEDDING_IDENTITY_REQUIRED")
+        if semantic_embedding_dimension is None:
+            raise ValueError("SEMANTIC_EMBEDDING_DIMENSION_REQUIRED")
+        if not catalog_release_id:
+            raise ValueError("SEMANTIC_CATALOG_RELEASE_REQUIRED")
         parameters["query_vector"] = query_vector
+        parameters["semantic_embedding_model"] = semantic_embedding_model
+        parameters["semantic_embedding_version"] = semantic_embedding_version
+        parameters["semantic_embedding_dimension"] = semantic_embedding_dimension
+        parameters["semantic_catalog_release_id"] = catalog_release_id
         parameters["candidate_limit"] = candidate_limit
-        semantic_projection = """
-          CASE WHEN menu.embedding_vector IS NULL THEN 0
-               ELSE 1-VECTOR_DISTANCE(menu.embedding_vector,:query_vector,COSINE)
-          END AS semantic_score
+        conditions.extend(
+            (
+                "semantic_embedding.embedding_vector IS NOT NULL",
+            )
+        )
+        semantic_projection = (
+            "1-VECTOR_DISTANCE(semantic_embedding.embedding_vector,:query_vector,COSINE) "
+            "AS semantic_score"
+        )
+        semantic_join = """
+          JOIN menu_semantic_embedding semantic_embedding
+            ON semantic_embedding.menu_id=menu.menu_id
+           AND semantic_embedding.catalog_release_id=:semantic_catalog_release_id
+           AND semantic_embedding.embedding_model=:semantic_embedding_model
+           AND semantic_embedding.embedding_version=:semantic_embedding_version
+           AND semantic_embedding.embedding_dimension=:semantic_embedding_dimension
         """
         order_and_limit = """
           ORDER BY semantic_score DESC,menu.merchant_id,menu.menu_id
@@ -796,15 +758,17 @@ def build_semantic_candidate_query(
         """
     else:
         semantic_projection = "menu.semantic_text"
+        semantic_join = ""
         # SQLite has no native VECTOR column. The repository applies the
         # deterministic offline scorer and then keeps exactly candidate_limit.
         order_and_limit = "ORDER BY menu.merchant_id,menu.menu_id"
     sql = f"""
       SELECT menu.menu_id,menu.merchant_id,{semantic_projection}
       FROM menu
+      {semantic_join}
       JOIN merchant ON merchant.merchant_id=menu.merchant_id
       LEFT JOIN menu_source_detail source_detail ON source_detail.menu_id=menu.menu_id
-      WHERE {' AND '.join(conditions)}
+      WHERE {" AND ".join(conditions)}
       {order_and_limit}
     """
     return ConceptCandidateQuery(sql=sql, parameters=parameters)

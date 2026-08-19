@@ -153,6 +153,23 @@ CREATE TABLE IF NOT EXISTS menu (
   dietary_data_status TEXT
 );
 
+CREATE TABLE IF NOT EXISTS menu_semantic_embedding (
+  catalog_release_id TEXT NOT NULL,
+  menu_id TEXT NOT NULL REFERENCES menu(menu_id),
+  embedding_model TEXT NOT NULL,
+  embedding_version TEXT NOT NULL,
+  embedding_dimension INTEGER NOT NULL CHECK (embedding_dimension = 1536),
+  semantic_text_sha256 TEXT NOT NULL CHECK (length(semantic_text_sha256) = 64),
+  embedding_manifest_sha256 TEXT NOT NULL CHECK (length(embedding_manifest_sha256) = 64),
+  embedding_vector_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(catalog_release_id,menu_id,embedding_model,embedding_version)
+);
+CREATE INDEX IF NOT EXISTS idx_menu_semantic_identity
+  ON menu_semantic_embedding(
+    catalog_release_id,embedding_model,embedding_version,embedding_dimension,menu_id
+  );
+
 CREATE TABLE IF NOT EXISTS evidence (
   evidence_id TEXT PRIMARY KEY,
   subject_id TEXT NOT NULL,
@@ -772,6 +789,14 @@ CREATE TABLE IF NOT EXISTS menu_concept_membership (
     REFERENCES dish_concept(release_id, concept_id)
 );
 
+CREATE TABLE IF NOT EXISTS menu_wiki_eligibility (
+  knowledge_release_id TEXT NOT NULL REFERENCES knowledge_release(release_id),
+  menu_id TEXT NOT NULL REFERENCES menu(menu_id),
+  reviewed_chunk_count INTEGER NOT NULL CHECK (reviewed_chunk_count > 0),
+  compiled_at TEXT NOT NULL,
+  PRIMARY KEY(knowledge_release_id, menu_id)
+);
+
 CREATE TABLE IF NOT EXISTS recommendation_runtime_state (
   state_key TEXT PRIMARY KEY CHECK (state_key = 'ACTIVE'),
   active_release_family_id TEXT NOT NULL
@@ -885,6 +910,16 @@ CREATE INDEX IF NOT EXISTS idx_menu_pref_evidence_feature
   ON menu_preference_feature_evidence(knowledge_release_id, feature_id, evidence_role);
 CREATE INDEX IF NOT EXISTS idx_menu_concept_membership_lookup
   ON menu_concept_membership(knowledge_release_id, concept_id, membership_role, menu_id);
+CREATE INDEX IF NOT EXISTS idx_menu_concept_membership_concept
+  ON menu_concept_membership(knowledge_release_id, concept_id, menu_id);
+CREATE INDEX IF NOT EXISTS idx_menu_wiki_eligibility_menu
+  ON menu_wiki_eligibility(menu_id, knowledge_release_id);
+CREATE INDEX IF NOT EXISTS idx_dish_closure_ancestor
+  ON dish_concept_closure(
+    release_id, ancestor_concept_id, inherit_claims, descendant_concept_id
+  );
+CREATE INDEX IF NOT EXISTS idx_knowledge_chunk_lookup
+  ON knowledge_chunk(release_id, concept_id, facet, document_id, chunk_id);
 CREATE INDEX IF NOT EXISTS idx_merchant_cert_active
   ON merchant_certification(
     certification_release_id, certification_type, status, merchant_id, valid_from, valid_to

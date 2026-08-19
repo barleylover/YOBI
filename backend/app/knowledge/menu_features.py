@@ -174,6 +174,7 @@ def _sha(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+@lru_cache(maxsize=32768)
 def normalize_preference_text(value: str) -> str:
     """NFKC/casefold text with punctuation converted to token separators."""
 
@@ -181,6 +182,7 @@ def normalize_preference_text(value: str) -> str:
     return " ".join(_TOKEN_PATTERN.findall(normalized))
 
 
+@lru_cache(maxsize=65536)
 def preference_term_matches(value: str, term: str) -> bool:
     """Match explicit aliases without raw substring comparisons.
 
@@ -194,6 +196,40 @@ def preference_term_matches(value: str, term: str) -> bool:
     if not normalized_value or not normalized_term:
         return False
     return _normalized_term_matches(normalized_value.split(), normalized_term)
+
+
+_UNCERTAIN_GENERAL_SUPPORT = re.compile(
+    r"\b(?:may|might|can|could|sometimes|possibly|possible|optional|optionally|"
+    r"varies|vary|varied|depending|ranges?|some|not|never|no|without|"
+    r"doesn['’]?t|does\s+not|isn['’]?t|is\s+not|aren['’]?t|are\s+not|"
+    r"cannot|can['’]?t|guarantee[ds]?)\b",
+    re.IGNORECASE,
+)
+
+
+@lru_cache(maxsize=65536)
+def reviewed_general_support_matches(value: str, term: str) -> bool:
+    """Accept a Wiki term only when its local clause states positive support.
+
+    General culinary prose often lists alternatives or explicitly warns that a
+    property is not guaranteed for every merchant. Raw lexical matching turns
+    those caveats into false positive recommendation edges. Evaluate the local
+    clause and reject modal, variable, and negated language while still
+    accepting typical statements such as ``commonly served hot``.
+    """
+
+    clauses = re.split(
+        r"(?<=[.!?;])\s+|[,;]|\b(?:although|but|whereas|while)\b",
+        unicodedata.normalize("NFKC", value or ""),
+        flags=re.IGNORECASE,
+    )
+    for clause in clauses:
+        if not preference_term_matches(clause, term):
+            continue
+        if _UNCERTAIN_GENERAL_SUPPORT.search(clause):
+            continue
+        return True
+    return False
 
 
 def _normalized_term_matches(value_tokens: list[str], normalized_term: str) -> bool:

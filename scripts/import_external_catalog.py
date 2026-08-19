@@ -33,15 +33,21 @@ from app.domain.preference_catalog import (
     PREFERENCE_CATEGORIES,
     localized_spice_references,
 )
-from app.rag.providers import DeterministicEmbeddingProvider
+from app.rag.providers import (
+    DeterministicEmbeddingProvider,
+    EmbeddingProvider,
+    choose_embedding_provider,
+)
 
 PACKAGE_FORMAT = "yobi-external-catalog-v1"
 DATA_ORIGIN = "YOGIYO_PUBLIC_WEB"
 SOURCE_PLATFORM = "YOGIYO"
 NORMALIZATION_CODE = "REQUIRED_SINGLE_SELECT_ZERO_LIMIT"
 SPICE_REFERENCE_VERSION = f"{PREFERENCE_CATALOG_VERSION}-spice"
-VECTOR_PROVIDER = DeterministicEmbeddingProvider()
-VECTOR_BATCH_SIZE = 64
+# OCI Cohere Embed 4 accepts up to 96 text inputs per request. Keeping the
+# importer on that boundary reduces a 15,085-menu rebuild from 236 to 158
+# provider dispatches without changing document order or vector identity.
+VECTOR_BATCH_SIZE = 96
 DML_BATCH_SIZE = 500
 
 FILE_TABLES = {
@@ -301,6 +307,10 @@ DELETE_ORDER = (
     "option_ingredient_effect",
     "merchant_ingredient",
     "merchant_origin_declaration",
+    "menu_preference_feature_evidence",
+    "menu_preference_feature",
+    "menu_wiki_eligibility",
+    "menu_concept_membership",
     "concept_preference_support",
     "menu_concept_map",
     "knowledge_chunk",
@@ -326,6 +336,7 @@ DELETE_ORDER = (
     "catalog_source_payload",
     "menu_option_item",
     "menu_option_group",
+    "menu_semantic_embedding",
     "menu",
     "menu_category",
     "merchant",
@@ -532,7 +543,10 @@ def validate_package(
     return manifest, package_sha, diagnostics
 
 
-def prepare_vector_cache(package_path: Path) -> tuple[Path, int]:
+def prepare_vector_cache(
+    package_path: Path,
+    provider: EmbeddingProvider,
+) -> tuple[Path, int]:
     file_descriptor, raw_path = tempfile.mkstemp(
         prefix="yobi-catalog-vectors-", suffix=".f32"
     )
@@ -545,12 +559,12 @@ def prepare_vector_cache(package_path: Path) -> tuple[Path, int]:
                 batch.append(str(row["semantic_text"]))
                 if len(batch) < VECTOR_BATCH_SIZE:
                     continue
-                for vector in VECTOR_PROVIDER.embed(batch, "SEARCH_DOCUMENT"):
+                for vector in provider.embed(batch, "SEARCH_DOCUMENT"):
                     array("f", vector).tofile(handle)
                     vector_count += 1
                 batch = []
             if batch:
-                for vector in VECTOR_PROVIDER.embed(batch, "SEARCH_DOCUMENT"):
+                for vector in provider.embed(batch, "SEARCH_DOCUMENT"):
                     array("f", vector).tofile(handle)
                     vector_count += 1
             handle.flush()
@@ -558,7 +572,7 @@ def prepare_vector_cache(package_path: Path) -> tuple[Path, int]:
     except BaseException:
         cache_path.unlink(missing_ok=True)
         raise
-    expected_size = vector_count * VECTOR_PROVIDER.dimension * array("f").itemsize
+    expected_size = vector_count * provider.dimension * array("f").itemsize
     if cache_path.stat().st_size != expected_size:
         cache_path.unlink(missing_ok=True)
         raise RuntimeError("VECTOR_CACHE_SIZE_MISMATCH")
@@ -720,6 +734,7 @@ def oracle_insert_menus(
     cursor: oracledb.Cursor,
     package_path: Path,
     vector_cache_path: Path,
+    provider: EmbeddingProvider,
 ) -> int:
     columns = INSERT_COLUMNS["menu"] + (
         "embedding_vector",
@@ -740,7 +755,7 @@ def oracle_insert_menus(
         for row in iter_jsonl(package_path, "menu.jsonl"):
             vector = array("f")
             try:
-                vector.fromfile(vector_handle, VECTOR_PROVIDER.dimension)
+                vector.fromfile(vector_handle, provider.dimension)
             except EOFError as exc:
                 raise RuntimeError("VECTOR_CACHE_TRUNCATED") from exc
             prepared = {
@@ -750,9 +765,9 @@ def oracle_insert_menus(
             prepared.update(
                 {
                     "embedding_vector": vector,
-                    "embedding_model": VECTOR_PROVIDER.model,
-                    "embedding_dimension": VECTOR_PROVIDER.dimension,
-                    "embedding_version": VECTOR_PROVIDER.version,
+                    "embedding_model": provider.model,
+                    "embedding_dimension": provider.dimension,
+                    "embedding_version": provider.version,
                 }
             )
             payload.append(prepared)
@@ -791,6 +806,7 @@ def insert_release_state(
     cursor: Any,
     manifest: dict[str, Any],
     oracle: bool,
+    provider: EmbeddingProvider,
 ) -> dict[str, str]:
     selection_token = str(manifest["selection_manifest_sha256"])[:20]
     knowledge_release_id = f"external-knowledge-{selection_token}"
@@ -808,9 +824,9 @@ def insert_release_state(
         knowledge_release_id,
         manifest["catalog_release_id"],
         manifest["selection_manifest_sha256"],
-        VECTOR_PROVIDER.model,
-        VECTOR_PROVIDER.dimension,
-        VECTOR_PROVIDER.version,
+        provider.model,
+        provider.dimension,
+        provider.version,
         "READY",
         canonical_json(zero_counts),
         canonical_json(zero_counts),
@@ -857,8 +873,8 @@ def insert_release_state(
         PREFERENCE_CATALOG_VERSION,
         SPICE_REFERENCE_VERSION,
         certification_release_id,
-        VECTOR_PROVIDER.model,
-        VECTOR_PROVIDER.version,
+        provider.model,
+        provider.version,
         "ACTIVE",
         timestamp,
     )
@@ -988,6 +1004,7 @@ def verify_database(
     manifest: dict[str, Any],
     package_sha: str,
     oracle: bool,
+    provider: EmbeddingProvider,
 ) -> dict[str, Any]:
     expected = {str(key): int(value) for key, value in manifest["expected_counts"].items()}
     counts = fetch_counts(cursor, expected, oracle)
@@ -1132,9 +1149,9 @@ def verify_database(
               OR embedding_dimension<>:dimension OR embedding_version<>:version
             """,
             {
-                "model": VECTOR_PROVIDER.model,
-                "dimension": VECTOR_PROVIDER.dimension,
-                "version": VECTOR_PROVIDER.version,
+                "model": provider.model,
+                "dimension": provider.dimension,
+                "version": provider.version,
             },
         ) == 0
     else:
@@ -1174,9 +1191,9 @@ def verify_database(
         "catalog_release_id": manifest["catalog_release_id"],
         "package_sha256": package_sha,
         "embedding": {
-            "model": VECTOR_PROVIDER.model,
-            "dimension": VECTOR_PROVIDER.dimension,
-            "version": VECTOR_PROVIDER.version,
+            "model": provider.model,
+            "dimension": provider.dimension,
+            "version": provider.version,
         },
     }
 
@@ -1300,6 +1317,7 @@ def apply_oracle(
     manifest: dict[str, Any],
     package_sha: str,
     package_diagnostics: dict[str, Any],
+    provider: EmbeddingProvider,
 ) -> dict[str, Any]:
     dsn = settings.adb_dsn.get_secret_value()
     password = settings.db_password.get_secret_value()
@@ -1311,9 +1329,9 @@ def apply_oracle(
         current_user = str(cursor.fetchone()[0])
         if current_user.upper() != settings.db_username.upper() or current_user.upper() == "ADMIN":
             raise RuntimeError("ORACLE_RUNTIME_USER_MISMATCH")
-        cursor.execute("SELECT COUNT(*) FROM schema_migration WHERE version='012'")
+        cursor.execute("SELECT COUNT(*) FROM schema_migration WHERE version='014'")
         if int(cursor.fetchone()[0]) != 1:
-            raise RuntimeError("MIGRATION_012_NOT_APPLIED")
+            raise RuntimeError("MIGRATION_014_NOT_APPLIED")
         varchar_validation = validate_oracle_varchar_capacity(cursor, package_path)
         preflight = fetch_counts(cursor, PREFLIGHT_TABLES, True)
         try:
@@ -1323,7 +1341,12 @@ def apply_oracle(
             insert_service_area(cursor, manifest, True)
             insert_demo_address(cursor, manifest, True)
             oracle_insert_rows(cursor, package_path, "merchant.jsonl", "merchant")
-            menu_count = oracle_insert_menus(cursor, package_path, vector_cache_path)
+            menu_count = oracle_insert_menus(
+                cursor,
+                package_path,
+                vector_cache_path,
+                provider,
+            )
             if menu_count != int(manifest["expected_counts"]["menu"]):
                 raise RuntimeError("ORACLE_MENU_INSERT_COUNT_MISMATCH")
             for filename in (
@@ -1338,15 +1361,21 @@ def apply_oracle(
                 "catalog_source_payload.jsonl",
             ):
                 oracle_insert_rows(cursor, package_path, filename, FILE_TABLES[filename])
-            release_state = insert_release_state(cursor, manifest, True)
+            release_state = insert_release_state(cursor, manifest, True, provider)
             insert_unmapped_menu_state(
                 cursor, package_path, release_state["knowledge_release_id"], True
             )
-            verification = verify_database(cursor, manifest, package_sha, True)
+            verification = verify_database(cursor, manifest, package_sha, True, provider)
             if not verification["pass"]:
                 raise RuntimeError(f"ORACLE_IMPORT_VERIFICATION_FAILED:{canonical_json(verification['checks'])}")
             finalize_batch(cursor, manifest, verification, True)
-            final_verification = verify_database(cursor, manifest, package_sha, True)
+            final_verification = verify_database(
+                cursor,
+                manifest,
+                package_sha,
+                True,
+                provider,
+            )
             if not final_verification["pass"]:
                 raise RuntimeError("ORACLE_IMPORT_FINAL_VERIFICATION_FAILED")
             connection.commit()
@@ -1456,6 +1485,7 @@ def apply_sqlite(
     package_sha: str,
     package_diagnostics: dict[str, Any],
 ) -> dict[str, Any]:
+    provider = DeterministicEmbeddingProvider()
     sqlite_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(sqlite_path)
     try:
@@ -1474,15 +1504,21 @@ def apply_sqlite(
             insert_demo_address(cursor, manifest, False)
             for filename, table in FILE_TABLES.items():
                 sqlite_insert_rows(cursor, package_path, filename, table)
-            release_state = insert_release_state(cursor, manifest, False)
+            release_state = insert_release_state(cursor, manifest, False, provider)
             insert_unmapped_menu_state(
                 cursor, package_path, release_state["knowledge_release_id"], False
             )
-            verification = verify_database(cursor, manifest, package_sha, False)
+            verification = verify_database(cursor, manifest, package_sha, False, provider)
             if not verification["pass"]:
                 raise RuntimeError(f"SQLITE_IMPORT_VERIFICATION_FAILED:{canonical_json(verification['checks'])}")
             finalize_batch(cursor, manifest, verification, False)
-            final_verification = verify_database(cursor, manifest, package_sha, False)
+            final_verification = verify_database(
+                cursor,
+                manifest,
+                package_sha,
+                False,
+                provider,
+            )
             if not final_verification["pass"]:
                 raise RuntimeError("SQLITE_IMPORT_FINAL_VERIFICATION_FAILED")
             connection.commit()
@@ -1502,23 +1538,39 @@ def apply_sqlite(
 
 
 def verify_only_oracle(
-    settings: Settings, manifest: dict[str, Any], package_sha: str
+    settings: Settings,
+    manifest: dict[str, Any],
+    package_sha: str,
+    provider: EmbeddingProvider,
 ) -> dict[str, Any]:
     dsn = settings.adb_dsn.get_secret_value()
     password = settings.db_password.get_secret_value()
     if not dsn or not password:
         raise RuntimeError("ADB_DSN_AND_DB_PASSWORD_REQUIRED")
     with oracledb.connect(user=settings.db_username, password=password, dsn=dsn) as connection:
-        result = verify_database(connection.cursor(), manifest, package_sha, True)
+        result = verify_database(
+            connection.cursor(),
+            manifest,
+            package_sha,
+            True,
+            provider,
+        )
     return {**result, "backend": "oracle-26ai", "transaction_committed": False}
 
 
 def verify_only_sqlite(
     sqlite_path: Path, manifest: dict[str, Any], package_sha: str
 ) -> dict[str, Any]:
+    provider = DeterministicEmbeddingProvider()
     with sqlite3.connect(sqlite_path) as connection:
         connection.execute("PRAGMA foreign_keys=ON")
-        result = verify_database(connection.cursor(), manifest, package_sha, False)
+        result = verify_database(
+            connection.cursor(),
+            manifest,
+            package_sha,
+            False,
+            provider,
+        )
     return {
         **result,
         "backend": "sqlite",
@@ -1536,6 +1588,14 @@ def main() -> None:
     parser.add_argument("--sqlite-path", type=Path)
     parser.add_argument("--expected-package-sha256")
     parser.add_argument("--expected-normalization-count", type=int)
+    parser.add_argument(
+        "--embedding-provider",
+        choices=("deterministic", "oci"),
+        help=(
+            "Oracle vector provider. Defaults to EMBEDDING_PROVIDER; production "
+            "catalog writes reject the deterministic fallback."
+        ),
+    )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--apply", action="store_true")
     mode.add_argument("--verify-only", action="store_true")
@@ -1548,6 +1608,18 @@ def main() -> None:
         args.expected_normalization_count,
     )
     settings = Settings()
+    oracle_provider: EmbeddingProvider | None = None
+    if args.backend == "oracle" and not args.validate_only:
+        oracle_provider = choose_embedding_provider(
+            settings,
+            args.embedding_provider or settings.embedding_provider,
+        )
+        if (
+            args.apply
+            and settings.app_env == "production"
+            and isinstance(oracle_provider, DeterministicEmbeddingProvider)
+        ):
+            raise RuntimeError("PRODUCTION_EXTERNAL_IMPORT_REQUIRES_OCI_EMBEDDINGS")
     if args.validate_only:
         result = {
             "backend": None,
@@ -1559,7 +1631,14 @@ def main() -> None:
         }
     elif args.verify_only:
         if args.backend == "oracle":
-            result = verify_only_oracle(settings, manifest, package_sha)
+            if oracle_provider is None:
+                raise RuntimeError("ORACLE_EMBEDDING_PROVIDER_REQUIRED")
+            result = verify_only_oracle(
+                settings,
+                manifest,
+                package_sha,
+                oracle_provider,
+            )
         else:
             if args.sqlite_path is None:
                 raise RuntimeError("SQLITE_PATH_REQUIRED")
@@ -1575,7 +1654,12 @@ def main() -> None:
             diagnostics,
         )
     else:
-        vector_cache_path, vector_count = prepare_vector_cache(args.package)
+        if oracle_provider is None:
+            raise RuntimeError("ORACLE_EMBEDDING_PROVIDER_REQUIRED")
+        vector_cache_path, vector_count = prepare_vector_cache(
+            args.package,
+            oracle_provider,
+        )
         try:
             if vector_count != int(manifest["expected_counts"]["menu"]):
                 raise RuntimeError("VECTOR_COUNT_MISMATCH")
@@ -1586,6 +1670,7 @@ def main() -> None:
                 manifest,
                 package_sha,
                 diagnostics,
+                oracle_provider,
             )
         finally:
             vector_cache_path.unlink(missing_ok=True)

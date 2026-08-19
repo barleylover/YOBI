@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     genai_prompt_profile: Literal["yobi-grounded-v1"] = "yobi-grounded-v1"
     oci_embed_model: str = "cohere.embed-v4.0"
     oci_embed_dimension: int = 1536
+    oci_embed_auth: Literal["instance_principal", "config_file"] = "instance_principal"
+    oci_embed_config_file: Path = Path("~/.oci/config")
+    oci_embed_config_profile: str = "DEFAULT"
     embedding_provider: Literal["deterministic", "oci", "auto"] = "deterministic"
     oci_compartment_id: SecretStr = SecretStr("")
 

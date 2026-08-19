@@ -89,8 +89,10 @@ export function ChatPage() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewMessage, setPreviewMessage] = useState("");
   const [selectedMenu, setSelectedMenu] = useState<MenuSummary | null>(null);
+  const [pollRevision, setPollRevision] = useState(0);
   const stateVersionRef = useRef(session?.state_version ?? 0);
   const pollCountRef = useRef(0);
+  const pollStartedAtRef = useRef(0);
   const recommendationAbortRef = useRef<AbortController | null>(null);
   const previewAbortRef = useRef<AbortController | null>(null);
   const previewValidationAbortRef = useRef<AbortController | null>(null);
@@ -103,10 +105,12 @@ export function ChatPage() {
     if (batch.status !== "PENDING") {
       setPendingRecommendation(null);
       pollCountRef.current = 0;
+      pollStartedAtRef.current = 0;
     }
     if (batch.status === "PENDING") {
       const current = useSessionStore.getState().pendingRecommendation;
       if (current?.request_id !== batch.request_id) {
+        pollStartedAtRef.current = Date.now();
         setPendingRecommendation({
           request_id: batch.request_id,
           expected_state_version: batch.state_version,
@@ -188,7 +192,7 @@ export function ChatPage() {
     try {
       const batch = await api.getRecommendationRequest(sessionId, request.request_id);
       applyBatch(batch);
-    } catch (cause) {
+    } catch {
       try {
         const conversation = await api.getConversation(sessionId);
         const recovered = conversation.active_recommendation ?? conversation.latest_recommendation;
@@ -197,14 +201,22 @@ export function ChatPage() {
           return;
         }
       } catch { /* Keep the request available for another GET recovery attempt. */ }
-      setRecommendationPhase("ERROR");
-      setError(language === "English"
-        ? actionableError(cause, recommendationCopy.failedDescription)
-        : recommendationCopy.failedDescription);
+      // A single failed poll must not turn a still-running, idempotent request
+      // into a visible terminal error. The bounded polling deadline below is
+      // the authority for an actually unrecoverable request.
+      setRecommendationPhase(latestRecommendation?.phase === "GENERATING" ? "GENERATING" : "RETRIEVING");
     } finally {
       setBusy(false);
+      setPollRevision((revision) => revision + 1);
     }
-  }, [applyBatch, applyConversation, language, recommendationCopy.failedDescription, sessionId, setRecommendationPhase]);
+  }, [applyBatch, applyConversation, latestRecommendation?.phase, sessionId, setRecommendationPhase]);
+
+  const retryPendingRecommendation = useCallback(async (request: RecommendationRequestV2) => {
+    pollCountRef.current = 0;
+    pollStartedAtRef.current = Date.now();
+    setRecommendationPhase("RETRIEVING");
+    await recoverRecommendation(request);
+  }, [recoverRecommendation, setRecommendationPhase]);
 
   const checkCriteriaPreview = useCallback(async (
     criteria: typeof draftCriteria,
@@ -284,17 +296,19 @@ export function ChatPage() {
 
   useEffect(() => {
     if (hydrating || latestRecommendation?.status !== "PENDING" || !pendingRecommendation || busy) return;
-    if (pollCountRef.current >= 8) {
+    if (!pollStartedAtRef.current) pollStartedAtRef.current = Date.now();
+    if (Date.now() - pollStartedAtRef.current >= 150_000) {
       setRecommendationPhase("ERROR");
       setError(recommendationCopy.failedDescription);
       return;
     }
+    const pollDelayMs = pollCountRef.current < 8 ? 1_200 : 2_500;
     const timer = window.setTimeout(() => {
       pollCountRef.current += 1;
       void recoverRecommendation(pendingRecommendation);
-    }, 1200);
+    }, pollDelayMs);
     return () => window.clearTimeout(timer);
-  }, [busy, hydrating, latestRecommendation, pendingRecommendation, recommendationCopy.failedDescription, recoverRecommendation, setRecommendationPhase]);
+  }, [busy, hydrating, latestRecommendation, pendingRecommendation, pollRevision, recommendationCopy.failedDescription, recoverRecommendation, setRecommendationPhase]);
 
   useEffect(() => {
     if (!catalog) return;
@@ -700,7 +714,7 @@ export function ChatPage() {
                 <section className="assistant-bubble recommendation-state-card error">
                   <h1>{recommendationCopy.failedTitle}</h1>
                   <p>{error || recommendationCopy.failedDescription}</p>
-                  <div className="button-row"><button className="primary-button" onClick={() => pendingRecommendation ? void recoverRecommendation(pendingRecommendation) : void requestAnother("RETRY")}>{recommendationCopy.tryAgain}</button><button className="secondary-button" onClick={editCriteria}>{recommendationCopy.editCriteria}</button></div>
+                  <div className="button-row"><button className="primary-button" onClick={() => pendingRecommendation ? void retryPendingRecommendation(pendingRecommendation) : void requestAnother("RETRY")}>{recommendationCopy.tryAgain}</button><button className="secondary-button" onClick={editCriteria}>{recommendationCopy.editCriteria}</button></div>
                 </section>
               </div>
             </div>

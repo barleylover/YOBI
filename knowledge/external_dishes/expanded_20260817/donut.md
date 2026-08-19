@@ -32,8 +32,8 @@
 ---
 # Doughnut
 
-A doughnut is a sweet dough product shaped and cooked as a ring or filled piece, usually fried and sometimes baked.
+A doughnut is a sweet dough product shaped and cooked as a ring or filled piece. It is usually fried, while some bakery styles are baked, so the product label remains the authority for cooking method.
 
-It is soft or chewy with a browned exterior and may be glazed, sugared or filled. Toppings and allergens require product information.
+Doughnuts are sweet and commonly served at room temperature, with a soft or chewy centre and a browned, sometimes crisp exterior. Glaze, sugar, filling, toppings and allergens vary by product.
 
 This is general culinary guidance, not a statement about one merchant's recipe, ingredients, certification, allergens, portion or menu-specific spice level. Check the current merchant information before ordering.

@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
+from io import StringIO
 from pathlib import Path
 
 import oracledb
@@ -19,7 +20,8 @@ RUNTIME_ENV = Path("/etc/yobi/yobi.env")
 CHECKPOINT = Path("/opt/yobi/shared/control/bootstrap_state.json")
 LEGACY_CHECKPOINT = Path("/opt/yobi/shared/bootstrap_state.json")
 RUNTIME_RETRY_POLICY = 'LLM_MAX_RETRIES="0"'
-RUNTIME_EMBEDDING_POLICY = 'EMBEDDING_PROVIDER="deterministic"'
+RUNTIME_EMBEDDING_POLICY = 'EMBEDDING_PROVIDER="oci"'
+RUNTIME_EMBED_AUTH_POLICY = 'OCI_EMBED_AUTH="instance_principal"'
 RUNTIME_OCI_INPUT_POLICY = 'OCI_GENAI_MAX_INPUT_TOKENS="131072"'
 RUNTIME_LLM_INPUT_POLICY = 'LLM_MAX_INPUT_TOKENS="131072"'
 RUNTIME_OCI_OUTPUT_POLICY = 'OCI_GENAI_MAX_OUTPUT_TOKENS="4096"'
@@ -81,7 +83,13 @@ def ensure_app_user(dsn: str, admin_password: str, app_password: str) -> None:
             print("YOBI_APP already exists; credentials and grants were left unchanged.")
 
 
-def write_env(dsn: str, app_password: str, api_key: str, control_token: str) -> None:
+def write_env(
+    dsn: str,
+    app_password: str,
+    api_key: str,
+    control_token: str,
+    compartment_id: str,
+) -> None:
     # This format is consumed by systemd and python-dotenv. It must never be shell-sourced;
     # deployment subprocesses use run_with_runtime_env.py with interpolation disabled.
     def quote(value: str) -> str:
@@ -114,7 +122,9 @@ def write_env(dsn: str, app_password: str, api_key: str, control_token: str) -> 
         f"OCI_GENAI_MAX_OUTPUT_TOKENS={quote('4096')}",
         f"OCI_EMBED_MODEL={quote('cohere.embed-v4.0')}",
         f"OCI_EMBED_DIMENSION={quote('1536')}",
-        f"EMBEDDING_PROVIDER={quote('deterministic')}",
+        f"OCI_EMBED_AUTH={quote('instance_principal')}",
+        f"OCI_COMPARTMENT_ID={quote(compartment_id)}",
+        f"EMBEDDING_PROVIDER={quote('oci')}",
         f"ADB_DSN={quote(dsn)}",
         f"DB_USERNAME={quote('YOBI_APP')}",
         f"DB_PASSWORD={quote(app_password)}",
@@ -190,11 +200,18 @@ def persist_runtime_release_policy(path: Path = RUNTIME_ENV) -> bool:
     if path.is_symlink():
         raise SystemExit("Runtime environment must be a regular file, not a symlink")
     text = path.read_text(encoding="utf-8")
+    values = dotenv_values(stream=StringIO(text), interpolate=False)
+    if not str(values.get("OCI_COMPARTMENT_ID") or "").strip():
+        raise SystemExit(
+            "Runtime environment must be restored with OCI_COMPARTMENT_ID "
+            "before enabling OCI embeddings"
+        )
     updated = text
     changed = False
     for key, policy in (
         ("LLM_MAX_RETRIES", RUNTIME_RETRY_POLICY),
         ("EMBEDDING_PROVIDER", RUNTIME_EMBEDDING_POLICY),
+        ("OCI_EMBED_AUTH", RUNTIME_EMBED_AUTH_POLICY),
         ("OCI_GENAI_MAX_INPUT_TOKENS", RUNTIME_OCI_INPUT_POLICY),
         ("LLM_MAX_INPUT_TOKENS", RUNTIME_LLM_INPUT_POLICY),
         ("OCI_GENAI_MAX_OUTPUT_TOKENS", RUNTIME_OCI_OUTPUT_POLICY),
@@ -269,7 +286,13 @@ def load_runtime_env() -> bool:
     if not RUNTIME_ENV.is_file():
         return False
     values = dotenv_values(RUNTIME_ENV, interpolate=False)
-    required = {"ADB_DSN", "DB_PASSWORD", "OCI_GENAI_API_KEY", "DEMO_CONTROL_TOKEN"}
+    required = {
+        "ADB_DSN",
+        "DB_PASSWORD",
+        "OCI_GENAI_API_KEY",
+        "DEMO_CONTROL_TOKEN",
+        "OCI_COMPARTMENT_ID",
+    }
     if any(not values.get(key) for key in required):
         raise SystemExit("Runtime environment exists but is missing a required value")
     persist_runtime_release_policy(RUNTIME_ENV)
@@ -304,6 +327,8 @@ def verify_database(settings: Settings) -> dict[str, object]:
         "MENU_PREFERENCE_FEATURE",
         "MENU_PREFERENCE_FEATURE_EVIDENCE",
         "MENU_CONCEPT_MEMBERSHIP",
+        "MENU_WIKI_ELIGIBILITY",
+        "MENU_SEMANTIC_EMBEDDING",
     }
     with oracledb.connect(user=username, password=password, dsn=dsn) as connection:
         cursor = connection.cursor()
@@ -359,6 +384,9 @@ def main() -> None:
         validate_app_password(app_password)
         api_key = secret("OCI Generative AI API key secret: ")
         control_token = secret("Demo control token: ")
+        compartment_id = os.getenv("OCI_COMPARTMENT_ID", "").strip()
+        if not compartment_id:
+            raise SystemExit("OCI_COMPARTMENT_ID is required for OCI embeddings")
         ensure_app_user(dsn, admin_password, app_password)
         os.environ.update(
             {
@@ -378,7 +406,9 @@ def main() -> None:
                 "RECOMMENDATION_LLM_SHORTLIST_LIMIT": "15",
                 "RECOMMENDATION_LLM_PASSAGES_PER_MENU": "2",
                 "RECOMMENDATION_LLM_SELECTION_ENABLED": "true",
-                "EMBEDDING_PROVIDER": "deterministic",
+                "OCI_EMBED_AUTH": "instance_principal",
+                "OCI_COMPARTMENT_ID": compartment_id,
+                "EMBEDDING_PROVIDER": "oci",
                 "LLM_MAX_RETRIES": "0",
             }
         )
@@ -390,7 +420,7 @@ def main() -> None:
     database_status = verify_database(settings)
     checkpoint("database", "complete", **database_status)
     if not resumed:
-        write_env(dsn, app_password, api_key, control_token)
+        write_env(dsn, app_password, api_key, control_token, compartment_id)
         print(
             "Runtime configuration written root:root with mode 0600; "
             "ADMIN password was not stored."

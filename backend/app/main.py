@@ -12,6 +12,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import (
+    BackgroundTasks,
     Depends,
     FastAPI,
     File,
@@ -283,6 +284,12 @@ def readyz(
                 "errors": configuration_errors,
             },
         )
+    readiness_checks = db.get("readiness_checks")
+    wiki_eligibility_ready = bool(
+        readiness_checks.get("wiki_eligibility_exactly_covers_membership_menus")
+        if isinstance(readiness_checks, dict)
+        else False
+    )
     return {
         "status": "ready",
         "release": _release_metadata(),
@@ -311,6 +318,10 @@ def readyz(
             "ranking_policy_version": db.get("ranking_policy_version"),
             "feature_count": db.get("feature_count", 0),
             "feature_manifest_sha256": db.get("feature_manifest_sha256"),
+            "wiki_eligible_menu_count": db.get("wiki_eligible_menu_count", 0),
+            "wiki_eligibility_ready": wiki_eligibility_ready,
+            "semantic_channel_status": db.get("semantic_channel_status"),
+            "semantic_vector_ready": db.get("vector_ready") is True,
             "ready": bool(
                 current_settings.recommendation_llm_selection_enabled
                 and current_settings.structured_recommendation_model == "xai.grok-4.3"
@@ -531,10 +542,13 @@ def put_recommendation_criteria(
 @app.post(
     "/api/v1/sessions/{session_id}/recommendations",
     response_model=RecommendationBatchV2,
+    responses={202: {"model": RecommendationBatchV2}},
 )
 def post_structured_recommendation(
     session_id: str,
     data: RecommendationRequestInput,
+    background_tasks: BackgroundTasks,
+    response: Response,
     repository: YobiRepository = Depends(get_repository),
     recommendation_service: StructuredRecommendationService = Depends(
         get_structured_recommendation_service
@@ -542,7 +556,21 @@ def post_structured_recommendation(
 ) -> RecommendationBatchV2:
     session, profile = _resolve_session_profile(repository, session_id)
     try:
-        return recommendation_service.request_recommendation(session, profile, data)
+        batch, should_process = recommendation_service.begin_recommendation(
+            session,
+            profile,
+            data,
+        )
+        if should_process:
+            background_tasks.add_task(
+                recommendation_service.process_reserved_recommendation,
+                session,
+                profile,
+                data,
+            )
+        if batch.status == "PENDING":
+            response.status_code = status.HTTP_202_ACCEPTED
+        return batch
     except Exception as exc:
         raise _structured_recommendation_http_error(exc) from exc
 
@@ -554,15 +582,27 @@ def post_structured_recommendation(
 def get_structured_recommendation_request(
     session_id: str,
     request_id: str,
+    background_tasks: BackgroundTasks,
     repository: YobiRepository = Depends(get_repository),
     recommendation_service: StructuredRecommendationService = Depends(
         get_structured_recommendation_service
     ),
 ) -> RecommendationBatchV2:
-    _require_session(repository, session_id)
-    result = recommendation_service.get_request(session_id, request_id)
+    session, profile = _resolve_session_profile(repository, session_id)
+    result, resumable = recommendation_service.recover_request(
+        session,
+        profile,
+        request_id,
+    )
     if result is None:
         raise _not_found("RECOMMENDATION_REQUEST_NOT_FOUND")
+    if resumable is not None:
+        background_tasks.add_task(
+            recommendation_service.process_reserved_recommendation,
+            session,
+            profile,
+            resumable,
+        )
     return result
 
 

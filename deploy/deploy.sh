@@ -14,6 +14,7 @@ readonly ZERO_PROVIDER_PROVISIONAL="${YOBI_ZERO_PROVIDER_PROVISIONAL:-false}"
 readonly CODE_ONLY_PROVISIONAL="${YOBI_CODE_ONLY_PROVISIONAL:-false}"
 readonly QUALITY_FIVE_ONLY="${YOBI_QUALITY_FIVE_ONLY:-false}"
 readonly POST_QUALITY_REVIEW_DEPLOY="${YOBI_POST_QUALITY_REVIEW_DEPLOY:-false}"
+readonly MENU_SEMANTIC_BACKFILL="${YOBI_MENU_SEMANTIC_BACKFILL:-false}"
 readonly GUARDED_SSH_HOST="${YOBI_GUARDED_SSH_HOST:-}"
 readonly GUARDED_SSH_PORT="${YOBI_GUARDED_SSH_PORT:-}"
 readonly GUARDED_SSH_KNOWN_HOSTS_FILE="${YOBI_GUARDED_SSH_KNOWN_HOSTS_FILE:-}"
@@ -35,6 +36,9 @@ readonly GUARDED_SSH_CONTROL_PATH="${YOBI_GUARDED_SSH_CONTROL_PATH:-}"
 [[ "$POST_QUALITY_REVIEW_DEPLOY" == "true" \
   || "$POST_QUALITY_REVIEW_DEPLOY" == "false" ]] \
   || { printf 'YOBI_POST_QUALITY_REVIEW_DEPLOY must be true or false.\n' >&2; exit 1; }
+[[ "$MENU_SEMANTIC_BACKFILL" == "true" \
+  || "$MENU_SEMANTIC_BACKFILL" == "false" ]] \
+  || { printf 'YOBI_MENU_SEMANTIC_BACKFILL must be true or false.\n' >&2; exit 1; }
 [[ "$QUALITY_FIVE_ONLY" != "true" || "$PROVISIONAL_DEPLOY" != "true" ]] \
   && [[ "$POST_QUALITY_REVIEW_DEPLOY" != "true" \
     || "$PROVISIONAL_DEPLOY" != "true" ]] \
@@ -52,6 +56,11 @@ readonly GUARDED_SSH_CONTROL_PATH="${YOBI_GUARDED_SSH_CONTROL_PATH:-}"
     && "$QUALITY_FIVE_ONLY" == "false" \
     && "$POST_QUALITY_REVIEW_DEPLOY" == "false" ) ]] \
   || { printf 'Code-only mode requires exclusive provisional deployment.\n' >&2; exit 1; }
+[[ "$MENU_SEMANTIC_BACKFILL" != "true" \
+  || ( "$PROVISIONAL_DEPLOY" == "true" \
+    && "$ZERO_PROVIDER_PROVISIONAL" == "true" \
+    && "$CODE_ONLY_PROVISIONAL" == "false" ) ]] \
+  || { printf 'Menu semantic backfill requires the approved zero-provider provisional mode.\n' >&2; exit 1; }
 
 for command in git oci ssh tar shasum python3; do
   command -v "$command" >/dev/null || { printf 'Missing command: %s\n' "$command" >&2; exit 1; }
@@ -127,9 +136,11 @@ fi
 [[ -d "$ROOT_DIR/frontend/dist" ]] || { printf 'Run make build before deployment.\n' >&2; exit 1; }
 [[ -d "$ROOT_DIR/knowledge" ]] || { printf 'Knowledge authoring sources are missing.\n' >&2; exit 1; }
 readonly REQUIRED_RELEASE_TOOLS=(
+  scripts/backfill_menu_semantic_embeddings.py
   scripts/build_external_knowledge_release.py
   scripts/catalog_mode.py
   scripts/manage_demo_address.py
+  scripts/recommendation_http.py
   scripts/recommendation_query_plan.py
   scripts/structured_recommendation_smoke.py
   scripts/structured_fallback_smoke.py
@@ -156,6 +167,7 @@ readonly EXPECTED_MIGRATIONS=(
   011_external_catalog_import.sql
   012_concept_preference_support_and_server_ranking.sql
   013_menu_preference_features_and_hybrid_rank.sql
+  014_wiki_eligibility_indexes.sql
 )
 for migration in "${EXPECTED_MIGRATIONS[@]}"; do
   [[ -f "$ROOT_DIR/database/migrations/$migration" ]] \
@@ -168,7 +180,7 @@ actual_migration_list="$(
   done | LC_ALL=C sort
 )"
 [[ "$actual_migration_list" == "$expected_migration_list" ]] \
-  || { printf 'Migration directory must contain exactly 001-013.\n' >&2; exit 1; }
+  || { printf 'Migration directory must contain exactly 001-014.\n' >&2; exit 1; }
 
 source_git_commit="$(git -C "$ROOT_DIR" rev-parse --verify HEAD)"
 source_git_branch="$(git -C "$ROOT_DIR" branch --show-current)"
@@ -283,7 +295,7 @@ ssh -t -p "$ssh_port" -i "$SSH_KEY" \
   "${ssh_host_key_options[@]}" \
   "${ssh_connection_options[@]}" \
   "$SSH_USER@$host" \
-  "sudo -n bash -s -- '$RELEASE_ID' '$ARCHIVE_SHA256' '$REMOTE_ARCHIVE' '$SSH_USER' '$ARCHIVE_NONCE' '$RECOVERY_ALLOW_UNREADY_CURRENT' '$PROVISIONAL_DEPLOY' '$ZERO_PROVIDER_PROVISIONAL' '$CODE_ONLY_PROVISIONAL' '$QUALITY_FIVE_ONLY' '$POST_QUALITY_REVIEW_DEPLOY' '$source_git_commit'" <<'REMOTE'
+  "sudo -n bash -s -- '$RELEASE_ID' '$ARCHIVE_SHA256' '$REMOTE_ARCHIVE' '$SSH_USER' '$ARCHIVE_NONCE' '$RECOVERY_ALLOW_UNREADY_CURRENT' '$PROVISIONAL_DEPLOY' '$ZERO_PROVIDER_PROVISIONAL' '$CODE_ONLY_PROVISIONAL' '$QUALITY_FIVE_ONLY' '$POST_QUALITY_REVIEW_DEPLOY' '$MENU_SEMANTIC_BACKFILL' '$source_git_commit'" <<'REMOTE'
 set -euo pipefail
 [[ "${EUID}" -eq 0 ]] || { printf 'Remote deployment requires root.\n' >&2; exit 1; }
 release_id="$1"
@@ -297,7 +309,8 @@ zero_provider_provisional="$8"
 code_only_provisional="$9"
 quality_five_only="${10}"
 post_quality_review_deploy="${11}"
-source_git_commit="${12}"
+menu_semantic_backfill="${12}"
+source_git_commit="${13}"
 [[ "$release_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$ \
   && "$archive_sha256" =~ ^[0-9a-f]{64}$ \
   && "$source_git_commit" =~ ^[0-9a-f]{40}$ \
@@ -315,6 +328,8 @@ source_git_commit="${12}"
     || "$quality_five_only" == "false" ) \
   && ( "$post_quality_review_deploy" == "true" \
     || "$post_quality_review_deploy" == "false" ) \
+  && ( "$menu_semantic_backfill" == "true" \
+    || "$menu_semantic_backfill" == "false" ) \
   && "$remote_archive" == "/home/${upload_user}/.yobi-release-${release_id}-${archive_nonce}.tar.gz" ]] \
   || { printf 'Remote release identity is invalid.\n' >&2; exit 1; }
 [[ "$quality_five_only" != "true" || "$provisional_deploy" != "true" ]] \
@@ -334,6 +349,11 @@ source_git_commit="${12}"
     && "$quality_five_only" == "false" \
     && "$post_quality_review_deploy" == "false" ) ]] \
   || { printf 'Remote code-only mode requires exclusive provisional deployment.\n' >&2; exit 1; }
+[[ "$menu_semantic_backfill" != "true" \
+  || ( "$provisional_deploy" == "true" \
+    && "$zero_provider_provisional" == "true" \
+    && "$code_only_provisional" == "false" ) ]] \
+  || { printf 'Remote menu semantic backfill requires zero-provider provisional mode.\n' >&2; exit 1; }
 
 cleanup_remote_archive() {
   if [[ -n "$remote_archive" ]]; then
@@ -631,13 +651,13 @@ sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \
   'from deploy.secure_bootstrap import Settings, verify_database
 status = verify_database(Settings())
 if not (
-    status["expected_migration_count"] == status["applied_migration_count"] == 13
+    status["expected_migration_count"] == status["applied_migration_count"] == 14
     and status["latest_expected_migration"]
     == status["latest_applied_migration"]
-    == "013"
+    == "014"
 ):
     raise SystemExit("MIGRATION_LEDGER_NOT_EXACT")
-print("Verified exact migrations=001-013 runtime_user=YOBI_APP")'
+print("Verified exact migrations=001-014 runtime_user=YOBI_APP")'
 old_knowledge_release_id="$(run_knowledge_manager get-active)"
 old_recommendation_release_family_id="$(run_recommendation_manager get-active)"
 knowledge_restore_required=true
@@ -661,6 +681,18 @@ if [[ "$catalog_mode" == "external" ]]; then
       --verify-only
     printf 'CODE-ONLY: reusing active knowledge and recommendation family without provider calls.\n'
   else
+    # The default remains verification-only. A full provider backfill can run
+    # only through the explicit, guarded, zero-provider provisional mode.
+    if [[ "$menu_semantic_backfill" == "true" ]]; then
+      sudo env PYTHONPATH="$new_release/backend:$new_release" \
+        "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
+        "$new_release/scripts/backfill_menu_semantic_embeddings.py" \
+        --embedding-provider oci --dispatch-interval-seconds 1 --apply
+    fi
+    sudo env PYTHONPATH="$new_release/backend:$new_release" \
+      "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
+      "$new_release/scripts/backfill_menu_semantic_embeddings.py" \
+      --embedding-provider oci --verify-only
     staged_release_json="$(sudo env PYTHONPATH="$new_release/backend:$new_release" \
     "${runtime_env_runner[@]}" \
     "$new_release/venv/bin/python" \

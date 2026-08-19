@@ -68,7 +68,7 @@ YOBI는 외국인 사용자가 한국 배달 음식을 선택하고, 합성 메�
 | SQLite | `SQLITE_PATH` | 기본 상대 경로 DB 파일. 실행 cwd에 따라 다른 파일이 생길 수 있음 |
 | Oracle | `ADB_DSN`, `DB_USERNAME`, `DB_PASSWORD` | thin pool 연결. pool은 코드에 min 1/max 3/increment 1로 고정. 앱 설정은 `ADMIN` 사용자를 거부하고 `YOBI_APP`을 전제로 함 |
 | 생성형 AI | `OCI_GENAI_API_KEY`, `OCI_GENAI_BASE_URL`, `OCI_GENAI_MODEL`, `OCI_GENAI_FALLBACK_MODEL`, `OCI_COMPARTMENT_ID` | OCI OpenAI 호환 호출과 readiness 판정 |
-| 임베딩 | `EMBEDDING_PROVIDER`, `OCI_EMBED_MODEL`, `OCI_EMBED_DIMENSION` | 기본 결정론적 model/version은 코드 상수 `yobi-semantic-hash-v1`/`2026-08-06`, 1536차원; 선택적으로 OCI `cohere.embed-v4.0` |
+| 임베딩 | `EMBEDDING_PROVIDER`, `OCI_EMBED_MODEL`, `OCI_EMBED_DIMENSION`, `OCI_EMBED_AUTH`, `OCI_COMPARTMENT_ID` | 로컬 SQLite 픽스처는 결정론적 hash를 사용하고, 운영 Oracle은 OCI native `embedText`의 `cohere.embed-v4.0` 1536차원만 허용한다. 저장 provider/model/version/dimension이 런타임과 다르면 semantic channel을 비활성화한다. |
 | 주소 | `ADDRESS_OCR_PROVIDER`, `DEMO_CONTROL_TOKEN` | `fixture`/`tesseract`; production 주소 후보 HMAC 키는 demo control token을 재사용 |
 | HTTP | `CORS_ORIGINS`, `MAX_UPLOAD_MB` | 허용 origin과 업로드 크기 제한 |
 | 데모 제어 | `DEMO_CONTROL_TOKEN`, `APP_ENV` | production에서 `/api/v1/demo/*` 토큰 필수 |
@@ -437,6 +437,7 @@ erDiagram
 |---|---|---|
 | `merchant` | 합성 상점·배달 조건 | `merchant_id PK`, service_area, name_ko/en, description, delivery_fee, eta_min/max, min_order_amount, flavor_profile, packaging_signal, is_synthetic, service_area_id. service_area FK 없음 |
 | `menu` | 합성 메뉴 | `menu_id PK`, `merchant_id → merchant`, category, name_ko/en, description, cultural_description, price, serves_min/max, spice_level, dietary_tags_json, allergen_tags_json, semantic_text, availability, is_synthetic, updated_at, category_id. category FK 없음 |
+| `menu_semantic_embedding` | catalog release별 불변 메뉴 semantic vector | `PK(catalog_release_id,menu_id,embedding_model,embedding_version)`, dimension, semantic_text_sha256, embedding_manifest_sha256, 1536차원 vector, created_at. 기존 `menu` vector를 덮어쓰지 않음 |
 | `menu_category` | 정규화 메뉴 범주/맵기 범위 | `category_id PK`, name_ko/en, description, tags_json, typical_spice_min/max |
 | `review_snippet` | 합성 리뷰 검색 신호 | `snippet_id PK`, `merchant_id → merchant`, `menu_id → menu`, rating, review_text, source_type, is_synthetic, updated_at |
 | `evidence` | 레거시 근거/상태 | `evidence_id PK`, subject_id, claim_type, status, source_type, excerpt, confidence_band, suggested_action, updated_at. subject FK 없음 |

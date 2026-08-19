@@ -258,6 +258,57 @@ describe("ChatPage structured recommendation contract", () => {
     expect(screen.getByTestId("user-preference-message")).toHaveTextContent("Sweet");
   }, 10_000);
 
+  it("polls one persisted pending request until the same request completes", async () => {
+    prepareStore();
+    const pendingBatch: RecommendationBatchV2 = {
+      ...batch,
+      snapshot_id: null,
+      status: "PENDING",
+      phase: "RETRIEVING",
+      recommendations: [],
+    };
+    useSessionStore.setState({
+      committedCriteria: criteria,
+      draftCriteria: criteria,
+      criteriaVersion: 1,
+      recommendationPhase: "RETRIEVING",
+      pendingRecommendation: {
+        request_id: pendingBatch.request_id,
+        expected_state_version: pendingBatch.state_version,
+        criteria_version: pendingBatch.criteria_version,
+        mode: "INITIAL",
+      },
+      latestRecommendation: pendingBatch,
+    });
+    vi.spyOn(api, "getPreferenceCatalog").mockResolvedValue({
+      catalog,
+      etag: '"catalog-v2-test"',
+      notModified: false,
+    });
+    vi.spyOn(api, "getConversation").mockResolvedValue(conversation({
+      state_version: pendingBatch.state_version,
+      recommendation_criteria: criteria,
+      criteria_version: 1,
+      latest_recommendation: pendingBatch,
+      active_recommendation: pendingBatch,
+    }));
+    const createRecommendation = vi.spyOn(api, "createRecommendation");
+    const poll = vi.spyOn(api, "getRecommendationRequest")
+      .mockResolvedValueOnce(pendingBatch)
+      .mockResolvedValueOnce(batch);
+
+    renderPage();
+
+    await waitFor(() => expect(poll).toHaveBeenCalledTimes(2), { timeout: 6_000 });
+    expect(poll).toHaveBeenNthCalledWith(
+      1,
+      session.session_id,
+      pendingBatch.request_id,
+    );
+    expect(createRecommendation).not.toHaveBeenCalled();
+    expect(await screen.findByText("An easy Korean meal")).toBeInTheDocument();
+  }, 8_000);
+
   it("blocks an explicit vegan or halal ingredient conflict before any API mutation", async () => {
     prepareStore();
     vi.spyOn(api, "getPreferenceCatalog").mockResolvedValue({ catalog, etag: '"catalog-v2-test"', notModified: false });

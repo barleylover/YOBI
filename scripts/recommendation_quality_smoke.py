@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(BACKEND))
 sys.path.insert(0, str(SCRIPTS))
 
+from recommendation_http import await_recommendation_response
 from recommendation_performance_smoke import (
     Scenario,
     _catalog_options,
@@ -262,16 +263,20 @@ def _run_case(
         ) as context:
             wait_for_dispatch()
             started = perf_counter()
-            batch = _require_http(
-                context.client.post(
-                    f"/api/v1/sessions/{context.session_id}/recommendations",
-                    json={
-                        "request_id": f"quality-{uuid4().hex}",
-                        "expected_state_version": context.state_version,
-                        "criteria_version": context.criteria_version,
-                        "mode": "INITIAL",
-                    },
-                )
+            response = context.client.post(
+                f"/api/v1/sessions/{context.session_id}/recommendations",
+                json={
+                    "request_id": f"quality-{uuid4().hex}",
+                    "expected_state_version": context.state_version,
+                    "criteria_version": context.criteria_version,
+                    "mode": "INITIAL",
+                },
+            )
+            batch = await_recommendation_response(
+                context.client,
+                session_id=context.session_id,
+                initial_response=response,
+                error_prefix="QUALITY",
             )
             latency_ms = round((perf_counter() - started) * 1_000, 3)
             errors, evidence = _validate_batch(

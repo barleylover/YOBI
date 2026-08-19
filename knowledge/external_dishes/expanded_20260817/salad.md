@@ -23,8 +23,8 @@
 ---
 # Salad
 
-A salad is a composed dish built around vegetables, grains, fruit, noodles or other bite-sized components, commonly served with a dressing.
+A salad is a composed dish built around vegetables, grains, fruit, noodles or other bite-sized components, commonly served with a dressing. Leafy versions often emphasize fresh, clean flavours, while grain or protein salads can be more filling.
 
-It is often cool or at room temperature and can feel crisp, crunchy, soft or hearty depending on the base. The name alone does not identify dressing, protein or dietary suitability.
+Salad is commonly served cool or at room temperature. Its texture may be crisp and crunchy, soft, chewy or hearty depending on the base and toppings, so the name alone does not identify dressing, protein or dietary suitability.
 
 This is general culinary guidance, not a statement about one merchant's recipe, ingredients, certification, allergens, portion or menu-specific spice level. Check the current merchant information before ordering.

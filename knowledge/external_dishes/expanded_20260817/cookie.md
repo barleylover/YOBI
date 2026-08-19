@@ -23,8 +23,8 @@
 ---
 # Cookie
 
-A cookie is a small baked sweet with styles ranging from thin and crisp to thick, soft or chewy.
+A cookie is a small baked sweet made in styles ranging from thin and crisp or crunchy to thick, soft and chewy. It is usually eaten at room temperature, although some bakery cookies are served warm.
 
-Butter, chocolate, fruit, nuts and spices are possible flavour directions rather than guaranteed ingredients. Product labelling remains necessary for allergens.
+Cookies are generally sweet and may be plain, filled or topped. Butter, chocolate, fruit, nuts and spices are possible flavour directions rather than guaranteed ingredients, so product labelling remains necessary for allergens.
 
 This is general culinary guidance, not a statement about one merchant's recipe, ingredients, certification, allergens, portion or menu-specific spice level. Check the current merchant information before ordering.

@@ -35,7 +35,10 @@ import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
-sys.path.insert(0, str(BACKEND))
+SCRIPTS = ROOT / "scripts"
+for path in (BACKEND, SCRIPTS):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from app.db.repository import YobiRepository
 from app.dependencies import get_repository
@@ -45,6 +48,7 @@ from app.domain.structured_recommendation import (
     RecommendationMode,
 )
 from app.services.structured_recommendation import StructuredRecommendationService
+from recommendation_http import await_recommendation_response
 
 WARM_REQUIRED = 100
 COLD_REQUIRED = 20
@@ -58,6 +62,8 @@ FULL_P90_LIMIT_MS = 8_000.0
 FULL_MAX_LIMIT_MS = 15_000.0
 RELEASE_DISPATCH_SPACING_SECONDS = 65.0
 RELEASE_PROVIDER_QUIET_SECONDS = 65.0
+RECOMMENDATION_POLL_INTERVAL_SECONDS = 0.5
+RECOMMENDATION_RESULT_TIMEOUT_SECONDS = 180.0
 
 
 @dataclass
@@ -359,6 +365,7 @@ def _discover_scenarios(
 
     no_match: RecommendationCriteriaV2 | None = None
     no_match_candidates = [
+        _criteria_for({}, max_spice_level=1, halal=True, vegan=True),
         _criteria_for({}, max_spice_level=1, halal=True),
         _criteria_for({}, max_spice_level=1, vegan=True),
     ]
@@ -841,6 +848,8 @@ def _dispatch_http_recommendation(
     before_dispatch: Callable[[], None] | None = None,
     barrier: Barrier | None = None,
     timer: Callable[[], float] = perf_counter,
+    deadline_clock: Callable[[], float] = monotonic,
+    poll_sleeper: Callable[[float], None] = sleep,
 ) -> dict[str, Any]:
     try:
         if barrier is not None:
@@ -874,7 +883,17 @@ def _dispatch_http_recommendation(
         )
     latency_ms = round((timer() - started) * 1_000, 3)
     try:
-        batch = _require_http(response)
+        batch = await_recommendation_response(
+            context.client,
+            session_id=context.session_id,
+            initial_response=response,
+            timeout_seconds=RECOMMENDATION_RESULT_TIMEOUT_SECONDS,
+            poll_interval_seconds=RECOMMENDATION_POLL_INTERVAL_SECONDS,
+            clock=deadline_clock,
+            sleeper=poll_sleeper,
+            error_prefix="PERFORMANCE",
+        )
+        latency_ms = round((timer() - started) * 1_000, 3)
     except Exception as exc:  # noqa: BLE001 - sanitized aggregate output only
         return _failed_http_outcome(
             spec.name,
