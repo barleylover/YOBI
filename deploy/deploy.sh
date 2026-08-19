@@ -295,7 +295,7 @@ ssh -t -p "$ssh_port" -i "$SSH_KEY" \
   "${ssh_host_key_options[@]}" \
   "${ssh_connection_options[@]}" \
   "$SSH_USER@$host" \
-  "sudo -n bash -s -- '$RELEASE_ID' '$ARCHIVE_SHA256' '$REMOTE_ARCHIVE' '$SSH_USER' '$ARCHIVE_NONCE' '$RECOVERY_ALLOW_UNREADY_CURRENT' '$PROVISIONAL_DEPLOY' '$ZERO_PROVIDER_PROVISIONAL' '$CODE_ONLY_PROVISIONAL' '$QUALITY_FIVE_ONLY' '$POST_QUALITY_REVIEW_DEPLOY' '$MENU_SEMANTIC_BACKFILL' '$source_git_commit'" <<'REMOTE'
+  "sudo -n bash -s -- '$RELEASE_ID' '$ARCHIVE_SHA256' '$REMOTE_ARCHIVE' '$SSH_USER' '$ARCHIVE_NONCE' '$RECOVERY_ALLOW_UNREADY_CURRENT' '$PROVISIONAL_DEPLOY' '$ZERO_PROVIDER_PROVISIONAL' '$CODE_ONLY_PROVISIONAL' '$QUALITY_FIVE_ONLY' '$POST_QUALITY_REVIEW_DEPLOY' '$MENU_SEMANTIC_BACKFILL' '$compartment_id' '$source_git_commit'" <<'REMOTE'
 set -euo pipefail
 [[ "${EUID}" -eq 0 ]] || { printf 'Remote deployment requires root.\n' >&2; exit 1; }
 release_id="$1"
@@ -310,7 +310,8 @@ code_only_provisional="$9"
 quality_five_only="${10}"
 post_quality_review_deploy="${11}"
 menu_semantic_backfill="${12}"
-source_git_commit="${13}"
+oci_compartment_id="${13}"
+source_git_commit="${14}"
 [[ "$release_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$ \
   && "$archive_sha256" =~ ^[0-9a-f]{64}$ \
   && "$source_git_commit" =~ ^[0-9a-f]{40}$ \
@@ -330,6 +331,7 @@ source_git_commit="${13}"
     || "$post_quality_review_deploy" == "false" ) \
   && ( "$menu_semantic_backfill" == "true" \
     || "$menu_semantic_backfill" == "false" ) \
+  && "$oci_compartment_id" =~ ^ocid1\.compartment\.[A-Za-z0-9._-]+$ \
   && "$remote_archive" == "/home/${upload_user}/.yobi-release-${release_id}-${archive_nonce}.tar.gz" ]] \
   || { printf 'Remote release identity is invalid.\n' >&2; exit 1; }
 [[ "$quality_five_only" != "true" || "$provisional_deploy" != "true" ]] \
@@ -634,7 +636,13 @@ harden_release_tree "$new_release" \
   || { printf 'New release permissions could not be hardened.\n' >&2; exit 1; }
 
 sudo env PYTHONPATH="$new_release" "$new_release/venv/bin/python" -c \
-  "from deploy.secure_bootstrap import persist_runtime_release_policy; persist_runtime_release_policy()"
+  'import sys
+from deploy.secure_bootstrap import (
+    persist_runtime_compartment_identity,
+    persist_runtime_release_policy,
+)
+persist_runtime_compartment_identity(sys.argv[1])
+persist_runtime_release_policy()' "$oci_compartment_id"
 # The protected dotenv file is data, not shell code. Keep every secret out of `source`/eval.
 runtime_env_runner=(
   "$new_release/venv/bin/python"

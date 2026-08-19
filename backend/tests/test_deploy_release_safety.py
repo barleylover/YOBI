@@ -25,6 +25,8 @@ def test_release_archive_contains_knowledge_and_all_migrations() -> None:
     assert "013_menu_preference_features_and_hybrid_rank.sql" in source
     assert "014_wiki_eligibility_indexes.sql" in source
     assert "persist_runtime_release_policy" in source
+    assert "persist_runtime_compartment_identity" in source
+    assert 'persist_runtime_compartment_identity(sys.argv[1])' in source
     assert "actual_migration_list" in source
     assert "Migration directory must contain exactly 001-014" in source
     assert 'status["expected_migration_count"] == status["applied_migration_count"] == 14' in source

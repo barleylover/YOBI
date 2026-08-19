@@ -195,6 +195,49 @@ def checkpoint_status(step: str) -> str | None:
     return str(status) if status else None
 
 
+def _atomic_replace_runtime_text(path: Path, updated: str) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(updated)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def persist_runtime_compartment_identity(
+    expected_compartment_id: str,
+    path: Path = RUNTIME_ENV,
+) -> bool:
+    """Add the locally discovered non-secret compartment identity if absent."""
+    if not re.fullmatch(r"ocid1\.compartment\.[A-Za-z0-9._-]+", expected_compartment_id):
+        raise SystemExit("Discovered OCI compartment identity is invalid")
+    if path.is_symlink() or not path.is_file():
+        raise SystemExit("Runtime environment must be a regular file, not a symlink")
+    text = path.read_text(encoding="utf-8")
+    matches = list(re.finditer(r"(?m)^[ \t]*OCI_COMPARTMENT_ID[ \t]*=.*$", text))
+    if len(matches) > 1:
+        raise SystemExit("Runtime environment contains duplicate OCI_COMPARTMENT_ID entries")
+    if matches:
+        values = dotenv_values(stream=StringIO(text), interpolate=False)
+        if str(values.get("OCI_COMPARTMENT_ID") or "").strip() != expected_compartment_id:
+            raise SystemExit("Runtime OCI compartment identity conflicts with deployment target")
+        return False
+    separator = "" if not text or text.endswith("\n") else "\n"
+    _atomic_replace_runtime_text(
+        path,
+        text + separator + f'OCI_COMPARTMENT_ID="{expected_compartment_id}"\n',
+    )
+    return True
+
+
 def persist_runtime_release_policy(path: Path = RUNTIME_ENV) -> bool:
     """Atomically pin the non-secret runtime policies for this release."""
     if path.is_symlink():
@@ -260,20 +303,7 @@ def persist_runtime_release_policy(path: Path = RUNTIME_ENV) -> bool:
     if not changed:
         return False
 
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent,
-        prefix=f".{path.name}.",
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(updated)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temporary, 0o600)
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    _atomic_replace_runtime_text(path, updated)
     return True
 
 

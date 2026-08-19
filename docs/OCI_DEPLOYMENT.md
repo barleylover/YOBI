@@ -258,9 +258,10 @@ non-secret release policies, including `LLM_MAX_RETRIES="0"`,
 `EMBEDDING_PROVIDER="oci"`, and `OCI_EMBED_AUTH="instance_principal"`, when a
 legacy file differs or omits a key;
 all secret and unrelated lines are preserved and no value is printed. Duplicate
-policy entries fail closed. A legacy file without `OCI_COMPARTMENT_ID` is not
-silently upgraded: run `deploy/restore_runtime_env.sh`, which resolves and writes
-that non-secret identity before deployment. The protected file remains mode `0600`.
+policy entries fail closed. A legacy file without `OCI_COMPARTMENT_ID` receives only
+the non-secret compartment identity already resolved and validated by the guarded
+deployment; a conflicting identity fails closed. The protected file remains mode
+`0600`.
 
 Progress is recorded as safe metadata in
 `/opt/yobi/shared/control/bootstrap_state.json` (`root:root`, mode `0600`). A transient 429

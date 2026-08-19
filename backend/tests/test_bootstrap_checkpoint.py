@@ -264,6 +264,45 @@ def test_release_policy_requires_embedding_identity_before_writing(tmp_path: Pat
     assert runtime_env.read_text(encoding="utf-8") == original
 
 
+def test_runtime_compartment_identity_is_added_without_rewriting_secrets(
+    tmp_path: Path,
+) -> None:
+    runtime_env = tmp_path / "yobi.env"
+    original = 'DB_PASSWORD="synthetic-secret"\nEMBEDDING_PROVIDER="deterministic"\n'
+    runtime_env.write_text(original, encoding="utf-8")
+
+    assert bootstrap.persist_runtime_compartment_identity(
+        "ocid1.compartment.oc1..synthetic",
+        runtime_env,
+    ) is True
+    persisted = runtime_env.read_text(encoding="utf-8")
+    assert persisted.startswith(original)
+    assert persisted.endswith(
+        'OCI_COMPARTMENT_ID="ocid1.compartment.oc1..synthetic"\n'
+    )
+    assert stat.S_IMODE(runtime_env.stat().st_mode) == 0o600
+    assert bootstrap.persist_runtime_compartment_identity(
+        "ocid1.compartment.oc1..synthetic",
+        runtime_env,
+    ) is False
+
+
+def test_runtime_compartment_identity_rejects_conflict_without_writing(
+    tmp_path: Path,
+) -> None:
+    runtime_env = tmp_path / "yobi.env"
+    original = 'OCI_COMPARTMENT_ID="ocid1.compartment.oc1..first"\n'
+    runtime_env.write_text(original, encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="conflicts with deployment target"):
+        bootstrap.persist_runtime_compartment_identity(
+            "ocid1.compartment.oc1..second",
+            runtime_env,
+        )
+
+    assert runtime_env.read_text(encoding="utf-8") == original
+
+
 def test_bootstrap_requires_every_migration_shipped_in_the_release() -> None:
     records = bootstrap.expected_migration_records()
 
