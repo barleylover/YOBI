@@ -34,9 +34,11 @@ from app.option_static_localization import (
     localize_option_name,
 )
 from build_synthetic_enrichment_release import (
-    _oracle_base_fingerprint,
     _oracle_clone_and_activate_family,
-    _protected_base_fingerprint,
+)
+from protected_base_fingerprint import (
+    oracle_base_fingerprint,
+    protected_base_fingerprint,
 )
 
 LANGUAGES = ("ko", "en", "ja")
@@ -440,7 +442,7 @@ def _apply_sqlite(path: Path, release_id: str, activate: bool) -> dict[str, Any]
     SQLiteYobiRepository(path).initialize()
     with sqlite3.connect(path) as connection:
         connection.row_factory = sqlite3.Row
-        before = _protected_base_fingerprint(connection)
+        before = protected_base_fingerprint(connection)
         knowledge_id, base_manifest, source_release_id, eligible_count = (
             _sqlite_context(connection, release_id)
         )
@@ -490,7 +492,7 @@ def _apply_sqlite(path: Path, release_id: str, activate: bool) -> dict[str, Any]
         )
         if activate:
             raise RuntimeError("SQLITE_ACTIVATION_USE_BUILD_ENRICHMENT_SCRIPT")
-        after = _protected_base_fingerprint(connection)
+        after = protected_base_fingerprint(connection)
         if before != after:
             raise RuntimeError("PROTECTED_BASE_TABLES_CHANGED")
     return {
@@ -516,7 +518,7 @@ def _apply_oracle(
 ) -> dict[str, Any]:
     user, password, dsn = _oracle_credentials(settings)
     with oracledb.connect(user=user, password=password, dsn=dsn) as connection:
-        before = _oracle_base_fingerprint(connection)
+        before = oracle_base_fingerprint(connection)
         knowledge_id, base_manifest, source_release_id, eligible_count = (
             _oracle_context(connection, release_id)
         )
@@ -571,7 +573,7 @@ def _apply_oracle(
             family_id = _oracle_clone_and_activate_family(
                 connection, release_id=release_id, manifest=manifest
             )
-        after = _oracle_base_fingerprint(connection)
+        after = oracle_base_fingerprint(connection)
         if before != after:
             connection.rollback()
             raise RuntimeError("PROTECTED_BASE_TABLES_CHANGED")

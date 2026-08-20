@@ -52,6 +52,7 @@ def test_enrichment_is_reproducible_and_exact() -> None:
     validate_enrichment_rows(first, eligible_menu_count=len(_menus()))
     assert manifest_sha256(first) == manifest_sha256(second)
     assert len(first["countries"]) == len(COUNTRY_CODES) == 36
+    assert len(first["country_examples"]) == 108
     assert len(first["preferences"]) == len(_menus()) * 36
     assert len(first["reviews"]) == len(_menus()) * 6
     assert len(first["localizations"]) == len(_menus())

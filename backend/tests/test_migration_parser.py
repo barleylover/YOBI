@@ -62,6 +62,10 @@ def test_release_discovers_conversation_and_knowledge_migrations() -> None:
     assert "012_concept_preference_support_and_server_ranking.sql" in names
     assert "013_menu_preference_features_and_hybrid_rank.sql" in names
     assert "014_wiki_eligibility_indexes.sql" in names
+    assert "015_synthetic_demo_enrichment.sql" in names
+    assert "016_recommendation_v3_runtime.sql" in names
+    assert "017_grounded_menu_presentation.sql" in names
+    assert "018_llm_runtime_resilience.sql" in names
 
 
 def test_conversation_migration_is_append_only_and_partial_rerun_safe() -> None:
@@ -240,6 +244,37 @@ def test_wiki_eligibility_index_migration_is_additive_and_rerun_safe() -> None:
         for index, statement in enumerate(statements)
         if index != 2
     )
+
+
+def test_grounded_presentation_migration_is_additive_and_rerun_safe() -> None:
+    path = ROOT / "database" / "migrations" / "017_grounded_menu_presentation.sql"
+    source = path.read_text(encoding="utf-8")
+    statements = migrate.split_statements(source)
+
+    assert "DROP " not in source.upper()
+    assert len(statements) == 12
+    assert "menu_source_description_localization" in source
+    assert "synthetic_country_spice_example" in source
+    assert "menu_presentation_generation_lease" in source
+    assert all(statement.startswith("BEGIN") and statement.endswith("END;") for statement in statements)
+    assert all(
+        "SQLCODE != -955" in statement
+        or "SQLCODE != -1430" in statement
+        or "SQLCODE NOT IN (-955,-1408)" in statement
+        for statement in statements
+    )
+
+
+def test_llm_resilience_migration_is_additive_and_rerun_safe() -> None:
+    path = ROOT / "database" / "migrations" / "018_llm_runtime_resilience.sql"
+    source = path.read_text(encoding="utf-8")
+    statements = migrate.split_statements(source)
+
+    assert "DROP " not in source.upper()
+    assert len(statements) == 3
+    assert "recommendation_provider_attempt ADD attempt_role" in source
+    assert "restaurant_note_translation_attempt" in source
+    assert all(statement.startswith("BEGIN") and statement.endswith("END;") for statement in statements)
 
 
 def test_discovery_rejects_a_missing_migration_version(tmp_path: Path) -> None:

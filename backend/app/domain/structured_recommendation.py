@@ -290,6 +290,9 @@ class EvidencePoolItem(BaseModel):
     vegan_status: VeganEvidenceStatus | None = None
     vegan_warning: str | None = None
     localized_title: str | None = None
+    localized_source_description: str | None = None
+    menu_localization_source_hash: str | None = None
+    source_description_source_hash: str | None = None
     synthetic_spice_level: int | None = Field(default=None, ge=1, le=5)
     country_spice_baseline: int | None = Field(default=None, ge=1, le=5)
     country_preference: dict[str, Any] | None = None
@@ -306,6 +309,7 @@ class EvidencePoolItem(BaseModel):
     knowledge_release_id: str
     catalog_release_id: str
     recommendation_release_family_id: str
+    synthetic_enrichment_release_id: str | None = None
 
     @property
     def menu_id(self) -> str:
@@ -436,6 +440,7 @@ class StructuredRecommendationView(BaseModel):
     selection_reason: str
     description: str
     localized_title: str | None = None
+    localized_subtitle: str | None = None
     yobi_short_explanation: str | None = None
     yobi_long_explanation: str | None = None
     source_description: str | None = None

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sqlite3
 import sys
@@ -13,7 +12,9 @@ from typing import Any
 import oracledb
 
 ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(ROOT / "backend"))
+sys.path.insert(0, str(SCRIPTS))
 
 from app.core.config import Settings
 from app.db.sqlite_repository import SQLiteYobiRepository
@@ -24,6 +25,10 @@ from app.demo_enrichment import (
     build_enrichment_rows,
     manifest_sha256,
     validate_enrichment_rows,
+)
+from protected_base_fingerprint import (
+    oracle_base_fingerprint,
+    protected_base_fingerprint,
 )
 
 
@@ -183,89 +188,9 @@ def _upsert_many(
     )
 
 
-_PROTECTED_BASE_TABLES = (
-    "menu",
-    "menu_source_detail",
-    "menu_wiki_eligibility",
-    "menu_embedding",
-    "menu_semantic_embedding",
-    "knowledge_document",
-    "knowledge_chunk",
-    "menu_concept_membership",
-    "menu_dietary_attribute",
-    "option_dietary_conflict",
-    "option_ingredient_effect",
-)
-
-
-def _protected_base_fingerprint(connection: sqlite3.Connection) -> str:
-    digest = hashlib.sha256()
-    existing = {
-        str(row[0])
-        for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    }
-    for table in _PROTECTED_BASE_TABLES:
-        if table not in existing:
-            continue
-        columns = [
-            str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")
-        ]
-        digest.update(f"{table}:{','.join(columns)}\n".encode())
-        order_by = ",".join(f'"{column}"' for column in columns)
-        for row in connection.execute(f'SELECT * FROM "{table}" ORDER BY {order_by}'):
-            for value in row:
-                if isinstance(value, bytes):
-                    digest.update(value)
-                else:
-                    digest.update(str(value).encode("utf-8"))
-                digest.update(b"\x1f")
-            digest.update(b"\x1e")
-    return digest.hexdigest()
-
-
-_ORACLE_ID_COLUMNS = {
-    "menu": ("menu_id",),
-    "menu_source_detail": ("menu_id",),
-    "menu_wiki_eligibility": ("knowledge_release_id", "menu_id"),
-    "menu_embedding": ("menu_id",),
-    "menu_semantic_embedding": (
-        "catalog_release_id", "menu_id", "embedding_model", "embedding_version"
-    ),
-    "knowledge_document": ("release_id", "document_id"),
-    "knowledge_chunk": ("release_id", "chunk_id"),
-    "menu_concept_membership": ("knowledge_release_id", "menu_id", "concept_id"),
-    "menu_dietary_attribute": ("menu_id", "attribute_id"),
-    "option_dietary_conflict": ("option_item_id", "rule_code"),
-    "option_ingredient_effect": (
-        "release_id", "option_item_id", "ingredient_id", "effect"
-    ),
-}
-
-
-def _oracle_base_fingerprint(connection: oracledb.Connection) -> str:
-    """Hash stable identifiers and row counts without materializing vector LOBs."""
-    digest = hashlib.sha256()
-    cursor = connection.cursor()
-    cursor.execute("SELECT LOWER(table_name) FROM user_tables")
-    existing = {str(row[0]) for row in cursor.fetchall()}
-    for table in _PROTECTED_BASE_TABLES:
-        if table not in existing:
-            continue
-        id_columns = _ORACLE_ID_COLUMNS[table]
-        cursor.execute(f"SELECT COUNT(*) FROM {table}")
-        digest.update(f"{table}:{int(cursor.fetchone()[0])}\n".encode())
-        cursor.execute(
-            f"SELECT {','.join(id_columns)} FROM {table} "
-            f"ORDER BY {','.join(id_columns)}"
-        )
-        for row in cursor:
-            digest.update("\x1f".join(str(value) for value in row).encode("utf-8"))
-            digest.update(b"\x1e")
-    return digest.hexdigest()
-
-
 _ORACLE_PRIMARY_KEYS = {
     "synthetic_country_profile": ("release_id", "country_code"),
+    "synthetic_country_spice_example": ("release_id", "country_code", "language_code"),
     "synthetic_menu_profile": ("release_id", "menu_id"),
     "synthetic_option_profile": ("release_id", "option_item_id"),
     "synthetic_menu_country_preference": ("release_id", "menu_id", "country_code"),
@@ -401,9 +326,10 @@ def _apply_oracle(
     user, password, dsn = _oracle_credentials(settings)
     generated_at = datetime.now(timezone.utc)
     localized_rows = [dict(row, generated_at=generated_at) for row in rows["localizations"]]
-    rows = dict(rows, localizations=localized_rows)
+    example_rows = [dict(row, generated_at=generated_at) for row in rows["country_examples"]]
+    rows = dict(rows, localizations=localized_rows, country_examples=example_rows)
     with oracledb.connect(user=user, password=password, dsn=dsn) as connection:
-        before = _oracle_base_fingerprint(connection)
+        before = oracle_base_fingerprint(connection)
         cursor = connection.cursor()
         cursor.execute(
             """
@@ -433,6 +359,7 @@ def _apply_oracle(
         )
         for table, key in (
             ("synthetic_country_profile", "countries"),
+            ("synthetic_country_spice_example", "country_examples"),
             ("synthetic_menu_profile", "menus"),
             ("synthetic_option_profile", "options"),
             ("synthetic_menu_country_preference", "preferences"),
@@ -462,7 +389,7 @@ def _apply_oracle(
             family_id = _oracle_clone_and_activate_family(
                 connection, release_id=release_id, manifest=manifest
             )
-        after = _oracle_base_fingerprint(connection)
+        after = oracle_base_fingerprint(connection)
         if before != after:
             connection.rollback()
             raise RuntimeError("PROTECTED_BASE_TABLES_CHANGED")
@@ -531,10 +458,12 @@ def _apply_sqlite(
     now = datetime.now(timezone.utc).isoformat()
     for row in rows["localizations"]:
         row["generated_at"] = now
+    for row in rows["country_examples"]:
+        row["generated_at"] = now
     with sqlite3.connect(path) as connection:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
-        base_fingerprint_before = _protected_base_fingerprint(connection)
+        base_fingerprint_before = protected_base_fingerprint(connection)
         connection.execute(
             """
             INSERT INTO synthetic_enrichment_release(
@@ -561,6 +490,7 @@ def _apply_sqlite(
         )
         for table, key in (
             ("synthetic_country_profile", "countries"),
+            ("synthetic_country_spice_example", "country_examples"),
             ("synthetic_menu_profile", "menus"),
             ("synthetic_option_profile", "options"),
             ("synthetic_menu_country_preference", "preferences"),
@@ -666,7 +596,7 @@ def _apply_sqlite(
                 """,
                 (active_family_id, now),
             )
-        base_fingerprint_after = _protected_base_fingerprint(connection)
+        base_fingerprint_after = protected_base_fingerprint(connection)
         if base_fingerprint_before != base_fingerprint_after:
             raise RuntimeError("PROTECTED_BASE_TABLES_CHANGED")
     return base_fingerprint_before, base_fingerprint_after

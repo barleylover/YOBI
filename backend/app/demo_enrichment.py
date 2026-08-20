@@ -6,6 +6,12 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from app.country_spice_examples import (
+    COUNTRY_SPICE_EXAMPLES,
+    LanguageCode,
+    example_seed_hash,
+)
+
 COUNTRY_CODES = (
     "US", "GB", "CA", "AU", "NZ", "IE", "KR", "JP", "CN", "TW", "HK", "SG",
     "ES", "MX", "AR", "CO", "FR", "BE", "DE", "AT", "CH", "IT", "PT", "BR",
@@ -13,6 +19,7 @@ COUNTRY_CODES = (
 )
 GENERATOR_VERSION = "yobi-synthetic-enrichment-v1"
 SOURCE_TYPE = "SYNTHETIC_DEMO"
+LANGUAGE_CODES: tuple[LanguageCode, ...] = ("ko", "en", "ja")
 
 _ANIMAL_TOKENS = (
     "PORK", "BEEF", "CHICKEN", "FISH", "SEAFOOD", "EGG", "DAIRY",
@@ -224,6 +231,30 @@ def build_korean_localizations(
     ]
 
 
+def build_country_spice_examples(
+    release_id: str,
+    seed: str,
+    countries: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    baselines = {
+        str(country["country_code"]): int(country["spice_baseline"])
+        for country in countries
+    }
+    return [
+        {
+            "release_id": release_id,
+            "country_code": country_code,
+            "language_code": language_code,
+            "representative_dish": COUNTRY_SPICE_EXAMPLES[country_code][language_code],
+            "spice_baseline": baselines[country_code],
+            "source_type": SOURCE_TYPE,
+            "seed_hash": example_seed_hash(seed, country_code, language_code),
+        }
+        for country_code in sorted(baselines)
+        for language_code in LANGUAGE_CODES
+    ]
+
+
 def manifest_sha256(rows_by_name: dict[str, list[dict[str, Any]]]) -> str:
     payload = json.dumps(rows_by_name, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -240,6 +271,7 @@ def build_enrichment_rows(
     countries = build_country_profiles(release_id, seed)
     rows = {
         "countries": countries,
+        "country_examples": build_country_spice_examples(release_id, seed, countries),
         "menus": build_menu_profiles(release_id, seed, menu_list),
         "options": build_option_profiles(release_id, seed, options),
         "preferences": build_country_preferences(release_id, seed, menu_list, countries),
@@ -256,6 +288,7 @@ def validate_enrichment_rows(
 ) -> None:
     expected = {
         "countries": len(COUNTRY_CODES),
+        "country_examples": len(COUNTRY_CODES) * 3,
         "menus": eligible_menu_count,
         "preferences": eligible_menu_count * len(COUNTRY_CODES),
         "reviews": eligible_menu_count * len(_REVIEW_TEMPLATES),

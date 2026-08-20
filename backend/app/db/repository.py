@@ -21,6 +21,7 @@ from app.domain.models import (
     CheckoutCreate,
     DeliveryPreferenceInput,
     Evidence,
+    MenuPresentationCacheEntry,
     MenuSummary,
     MerchantComparison,
     MerchantMenuPresentation,
@@ -145,6 +146,22 @@ class YobiRepository(Protocol):
         self,
         session_id: str,
         request_id: str,
+        *,
+        attempt_no: int,
+        provider: str,
+        model_id: str,
+        status: str,
+        error_code: str | None,
+        latency_ms: int,
+        input_tokens: int | None,
+        output_tokens: int | None,
+        attempt_role: str = "SELECTION",
+    ) -> None: ...
+
+    def record_restaurant_note_translation_attempt(
+        self,
+        session_id: str,
+        request_hash: str,
         *,
         attempt_no: int,
         provider: str,
@@ -364,6 +381,30 @@ class YobiRepository(Protocol):
 
     def save_menu_presentation_cache(
         self, session_id: str, presentation: MerchantMenuPresentation
+    ) -> None: ...
+
+    def get_menu_presentation_cache(
+        self, cache_key: str
+    ) -> MenuPresentationCacheEntry | None: ...
+
+    def save_menu_presentation_cache_entry(
+        self, entry: MenuPresentationCacheEntry
+    ) -> None: ...
+
+    def acquire_menu_presentation_lease(
+        self,
+        cache_key: str,
+        owner_token: str,
+        *,
+        expires_at: datetime,
+    ) -> bool: ...
+
+    def finish_menu_presentation_lease(
+        self,
+        cache_key: str,
+        owner_token: str,
+        *,
+        error_code: str | None = None,
     ) -> None: ...
 
     def resolve_address(

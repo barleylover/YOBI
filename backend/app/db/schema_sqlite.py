@@ -1008,6 +1008,33 @@ CREATE TABLE IF NOT EXISTS option_item_localization (
   PRIMARY KEY(release_id, option_item_id, language_code)
 );
 
+CREATE TABLE IF NOT EXISTS menu_source_description_localization (
+  release_id TEXT NOT NULL REFERENCES synthetic_enrichment_release(release_id),
+  menu_id TEXT NOT NULL REFERENCES menu(menu_id),
+  language_code TEXT NOT NULL CHECK (language_code IN ('ko','en','ja')),
+  description_text TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  prompt_version TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  validation_status TEXT NOT NULL CHECK (validation_status IN ('VALID','REJECTED')),
+  generated_at TEXT NOT NULL,
+  PRIMARY KEY(release_id, menu_id, language_code)
+);
+
+CREATE TABLE IF NOT EXISTS synthetic_country_spice_example (
+  release_id TEXT NOT NULL,
+  country_code TEXT NOT NULL,
+  language_code TEXT NOT NULL CHECK (language_code IN ('ko','en','ja')),
+  representative_dish TEXT NOT NULL,
+  spice_baseline INTEGER NOT NULL CHECK (spice_baseline BETWEEN 1 AND 5),
+  source_type TEXT NOT NULL DEFAULT 'SYNTHETIC_DEMO',
+  seed_hash TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  PRIMARY KEY(release_id, country_code, language_code),
+  FOREIGN KEY(release_id, country_code)
+    REFERENCES synthetic_country_profile(release_id, country_code)
+);
+
 CREATE TABLE IF NOT EXISTS menu_presentation_cache (
   cache_key TEXT PRIMARY KEY,
   release_id TEXT NOT NULL REFERENCES synthetic_enrichment_release(release_id),
@@ -1022,7 +1049,25 @@ CREATE TABLE IF NOT EXISTS menu_presentation_cache (
   review_ids_json TEXT NOT NULL DEFAULT '[]',
   model_id TEXT NOT NULL,
   source_hash TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  localized_subtitle TEXT,
+  prompt_version TEXT,
+  content_schema_version TEXT,
+  evidence_map_json TEXT,
+  personalization_applied INTEGER,
+  updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS menu_presentation_generation_lease (
+  cache_key TEXT PRIMARY KEY,
+  owner_token TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('GENERATING','FAILED')),
+  expires_at TEXT NOT NULL,
+  retry_after TEXT,
+  attempt_count INTEGER NOT NULL DEFAULT 1 CHECK (attempt_count > 0),
+  error_code TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS recommendation_provider_attempt (
@@ -1036,6 +1081,7 @@ CREATE TABLE IF NOT EXISTS recommendation_provider_attempt (
   latency_ms INTEGER,
   input_tokens INTEGER,
   output_tokens INTEGER,
+  attempt_role TEXT NOT NULL DEFAULT 'SELECTION',
   created_at TEXT NOT NULL,
   completed_at TEXT,
   PRIMARY KEY(session_id, request_id, attempt_no),
@@ -1058,6 +1104,22 @@ CREATE TABLE IF NOT EXISTS restaurant_note_translation (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS restaurant_note_translation_attempt (
+  session_id TEXT NOT NULL REFERENCES chat_session(session_id) ON DELETE CASCADE,
+  request_hash TEXT NOT NULL,
+  attempt_no INTEGER NOT NULL CHECK (attempt_no BETWEEN 1 AND 9),
+  provider TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('SUCCEEDED','FAILED')),
+  error_code TEXT,
+  latency_ms INTEGER,
+  input_tokens INTEGER,
+  output_tokens INTEGER,
+  created_at TEXT NOT NULL,
+  completed_at TEXT NOT NULL,
+  PRIMARY KEY(session_id, request_hash, attempt_no)
+);
+
 CREATE INDEX IF NOT EXISTS idx_rec_criteria_latest
   ON session_recommendation_criteria(session_id, criteria_version DESC);
 CREATE INDEX IF NOT EXISTS idx_rec_request_status
@@ -1076,6 +1138,14 @@ CREATE INDEX IF NOT EXISTS idx_menu_localization_lookup
   ON menu_localization(release_id, language_code, menu_id);
 CREATE INDEX IF NOT EXISTS idx_menu_presentation_lookup
   ON menu_presentation_cache(release_id, menu_id, language_code, country_code);
+CREATE INDEX IF NOT EXISTS idx_menu_source_description_lookup
+  ON menu_source_description_localization(release_id, language_code, menu_id);
+CREATE INDEX IF NOT EXISTS idx_country_spice_example_lookup
+  ON synthetic_country_spice_example(release_id, country_code, language_code);
+CREATE INDEX IF NOT EXISTS idx_menu_presentation_lease_expiry
+  ON menu_presentation_generation_lease(status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_note_translation_attempt_request
+  ON restaurant_note_translation_attempt(session_id, request_hash, attempt_no);
 CREATE INDEX IF NOT EXISTS idx_menu_pref_feature_lookup
   ON menu_preference_feature(
     knowledge_release_id, category_code, option_code, support_status, menu_id

@@ -12,6 +12,7 @@ from time import monotonic
 from typing import Any, cast
 from uuid import uuid4
 
+from app.country_spice_examples import effective_language, representative_dish
 from app.db.browse_rankings import food_ranking_sql
 from app.db.concept_query import (
     build_candidate_recall_channel_query,
@@ -66,6 +67,7 @@ from app.domain.models import (
     DeliveryPreferenceInput,
     Evidence,
     EvidenceStatus,
+    MenuPresentationCacheEntry,
     MenuSummary,
     MerchantComparison,
     MerchantMenuPresentation,
@@ -398,6 +400,35 @@ class SQLiteYobiRepository:
             }
             if "country_code" not in profile_columns:
                 connection.execute("ALTER TABLE user_profile ADD COLUMN country_code TEXT")
+            presentation_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(menu_presentation_cache)"
+                ).fetchall()
+            }
+            for column, definition in (
+                ("localized_subtitle", "TEXT"),
+                ("prompt_version", "TEXT"),
+                ("content_schema_version", "TEXT"),
+                ("evidence_map_json", "TEXT"),
+                ("personalization_applied", "INTEGER"),
+                ("updated_at", "TEXT"),
+            ):
+                if column not in presentation_columns:
+                    connection.execute(
+                        f"ALTER TABLE menu_presentation_cache ADD COLUMN {column} {definition}"
+                    )
+            provider_attempt_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(recommendation_provider_attempt)"
+                ).fetchall()
+            }
+            if "attempt_role" not in provider_attempt_columns:
+                connection.execute(
+                    "ALTER TABLE recommendation_provider_attempt "
+                    "ADD COLUMN attempt_role TEXT NOT NULL DEFAULT 'SELECTION'"
+                )
             snapshot_columns = {
                 row["name"]
                 for row in connection.execute(
@@ -2233,6 +2264,7 @@ class SQLiteYobiRepository:
         latency_ms: int,
         input_tokens: int | None,
         output_tokens: int | None,
+        attempt_role: str = "SELECTION",
     ) -> None:
         now = _now()
         with self._connection() as connection:
@@ -2240,16 +2272,62 @@ class SQLiteYobiRepository:
                 """
                 INSERT INTO recommendation_provider_attempt(
                   session_id,request_id,attempt_no,provider,model_id,status,error_code,
+                  latency_ms,input_tokens,output_tokens,attempt_role,created_at,completed_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(session_id,request_id,attempt_no) DO UPDATE SET
+                  status=excluded.status,error_code=excluded.error_code,
+                  latency_ms=excluded.latency_ms,input_tokens=excluded.input_tokens,
+                  output_tokens=excluded.output_tokens,attempt_role=excluded.attempt_role,
+                  completed_at=excluded.completed_at
+                """,
+                (
+                    session_id,
+                    request_id,
+                    attempt_no,
+                    provider,
+                    model_id,
+                    status,
+                    error_code,
+                    latency_ms,
+                    input_tokens,
+                    output_tokens,
+                    attempt_role,
+                    now,
+                    now,
+                ),
+            )
+
+    def record_restaurant_note_translation_attempt(
+        self,
+        session_id: str,
+        request_hash: str,
+        *,
+        attempt_no: int,
+        provider: str,
+        model_id: str,
+        status: str,
+        error_code: str | None,
+        latency_ms: int,
+        input_tokens: int | None,
+        output_tokens: int | None,
+    ) -> None:
+        now = _now()
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO restaurant_note_translation_attempt(
+                  session_id,request_hash,attempt_no,provider,model_id,status,error_code,
                   latency_ms,input_tokens,output_tokens,created_at,completed_at
                 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(session_id,request_id,attempt_no) DO UPDATE SET
+                ON CONFLICT(session_id,request_hash,attempt_no) DO UPDATE SET
+                  provider=excluded.provider,model_id=excluded.model_id,
                   status=excluded.status,error_code=excluded.error_code,
                   latency_ms=excluded.latency_ms,input_tokens=excluded.input_tokens,
                   output_tokens=excluded.output_tokens,completed_at=excluded.completed_at
                 """,
                 (
                     session_id,
-                    request_id,
+                    request_hash,
                     attempt_no,
                     provider,
                     model_id,
@@ -4054,7 +4132,8 @@ class SQLiteYobiRepository:
             if family["synthetic_enrichment_release_id"]
             else None
         )
-        country_code = profile.country_code or criteria.spice_reference_country
+        country_code = profile.country_code or "ZZ"
+        spice_reference_country = criteria.spice_reference_country
         requested_locale = normalize_preference_locale(profile.preferred_language)
         presentation_locale = requested_locale if requested_locale in {"ko", "ja"} else "en"
         if decisions and synthetic_release_id:
@@ -4064,6 +4143,11 @@ class SQLiteYobiRepository:
                 f"""
                 SELECT profile.menu_id,profile.spice_level,profile.halal_fit,
                        profile.vegan_fit,localization.display_name,
+                       localization.source_hash AS menu_localization_source_hash,
+                       description_localization.description_text
+                         AS localized_source_description,
+                       description_localization.source_hash
+                         AS source_description_source_hash,
                        preference.preference_percent,preference.sample_size,
                        country.spice_baseline
                 FROM synthetic_menu_profile profile
@@ -4075,6 +4159,11 @@ class SQLiteYobiRepository:
                  AND localization.menu_id=profile.menu_id
                  AND localization.language_code=?
                  AND localization.validation_status='VALID'
+                LEFT JOIN menu_source_description_localization description_localization
+                  ON description_localization.release_id=profile.release_id
+                 AND description_localization.menu_id=profile.menu_id
+                 AND description_localization.language_code=?
+                 AND description_localization.validation_status='VALID'
                 LEFT JOIN synthetic_menu_country_preference preference
                   ON preference.release_id=profile.release_id
                  AND preference.menu_id=profile.menu_id
@@ -4083,7 +4172,8 @@ class SQLiteYobiRepository:
                   AND profile.menu_id IN ({placeholders})
                 """,
                 (
-                    country_code,
+                    spice_reference_country,
+                    presentation_locale,
                     presentation_locale,
                     country_code,
                     synthetic_release_id,
@@ -4229,6 +4319,24 @@ class SQLiteYobiRepository:
                         if synthetic is not None and synthetic["display_name"]
                         else menu.name_ko if presentation_locale == "ko" else menu.name_en
                     ),
+                    localized_source_description=(
+                        str(synthetic["localized_source_description"])
+                        if synthetic is not None
+                        and synthetic["localized_source_description"]
+                        else menu.description
+                    ),
+                    menu_localization_source_hash=(
+                        str(synthetic["menu_localization_source_hash"])
+                        if synthetic is not None
+                        and synthetic["menu_localization_source_hash"]
+                        else None
+                    ),
+                    source_description_source_hash=(
+                        str(synthetic["source_description_source_hash"])
+                        if synthetic is not None
+                        and synthetic["source_description_source_hash"]
+                        else None
+                    ),
                     synthetic_spice_level=(
                         int(synthetic["spice_level"]) if synthetic is not None else None
                     ),
@@ -4256,6 +4364,7 @@ class SQLiteYobiRepository:
                     knowledge_release_id=str(family["knowledge_release_id"]),
                     catalog_release_id=str(family["catalog_release_id"]),
                     recommendation_release_family_id=str(family["release_family_id"]),
+                    synthetic_enrichment_release_id=synthetic_release_id,
                 )
             )
         evidence_ms = int((monotonic() - evidence_started) * 1000)
@@ -4639,11 +4748,16 @@ class SQLiteYobiRepository:
                 ).fetchone()
                 synthetic_country_rows = connection.execute(
                     """
-                    SELECT country_code,spice_baseline
-                    FROM synthetic_country_profile
-                    WHERE release_id=? ORDER BY country_code
+                    SELECT profile.country_code,profile.spice_baseline,
+                           example.representative_dish
+                    FROM synthetic_country_profile profile
+                    LEFT JOIN synthetic_country_spice_example example
+                      ON example.release_id=profile.release_id
+                     AND example.country_code=profile.country_code
+                     AND example.language_code=?
+                    WHERE profile.release_id=? ORDER BY profile.country_code
                     """,
-                    (family.synthetic_enrichment_release_id,),
+                    (effective_language(locale), family.synthetic_enrichment_release_id),
                 ).fetchall()
                 synthetic_capability = connection.execute(
                     """
@@ -4742,6 +4856,10 @@ class SQLiteYobiRepository:
             {
                 "country_code": str(row["country_code"]),
                 "spice_baseline": int(row["spice_baseline"]),
+                "representative_dish": str(
+                    row["representative_dish"]
+                    or representative_dish(str(row["country_code"]), locale)
+                ),
             }
             for row in synthetic_country_rows
         ]
@@ -5963,8 +6081,10 @@ class SQLiteYobiRepository:
                 raise RuntimeError("SYNTHETIC_ENRICHMENT_UNAVAILABLE")
             requested_locale = normalize_preference_locale(str(context["preferred_language"]))
             language_code = requested_locale if requested_locale in {"ko", "ja"} else "en"
-            country_code = str(context["country_code"] or "US")
+            country_code = str(context["country_code"] or "ZZ")
             parameters: list[Any] = [
+                release_id,
+                language_code,
                 release_id,
                 language_code,
                 release_id,
@@ -5984,14 +6104,24 @@ class SQLiteYobiRepository:
                 f"""
                 SELECT menu.*,COALESCE(merchant.name_en,merchant.name_ko) merchant_name,
                        merchant.delivery_fee,merchant.eta_min,merchant.eta_max,
-                       localization.display_name,preference.preference_percent,
-                       preference.sample_size
+                       localization.display_name,
+                       localization.source_hash AS menu_localization_source_hash,
+                       description_localization.description_text
+                         AS localized_source_description,
+                       description_localization.source_hash
+                         AS source_description_source_hash,
+                       preference.preference_percent,preference.sample_size
                 FROM menu_wiki_eligibility eligibility
                 JOIN menu ON menu.menu_id=eligibility.menu_id
                 JOIN merchant ON merchant.merchant_id=menu.merchant_id
                 LEFT JOIN menu_localization localization
                   ON localization.release_id=? AND localization.menu_id=menu.menu_id
                  AND localization.language_code=? AND localization.validation_status='VALID'
+                LEFT JOIN menu_source_description_localization description_localization
+                  ON description_localization.release_id=?
+                 AND description_localization.menu_id=menu.menu_id
+                 AND description_localization.language_code=?
+                 AND description_localization.validation_status='VALID'
                 LEFT JOIN synthetic_menu_country_preference preference
                   ON preference.release_id=? AND preference.menu_id=menu.menu_id
                  AND preference.country_code=?
@@ -6057,32 +6187,9 @@ class SQLiteYobiRepository:
                 review_summary = presentation_copy.review_summary
                 evidence_ids = [str(passage["chunk_id"]) for passage in passage_rows]
                 review_ids = [str(review["review_id"]) for review in reviews]
-                source_hash = hashlib.sha256(
-                    json.dumps(
-                        {
-                            "localized_title": title,
-                            "source_description": str(row["description"] or ""),
-                            "evidence_ids": evidence_ids,
-                            "review_ids": review_ids,
-                        },
-                        ensure_ascii=False,
-                        sort_keys=True,
-                    ).encode()
-                ).hexdigest()
-                cached = connection.execute(
-                    """
-                    SELECT * FROM menu_presentation_cache
-                    WHERE release_id=? AND menu_id=? AND language_code=?
-                      AND country_code=? AND source_hash=?
-                    ORDER BY created_at DESC LIMIT 1
-                    """,
-                    (release_id, menu_id, language_code, country_code, source_hash),
-                ).fetchone()
-                if cached is not None:
-                    title = str(cached["localized_title"])
-                    short = str(cached["short_explanation"])
-                    long = str(cached["long_explanation"])
-                    review_summary = str(cached["review_summary"])
+                source_description = str(
+                    row["localized_source_description"] or row["description"] or ""
+                )
                 menu = self._menu_summary(
                     row,
                     ["More from this restaurant"],
@@ -6094,9 +6201,10 @@ class SQLiteYobiRepository:
                     MerchantMenuPresentation(
                         menu=menu,
                         localized_title=title,
+                        localized_subtitle=title,
                         yobi_short_explanation=short,
                         yobi_long_explanation=long,
-                        source_description=str(row["description"] or ""),
+                        source_description=source_description,
                         review_summary=review_summary,
                         country_preference={
                             "country_code": country_code,
@@ -6105,11 +6213,30 @@ class SQLiteYobiRepository:
                         },
                         evidence_ids=evidence_ids,
                         review_ids=review_ids,
-                        generation_model=(
-                            str(cached["model_id"])
-                            if cached is not None
-                            else "DETERMINISTIC_WIKI_FALLBACK"
-                        ),
+                        generation_model="DETERMINISTIC_GROUNDED_FALLBACK",
+                        release_id=release_id,
+                        language_code=cast(Any, language_code),
+                        evidence_map={
+                            "wiki_passages": [
+                                {
+                                    "evidence_id": str(passage["chunk_id"]),
+                                    "evidence_type": "WIKI_PASSAGE",
+                                    "content": str(passage["content"]),
+                                }
+                                for passage in passage_rows
+                            ],
+                            "menu_facts": [],
+                            "synthetic_reviews": [dict(review) for review in reviews],
+                            "source_identity": {
+                                "menu_localization_source_hash": row[
+                                    "menu_localization_source_hash"
+                                ],
+                                "source_description_source_hash": row[
+                                    "source_description_source_hash"
+                                ],
+                                "knowledge_release_id": str(context["knowledge_release_id"]),
+                            },
+                        },
                     )
                 )
         return MerchantMenuPresentationPage(
@@ -6139,7 +6266,7 @@ class SQLiteYobiRepository:
             release_id = str(context["synthetic_enrichment_release_id"])
             requested_locale = normalize_preference_locale(str(context["preferred_language"]))
             language_code = requested_locale if requested_locale in {"ko", "ja"} else "en"
-            country_code = str(context["country_code"] or "US")
+            country_code = str(context["country_code"] or "ZZ")
             source_hash = hashlib.sha256(
                 json.dumps(
                     {
@@ -6157,19 +6284,11 @@ class SQLiteYobiRepository:
             ).hexdigest()
             connection.execute(
                 """
-                INSERT INTO menu_presentation_cache(
+                INSERT OR IGNORE INTO menu_presentation_cache(
                   cache_key,release_id,menu_id,language_code,country_code,localized_title,
                   short_explanation,long_explanation,review_summary,evidence_ids_json,
                   review_ids_json,model_id,source_hash,created_at
                 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(cache_key) DO UPDATE SET
-                  localized_title=excluded.localized_title,
-                  short_explanation=excluded.short_explanation,
-                  long_explanation=excluded.long_explanation,
-                  review_summary=excluded.review_summary,
-                  evidence_ids_json=excluded.evidence_ids_json,
-                  review_ids_json=excluded.review_ids_json,model_id=excluded.model_id,
-                  source_hash=excluded.source_hash,created_at=excluded.created_at
                 """,
                 (
                     cache_key,
@@ -6186,6 +6305,165 @@ class SQLiteYobiRepository:
                     presentation.generation_model,
                     source_hash,
                     _now(),
+                ),
+            )
+
+    @staticmethod
+    def _menu_presentation_cache_entry_from_row(
+        row: sqlite3.Row,
+    ) -> MenuPresentationCacheEntry:
+        created_at = datetime.fromisoformat(str(row["created_at"]))
+        updated_at = datetime.fromisoformat(
+            str(row["updated_at"] or row["created_at"])
+        )
+        return MenuPresentationCacheEntry(
+            cache_key=str(row["cache_key"]),
+            release_id=str(row["release_id"]),
+            menu_id=str(row["menu_id"]),
+            language_code=cast(Any, str(row["language_code"])),
+            country_code=str(row["country_code"]),
+            localized_title=str(row["localized_title"]),
+            localized_subtitle=str(row["localized_subtitle"] or row["localized_title"]),
+            short_explanation=str(row["short_explanation"]),
+            long_explanation=str(row["long_explanation"]),
+            review_summary=str(row["review_summary"]),
+            evidence_ids=list(json.loads(str(row["evidence_ids_json"] or "[]"))),
+            review_ids=list(json.loads(str(row["review_ids_json"] or "[]"))),
+            evidence_map=dict(json.loads(str(row["evidence_map_json"] or "{}"))),
+            model_id=str(row["model_id"]),
+            prompt_version=str(row["prompt_version"] or "legacy"),
+            content_schema_version=str(row["content_schema_version"] or "1"),
+            source_hash=str(row["source_hash"]),
+            personalization_applied=bool(row["personalization_applied"] or 0),
+            created_at=created_at,
+            updated_at=updated_at,
+        )
+
+    def get_menu_presentation_cache(
+        self, cache_key: str
+    ) -> MenuPresentationCacheEntry | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM menu_presentation_cache WHERE cache_key=?",
+                (cache_key,),
+            ).fetchone()
+        return self._menu_presentation_cache_entry_from_row(row) if row else None
+
+    def save_menu_presentation_cache_entry(
+        self, entry: MenuPresentationCacheEntry
+    ) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO menu_presentation_cache(
+                  cache_key,release_id,menu_id,language_code,country_code,localized_title,
+                  short_explanation,long_explanation,review_summary,evidence_ids_json,
+                  review_ids_json,model_id,source_hash,created_at,localized_subtitle,
+                  prompt_version,content_schema_version,evidence_map_json,
+                  personalization_applied,updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    entry.cache_key,
+                    entry.release_id,
+                    entry.menu_id,
+                    entry.language_code,
+                    entry.country_code,
+                    entry.localized_title,
+                    entry.short_explanation,
+                    entry.long_explanation,
+                    entry.review_summary,
+                    json.dumps(entry.evidence_ids, ensure_ascii=False),
+                    json.dumps(entry.review_ids, ensure_ascii=False),
+                    entry.model_id,
+                    entry.source_hash,
+                    entry.created_at.isoformat(),
+                    entry.localized_subtitle,
+                    entry.prompt_version,
+                    entry.content_schema_version,
+                    json.dumps(entry.evidence_map, ensure_ascii=False, sort_keys=True),
+                    int(entry.personalization_applied),
+                    entry.updated_at.isoformat(),
+                ),
+            )
+
+    def acquire_menu_presentation_lease(
+        self,
+        cache_key: str,
+        owner_token: str,
+        *,
+        expires_at: datetime,
+    ) -> bool:
+        now = datetime.now(timezone.utc)
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM menu_presentation_generation_lease WHERE cache_key=?",
+                (cache_key,),
+            ).fetchone()
+            if row is None:
+                connection.execute(
+                    """
+                    INSERT INTO menu_presentation_generation_lease(
+                      cache_key,owner_token,status,expires_at,retry_after,attempt_count,
+                      error_code,created_at,updated_at
+                    ) VALUES (?,?, 'GENERATING',?,NULL,1,NULL,?,?)
+                    """,
+                    (cache_key, owner_token, expires_at.isoformat(), now.isoformat(), now.isoformat()),
+                )
+                return True
+            current_expiry = datetime.fromisoformat(str(row["expires_at"]))
+            retry_after = (
+                datetime.fromisoformat(str(row["retry_after"]))
+                if row["retry_after"]
+                else None
+            )
+            claimable = (
+                str(row["owner_token"]) == owner_token
+                or current_expiry <= now
+                or (str(row["status"]) == "FAILED" and (retry_after is None or retry_after <= now))
+            )
+            if not claimable:
+                return False
+            connection.execute(
+                """
+                UPDATE menu_presentation_generation_lease
+                SET owner_token=?,status='GENERATING',expires_at=?,retry_after=NULL,
+                    attempt_count=attempt_count+1,error_code=NULL,updated_at=?
+                WHERE cache_key=?
+                """,
+                (owner_token, expires_at.isoformat(), now.isoformat(), cache_key),
+            )
+            return True
+
+    def finish_menu_presentation_lease(
+        self,
+        cache_key: str,
+        owner_token: str,
+        *,
+        error_code: str | None = None,
+    ) -> None:
+        with self._connection() as connection:
+            if error_code is None:
+                connection.execute(
+                    "DELETE FROM menu_presentation_generation_lease "
+                    "WHERE cache_key=? AND owner_token=?",
+                    (cache_key, owner_token),
+                )
+                return
+            now = datetime.now(timezone.utc)
+            connection.execute(
+                """
+                UPDATE menu_presentation_generation_lease
+                SET status='FAILED',error_code=?,retry_after=?,updated_at=?
+                WHERE cache_key=? AND owner_token=?
+                """,
+                (
+                    error_code[:160],
+                    (now + timedelta(seconds=1)).isoformat(),
+                    now.isoformat(),
+                    cache_key,
+                    owner_token,
                 ),
             )
 
