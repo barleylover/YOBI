@@ -1,0 +1,505 @@
+from __future__ import annotations
+
+import re
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any
+
+from app.domain.preference_catalog import SUPPORTED_LOCALES, normalize_preference_locale
+
+
+@dataclass(frozen=True)
+class RecommendationFallbackCopy:
+    comparison_summary: str
+    price_difference: str
+    general_reference: str
+    general_reference_unavailable: str
+    ingredients_unverified: str
+    spice_reviewed: str
+    spice_unavailable: str
+    serves: str
+    serves_unavailable: str
+    best_for: str
+    dietary_warning: str
+    search_selection_reason: str
+    criteria_default: str
+    max_spice: str
+    halal_only: str
+    vegan: str
+
+
+@dataclass(frozen=True)
+class DeterministicPresentationCopy:
+    short_explanation: str
+    long_explanation: str
+    review_summary: str
+
+
+_COPY: dict[str, RecommendationFallbackCopy] = {
+    "en": RecommendationFallbackCopy(
+        "Compared with current menu facts and reviewed general food references. The recommendation order is unchanged.",
+        "The current listed price is ₩{price:,}.",
+        "General food reference: {passage}",
+        "No reviewed general taste or texture reference is available.",
+        "Restaurant-specific ingredients are not verified.",
+        "The reviewed menu spice level is {level} out of 5.",
+        "No reviewed menu spice level is available.",
+        "The listed serving range is {minimum}–{maximum} people.",
+        "No verified serving context is available.",
+        "A close fit within this server-ranked recommendation batch.",
+        "Restaurant ingredients, certification, and cross-contact are unverified unless shown in current server facts.",
+        "The closest server-ranked match to your selected preferences.",
+        "Selected meal preferences",
+        "Maximum spice level {level} out of 5",
+        "Formally halal-certified only",
+        "Vegan filter",
+    ),
+    "ko": RecommendationFallbackCopy(
+        "현재 메뉴 정보와 검토된 일반 음식 자료만으로 비교했습니다. 추천 순서는 그대로입니다.",
+        "현재 표시 가격은 ₩{price:,}입니다.",
+        "일반 음식 자료: {passage}",
+        "검토된 일반 맛·식감 자료가 없습니다.",
+        "식당별 재료 정보는 확인되지 않았습니다.",
+        "검토된 메뉴 매운맛 단계는 5단계 중 {level}단계입니다.",
+        "검토된 메뉴 매운맛 단계가 없습니다.",
+        "표기된 인분은 {minimum}~{maximum}인분입니다.",
+        "확인된 인분 정보가 없습니다.",
+        "서버가 정렬한 이번 추천 묶음에서 선호 조건에 잘 맞습니다.",
+        "현재 서버 정보에 명시되지 않은 식당별 재료, 인증, 교차접촉 가능성은 확인되지 않았습니다.",
+        "선택한 선호 조건에 가장 가까운 서버 정렬 결과입니다.",
+        "선택한 식사 선호 조건",
+        "매운맛 최대 {level}/5",
+        "공식 할랄 인증 메뉴만",
+        "비건 조건",
+    ),
+    "ja": RecommendationFallbackCopy(
+        "現在のメニュー情報と確認済みの一般的な料理資料だけで比較しています。おすすめ順は変えていません。",
+        "現在の表示価格は₩{price:,}です。",
+        "一般的な料理資料：{passage}",
+        "確認済みの一般的な味・食感資料はありません。",
+        "店舗ごとの食材情報は確認されていません。",
+        "確認済みの辛さは5段階中{level}です。",
+        "確認済みの辛さ情報はありません。",
+        "表示されている量は{minimum}～{maximum}人前です。",
+        "確認済みの人数情報はありません。",
+        "サーバーが並べた今回の候補の中で条件に近いメニューです。",
+        "店舗ごとの食材、認証、交差接触は、現在のサーバー情報に明記されていない限り未確認です。",
+        "選択した条件に最も近いサーバー順位の候補です。",
+        "選択した食事の好み",
+        "辛さは最大{level}/5",
+        "正式なハラール認証のみ",
+        "ヴィーガン条件",
+    ),
+    "zh-CN": RecommendationFallbackCopy(
+        "仅根据当前菜单信息和已审核的一般食物资料进行比较，推荐顺序保持不变。",
+        "当前标价为₩{price:,}。",
+        "一般食物资料：{passage}",
+        "暂无已审核的一般口味或口感资料。",
+        "餐厅具体食材尚未核实。",
+        "已审核的菜单辣度为5级中的{level}级。",
+        "暂无已审核的菜单辣度。",
+        "标示分量为{minimum}至{maximum}人份。",
+        "暂无已核实的分量信息。",
+        "在本次服务器排序的推荐中较符合您的条件。",
+        "除非当前服务器信息明确标示，否则餐厅食材、认证和交叉接触情况均未核实。",
+        "这是最接近您所选偏好的服务器排序结果。",
+        "已选择的用餐偏好",
+        "最高辣度{level}/5",
+        "仅限正式清真认证",
+        "纯素条件",
+    ),
+    "zh-TW": RecommendationFallbackCopy(
+        "僅根據目前菜單資訊和已審核的一般食物資料進行比較，推薦順序維持不變。",
+        "目前標價為₩{price:,}。",
+        "一般食物資料：{passage}",
+        "暫無已審核的一般口味或口感資料。",
+        "餐廳特定食材尚未核實。",
+        "已審核的菜單辣度為5級中的{level}級。",
+        "暫無已審核的菜單辣度。",
+        "標示份量為{minimum}至{maximum}人份。",
+        "暫無已核實的份量資訊。",
+        "在本次伺服器排序的推薦中較符合您的條件。",
+        "除非目前伺服器資訊明確標示，否則餐廳食材、認證與交叉接觸情況均未核實。",
+        "這是最接近您所選偏好的伺服器排序結果。",
+        "已選擇的用餐偏好",
+        "最高辣度{level}/5",
+        "僅限正式清真認證",
+        "純素條件",
+    ),
+    "es": RecommendationFallbackCopy(
+        "La comparación usa datos actuales del menú y referencias generales revisadas. El orden recomendado no cambia.",
+        "El precio indicado actualmente es ₩{price:,}.",
+        "Referencia general del plato: {passage}",
+        "No hay una referencia revisada sobre sabor o textura.",
+        "Los ingredientes específicos del restaurante no están verificados.",
+        "El picante revisado del menú es {level} de 5.",
+        "No hay un nivel de picante revisado para este menú.",
+        "La cantidad indicada es para {minimum}–{maximum} personas.",
+        "No hay información verificada sobre las porciones.",
+        "Una opción cercana dentro de este lote ordenado por el servidor.",
+        "Los ingredientes, la certificación y el contacto cruzado no están verificados salvo que figuren en los datos actuales.",
+        "El resultado ordenado por el servidor más cercano a tus preferencias.",
+        "Preferencias de comida seleccionadas",
+        "Picante máximo {level} de 5",
+        "Solo con certificación halal formal",
+        "Filtro vegano",
+    ),
+    "fr": RecommendationFallbackCopy(
+        "Comparaison fondée sur les données actuelles du menu et des références générales vérifiées. L’ordre reste inchangé.",
+        "Le prix actuellement affiché est de ₩{price:,}.",
+        "Référence générale du plat : {passage}",
+        "Aucune référence vérifiée sur le goût ou la texture n’est disponible.",
+        "Les ingrédients propres au restaurant ne sont pas vérifiés.",
+        "Le niveau de piquant vérifié est de {level} sur 5.",
+        "Aucun niveau de piquant vérifié n’est disponible.",
+        "La portion indiquée convient à {minimum}–{maximum} personnes.",
+        "Aucune information vérifiée sur les portions n’est disponible.",
+        "Un choix proche dans cette sélection classée par le serveur.",
+        "Les ingrédients, la certification et les contacts croisés ne sont pas vérifiés sauf indication dans les données actuelles.",
+        "Le résultat classé par le serveur le plus proche de vos préférences.",
+        "Préférences de repas sélectionnées",
+        "Piquant maximal {level} sur 5",
+        "Certification halal officielle uniquement",
+        "Filtre végétalien",
+    ),
+    "de": RecommendationFallbackCopy(
+        "Verglichen anhand aktueller Menüdaten und geprüfter allgemeiner Speiseinformationen. Die Reihenfolge bleibt unverändert.",
+        "Der aktuell angegebene Preis beträgt ₩{price:,}.",
+        "Allgemeine Speiseinformation: {passage}",
+        "Es gibt keine geprüfte allgemeine Angabe zu Geschmack oder Textur.",
+        "Restaurantspezifische Zutaten sind nicht verifiziert.",
+        "Die geprüfte Schärfe beträgt {level} von 5.",
+        "Für dieses Menü ist keine geprüfte Schärfe verfügbar.",
+        "Die angegebene Portion reicht für {minimum}–{maximum} Personen.",
+        "Es gibt keine verifizierte Portionsangabe.",
+        "Eine passende Wahl in dieser serverseitig sortierten Auswahl.",
+        "Zutaten, Zertifizierung und Kreuzkontakt sind nur verifiziert, wenn sie in den aktuellen Daten ausdrücklich stehen.",
+        "Das serverseitig sortierte Ergebnis, das Ihren Präferenzen am nächsten kommt.",
+        "Ausgewählte Essenspräferenzen",
+        "Maximale Schärfe {level} von 5",
+        "Nur mit offizieller Halal-Zertifizierung",
+        "Veganer Filter",
+    ),
+    "it": RecommendationFallbackCopy(
+        "Confronto basato sui dati attuali del menu e su riferimenti generali verificati. L’ordine resta invariato.",
+        "Il prezzo attualmente indicato è ₩{price:,}.",
+        "Riferimento generale sul piatto: {passage}",
+        "Non è disponibile un riferimento verificato su gusto o consistenza.",
+        "Gli ingredienti specifici del ristorante non sono verificati.",
+        "Il livello di piccantezza verificato è {level} su 5.",
+        "Non è disponibile un livello di piccantezza verificato.",
+        "La porzione indicata è per {minimum}–{maximum} persone.",
+        "Non sono disponibili dati verificati sulle porzioni.",
+        "Una scelta vicina alle preferenze in questo gruppo ordinato dal server.",
+        "Ingredienti, certificazione e contaminazione crociata non sono verificati salvo indicazione nei dati attuali.",
+        "Il risultato ordinato dal server più vicino alle preferenze selezionate.",
+        "Preferenze del pasto selezionate",
+        "Piccantezza massima {level} su 5",
+        "Solo certificazione halal formale",
+        "Filtro vegano",
+    ),
+    "pt": RecommendationFallbackCopy(
+        "Comparação baseada nos dados atuais do menu e em referências gerais revisadas. A ordem permanece igual.",
+        "O preço indicado atualmente é ₩{price:,}.",
+        "Referência geral do prato: {passage}",
+        "Não há referência revisada sobre sabor ou textura.",
+        "Os ingredientes específicos do restaurante não foram verificados.",
+        "O nível de picância revisado é {level} de 5.",
+        "Não há nível de picância revisado para este menu.",
+        "A porção indicada serve {minimum}–{maximum} pessoas.",
+        "Não há informação verificada sobre porções.",
+        "Uma opção próxima neste conjunto ordenado pelo servidor.",
+        "Ingredientes, certificação e contato cruzado não foram verificados, salvo quando constarem nos dados atuais.",
+        "O resultado ordenado pelo servidor mais próximo das preferências escolhidas.",
+        "Preferências de refeição selecionadas",
+        "Picância máxima {level} de 5",
+        "Somente certificação halal formal",
+        "Filtro vegano",
+    ),
+    "th": RecommendationFallbackCopy(
+        "เปรียบเทียบจากข้อมูลเมนูปัจจุบันและข้อมูลอาหารทั่วไปที่ตรวจทานแล้ว โดยไม่เปลี่ยนลำดับคำแนะนำ",
+        "ราคาที่แสดงปัจจุบันคือ ₩{price:,}",
+        "ข้อมูลอาหารทั่วไป: {passage}",
+        "ไม่มีข้อมูลรสชาติหรือเนื้อสัมผัสทั่วไปที่ตรวจทานแล้ว",
+        "ยังไม่ได้ตรวจสอบส่วนผสมเฉพาะของร้านอาหาร",
+        "ระดับความเผ็ดที่ตรวจทานแล้วคือ {level} จาก 5",
+        "ไม่มีระดับความเผ็ดของเมนูที่ตรวจทานแล้ว",
+        "ปริมาณที่ระบุเหมาะสำหรับ {minimum}–{maximum} คน",
+        "ไม่มีข้อมูลจำนวนเสิร์ฟที่ตรวจสอบแล้ว",
+        "เป็นตัวเลือกที่ใกล้เคียงในชุดคำแนะนำที่เซิร์ฟเวอร์จัดลำดับ",
+        "ส่วนผสม การรับรอง และการสัมผัสข้ามยังไม่ได้ตรวจสอบ เว้นแต่ระบุไว้ในข้อมูลเซิร์ฟเวอร์ปัจจุบัน",
+        "ผลลัพธ์ที่เซิร์ฟเวอร์จัดลำดับซึ่งใกล้กับความต้องการที่เลือกมากที่สุด",
+        "ความต้องการอาหารที่เลือก",
+        "ระดับความเผ็ดสูงสุด {level} จาก 5",
+        "เฉพาะที่มีการรับรองฮาลาลอย่างเป็นทางการ",
+        "ตัวกรองวีแกน",
+    ),
+    "vi": RecommendationFallbackCopy(
+        "So sánh dựa trên dữ liệu thực đơn hiện tại và tài liệu món ăn chung đã được duyệt. Thứ tự đề xuất không đổi.",
+        "Giá hiện được niêm yết là ₩{price:,}.",
+        "Tài liệu chung về món ăn: {passage}",
+        "Không có tài liệu đã duyệt về hương vị hoặc kết cấu.",
+        "Nguyên liệu riêng của nhà hàng chưa được xác minh.",
+        "Độ cay đã duyệt của món là {level} trên 5.",
+        "Không có mức độ cay đã được duyệt.",
+        "Khẩu phần được ghi là cho {minimum}–{maximum} người.",
+        "Không có thông tin khẩu phần đã xác minh.",
+        "Một lựa chọn phù hợp trong nhóm do máy chủ xếp hạng.",
+        "Nguyên liệu, chứng nhận và nguy cơ tiếp xúc chéo chưa được xác minh nếu không có trong dữ liệu hiện tại.",
+        "Kết quả do máy chủ xếp hạng gần nhất với lựa chọn của bạn.",
+        "Sở thích bữa ăn đã chọn",
+        "Độ cay tối đa {level} trên 5",
+        "Chỉ chứng nhận halal chính thức",
+        "Bộ lọc thuần chay",
+    ),
+    "id": RecommendationFallbackCopy(
+        "Perbandingan memakai fakta menu saat ini dan referensi makanan umum yang telah ditinjau. Urutan rekomendasi tidak berubah.",
+        "Harga yang tercantum saat ini adalah ₩{price:,}.",
+        "Referensi makanan umum: {passage}",
+        "Tidak ada referensi rasa atau tekstur umum yang telah ditinjau.",
+        "Bahan khusus restoran belum diverifikasi.",
+        "Tingkat pedas yang telah ditinjau adalah {level} dari 5.",
+        "Tidak ada tingkat pedas menu yang telah ditinjau.",
+        "Porsi yang tercantum untuk {minimum}–{maximum} orang.",
+        "Tidak ada informasi porsi yang telah diverifikasi.",
+        "Pilihan yang mendekati preferensi dalam daftar yang diurutkan server.",
+        "Bahan, sertifikasi, dan kontak silang belum diverifikasi kecuali tercantum dalam fakta server saat ini.",
+        "Hasil urutan server yang paling dekat dengan preferensi pilihan Anda.",
+        "Preferensi makanan yang dipilih",
+        "Tingkat pedas maksimum {level} dari 5",
+        "Hanya sertifikasi halal resmi",
+        "Filter vegan",
+    ),
+    "ar": RecommendationFallbackCopy(
+        "تمت المقارنة باستخدام بيانات القائمة الحالية ومراجع الطعام العامة التي تمت مراجعتها. لم يتغير ترتيب التوصيات.",
+        "السعر المعروض حاليًا هو ₩{price:,}.",
+        "مرجع عام للطعام: {passage}",
+        "لا يتوفر مرجع مُراجع للطعم أو القوام.",
+        "لم يتم التحقق من المكونات الخاصة بالمطعم.",
+        "درجة الحرارة الحارة التي تمت مراجعتها هي {level} من 5.",
+        "لا تتوفر درجة حدة مُراجعة لهذه القائمة.",
+        "الكمية المدرجة تكفي من {minimum} إلى {maximum} أشخاص.",
+        "لا تتوفر معلومات مؤكدة عن حجم الحصة.",
+        "خيار قريب من تفضيلاتك ضمن هذه المجموعة المرتبة من الخادم.",
+        "لم يتم التحقق من مكونات المطعم أو الشهادة أو التلامس المتبادل ما لم تظهر في بيانات الخادم الحالية.",
+        "النتيجة المرتبة من الخادم الأقرب إلى تفضيلاتك المحددة.",
+        "تفضيلات الوجبة المحددة",
+        "الحد الأقصى للحدة {level} من 5",
+        "الحاصل على شهادة حلال رسمية فقط",
+        "مرشح نباتي صرف",
+    ),
+    "hi": RecommendationFallbackCopy(
+        "तुलना मौजूदा मेनू तथ्यों और समीक्षा किए गए सामान्य भोजन संदर्भों पर आधारित है। सुझाव क्रम नहीं बदला है।",
+        "वर्तमान सूचीबद्ध कीमत ₩{price:,} है।",
+        "सामान्य भोजन संदर्भ: {passage}",
+        "स्वाद या बनावट का समीक्षा किया हुआ सामान्य संदर्भ उपलब्ध नहीं है।",
+        "रेस्तरां-विशिष्ट सामग्री सत्यापित नहीं है।",
+        "समीक्षा किया गया तीखापन 5 में से {level} है।",
+        "मेनू का समीक्षा किया हुआ तीखापन उपलब्ध नहीं है।",
+        "सूचीबद्ध मात्रा {minimum}–{maximum} लोगों के लिए है।",
+        "सर्विंग की सत्यापित जानकारी उपलब्ध नहीं है।",
+        "सर्वर द्वारा क्रमित इस समूह में आपकी पसंद के करीब विकल्प।",
+        "सामग्री, प्रमाणन और क्रॉस-कॉन्टैक्ट तभी सत्यापित माने जाएँ जब वे मौजूदा सर्वर तथ्यों में दिखें।",
+        "आपकी चुनी पसंद के सबसे करीब सर्वर-क्रमित परिणाम।",
+        "चुनी हुई भोजन प्राथमिकताएँ",
+        "अधिकतम तीखापन 5 में से {level}",
+        "केवल औपचारिक हलाल प्रमाणन",
+        "वीगन फ़िल्टर",
+    ),
+    "ru": RecommendationFallbackCopy(
+        "Сравнение основано на текущих данных меню и проверенных общих материалах о блюдах. Порядок рекомендаций не изменён.",
+        "Текущая указанная цена — ₩{price:,}.",
+        "Общая справка о блюде: {passage}",
+        "Проверенная общая справка о вкусе или текстуре отсутствует.",
+        "Ингредиенты конкретного ресторана не проверены.",
+        "Проверенный уровень остроты — {level} из 5.",
+        "Проверенный уровень остроты меню отсутствует.",
+        "Указанная порция рассчитана на {minimum}–{maximum} человек.",
+        "Проверенная информация о порции отсутствует.",
+        "Подходящий вариант в этой подборке, отсортированной сервером.",
+        "Ингредиенты, сертификация и перекрёстный контакт не проверены, если они не указаны в текущих данных сервера.",
+        "Ближайший к выбранным предпочтениям результат серверной сортировки.",
+        "Выбранные предпочтения в еде",
+        "Максимальная острота {level} из 5",
+        "Только официальная халяль-сертификация",
+        "Веганский фильтр",
+    ),
+}
+
+
+def localized_recommendation_fallback_copy(value: str) -> RecommendationFallbackCopy:
+    return _COPY[normalize_preference_locale(value)]
+
+
+_SENTENCE_PATTERN = re.compile(r"[^.!?。！？]+[.!?。！？]?")
+_NON_ENGLISH_SCRIPT_PATTERN = re.compile(r"[가-힣぀-ヿ㐀-鿿]")
+_REVIEW_TOPIC_LABELS: dict[str, dict[str, str]] = {
+    "en": {
+        "TASTE": "taste",
+        "TEXTURE": "texture",
+        "VALUE": "value and portion",
+        "PACKAGING": "packaging",
+        "CAVEAT": "a mild caveat",
+    },
+    "ko": {
+        "TASTE": "맛",
+        "TEXTURE": "식감",
+        "VALUE": "가격·양",
+        "PACKAGING": "포장",
+        "CAVEAT": "가벼운 아쉬움",
+    },
+    "ja": {
+        "TASTE": "味",
+        "TEXTURE": "食感",
+        "VALUE": "価格とボリューム",
+        "PACKAGING": "包装",
+        "CAVEAT": "軽い気になる点",
+    },
+}
+
+
+def _presentation_locale(value: str) -> str:
+    normalized = normalize_preference_locale(value)
+    return normalized if normalized in {"ko", "ja"} else "en"
+
+
+def _sentences(value: str, *, locale: str) -> list[str]:
+    terminal = "。" if locale in {"ko", "ja"} else "."
+    sentences: list[str] = []
+    for match in _SENTENCE_PATTERN.findall(" ".join(value.split())):
+        sentence = match.strip()
+        if not sentence:
+            continue
+        if sentence[-1] not in ".!?。！？":
+            sentence += terminal
+        sentences.append(sentence)
+    return sentences
+
+
+def _join_labels(labels: Sequence[str], *, locale: str) -> str:
+    if locale == "en":
+        if len(labels) == 1:
+            return labels[0]
+        if len(labels) == 2:
+            return f"{labels[0]} and {labels[1]}"
+        return f"{', '.join(labels[:-1])}, and {labels[-1]}"
+    return "、".join(labels)
+
+
+def deterministic_presentation_copy(
+    value: str,
+    *,
+    localized_title: str,
+    wiki_passages: Sequence[str],
+    reviews: Sequence[Mapping[str, Any]],
+) -> DeterministicPresentationCopy:
+    """Build locale-safe, schema-valid copy when structured generation is unavailable."""
+
+    locale = _presentation_locale(value)
+    if locale == "en":
+        grounded_text = " ".join(str(passage).strip() for passage in wiki_passages).strip()
+        grounded_sentences = (
+            []
+            if _NON_ENGLISH_SCRIPT_PATTERN.search(grounded_text)
+            else _sentences(grounded_text, locale=locale)
+        )
+        if not grounded_sentences:
+            grounded_sentences = [
+                f"{localized_title} is introduced through the key characteristics "
+                "confirmed in its linked food reference."
+            ]
+        short_sentences = grounded_sentences[:2]
+        long_sentences = grounded_sentences[:4]
+        supporting_sentences = (
+            "This overview stays within the available reference instead of adding "
+            "unverified details.",
+            "The restaurant's original wording is shown separately under YOGIYO.",
+            "It is arranged to help first-time visitors recognize the dish before ordering.",
+        )
+    elif locale == "ko":
+        short_sentences = [
+            f"연결된 음식 자료를 바탕으로 {localized_title}의 핵심 특징을 쉽게 정리했습니다."
+        ]
+        long_sentences = list(short_sentences)
+        supporting_sentences = (
+            "확인된 내용 밖의 재료나 맛을 추가로 추정하지 않았습니다.",
+            "매장이 제공한 원문 설명은 YOGIYO 영역에서 별도로 확인할 수 있습니다.",
+            "처음 접하는 사람도 주문 전에 음식을 쉽게 알아볼 수 있도록 구성했습니다.",
+        )
+    else:
+        short_sentences = [
+            f"{localized_title}は、関連する料理資料で確認できる特徴をわかりやすくまとめた"
+            "メニューです。"
+        ]
+        long_sentences = list(short_sentences)
+        supporting_sentences = (
+            "確認できる内容の範囲を超えて、食材や味を推測していません。",
+            "店舗の原文説明は、YOGIYO欄で別に確認できます。",
+            "初めての方でも、注文前に料理をイメージしやすいように構成しています。",
+        )
+
+    for sentence in supporting_sentences:
+        if len(long_sentences) >= 3:
+            break
+        long_sentences.append(sentence)
+
+    topics: list[str] = []
+    ratings: list[float] = []
+    labels = _REVIEW_TOPIC_LABELS[locale]
+    for review in reviews:
+        topic = str(review.get("topic") or "").upper()
+        if topic in labels and topic not in topics:
+            topics.append(topic)
+        raw_rating = review.get("rating")
+        if not isinstance(raw_rating, (int, float, str)):
+            continue
+        try:
+            rating = float(raw_rating)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= rating <= 5:
+            ratings.append(rating)
+
+    if topics:
+        topic_text = _join_labels([labels[topic] for topic in topics], locale=locale)
+        average = sum(ratings) / len(ratings) if ratings else None
+        if locale == "en":
+            first_review_sentence = f"The available review snippets cover {topic_text}."
+            second_review_sentence = (
+                f"Their average rating is {average:.1f} out of 5."
+                if average is not None
+                else "No consistent numeric rating is available for those snippets."
+            )
+        elif locale == "ko":
+            first_review_sentence = f"제공된 리뷰 조각에서 확인되는 주제는 {topic_text}입니다."
+            second_review_sentence = (
+                f"평균 평점은 5점 만점에 {average:.1f}점입니다."
+                if average is not None
+                else "이 리뷰 조각에서 일관된 숫자 평점은 확인되지 않습니다."
+            )
+        else:
+            first_review_sentence = f"提供されたレビューの抜粋は、{topic_text}に触れています。"
+            second_review_sentence = (
+                f"平均評価は5点満点中{average:.1f}点です。"
+                if average is not None
+                else "これらの抜粋には、一貫した数値評価がありません。"
+            )
+    elif locale == "en":
+        first_review_sentence = "There are not enough review snippets to summarize yet."
+        second_review_sentence = "Please check the restaurant's current reviews before ordering."
+    elif locale == "ko":
+        first_review_sentence = "아직 요약할 만한 리뷰 조각이 충분하지 않습니다."
+        second_review_sentence = "주문 전에 매장의 최신 리뷰를 확인해 주세요."
+    else:
+        first_review_sentence = "現時点では、要約できるレビューの抜粋が十分ではありません。"
+        second_review_sentence = "注文前に店舗の最新レビューをご確認ください。"
+
+    return DeterministicPresentationCopy(
+        short_explanation=" ".join(short_sentences),
+        long_explanation=" ".join(long_sentences[:5]),
+        review_summary=f"{first_review_sentence} {second_review_sentence}",
+    )
+
+
+if set(_COPY) != set(SUPPORTED_LOCALES):
+    raise RuntimeError("RECOMMENDATION_FALLBACK_LOCALE_COVERAGE_MISMATCH")

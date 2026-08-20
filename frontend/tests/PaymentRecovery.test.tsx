@@ -1,0 +1,133 @@
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import App from "../src/App";
+import { api } from "../src/lib/api";
+import { HandoffPage } from "../src/routes/HandoffPage";
+import { useSessionStore } from "../src/stores/session";
+import type { CartPreview, Profile, Session } from "../src/types";
+
+const profile: Profile = {
+  profile_id: "profile_handoff_test",
+  preferred_language: "English",
+  nationality: "United States",
+  religion_selection: "Prefer not to say",
+  spice_tolerance: 1,
+  dietary_rules: [],
+  favorite_foods: [],
+  age_band: "Prefer not to say",
+  consent_demo_data: true,
+  remember_profile: false,
+};
+
+const session: Session = {
+  session_id: "session_handoff_test",
+  profile_id: profile.profile_id,
+  state: "ORDER_BUILDING",
+  state_version: 4,
+};
+
+const cart: CartPreview = {
+  cart_id: "cart_handoff_test",
+  version: 2,
+  items: [{
+    cart_item_id: "cart_item_1",
+    menu_id: "menu_1",
+    menu_name: "YOBI gimbap",
+    menu_name_ko: "요비 김밥",
+    quantity: 1,
+    unit_price: 9000,
+    options: [],
+    line_total: 9000,
+  }],
+  subtotal: 9000,
+  delivery_fee: 2000,
+  total_price: 11000,
+  missing_slots: [],
+  dietary_warnings: [],
+  minimum_order_amount: 0,
+  minimum_order_shortfall: 0,
+  ready_to_checkout: true,
+  confirmed: true,
+};
+
+describe("Yogiyo handoff", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    sessionStorage.clear();
+    useSessionStore.getState().clear();
+  });
+
+  it("uses one Yogiyo CTA without payment or order creation", async () => {
+    useSessionStore.setState({ profile, session, addressRefId: "address_handoff_test" });
+    vi.spyOn(api, "getCart").mockResolvedValue(cart);
+    const createCheckout = vi.spyOn(api, "createCheckout");
+    const paymentSuccess = vi.spyOn(api, "paymentSuccess");
+
+    render(
+      <MemoryRouter initialEntries={["/handoff"]}>
+        <Routes>
+          <Route path="/handoff" element={<HandoffPage />} />
+          <Route path={`/chat/${session.session_id}`} element={<div>YOBI chat</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Ready to order" })).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/demo|mock|synthetic/i);
+    fireEvent.click(screen.getByRole("button", { name: /Open in Yogiyo/ }));
+    expect(await screen.findByRole("heading", { name: "Continue your order in Yogiyo" })).toBeInTheDocument();
+    expect(screen.getByText("Review the basket, then continue to Yogiyo.")).toBeInTheDocument();
+    expect(createCheckout).not.toHaveBeenCalled();
+    expect(paymentSuccess).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /^Pay/ })).not.toBeInTheDocument();
+    expect(document.querySelector(".post-address-nav")).not.toBeInTheDocument();
+  });
+
+  it("redirects legacy payment URLs to the same handoff without a payment screen", async () => {
+    useSessionStore.setState({ profile, session, addressRefId: "address_handoff_test" });
+    vi.spyOn(api, "getCart").mockResolvedValue(cart);
+
+    render(
+      <MemoryRouter initialEntries={["/pay/legacy-checkout"]}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Ready to order" })).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/demo|mock|synthetic/i);
+  });
+
+  it("keeps localized menu and option names on the Japanese handoff", async () => {
+    const japaneseProfile = { ...profile, preferred_language: "日本語" as const, nationality: "Japan" };
+    const localizedCart: CartPreview = {
+      ...cart,
+      items: [{
+        ...cart.items[0],
+        display_name: "YOBIキンパ",
+        options: [{
+          option_item_id: "option_1",
+          name_en: "No pickles",
+          name_ko: "단무지 제외",
+          display_name: "たくあん抜き",
+          price_delta: 0,
+        }],
+      }],
+    };
+    useSessionStore.setState({ profile: japaneseProfile, session, addressRefId: "address_handoff_test" });
+    vi.spyOn(api, "getCart").mockResolvedValue(localizedCart);
+
+    render(
+      <MemoryRouter initialEntries={["/handoff"]}>
+        <Routes>
+          <Route path="/handoff" element={<HandoffPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect((await screen.findAllByText(/YOBIキンパ/)).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("たくあん抜き")).toBeInTheDocument();
+    expect(screen.queryByText("요비 김밥")).not.toBeInTheDocument();
+  });
+});

@@ -1,0 +1,2 @@
+"""YOBI backend application."""
+
