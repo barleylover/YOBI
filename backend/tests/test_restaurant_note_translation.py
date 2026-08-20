@@ -15,7 +15,10 @@ from app.genai.contracts import (
     GenAIServingMode,
     ProviderCapabilities,
 )
-from app.services.restaurant_note_translation import RestaurantNoteTranslationService
+from app.services.restaurant_note_translation import (
+    _TRANSLATION_SCHEMA,
+    RestaurantNoteTranslationService,
+)
 
 
 class PlannedProvider:
@@ -38,11 +41,13 @@ class PlannedProvider:
     def __init__(self, plan: dict[str, Any]) -> None:
         self.plan = plan
         self.calls: list[str] = []
+        self.requests: list[dict[str, Any]] = []
 
     def supports_model(self, model: str) -> bool:
         return model in {
             "google.gemini-2.5-flash-lite",
             "google.gemini-2.5-flash",
+            "openai.gpt-oss-20b",
             "openai.gpt-oss-120b",
         }
 
@@ -50,8 +55,8 @@ class PlannedProvider:
         return {"model": model, **kwargs}
 
     def create_response(self, model: str, **kwargs: Any) -> Any:
-        del kwargs
         self.calls.append(model)
+        self.requests.append(kwargs)
         result = self.plan[model]
         if isinstance(result, BaseException):
             raise result
@@ -158,6 +163,9 @@ def test_failed_note_translation_blocks_nonempty_note_but_allows_note_free_cart(
             "google.gemini-2.5-flash": GenAIProviderError(
                 GenAIErrorCode.PROVIDER_UNAVAILABLE, retryable=True
             ),
+            "openai.gpt-oss-20b": GenAIProviderError(
+                GenAIErrorCode.PROVIDER_UNAVAILABLE, retryable=True
+            ),
             "openai.gpt-oss-120b": GenAIProviderError(
                 GenAIErrorCode.PROVIDER_UNAVAILABLE, retryable=True
             ),
@@ -173,6 +181,7 @@ def test_failed_note_translation_blocks_nonempty_note_but_allows_note_free_cart(
     assert provider.calls == [
         "google.gemini-2.5-flash-lite",
         "google.gemini-2.5-flash",
+        "openai.gpt-oss-20b",
         "openai.gpt-oss-120b",
     ]
     with pytest.raises(ValueError, match="RESTAURANT_NOTE_TRANSLATION_REQUIRED"):
@@ -216,6 +225,59 @@ def test_invalid_fenced_response_advances_to_next_model(
 
     assert translated.status == "SUCCEEDED"
     assert translated.model_id == "google.gemini-2.5-flash"
+
+
+def test_non_structured_provider_receives_explicit_translation_contract(
+    repository: SQLiteYobiRepository,
+) -> None:
+    session_id = _session(repository)
+    provider = PlannedProvider({"google.gemini-2.5-flash-lite": _payload()})
+    provider.capabilities = provider.capabilities.model_copy(
+        update={"structured_output": False}
+    )
+
+    translated = RestaurantNoteTranslationService(
+        repository, Settings(), provider=provider
+    ).translate(
+        session_id,
+        RestaurantNoteTranslationInput(
+            source_text="No onions, please.", source_language="en"
+        ),
+    )
+
+    assert translated.status == "SUCCEEDED"
+    content = json.loads(provider.requests[0]["input"][0]["content"])
+    assert content["response_contract"] == _TRANSLATION_SCHEMA
+
+
+def test_non_korean_translation_is_rejected_and_20b_can_recover(
+    repository: SQLiteYobiRepository,
+) -> None:
+    session_id = _session(repository)
+    provider = PlannedProvider(
+        {
+            "google.gemini-2.5-flash-lite": {
+                "korean_text": "No onions, please.",
+                "back_translation": "No onions, please.",
+            },
+            "google.gemini-2.5-flash": GenAIProviderError(
+                GenAIErrorCode.PROVIDER_UNAVAILABLE, retryable=True
+            ),
+            "openai.gpt-oss-20b": _payload(),
+        }
+    )
+
+    translated = RestaurantNoteTranslationService(
+        repository, Settings(), provider=provider
+    ).translate(
+        session_id,
+        RestaurantNoteTranslationInput(
+            source_text="No onions, please.", source_language="en"
+        ),
+    )
+
+    assert translated.status == "SUCCEEDED"
+    assert translated.model_id == "openai.gpt-oss-20b"
 
 
 def test_unsupported_configured_model_advances_to_a_working_model(

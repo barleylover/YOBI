@@ -77,24 +77,34 @@ class RestaurantNoteTranslationService:
                 if model.strip()
             )
         )
-        if not models:
-            models = [self.settings.restaurant_note_model]
+        models = list(
+            dict.fromkeys(
+                [
+                    *models,
+                    self.settings.restaurant_note_model.strip(),
+                    self.settings.oci_genai_fallback_model.strip(),
+                ]
+            )
+        )
+        models = [model for model in models if model]
+        input_payload: dict[str, Any] = {
+            "source_language": data.source_language,
+            "source_text": data.source_text,
+        }
+        if not self.provider.capabilities.structured_output:
+            input_payload["response_contract"] = _TRANSLATION_SCHEMA
         request: dict[str, Any] = {
             "instructions": (
                 "Translate the visitor's restaurant note into natural, polite Korean. "
                 "Preserve names, quantities, negation, and requests exactly. Also translate "
-                "the Korean result back into the source language for confirmation. Return JSON only."
+                "the Korean result back into the source language for confirmation. Return exactly "
+                "one JSON object with only korean_text and back_translation string fields. Do not "
+                "use Markdown, a code fence, Korean field names, commentary, or additional keys."
             ),
             "input": [
                 {
                     "role": "user",
-                    "content": json.dumps(
-                        {
-                            "source_language": data.source_language,
-                            "source_text": data.source_text,
-                        },
-                        ensure_ascii=False,
-                    ),
+                    "content": json.dumps(input_payload, ensure_ascii=False),
                 }
             ],
             "max_output_tokens": min(700, self.provider.capabilities.max_output_tokens),
@@ -123,6 +133,11 @@ class RestaurantNoteTranslationService:
                 response = self.provider.create_response(model_id, **request)
                 raw = str(getattr(response, "output_text", "")).strip()
                 parsed = _TranslationPayload.model_validate(parse_json_object(raw))
+                if (
+                    not data.source_language.lower().startswith("ko")
+                    and not any("가" <= character <= "힣" for character in parsed.korean_text)
+                ):
+                    raise ValueError("TRANSLATION_KOREAN_TEXT_REQUIRED")
                 usage = self._usage(response)
                 self._record_attempt(
                     session_id,

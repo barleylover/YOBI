@@ -340,6 +340,16 @@ def readyz(
         "genai": {
             "provider": current_settings.genai_provider,
             "serving_mode": current_settings.oci_genai_serving_mode,
+            "admission_control": {
+                "enabled": current_settings.oci_genai_admission_control_enabled,
+                "max_concurrent_per_model": (
+                    current_settings.oci_genai_max_concurrent_requests_per_model
+                ),
+                "min_interval_seconds": current_settings.oci_genai_min_interval_seconds,
+                "rate_limit_cooldown_seconds": (
+                    current_settings.oci_genai_rate_limit_cooldown_seconds
+                ),
+            },
             "configured": bool(
                 current_settings.oci_genai_api_key.get_secret_value().strip()
                 and current_settings.oci_genai_model.strip()

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Lock
+from time import sleep
 from types import SimpleNamespace
 from typing import Any
 
@@ -11,6 +14,7 @@ from fastapi import HTTPException
 from openai import RateLimitError
 
 from app.core.config import Settings
+from app.genai.admission import SharedModelAdmissionController
 from app.genai.agent_loop import AgentLoop
 from app.genai.contracts import (
     GenAIErrorCode,
@@ -57,6 +61,91 @@ def test_on_demand_provider_preserves_legacy_model_request_and_capabilities() ->
     assert provider.capabilities.max_output_tokens == 8192
     assert provider.capabilities.max_tools_per_request == 4
     assert provider.capabilities.max_tool_calls_per_response == 4
+
+
+def test_shared_model_admission_serializes_separate_provider_instances() -> None:
+    SharedModelAdmissionController.reset_for_tests()
+    settings = Settings(
+        oci_genai_api_key="test-key",
+        oci_genai_admission_control_enabled=True,
+        oci_genai_max_concurrent_requests_per_model=1,
+        oci_genai_min_interval_seconds=0,
+    )
+    state_lock = Lock()
+    in_flight = 0
+    peak_in_flight = 0
+
+    class SlowResponses:
+        def create(self, **kwargs: Any) -> Any:
+            nonlocal in_flight, peak_in_flight
+            with state_lock:
+                in_flight += 1
+                peak_in_flight = max(peak_in_flight, in_flight)
+            sleep(0.04)
+            with state_lock:
+                in_flight -= 1
+            return SimpleNamespace(output_text="ok", model=kwargs["model"])
+
+    responses = SlowResponses()
+    providers = [OciResponsesProvider(settings), OciResponsesProvider(settings)]
+    for provider in providers:
+        provider.client_factory.build = lambda: SimpleNamespace(responses=responses)  # type: ignore[method-assign]
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(
+                lambda provider: provider.create_response(
+                    settings.oci_genai_model, input="hello"
+                ),
+                providers,
+            )
+        )
+
+    assert [result.output_text for result in results] == ["ok", "ok"]
+    assert peak_in_flight == 1
+    SharedModelAdmissionController.reset_for_tests()
+
+
+def test_shared_model_admission_fails_fast_during_retry_after_cooldown() -> None:
+    SharedModelAdmissionController.reset_for_tests()
+    settings = Settings(
+        oci_genai_api_key="test-key",
+        oci_genai_admission_control_enabled=True,
+        oci_genai_max_concurrent_requests_per_model=1,
+        oci_genai_min_interval_seconds=0,
+        oci_genai_rate_limit_cooldown_seconds=30,
+    )
+
+    class RejectedResponses:
+        def create(self, **kwargs: Any) -> Any:
+            del kwargs
+            raise _rate_limit()
+
+    second_calls = 0
+
+    class CountingResponses:
+        def create(self, **kwargs: Any) -> Any:
+            nonlocal second_calls
+            del kwargs
+            second_calls += 1
+            return SimpleNamespace(output_text="unexpected")
+
+    first = OciResponsesProvider(settings)
+    first.client_factory.build = lambda: SimpleNamespace(responses=RejectedResponses())  # type: ignore[method-assign]
+    second = OciResponsesProvider(settings)
+    second.client_factory.build = lambda: SimpleNamespace(responses=CountingResponses())  # type: ignore[method-assign]
+
+    with pytest.raises(GenAIProviderError) as rejected:
+        first.create_response(settings.oci_genai_model, input="hello")
+    with pytest.raises(GenAIProviderError) as cooled_down:
+        second.create_response(settings.oci_genai_model, input="hello again")
+
+    assert rejected.value.code is GenAIErrorCode.RATE_LIMIT
+    assert rejected.value.safe_metadata["retry_after_ms"] == 10_000
+    assert cooled_down.value.code is GenAIErrorCode.RATE_LIMIT
+    assert cooled_down.value.safe_metadata["admission_cooldown_remaining_ms"] > 0
+    assert second_calls == 0
+    SharedModelAdmissionController.reset_for_tests()
 
 
 def test_dedicated_provider_normalizes_logical_models_to_endpoint_ocids() -> None:

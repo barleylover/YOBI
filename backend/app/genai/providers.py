@@ -5,6 +5,7 @@ from typing import Any
 from openai import APIConnectionError, APIStatusError, APITimeoutError, RateLimitError
 
 from app.core.config import Settings
+from app.genai.admission import ModelAdmissionCooldown, SharedModelAdmissionController
 from app.genai.client import OciGenAIClient
 from app.genai.contracts import (
     GenAIErrorCode,
@@ -105,11 +106,39 @@ class OciResponsesProvider:
             raise GenAIProviderError(GenAIErrorCode.PROVIDER_UNAVAILABLE, retryable=False)
         try:
             client = self.client_factory.build()
-            return client.responses.create(**self.normalize_request(model, **kwargs))
+            normalized = self.normalize_request(model, **kwargs)
+            if not self.settings.oci_genai_admission_control_enabled:
+                return client.responses.create(**normalized)
+            return SharedModelAdmissionController.run(
+                endpoint=self.settings.oci_genai_base_url,
+                model=str(normalized["model"]),
+                max_concurrent=self.settings.oci_genai_max_concurrent_requests_per_model,
+                min_interval_seconds=self.settings.oci_genai_min_interval_seconds,
+                default_cooldown_seconds=(
+                    self.settings.oci_genai_rate_limit_cooldown_seconds
+                ),
+                call=lambda: client.responses.create(**normalized),
+            )
+        except ModelAdmissionCooldown as exc:
+            raise GenAIProviderError(
+                GenAIErrorCode.RATE_LIMIT,
+                retryable=True,
+                cause=exc,
+                safe_metadata={
+                    "admission_cooldown_remaining_ms": int(
+                        exc.remaining_seconds * 1000
+                    )
+                },
+            ) from exc
         except GenAIProviderError:
             raise
         except Exception as exc:
-            raise classify_provider_error(exc) from exc
+            classified = classify_provider_error(exc)
+            if classified.code is GenAIErrorCode.RATE_LIMIT:
+                retry_after = SharedModelAdmissionController._retry_after_seconds(exc)
+                if retry_after is not None:
+                    classified.safe_metadata["retry_after_ms"] = int(retry_after * 1000)
+            raise classified from exc
 
 
 def choose_genai_provider(settings: Settings) -> OciResponsesProvider:

@@ -31,7 +31,8 @@ class Settings(BaseSettings):
     structured_recommendation_model: str = "xai.grok-4.3"
     restaurant_note_model: str = "openai.gpt-oss-20b"
     restaurant_note_model_chain: str = (
-        "google.gemini-2.5-flash-lite,google.gemini-2.5-flash,openai.gpt-oss-120b"
+        "google.gemini-2.5-flash-lite,google.gemini-2.5-flash,"
+        "openai.gpt-oss-20b,openai.gpt-oss-120b"
     )
     menu_localization_model: str = "xai.grok-4.3"
     structured_recommendation_max_output_tokens: int = Field(default=2048, ge=64)
@@ -43,6 +44,12 @@ class Settings(BaseSettings):
     oci_genai_fallback_endpoint_id: str = ""
     oci_genai_structured_output_enabled: bool = False
     oci_genai_streaming_enabled: bool = False
+    oci_genai_admission_control_enabled: bool = False
+    oci_genai_max_concurrent_requests_per_model: int = Field(default=1, ge=1, le=8)
+    oci_genai_min_interval_seconds: float = Field(default=2.0, ge=0.0, le=30.0)
+    oci_genai_rate_limit_cooldown_seconds: float = Field(
+        default=65.0, ge=1.0, le=300.0
+    )
     # Explicit provider contract profile. These are the request envelope that the
     # configured OCI model/endpoint is expected to support, not advertised model
     # headline limits. Operators must lower them for a more restrictive endpoint.
