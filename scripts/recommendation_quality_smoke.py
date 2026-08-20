@@ -186,7 +186,6 @@ def _validate_batch(
 
         for field, minimum in (
             ("title", 2),
-            ("selection_reason", 10),
             ("description", 10),
         ):
             value = item.get(field)

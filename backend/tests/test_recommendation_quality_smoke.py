@@ -53,11 +53,9 @@ def _batch(*, korean: bool = False, price: int = 9_000) -> dict[str, Any]:
                     "price": price,
                 },
                 "title": "추천 메뉴" if korean else "Recommended menu",
-                "selection_reason": (
-                    "선택한 한식 취향을 뒷받침하는 근거가 있습니다."
-                    if korean
-                    else "Reviewed evidence supports the selected Korean preference."
-                ),
+                # Selection is ID/evidence-only. User-facing selection reasons
+                # were removed from the current recommendation contract.
+                "selection_reason": "",
                 "description": (
                     "인용된 일반 음식 설명을 바탕으로 안내합니다."
                     if korean
