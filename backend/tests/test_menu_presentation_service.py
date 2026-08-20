@@ -618,6 +618,46 @@ def test_presentation_rejects_review_ids_or_sources_claimed_for_yobi_copy() -> N
         == "PRESENTATION_YOBI_SOURCE_SCOPE_INVALID"
     )
 
+
+def test_presentation_accepts_spelled_quantity_when_value_is_unchanged() -> None:
+    payload = _generated_payload()
+    payload["items"][0].update(
+        {
+            "localized_source_description": "Beef fried rice, one serving.",
+            "localized_subtitle": "Tteokbokki served with beef fried rice",
+            "yobi_short_explanation": (
+                "Tteokbokki keeps its chewy rice cakes beside beef fried rice. "
+                "The listing is for one serving."
+            ),
+            "yobi_long_explanation": (
+                "Tteokbokki centers on chewy rice cakes. "
+                "This listing pairs them with beef fried rice. "
+                "The restaurant describes one serving. "
+                "The supplied Wiki explains the rice-cake format."
+            ),
+        }
+    )
+    repository = PresentationRepository(
+        MerchantMenuPresentationPage(
+            items=[_presentation(source_description="소고기 볶음밥 1인분")]
+        )
+    )
+    provider = PresentationProvider(output=json.dumps(payload))
+    service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        generator=MenuPresentationGenerator(Settings(), provider=provider),
+    )
+
+    page = service.list_presentations(
+        "session-1", "merchant-1", MerchantMenuPresentationRequest()
+    )
+
+    assert page.items[0].generation_model == "xai.grok-4.3"
+    assert page.items[0].source_description == "Beef fried rice, one serving."
+    assert len(repository.cache) == 1
+
+
 def test_presentation_rejects_changed_quantities_in_yogiyo_translation() -> None:
     payload = _generated_payload()
     payload["items"][0].update(
@@ -639,6 +679,53 @@ def test_presentation_rejects_changed_quantities_in_yogiyo_translation() -> None
         _presentation_validation_reason(payload, presentation)
         == "PRESENTATION_SOURCE_DESCRIPTION_QUANTITY_CHANGED"
     )
+
+
+def test_quantity_failure_isolated_to_one_menu_in_provider_batch() -> None:
+    presentations = [
+        _presentation("menu-1"),
+        _presentation("menu-2", source_description="코카콜라 355ml 2개"),
+        _presentation("menu-3"),
+    ]
+    payload = _generated_payload([item.menu.menu_id for item in presentations])
+    payload["items"][1].update(
+        {
+            "localized_source_description": "Coca-Cola 355ml with 3 dumplings.",
+            "localized_subtitle": "Tteokbokki with Coca-Cola and dumplings",
+            "yobi_short_explanation": (
+                "Tteokbokki comes with Coca-Cola and dumplings. "
+                "The rice cakes remain central."
+            ),
+            "yobi_long_explanation": (
+                "Tteokbokki centers on chewy rice cakes. "
+                "Coca-Cola is included. Dumplings accompany the dish. "
+                "The exact bundle follows the restaurant listing."
+            ),
+        }
+    )
+    repository = PresentationRepository(MerchantMenuPresentationPage(items=presentations))
+    provider = PresentationProvider(output=json.dumps(payload))
+    service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        generator=MenuPresentationGenerator(Settings(), provider=provider),
+    )
+
+    page = service.list_presentations(
+        "session-1", "merchant-1", MerchantMenuPresentationRequest()
+    )
+
+    assert provider.requested_ids == [["menu-1", "menu-2", "menu-3"]]
+    assert [item.generation_model for item in page.items] == [
+        "xai.grok-4.3",
+        "DETERMINISTIC_GROUNDED_FALLBACK",
+        "xai.grok-4.3",
+    ]
+    assert {entry[1] for entry in repository.saved_menu_localizations} == {
+        "menu-1",
+        "menu-3",
+    }
+    assert len(repository.cache) == 2
 
 
 def test_menu_presentation_rate_limit_keeps_deterministic_copy_without_model_retry() -> None:
@@ -1008,7 +1095,7 @@ def test_current_prompt_and_schema_logically_invalidate_legacy_cache_without_del
     )
 
     assert current_settings.menu_presentation_prompt_version == (
-        "yobi-menu-presentation-v9-review-isolation"
+        "yobi-menu-presentation-v10-review-isolation-quantity-safe"
     )
     assert current_settings.menu_presentation_schema_version == "6"
     assert provider.requested_ids == [["menu-1"]]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import difflib
 import json
 import re
+import unicodedata
 from time import monotonic
 from typing import Any, Callable
 
@@ -21,8 +22,43 @@ def _bounded_sentences(value: str, *, minimum: int, maximum: int, code: str) -> 
     return " ".join(parts).strip()
 
 
+_ENGLISH_QUANTITY_WORDS = {
+    "zero": "0",
+    "one": "1",
+    "two": "2",
+    "three": "3",
+    "four": "4",
+    "five": "5",
+    "six": "6",
+    "seven": "7",
+    "eight": "8",
+    "nine": "9",
+    "ten": "10",
+    "eleven": "11",
+    "twelve": "12",
+}
+_ENGLISH_QUANTITY_UNIT_PATTERN = re.compile(
+    r"(?i)\b(" + "|".join(_ENGLISH_QUANTITY_WORDS) + r")\b(?=\s*(?:"
+    r"servings?|portions?|pieces?|items?|bottles?|cans?|cups?|packs?|sets?|"
+    r"ml|g|kg)\b)"
+)
+
+
 def _number_tokens(value: str) -> list[str]:
+    """Return literal numeric tokens for option-label identity validation."""
+
     return re.findall(r"\d+(?:[.,]\d+)?", value)
+
+
+def _quantity_tokens(value: str, target_language: str) -> list[str]:
+    normalized = unicodedata.normalize("NFKC", value)
+    tokens = _number_tokens(normalized)
+    if target_language == "en":
+        tokens.extend(
+            _ENGLISH_QUANTITY_WORDS[match.group(1).casefold()]
+            for match in _ENGLISH_QUANTITY_UNIT_PATTERN.finditer(normalized)
+        )
+    return tokens
 
 
 def _ascii_source_tokens(value: str) -> set[str]:
@@ -337,6 +373,7 @@ class MenuPresentationGeneration(BaseModel):
 
     _generation_model: str | None = PrivateAttr(default=None)
     _provider_metrics: dict[str, int] = PrivateAttr(default_factory=dict)
+    _item_errors: dict[str, str] = PrivateAttr(default_factory=dict)
 
     items: list[GeneratedMenuPresentation] = Field(min_length=1, max_length=12)
 
@@ -347,6 +384,10 @@ class MenuPresentationGeneration(BaseModel):
     @property
     def provider_metrics(self) -> dict[str, int]:
         return dict(self._provider_metrics)
+
+    @property
+    def item_errors(self) -> dict[str, str]:
+        return dict(self._item_errors)
 
 
 MENU_PRESENTATION_JSON_SCHEMA: dict[str, Any] = {
@@ -604,6 +645,7 @@ class MenuPresentationGenerator:
             returned_ids = [item.menu_id for item in result.items]
             if len(returned_ids) != len(set(returned_ids)) or set(returned_ids) != set(expected):
                 raise ValueError("PRESENTATION_MENU_SET_INVALID")
+            item_errors: dict[str, str] = {}
             for generated in result.items:
                 source = expected[generated.menu_id]
                 target_language = {
@@ -688,10 +730,17 @@ class MenuPresentationGenerator:
                     )
                 ):
                     raise ValueError("PRESENTATION_SOURCE_DESCRIPTION_NOT_REFLECTED")
-                if sorted(_number_tokens(generated.localized_source_description)) != sorted(
-                    _number_tokens(source_description)
+                if sorted(
+                    _quantity_tokens(generated.localized_source_description, target_language)
+                ) != sorted(
+                    _quantity_tokens(source_description, "ko")
                 ):
-                    raise ValueError("PRESENTATION_SOURCE_DESCRIPTION_QUANTITY_CHANGED")
+                    # One unsafe restaurant-description translation must not erase otherwise
+                    # valid presentation copy for every menu in the same provider response.
+                    item_errors[generated.menu_id] = (
+                        "PRESENTATION_SOURCE_DESCRIPTION_QUANTITY_CHANGED"
+                    )
+                    continue
                 translated_source_folded = generated.localized_source_description.casefold()
                 if any(
                     token not in translated_source_folded
@@ -824,6 +873,13 @@ class MenuPresentationGenerator:
                         for mention in generated.component_mentions
                     ):
                         raise ValueError("PRESENTATION_COMPONENT_MENTION_MEANING_INVALID")
+            if item_errors:
+                result.items = [
+                    item for item in result.items if item.menu_id not in item_errors
+                ]
+                result._item_errors = item_errors
+                if not result.items:
+                    raise ValueError(next(iter(item_errors.values())))
         except (json.JSONDecodeError, ValidationError, ValueError) as exc:
             reason_code = self._validation_reason(exc)
             if on_provider_attempt is not None:
@@ -897,7 +953,8 @@ Translate and write each field according to its display purpose:
   Preserve its promotional tone, sentence meaning, quantities, cautions, and uncertainty, but do
   not transliterate ordinary prose, summarize it, or introduce claims. Return an empty string when
   the Korean source description is empty. Preserve every digit, unit, Latin brand name, and product
-  code exactly; never add, remove, or alter them.
+  code exactly; never add, remove, or alter them. Keep a source digit as the same digit: for
+  example, translate 1인분 with the literal digit 1 rather than spelling it as "one serving".
 - option_group_localizations and option_item_localizations must both be empty arrays. Option
   translation is handled later, only for the menu the visitor actually chooses.
 

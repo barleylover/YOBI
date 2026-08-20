@@ -231,6 +231,38 @@ def test_sqlite_release_apply_is_resumable_and_preserves_base_tables(tmp_path: P
                 for language_code in ("en", "ja")
             ],
         )
+        connection.executemany(
+            """
+            INSERT INTO menu_source_description_localization(
+              release_id,menu_id,language_code,description_text,model_id,
+              prompt_version,source_hash,validation_status,generated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                (
+                    "release-source",
+                    menus[0].menu_id,
+                    "en",
+                    "A validated English restaurant description.",
+                    "TEST_FIXTURE",
+                    "test-only",
+                    "c" * 64,
+                    "VALID",
+                    "2026-08-20T00:00:00+00:00",
+                ),
+                (
+                    "release-source",
+                    menus[0].menu_id,
+                    "ja",
+                    "検証済みの店舗説明です。",
+                    "TEST_FIXTURE",
+                    "test-only",
+                    "d" * 64,
+                    "VALID",
+                    "2026-08-20T00:00:00+00:00",
+                ),
+            ],
+        )
 
     _apply_sqlite(
         database_path,
@@ -257,6 +289,19 @@ def test_sqlite_release_apply_is_resumable_and_preserves_base_tables(tmp_path: P
             ).fetchone()[0]
         )
         assert localization_count == len(menus) * 3
+        copied_source_descriptions = connection.execute(
+            """
+            SELECT language_code,description_text
+            FROM menu_source_description_localization
+            WHERE release_id=? AND menu_id=?
+            ORDER BY language_code
+            """,
+            ("release-resumable", menus[0].menu_id),
+        ).fetchall()
+        assert copied_source_descriptions == [
+            ("en", "A validated English restaurant description."),
+            ("ja", "検証済みの店舗説明です。"),
+        ]
 
     SQLiteYobiRepository(database_path).initialize()
 

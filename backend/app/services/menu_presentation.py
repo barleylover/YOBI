@@ -583,7 +583,10 @@ class MenuPresentationService:
                 on_provider_attempt=on_provider_attempt,
             )
             model = generated.generation_model or "UNKNOWN"
-            return ({value.menu_id: (value, model) for value in generated.items}, {})
+            return (
+                {value.menu_id: (value, model) for value in generated.items},
+                generated.item_errors,
+            )
         except GenAIProviderError as exc:
             error_code = exc.safe_reason_code or exc.code.value
         except Exception as exc:

@@ -229,7 +229,12 @@ def _oracle_merge_many(
 def _copy_active_menu_localizations_oracle(
     cursor: oracledb.Cursor, *, release_id: str
 ) -> None:
-    """Carry forward validated identity titles without copying runtime copy caches."""
+    """Carry forward validated titles and same-catalog source translations.
+
+    Presentation prose caches remain release-local. Restaurant-description translations are
+    immutable-source localizations, so the newest validated value from the same catalog can be
+    reused safely when a later presentation call is unavailable or rejects one menu.
+    """
     cursor.execute(
         """
         MERGE INTO menu_localization target
@@ -265,12 +270,59 @@ def _copy_active_menu_localizations_oracle(
         """,
         release_id=release_id,
     )
+    cursor.execute(
+        """
+        MERGE INTO menu_source_description_localization target
+        USING (
+          SELECT release_id,menu_id,language_code,description_text,model_id,
+                 prompt_version,source_hash,validation_status,generated_at
+          FROM (
+            SELECT :release_id release_id,localization.menu_id,
+                   localization.language_code,localization.description_text,
+                   localization.model_id,localization.prompt_version,
+                   localization.source_hash,localization.validation_status,
+                   localization.generated_at,
+                   ROW_NUMBER() OVER (
+                     PARTITION BY localization.menu_id,localization.language_code
+                     ORDER BY localization.generated_at DESC NULLS LAST,
+                              localization.release_id DESC
+                   ) localization_rank
+            FROM recommendation_runtime_state runtime_state
+            JOIN recommendation_release_family active_family
+              ON active_family.release_family_id=runtime_state.active_release_family_id
+            JOIN synthetic_menu_profile target_profile
+              ON target_profile.release_id=:release_id
+            JOIN synthetic_enrichment_release source_release
+              ON source_release.catalog_release_id=active_family.catalog_release_id
+             AND source_release.status IN ('READY','ACTIVE','RETIRED')
+            JOIN menu_source_description_localization localization
+              ON localization.release_id=source_release.release_id
+             AND localization.menu_id=target_profile.menu_id
+            WHERE runtime_state.state_key='ACTIVE'
+              AND localization.validation_status='VALID'
+              AND localization.language_code IN ('en','ja')
+          ) WHERE localization_rank=1
+        ) source
+        ON (target.release_id=source.release_id
+            AND target.menu_id=source.menu_id
+            AND target.language_code=source.language_code)
+        WHEN NOT MATCHED THEN INSERT (
+          release_id,menu_id,language_code,description_text,model_id,
+          prompt_version,source_hash,validation_status,generated_at
+        ) VALUES (
+          source.release_id,source.menu_id,source.language_code,
+          source.description_text,source.model_id,source.prompt_version,
+          source.source_hash,source.validation_status,source.generated_at
+        )
+        """,
+        release_id=release_id,
+    )
 
 
 def _copy_active_menu_localizations_sqlite(
     connection: sqlite3.Connection, *, release_id: str
 ) -> None:
-    """SQLite equivalent of the release-to-release identity-title carry-forward."""
+    """SQLite equivalent of the release-to-release localization carry-forward."""
     connection.execute(
         """
         INSERT INTO menu_localization(
@@ -293,6 +345,40 @@ def _copy_active_menu_localizations_sqlite(
         WHERE runtime_state.state_key='ACTIVE'
           AND localization.validation_status='VALID'
           AND localization.language_code IN ('en','ja')
+        ON CONFLICT(release_id,menu_id,language_code) DO NOTHING
+        """,
+        (release_id, release_id),
+    )
+    connection.execute(
+        """
+        INSERT INTO menu_source_description_localization(
+          release_id,menu_id,language_code,description_text,model_id,
+          prompt_version,source_hash,validation_status,generated_at
+        )
+        SELECT ?,menu_id,language_code,description_text,model_id,
+               prompt_version,source_hash,validation_status,generated_at
+        FROM (
+          SELECT localization.*,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY localization.menu_id,localization.language_code
+                   ORDER BY localization.generated_at DESC,localization.release_id DESC
+                 ) localization_rank
+          FROM recommendation_runtime_state runtime_state
+          JOIN recommendation_release_family active_family
+            ON active_family.release_family_id=runtime_state.active_release_family_id
+          JOIN synthetic_menu_profile target_profile
+            ON target_profile.release_id=?
+          JOIN synthetic_enrichment_release source_release
+            ON source_release.catalog_release_id=active_family.catalog_release_id
+           AND source_release.status IN ('READY','ACTIVE','RETIRED')
+          JOIN menu_source_description_localization localization
+            ON localization.release_id=source_release.release_id
+           AND localization.menu_id=target_profile.menu_id
+          WHERE runtime_state.state_key='ACTIVE'
+            AND localization.validation_status='VALID'
+            AND localization.language_code IN ('en','ja')
+        )
+        WHERE localization_rank=1
         ON CONFLICT(release_id,menu_id,language_code) DO NOTHING
         """,
         (release_id, release_id),
