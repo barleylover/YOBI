@@ -26,15 +26,17 @@ def test_release_archive_contains_knowledge_and_all_migrations() -> None:
     assert "014_wiki_eligibility_indexes.sql" in source
     assert "015_synthetic_demo_enrichment.sql" in source
     assert "016_recommendation_v3_runtime.sql" in source
+    assert "017_grounded_menu_presentation.sql" in source
+    assert "018_llm_runtime_resilience.sql" in source
     assert "persist_runtime_release_policy" in source
     assert "persist_runtime_compartment_identity" in source
     assert 'persist_runtime_compartment_identity(sys.argv[1])' in source
     assert "actual_migration_list" in source
-    assert "Migration directory must contain exactly 001-016" in source
-    assert 'status["expected_migration_count"] == status["applied_migration_count"] == 16' in source
+    assert "Migration directory must contain exactly 001-018" in source
+    assert 'status["expected_migration_count"] == status["applied_migration_count"] == 18' in source
     assert 'status["latest_expected_migration"]' in source
     assert 'status["latest_applied_migration"]' in source
-    assert '== "016"' in source
+    assert '== "018"' in source
     assert 'raise SystemExit("MIGRATION_LEDGER_NOT_EXACT")' in source
     assert "assert status[" not in source
     runtime_import = source.index('import app.main; print("Verified Python 3.9 application imports.")')

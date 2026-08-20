@@ -147,6 +147,7 @@ readonly REQUIRED_RELEASE_TOOLS=(
   scripts/backfill_menu_semantic_embeddings.py
   scripts/build_external_knowledge_release.py
   scripts/build_synthetic_enrichment_release.py
+  scripts/generate_static_menu_descriptions.py
   scripts/generate_static_option_localizations.py
   scripts/catalog_mode.py
   scripts/manage_demo_address.py
@@ -180,6 +181,8 @@ readonly EXPECTED_MIGRATIONS=(
   014_wiki_eligibility_indexes.sql
   015_synthetic_demo_enrichment.sql
   016_recommendation_v3_runtime.sql
+  017_grounded_menu_presentation.sql
+  018_llm_runtime_resilience.sql
 )
 for migration in "${EXPECTED_MIGRATIONS[@]}"; do
   [[ -f "$ROOT_DIR/database/migrations/$migration" ]] \
@@ -192,7 +195,7 @@ actual_migration_list="$(
   done | LC_ALL=C sort
 )"
 [[ "$actual_migration_list" == "$expected_migration_list" ]] \
-  || { printf 'Migration directory must contain exactly 001-016.\n' >&2; exit 1; }
+  || { printf 'Migration directory must contain exactly 001-018.\n' >&2; exit 1; }
 
 source_git_commit="$(git -C "$ROOT_DIR" rev-parse --verify HEAD)"
 source_git_branch="$(git -C "$ROOT_DIR" branch --show-current)"
@@ -695,13 +698,13 @@ sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \
   'from deploy.secure_bootstrap import Settings, verify_database
 status = verify_database(Settings())
 if not (
-    status["expected_migration_count"] == status["applied_migration_count"] == 16
+    status["expected_migration_count"] == status["applied_migration_count"] == 18
     and status["latest_expected_migration"]
     == status["latest_applied_migration"]
-    == "016"
+    == "018"
 ):
     raise SystemExit("MIGRATION_LEDGER_NOT_EXACT")
-print("Verified exact migrations=001-016 runtime_user=YOBI_APP")'
+print("Verified exact migrations=001-018 runtime_user=YOBI_APP")'
 old_knowledge_release_id="$(run_knowledge_manager get-active)"
 old_recommendation_release_family_id="$(run_recommendation_manager get-active)"
 knowledge_restore_required=true
@@ -726,10 +729,14 @@ if [[ "$catalog_mode" == "external" ]]; then
     if [[ "$synthetic_enrichment_deploy" == "true" ]]; then
       # Static option names are built in a new additive release. Existing menu
       # localizations are copied release-to-release; no provider is dispatched.
-      synthetic_release_id="synthetic-enrichment-static-options-v1"
+      synthetic_release_id="synthetic-enrichment-${release_id}"
       sudo env PYTHONPATH="$new_release/backend:$new_release" \
         "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
         "$new_release/scripts/build_synthetic_enrichment_release.py" \
+        --backend oracle --release-id "$synthetic_release_id" --apply
+      sudo env PYTHONPATH="$new_release/backend:$new_release" \
+        "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
+        "$new_release/scripts/generate_static_menu_descriptions.py" \
         --backend oracle --release-id "$synthetic_release_id" --apply
       enrichment_activation_json="$(sudo env \
         PYTHONPATH="$new_release/backend:$new_release" \
