@@ -712,7 +712,12 @@ catalog_mode="$(sudo env PYTHONPATH="$new_release/backend:$new_release" \
   "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
   "$new_release/scripts/catalog_mode.py" get-mode)"
 if [[ "$catalog_mode" == "external" ]]; then
-  if [[ "$code_only_provisional" == "true" ]]; then
+  # A normal application release is code-only with respect to the externally
+  # managed catalog/knowledge/recommendation data. Preserve the active family
+  # (including its additive synthetic enrichment pointer) unless an explicit
+  # semantic backfill workflow was authorized.
+  if [[ "$code_only_provisional" == "true" \
+    || "$menu_semantic_backfill" != "true" ]]; then
     [[ -n "$old_knowledge_release_id" \
       && -n "$old_recommendation_release_family_id" ]] \
       || { printf 'Code-only deployment requires active data release pointers.\n' >&2; exit 1; }
@@ -746,7 +751,7 @@ print(family)')"
       unset enrichment_activation_json synthetic_release_id
       printf 'CODE-ONLY+ENRICHMENT: activated additive synthetic enrichment release.\n'
     else
-      printf 'CODE-ONLY: reusing active knowledge and recommendation family without provider calls.\n'
+      printf 'CODE-ONLY: reusing active knowledge and recommendation family without data rebuilds.\n'
     fi
   else
     # The default remains verification-only. A full provider backfill can run
