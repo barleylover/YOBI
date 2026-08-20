@@ -7059,7 +7059,7 @@ class OracleYobiRepository:
                     json.dumps(options),
                     line_total,
                     _oracle_required_text(item.user_note),
-                    korean_note,
+                    _oracle_required_text(korean_note),
                     note_translation_id,
                     agent_request_key,
                     _now(),
@@ -7132,7 +7132,7 @@ class OracleYobiRepository:
                 option_snapshot=json.dumps(options),
                 line_total=line_total,
                 user_note=_oracle_required_text(replacement.user_note),
-                korean_note=korean_note,
+                korean_note=_oracle_required_text(korean_note),
                 note_translation_id=note_translation_id,
                 cart_item_id=cart_item_id,
             )

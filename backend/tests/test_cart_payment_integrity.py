@@ -456,8 +456,10 @@ def test_oracle_preserves_optional_empty_notes_in_required_varchar_columns() -> 
     delivery_source = " ".join(inspect.getsource(OracleYobiRepository.update_delivery).split())
 
     assert "_oracle_required_text(item.user_note)" in add_source
+    assert "_oracle_required_text(korean_note)" in add_source
     assert "_oracle_logical_text(duplicate.get(\"user_note\"))" in add_source
     assert "_oracle_required_text(replacement.user_note)" in update_source
+    assert "korean_note=_oracle_required_text(korean_note)" in update_source
     assert "stored_user_note = _oracle_required_text(preference.user_note)" in delivery_source
 
 
