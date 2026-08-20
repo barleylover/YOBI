@@ -16,13 +16,100 @@ from app.genai.response_contract import parse_json_object
 
 def _bounded_sentences(value: str, *, minimum: int, maximum: int, code: str) -> str:
     parts = [part for part in re.split(r"(?<=[.!?。！？])\s*", value.strip()) if part]
-    if len(parts) < minimum:
+    if not minimum <= len(parts) <= maximum:
         raise ValueError(code)
-    return " ".join(parts[:maximum]).strip()
+    return " ".join(parts).strip()
 
 
 def _number_tokens(value: str) -> list[str]:
     return re.findall(r"\d+(?:[.,]\d+)?", value)
+
+
+def _ascii_source_tokens(value: str) -> set[str]:
+    return {
+        token.casefold()
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9.-]{1,}", value)
+    }
+
+
+def _contains_hangul(value: str) -> bool:
+    return bool(re.search(r"[가-힣]", value))
+
+
+def _contains_japanese_script(value: str) -> bool:
+    return bool(re.search(r"[ぁ-ゖァ-ヺ一-龯々]", value))
+
+
+def _normalized_text(value: str) -> str:
+    return re.sub(r"[^0-9a-z가-힣ぁ-ゖァ-ヺ一-龯々]+", "", value.casefold())
+
+
+_ENGLISH_TITLE_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "combo",
+    "for",
+    "from",
+    "large",
+    "medium",
+    "menu",
+    "of",
+    "original",
+    "set",
+    "small",
+    "special",
+    "the",
+    "with",
+}
+
+_ENGLISH_DESCRIPTION_STOPWORDS = _ENGLISH_TITLE_STOPWORDS | {
+    "available",
+    "description",
+    "delicious",
+    "dish",
+    "enjoy",
+    "fresh",
+    "made",
+    "meal",
+    "natural",
+    "order",
+    "restaurant",
+    "serving",
+    "taste",
+    "tasty",
+}
+
+
+def _english_title_tokens(value: str) -> set[str]:
+    without_brands = re.sub(r"\[[^\]]*\]|\([^)]*(?:store|branch|restaurant)[^)]*\)", " ", value)
+    tokens: set[str] = set()
+    for token in re.findall(r"[A-Za-z]{3,}", without_brands.casefold()):
+        if token in _ENGLISH_TITLE_STOPWORDS:
+            continue
+        if token.endswith("ies") and len(token) > 4:
+            token = f"{token[:-3]}y"
+        elif token.endswith("s") and not token.endswith("ss") and len(token) > 3:
+            token = token[:-1]
+        tokens.add(token)
+    return tokens
+
+
+def _english_title_coverage_is_sufficient(title: str, explanation: str) -> bool:
+    required = _english_title_tokens(title)
+    if not required:
+        return True
+    actual = _english_title_tokens(explanation)
+    minimum = max(1, (len(required) * 3 + 3) // 4)
+    return len(required & actual) >= minimum
+
+
+def _english_source_reflection_is_sufficient(source: str, explanation: str) -> bool:
+    required = _english_title_tokens(source) - _ENGLISH_DESCRIPTION_STOPWORDS
+    if not required:
+        return True
+    actual = _english_title_tokens(explanation)
+    return len(required & actual) >= min(2, len(required))
 
 
 _OPTION_CONTROL_RULES = (
@@ -169,6 +256,13 @@ class GeneratedOptionLocalization(BaseModel):
     display_name: str = Field(min_length=1, max_length=300)
 
 
+class GeneratedComponentMention(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    component_id: str = Field(min_length=1, max_length=160)
+    mention_text: str = Field(min_length=2, max_length=300)
+
+
 class GeneratedMenuPresentation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -183,6 +277,7 @@ class GeneratedMenuPresentation(BaseModel):
     used_source_fields: list[str] = Field(min_length=1, max_length=20)
     personalization_applied: bool = False
     covered_component_ids: list[str] = Field(default_factory=list, max_length=40)
+    component_mentions: list[GeneratedComponentMention] = Field(default_factory=list, max_length=40)
     option_group_localizations: list[GeneratedOptionLocalization] = Field(
         default_factory=list, max_length=100
     )
@@ -262,6 +357,7 @@ MENU_PRESENTATION_JSON_SCHEMA: dict[str, Any] = {
                     "used_source_fields",
                     "personalization_applied",
                     "covered_component_ids",
+                    "component_mentions",
                     "option_group_localizations",
                     "option_item_localizations",
                 ],
@@ -312,6 +408,23 @@ MENU_PRESENTATION_JSON_SCHEMA: dict[str, Any] = {
                         "type": "array",
                         "maxItems": 40,
                         "items": {"type": "string"},
+                    },
+                    "component_mentions": {
+                        "type": "array",
+                        "maxItems": 40,
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["component_id", "mention_text"],
+                            "properties": {
+                                "component_id": {"type": "string", "minLength": 1},
+                                "mention_text": {
+                                    "type": "string",
+                                    "minLength": 2,
+                                    "maxLength": 300,
+                                },
+                            },
+                        },
                     },
                     "option_group_localizations": {
                         "type": "array",
@@ -409,7 +522,7 @@ class MenuPresentationGenerator:
             request["text"] = {
                 "format": {
                     "type": "json_schema",
-                    "name": "yobi_grounded_menu_presentation_v3",
+                    "name": "yobi_grounded_menu_presentation_v5",
                     "schema": MENU_PRESENTATION_JSON_SCHEMA,
                     "strict": True,
                 }
@@ -472,10 +585,74 @@ class MenuPresentationGenerator:
                 )
                 if generated.localized_title != expected_title:
                     raise ValueError("PRESENTATION_LOCALIZED_TITLE_CHANGED")
-                if not set(_number_tokens(generated.localized_source_description)) <= set(
+                generated_copy = (
+                    generated.localized_subtitle,
+                    generated.localized_source_description,
+                    generated.yobi_short_explanation,
+                    generated.yobi_long_explanation,
+                    generated.review_summary,
+                )
+                if target_language in {"en", "ja"} and any(
+                    _contains_hangul(value) for value in generated_copy
+                ):
+                    raise ValueError("PRESENTATION_TARGET_LANGUAGE_HANGUL_REMAINS")
+                if target_language == "ja" and any(
+                    value and not _contains_japanese_script(value)
+                    for value in (
+                        generated.localized_subtitle,
+                        generated.yobi_short_explanation,
+                        generated.yobi_long_explanation,
+                        generated.review_summary,
+                    )
+                ):
+                    raise ValueError("PRESENTATION_TARGET_LANGUAGE_SCRIPT_INVALID")
+                if (
+                    target_language == "ja"
+                    and source_description
+                    and _contains_hangul(source_description)
+                    and not _contains_japanese_script(generated.localized_source_description)
+                ):
+                    raise ValueError("PRESENTATION_TARGET_LANGUAGE_SCRIPT_INVALID")
+                if _normalized_text(generated.localized_subtitle) == _normalized_text(
+                    generated.localized_title
+                ):
+                    raise ValueError("PRESENTATION_LOCALIZED_SUBTITLE_NOT_EXPLANATORY")
+                if target_language == "en" and not _english_title_coverage_is_sufficient(
+                    generated.localized_title,
+                    " ".join(
+                        (
+                            generated.localized_subtitle,
+                            generated.yobi_short_explanation,
+                            generated.yobi_long_explanation,
+                        )
+                    ),
+                ):
+                    raise ValueError("PRESENTATION_MENU_TITLE_COVERAGE_INVALID")
+                if (
+                    target_language == "en"
+                    and generated.localized_source_description
+                    and not _english_source_reflection_is_sufficient(
+                        generated.localized_source_description,
+                        " ".join(
+                            (
+                                generated.localized_subtitle,
+                                generated.yobi_short_explanation,
+                                generated.yobi_long_explanation,
+                            )
+                        ),
+                    )
+                ):
+                    raise ValueError("PRESENTATION_SOURCE_DESCRIPTION_NOT_REFLECTED")
+                if sorted(_number_tokens(generated.localized_source_description)) != sorted(
                     _number_tokens(source_description)
                 ):
-                    raise ValueError("PRESENTATION_SOURCE_DESCRIPTION_NUMBER_ADDED")
+                    raise ValueError("PRESENTATION_SOURCE_DESCRIPTION_QUANTITY_CHANGED")
+                translated_source_folded = generated.localized_source_description.casefold()
+                if any(
+                    token not in translated_source_folded
+                    for token in _ascii_source_tokens(source_description)
+                ):
+                    raise ValueError("PRESENTATION_SOURCE_DESCRIPTION_TOKEN_DROPPED")
                 allowed_evidence = {
                     str(item.get("evidence_id"))
                     for field in ("wiki_passages", "menu_facts")
@@ -507,12 +684,20 @@ class MenuPresentationGenerator:
                 generated.used_source_fields = [
                     field for field in generated.used_source_fields if field in allowed_fields
                 ]
-                required_source_fields = {"menu_title_ko"}
+                required_source_fields = {"menu_title_ko", "localized_title"}
                 if source.get("source_description_ko"):
                     required_source_fields.add("source_description_ko")
-                generated.used_source_fields = sorted(
-                    set(generated.used_source_fields) | required_source_fields
-                )
+                if source.get("wiki_passages"):
+                    required_source_fields.add("wiki_passages")
+                if source.get("synthetic_reviews"):
+                    required_source_fields.add("synthetic_reviews")
+                if generated.personalization_applied:
+                    required_source_fields.add("country_preference")
+                if source.get("menu_components"):
+                    required_source_fields.add("menu_components")
+                if not required_source_fields <= set(generated.used_source_fields):
+                    raise ValueError("PRESENTATION_REQUIRED_SOURCE_FIELD_MISSING")
+                generated.used_source_fields = sorted(set(generated.used_source_fields))
                 required_components = {
                     str(component.get("component_id"))
                     for component in source.get("menu_components", [])
@@ -520,6 +705,43 @@ class MenuPresentationGenerator:
                 }
                 if set(generated.covered_component_ids) != required_components:
                     raise ValueError("PRESENTATION_COMPONENT_COVERAGE_INVALID")
+                component_mention_ids = [
+                    mention.component_id for mention in generated.component_mentions
+                ]
+                if (
+                    len(component_mention_ids) != len(set(component_mention_ids))
+                    or set(component_mention_ids) != required_components
+                ):
+                    raise ValueError("PRESENTATION_COMPONENT_MENTION_SET_INVALID")
+                explanatory_copy = _normalized_text(
+                    " ".join(
+                        (
+                            generated.localized_subtitle,
+                            generated.yobi_short_explanation,
+                            generated.yobi_long_explanation,
+                        )
+                    )
+                )
+                if any(
+                    not _normalized_text(mention.mention_text)
+                    or _normalized_text(mention.mention_text) not in explanatory_copy
+                    for mention in generated.component_mentions
+                ):
+                    raise ValueError("PRESENTATION_COMPONENT_MENTION_NOT_IN_COPY")
+                if target_language == "en":
+                    component_by_id = {
+                        str(component.get("component_id")): component
+                        for component in source.get("menu_components", [])
+                        if isinstance(component, dict) and component.get("component_id")
+                    }
+                    if any(
+                        not _english_title_coverage_is_sufficient(
+                            str(component_by_id[mention.component_id].get("name_en") or ""),
+                            mention.mention_text,
+                        )
+                        for mention in generated.component_mentions
+                    ):
+                        raise ValueError("PRESENTATION_COMPONENT_MENTION_MEANING_INVALID")
         except (json.JSONDecodeError, ValidationError, ValueError) as exc:
             reason_code = self._validation_reason(exc)
             if on_provider_attempt is not None:
@@ -586,11 +808,14 @@ Translate and write each field according to its display purpose:
 - localized_subtitle is explanatory copy. Paraphrase the actual menu composition in one short,
   foreign-visitor-friendly phrase. It may explain an unfamiliar term such as nakji as small
   octopus when the title or restaurant description supports that meaning, but must add no facts.
+  It must not repeat localized_title unchanged. Across localized_subtitle and both YOBI
+  explanations, retain every meaningful food, ingredient, and preparation term from the localized
+  title so a specific listing never collapses into a generic Wiki-family description.
 - localized_source_description is a natural translation of the YOGIYO restaurant description.
   Preserve its promotional tone, sentence meaning, quantities, cautions, and uncertainty, but do
   not transliterate ordinary prose, summarize it, or introduce claims. Return an empty string when
-  the Korean source description is empty. A number may be written naturally as a word, but never
-  add a numeric quantity that is absent from the Korean source.
+  the Korean source description is empty. Preserve every digit, unit, Latin brand name, and product
+  code exactly; never add, remove, or alter them.
 - option_group_localizations and option_item_localizations must both be empty arrays. Option
   translation is handled later, only for the menu the visitor actually chooses.
 
@@ -600,16 +825,23 @@ listing. Use only supplied fields; never invent ingredients, taste, preparation,
 popularity, or restaurant practices.
 
 For a compound menu, explain every item in menu_components and return every supplied component_id
-exactly once in covered_component_ids. Never let one component's temperature, form, ingredient,
-or cooking method describe another component.
+exactly once in covered_component_ids. Also return one component_mentions entry per component_id.
+Its mention_text must be a short, exact substring copied from localized_subtitle,
+yobi_short_explanation, or yobi_long_explanation that specifically explains that component.
+Return both component arrays empty when menu_components is empty. Never let one component's
+temperature, form, ingredient, or cooking method describe another component.
 
 Write yobi_short_explanation in one or two short sentences, yobi_long_explanation in three to five
 short sentences, and review_summary in two or three sentences based only on synthetic_reviews.
 Country and language may guide familiar wording or a clearly grounded analogy, but never force a
 country mention, stereotype a nationality, or invent a similar food. Set personalization_applied
 true only when the country cue materially changed wording. Cite only supplied evidence/review IDs
-and list every source field actually used. Do not expose internal IDs in prose, emit Markdown, or
-add a preamble. Prompt version: {self.settings.menu_presentation_prompt_version}.
+and list every source field actually used. menu_title_ko, localized_title, every non-empty
+source_description_ko, supplied wiki_passages, and supplied synthetic_reviews are required source
+fields because the output must reflect the exact listing rather than only the generic Wiki family.
+Do not leave Korean Hangul in English or Japanese output. Japanese prose must use natural Japanese
+script. Do not expose internal IDs in prose, emit Markdown, or add a preamble. Prompt version:
+{self.settings.menu_presentation_prompt_version}.
 """.strip()
 
     @staticmethod

@@ -449,6 +449,10 @@ class MenuPresentationService:
                             "used_evidence_ids": value.used_evidence_ids,
                             "used_source_fields": value.used_source_fields,
                             "covered_component_ids": value.covered_component_ids,
+                            "component_mentions": [
+                                mention.model_dump(mode="json")
+                                for mention in value.component_mentions
+                            ],
                             "localized_source_description": value.localized_source_description,
                         },
                     }

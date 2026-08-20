@@ -86,8 +86,8 @@ class Settings(BaseSettings):
     llm_max_tool_calls_per_response: int = Field(default=4, ge=1, le=14)
     tool_call_max_steps: int = Field(default=6, ge=1, le=12)
     recommendation_prompt_version: str = "yobi-structured-rag-v3-server-wiki-binding"
-    menu_presentation_prompt_version: str = "yobi-menu-presentation-v7-card-only"
-    menu_presentation_schema_version: str = "4"
+    menu_presentation_prompt_version: str = "yobi-menu-presentation-v8-strict-grounding"
+    menu_presentation_schema_version: str = "5"
     option_localization_prompt_version: str = "yobi-option-localization-v2-gptoss-chain"
     menu_presentation_wait_seconds: float = Field(default=10.0, ge=0.0, le=30.0)
     menu_presentation_poll_seconds: float = Field(default=0.25, ge=0.05, le=2.0)

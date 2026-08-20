@@ -8,6 +8,8 @@ from threading import Lock
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from app.core.config import Settings
 from app.domain.models import (
     EvidenceStatus,
@@ -296,7 +298,7 @@ def _generated_payload(menu_ids: list[str] | None = None) -> dict[str, Any]:
                 "menu_id": menu_id,
                 "localized_title": "Tteokbokki",
                 "localized_subtitle": "Chewy Korean rice cakes in sauce",
-                "localized_source_description": "Natural restaurant description.",
+                "localized_source_description": "Chewy rice cakes cooked to order.",
                 "yobi_short_explanation": (
                     "Think of chewy rice cakes in a warm Korean sauce. It is an easy dish to share."
                 ),
@@ -312,18 +314,38 @@ def _generated_payload(menu_ids: list[str] | None = None) -> dict[str, Any]:
                 "used_evidence_ids": ["wiki-1", "wiki-2", "review-1", "review-2"],
                 "used_source_fields": [
                     "menu_title_ko",
+                    "localized_title",
                     "source_description_ko",
                     "wiki_passages",
                     "synthetic_reviews",
                 ],
                 "personalization_applied": False,
                 "covered_component_ids": [],
+                "component_mentions": [],
                 "option_group_localizations": [],
                 "option_item_localizations": [],
             }
             for menu_id in ids
         ]
     }
+
+
+def _presentation_validation_reason(
+    payload: dict[str, Any],
+    presentation: MerchantMenuPresentation | None = None,
+    *,
+    locale: str = "English",
+) -> str | None:
+    provider = PresentationProvider(output=json.dumps(payload))
+    generator = MenuPresentationGenerator(Settings(), provider=provider)
+    with pytest.raises(GenAIProviderError) as raised:
+        generator.generate(
+            items=[
+                MenuPresentationService._generation_payload(presentation or _presentation())
+            ],
+            locale=locale,
+        )
+    return raised.value.safe_reason_code
 
 
 def test_menu_presentation_uses_grok_once_and_caches_structured_copy() -> None:
@@ -382,6 +404,7 @@ def test_presentation_translates_card_fields_without_option_localization() -> No
             "option_item_localizations": [],
             "used_source_fields": [
                 "menu_title_ko",
+                "localized_title",
                 "source_description_ko",
                 "wiki_passages",
                 "synthetic_reviews",
@@ -443,6 +466,7 @@ def test_presentation_rejects_option_localizations_from_card_model() -> None:
             ],
             "used_source_fields": [
                 "menu_title_ko",
+                "localized_title",
                 "source_description_ko",
                 "wiki_passages",
                 "synthetic_reviews",
@@ -488,6 +512,95 @@ def test_phonetic_yogiyo_description_is_rejected_instead_of_cached() -> None:
     assert page.items[0].generation_model == "DETERMINISTIC_GROUNDED_FALLBACK"
     assert repository.cache == {}
     assert repository.saved_menu_localizations == []
+
+
+def test_english_presentation_rejects_hangul_in_any_user_visible_copy() -> None:
+    payload = _generated_payload()
+    payload["items"][0]["yobi_short_explanation"] = "떡볶이 설명입니다."
+
+    assert (
+        _presentation_validation_reason(payload)
+        == "PRESENTATION_TARGET_LANGUAGE_HANGUL_REMAINS"
+    )
+
+
+def test_japanese_presentation_rejects_romanized_prose_without_japanese_script() -> None:
+    payload = _generated_payload()
+    payload["items"][0]["localized_title"] = "トッポッキ"
+    presentation = _presentation(localized_title="トッポッキ", language_code="ja")
+
+    assert (
+        _presentation_validation_reason(payload, presentation, locale="日本語")
+        == "PRESENTATION_TARGET_LANGUAGE_SCRIPT_INVALID"
+    )
+
+
+def test_presentation_rejects_title_repeated_as_missing_explanatory_subtitle() -> None:
+    payload = _generated_payload()
+    payload["items"][0]["localized_subtitle"] = "Tteokbokki"
+
+    assert (
+        _presentation_validation_reason(payload)
+        == "PRESENTATION_LOCALIZED_SUBTITLE_NOT_EXPLANATORY"
+    )
+
+
+def test_presentation_rejects_generic_wiki_copy_that_drops_specific_title_terms() -> None:
+    payload = _generated_payload()
+    payload["items"][0].update(
+        {
+            "localized_title": "Nakji Kimchi Bibimbap",
+            "localized_subtitle": "A Korean mixed rice bowl",
+            "yobi_short_explanation": (
+                "Bibimbap combines rice and seasoned vegetables. It is mixed before eating."
+            ),
+            "yobi_long_explanation": (
+                "Bibimbap is a Korean rice bowl. Vegetables are arranged over the rice. "
+                "The bowl is mixed before eating. Its exact toppings depend on the listing."
+            ),
+        }
+    )
+    presentation = _presentation(localized_title="Nakji Kimchi Bibimbap")
+
+    assert (
+        _presentation_validation_reason(payload, presentation)
+        == "PRESENTATION_MENU_TITLE_COVERAGE_INVALID"
+    )
+
+
+def test_presentation_rejects_yobi_copy_that_does_not_reflect_restaurant_description() -> None:
+    payload = _generated_payload()
+    payload["items"][0]["localized_source_description"] = (
+        "Tender octopus with crisp kimchi."
+    )
+
+    assert (
+        _presentation_validation_reason(payload)
+        == "PRESENTATION_SOURCE_DESCRIPTION_NOT_REFLECTED"
+    )
+
+
+def test_presentation_rejects_changed_quantities_in_yogiyo_translation() -> None:
+    payload = _generated_payload()
+    payload["items"][0].update(
+        {
+            "localized_source_description": "Coca-Cola with 3 dumplings.",
+            "localized_subtitle": "Tteokbokki with Coca-Cola and dumplings",
+            "yobi_short_explanation": (
+                "Tteokbokki comes with Coca-Cola and dumplings. The rice cakes remain central."
+            ),
+            "yobi_long_explanation": (
+                "Tteokbokki centers on chewy rice cakes. Coca-Cola is included. "
+                "Dumplings accompany the dish. The exact bundle follows the restaurant listing."
+            ),
+        }
+    )
+    presentation = _presentation(source_description="코카콜라 355ml 2개")
+
+    assert (
+        _presentation_validation_reason(payload, presentation)
+        == "PRESENTATION_SOURCE_DESCRIPTION_QUANTITY_CHANGED"
+    )
 
 
 def test_menu_presentation_rate_limit_keeps_deterministic_copy_without_model_retry() -> None:
@@ -573,6 +686,116 @@ def test_compound_presentation_requires_every_component_id() -> None:
     assert repository.cache == {}
 
 
+def test_compound_presentation_requires_component_mentions_in_actual_copy() -> None:
+    components = [
+        {"component_id": "cold-noodle", "name_en": "cold noodles"},
+        {"component_id": "cutlet", "name_en": "pork cutlet"},
+    ]
+    original = _presentation(localized_title="Cold Noodles and Pork Cutlet Set").model_copy(
+        update={
+            "evidence_map": {
+                **_presentation().evidence_map,
+                "menu_components": components,
+            }
+        }
+    )
+    payload = _generated_payload()
+    payload["items"][0].update(
+        {
+            "localized_title": "Cold Noodles and Pork Cutlet Set",
+            "localized_subtitle": "Cold noodles paired with a pork cutlet",
+            "localized_source_description": "Cold noodles served with pork cutlet.",
+            "yobi_short_explanation": (
+                "The cold noodles are the chilled main dish. A pork cutlet adds a crisp side."
+            ),
+            "yobi_long_explanation": (
+                "Cold noodles provide the chilled noodle portion. "
+                "The pork cutlet is a separate fried component. "
+                "Both items belong to this set. Each keeps its own serving style."
+            ),
+            "used_source_fields": [
+                "menu_title_ko",
+                "localized_title",
+                "source_description_ko",
+                "wiki_passages",
+                "synthetic_reviews",
+                "menu_components",
+            ],
+            "covered_component_ids": ["cold-noodle", "cutlet"],
+            "component_mentions": [
+                {"component_id": "cold-noodle", "mention_text": "cold noodles"},
+                {"component_id": "cutlet", "mention_text": "pork cutlet"},
+            ],
+        }
+    )
+    repository = PresentationRepository(MerchantMenuPresentationPage(items=[original]))
+    provider = PresentationProvider(output=json.dumps(payload))
+    service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        generator=MenuPresentationGenerator(Settings(), provider=provider),
+    )
+
+    page = service.list_presentations(
+        "session-1", "merchant-1", MerchantMenuPresentationRequest()
+    )
+
+    assert page.items[0].generation_model == "xai.grok-4.3"
+    assert len(repository.cache) == 1
+    assert page.items[0].evidence_map["component_mentions"] == [
+        {"component_id": "cold-noodle", "mention_text": "cold noodles"},
+        {"component_id": "cutlet", "mention_text": "pork cutlet"},
+    ]
+
+
+def test_compound_presentation_rejects_ids_mapped_to_wrong_component_copy() -> None:
+    components = [
+        {"component_id": "cold-noodle", "name_en": "cold noodles"},
+        {"component_id": "cutlet", "name_en": "pork cutlet"},
+    ]
+    presentation = _presentation(localized_title="Cold Noodles and Pork Cutlet Set").model_copy(
+        update={
+            "evidence_map": {
+                **_presentation().evidence_map,
+                "menu_components": components,
+            }
+        }
+    )
+    payload = _generated_payload()
+    payload["items"][0].update(
+        {
+            "localized_title": "Cold Noodles and Pork Cutlet Set",
+            "localized_subtitle": "Cold noodles paired with a pork cutlet",
+            "localized_source_description": "Cold noodles served with pork cutlet.",
+            "yobi_short_explanation": (
+                "The cold noodles are chilled. The pork cutlet is served separately."
+            ),
+            "yobi_long_explanation": (
+                "Cold noodles form one component. The pork cutlet forms the other. "
+                "Both belong to this set. Each keeps its own serving style."
+            ),
+            "used_source_fields": [
+                "menu_title_ko",
+                "localized_title",
+                "source_description_ko",
+                "wiki_passages",
+                "synthetic_reviews",
+                "menu_components",
+            ],
+            "covered_component_ids": ["cold-noodle", "cutlet"],
+            "component_mentions": [
+                {"component_id": "cold-noodle", "mention_text": "cold noodles"},
+                {"component_id": "cutlet", "mention_text": "cold noodles"},
+            ],
+        }
+    )
+
+    assert (
+        _presentation_validation_reason(payload, presentation)
+        == "PRESENTATION_COMPONENT_MENTION_MEANING_INVALID"
+    )
+
+
 def test_deterministic_presentation_copy_is_locale_safe_and_schema_sized() -> None:
     copy = deterministic_presentation_copy(
         "ja",
@@ -639,10 +862,34 @@ def test_source_language_country_and_prompt_changes_each_invalidate_cache() -> N
         items=[_presentation(source_description="변경된 요기요 원문")]
     )
     resolve(Settings())
+    japanese_payload = _generated_payload()
+    japanese_payload["items"][0].update(
+        {
+            "localized_title": "トッポッキ",
+            "localized_subtitle": "もちもちした韓国餅の甘辛い料理",
+            "localized_source_description": "変更されたヨギヨの原文です。",
+            "yobi_short_explanation": (
+                "トッポッキは、もちもちした韓国餅を温かいソースで味わう料理です。"
+                "分けやすい一品です。"
+            ),
+            "yobi_long_explanation": (
+                "トッポッキの中心は、もちもちした韓国餅です。"
+                "提供された情報では温かいソースを使います。"
+                "やわらかく弾力のある食感です。"
+                "この商品も韓国餅の特徴を保っています。"
+            ),
+            "review_summary": (
+                "口コミでは、もちもちした食感が好評でした。"
+                "量にも満足したという声がありました。"
+            ),
+        }
+    )
+    provider.output = json.dumps(japanese_payload)
     repository.page = MerchantMenuPresentationPage(
         items=[
             _presentation(
                 source_description="변경된 요기요 원문",
+                localized_title="トッポッキ",
                 language_code="ja",
                 country_code="JP",
             )
@@ -653,6 +900,42 @@ def test_source_language_country_and_prompt_changes_each_invalidate_cache() -> N
 
     assert provider.requested_ids == [["menu-1"]] * 4
     assert len(repository.cache) == 4
+
+
+def test_current_prompt_and_schema_logically_invalidate_legacy_cache_without_deleting_it() -> None:
+    repository = PresentationRepository(MerchantMenuPresentationPage(items=[_presentation()]))
+    legacy_settings = Settings(
+        menu_presentation_prompt_version="yobi-menu-presentation-v7-card-only",
+        menu_presentation_schema_version="4",
+    )
+    legacy_service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        legacy_settings,
+        generator=MenuPresentationGenerator(legacy_settings, provider=PresentationProvider()),
+    )
+    legacy_item = legacy_service._with_cache_identity(_presentation())
+    legacy_key = legacy_item.cache_key
+    repository.save_menu_presentation_cache_entry(legacy_service._cache_entry(legacy_item))
+
+    provider = PresentationProvider()
+    current_settings = Settings()
+    current_service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        current_settings,
+        generator=MenuPresentationGenerator(current_settings, provider=provider),
+    )
+    page = current_service.list_presentations(
+        "session-1", "merchant-1", MerchantMenuPresentationRequest()
+    )
+
+    assert current_settings.menu_presentation_prompt_version == (
+        "yobi-menu-presentation-v8-strict-grounding"
+    )
+    assert current_settings.menu_presentation_schema_version == "5"
+    assert provider.requested_ids == [["menu-1"]]
+    assert page.items[0].generation_model == "xai.grok-4.3"
+    assert len(repository.cache) == 2
+    assert legacy_key in repository.cache
 
 
 def test_ten_simultaneous_cold_misses_generate_one_cache_row_once() -> None:
