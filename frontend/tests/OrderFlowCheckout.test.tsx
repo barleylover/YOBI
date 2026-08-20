@@ -380,4 +380,181 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
     expect(screen.getByRole("button", { name: /Localized mild/ })).toBeInTheDocument();
     expect(screen.queryByText("맵기")).not.toBeInTheDocument();
   });
+
+  it("offers None only for optional groups and waits for Done on multi-select groups", async () => {
+    useSessionStore.setState({
+      profile,
+      session,
+      addressRefId: "address_checkout_test",
+      addressSummary: "YOBI hotel",
+      cartQuantity: 0,
+    });
+    const onOptionChange = vi.fn().mockResolvedValue(undefined);
+    vi.spyOn(api, "getOptions").mockResolvedValue([
+      {
+        option_group_id: "group-optional",
+        name_en: "Optional garnish",
+        name_ko: "선택 고명",
+        display_name: "Optional garnish",
+        description: "Optional",
+        required: false,
+        min_select: 0,
+        max_select: 1,
+        items: [{
+          option_item_id: "item-garnish",
+          name_en: "Spring onion",
+          name_ko: "파",
+          display_name: "Spring onion",
+          description: "Garnish",
+          price_delta: 0,
+          available: true,
+          conflicting_rules: [],
+        }],
+      },
+      {
+        option_group_id: "group-required",
+        name_en: "Required rice",
+        name_ko: "필수 밥",
+        display_name: "Required rice",
+        description: "Required",
+        required: true,
+        min_select: 1,
+        max_select: 1,
+        items: [{
+          option_item_id: "item-rice",
+          name_en: "White rice",
+          name_ko: "흰밥",
+          display_name: "White rice",
+          description: "Rice",
+          price_delta: 0,
+          available: true,
+          conflicting_rules: [],
+        }],
+      },
+      {
+        option_group_id: "group-multi",
+        name_en: "Toppings",
+        name_ko: "토핑",
+        display_name: "Toppings",
+        description: "Choose up to two",
+        required: false,
+        min_select: 0,
+        max_select: 2,
+        items: [
+          {
+            option_item_id: "item-a",
+            name_en: "Seaweed",
+            name_ko: "김",
+            display_name: "Seaweed",
+            description: "Topping",
+            price_delta: 0,
+            available: true,
+            conflicting_rules: [],
+          },
+          {
+            option_item_id: "item-b",
+            name_en: "Sesame",
+            name_ko: "깨",
+            display_name: "Sesame",
+            description: "Topping",
+            price_delta: 0,
+            available: true,
+            conflicting_rules: [],
+          },
+        ],
+      },
+    ]);
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <Routes><Route path="/chat" element={(
+          <OrderFlowPanel
+            sessionId={session.session_id}
+            menu={menu}
+            addressRefId="address_checkout_test"
+            onClose={() => undefined}
+            onOptionChange={onOptionChange}
+          />
+        )} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Optional garnish" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "None" }));
+    expect(await screen.findByRole("heading", { name: "Required rice" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "None" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /White rice/ }));
+    expect(await screen.findByRole("heading", { name: "Toppings" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "None" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Seaweed/ }));
+    await waitFor(() => expect(onOptionChange).toHaveBeenCalledWith(
+      menu.menu_id,
+      "group-multi",
+      ["item-a"],
+      false,
+    ));
+    fireEvent.click(screen.getByRole("button", { name: /Sesame/ }));
+    await waitFor(() => expect(onOptionChange).toHaveBeenCalledWith(
+      menu.menu_id,
+      "group-multi",
+      ["item-a", "item-b"],
+      false,
+    ));
+    expect(screen.getByRole("heading", { name: "Toppings" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(await screen.findByRole("heading", { name: "How should we say it?" })).toBeInTheDocument();
+    expect(onOptionChange).toHaveBeenCalledWith(menu.menu_id, "group-optional", [], false);
+    expect(onOptionChange).toHaveBeenCalledWith(menu.menu_id, "group-required", ["item-rice"], false);
+  });
+
+  it("allows a note-free cart add after every Korean translation model fails", async () => {
+    useSessionStore.setState({
+      profile,
+      session,
+      addressRefId: "address_checkout_test",
+      addressSummary: "YOBI hotel",
+      cartQuantity: 0,
+    });
+    vi.spyOn(api, "getOptions").mockResolvedValue([]);
+    const sourceText = "Please leave this at reception.";
+    vi.spyOn(api, "translateRestaurantNote").mockResolvedValue({
+      translation_id: "failed-translation",
+      source_text: sourceText,
+      source_language: "English",
+      korean_text: null,
+      back_translation: null,
+      model_id: "all-configured-models",
+      status: "FAILED",
+      error_code: "PROVIDER_UNAVAILABLE",
+      created_at: new Date().toISOString(),
+    });
+    const addCartItem = vi.spyOn(api, "addCartItem").mockResolvedValue(cart);
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <Routes><Route path="/chat" element={(
+          <OrderFlowPanel
+            sessionId={session.session_id}
+            menu={menu}
+            addressRefId="address_checkout_test"
+            onClose={() => undefined}
+          />
+        )} /></Routes>
+      </MemoryRouter>,
+    );
+
+    const note = await screen.findByRole("textbox");
+    fireEvent.change(note, { target: { value: sourceText } });
+    fireEvent.click(screen.getByRole("button", { name: "Translate to Korean" }));
+    expect(await screen.findByRole("button", { name: "Try Korean translation again" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Add without restaurant note" }));
+
+    await waitFor(() => expect(addCartItem).toHaveBeenCalledWith(
+      session.session_id,
+      menu.menu_id,
+      [],
+      "",
+      undefined,
+    ));
+  });
 });

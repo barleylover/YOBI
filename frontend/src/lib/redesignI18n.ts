@@ -31,6 +31,8 @@ export interface RedesignCopy {
   sectionPreferences: string;
   craveTitle: string;
   craveSubtitle: string;
+  foundForYou: string;
+  morePreferences: (count: number) => string;
   liveCount: (menus: number, merchants: number) => string;
   any: string;
   clear: string;
@@ -63,6 +65,7 @@ export interface RedesignCopy {
   spiceLess: string;
   spiceSimilar: string;
   spiceMore: string;
+  representativeSpice: (country: string, dish: string, level: number) => string;
   priceRange: string;
   priceMinimum: string;
   priceMaximum: string;
@@ -85,6 +88,9 @@ export interface RedesignCopy {
   editMyInfo: string;
   orderSetup: (index: number, total: number) => string;
   requiredTapOne: string;
+  optionalTap: string;
+  noneOption: string;
+  doneOptions: string;
   useDefaults: string;
   changeMenu: string;
   niceChoice: (count: number) => string;
@@ -110,6 +116,7 @@ export interface RedesignCopy {
   koreanTranslation: string;
   backTranslation: string;
   retryTranslation: string;
+  addWithoutNote: string;
 }
 
 const en: RedesignCopy = {
@@ -137,6 +144,8 @@ const en: RedesignCopy = {
   sectionPreferences: "Preferences",
   craveTitle: "What are you craving?",
   craveSubtitle: "Pick as many as you like. Results update live.",
+  foundForYou: "I found these for you.",
+  morePreferences: (count) => `+${count} more`,
   liveCount: (menus, merchants) => `${menus.toLocaleString()} menus · ${merchants.toLocaleString()} restaurants fit right now`,
   any: "Any",
   clear: "Clear",
@@ -171,6 +180,7 @@ const en: RedesignCopy = {
   spiceLess: "Less spicy",
   spiceSimilar: "About the same",
   spiceMore: "More spicy",
+  representativeSpice: (country, dish, level) => `${country} reference: ${dish} · spice ${level}/5`,
   priceRange: "Price range",
   priceMinimum: "Minimum price",
   priceMaximum: "Maximum price",
@@ -193,6 +203,9 @@ const en: RedesignCopy = {
   editMyInfo: "Edit my info",
   orderSetup: (index, total) => `Order setup · Option ${index} of ${total}`,
   requiredTapOne: "Required · tap one",
+  optionalTap: "Optional · choose any or none",
+  noneOption: "None",
+  doneOptions: "Done",
   useDefaults: "Use defaults for the rest",
   changeMenu: "Change menu",
   niceChoice: (count) => (count > 0
@@ -219,7 +232,8 @@ const en: RedesignCopy = {
   translatingNote: "Translating…",
   koreanTranslation: "Message to restaurant",
   backTranslation: "Check in your language",
-  retryTranslation: "Try translation again",
+  retryTranslation: "Try Korean translation again",
+  addWithoutNote: "Add without restaurant note",
 };
 
 const ko: RedesignCopy = {
@@ -247,6 +261,8 @@ const ko: RedesignCopy = {
   sectionPreferences: "취향",
   craveTitle: "어떤 음식이 당기세요?",
   craveSubtitle: "원하는 만큼 고르세요. 결과가 실시간으로 바뀌어요.",
+  foundForYou: "이 메뉴들을 찾았어요.",
+  morePreferences: (count) => `외 ${count}개`,
   liveCount: (menus, merchants) => `지금 메뉴 ${menus.toLocaleString()}개 · 가게 ${merchants.toLocaleString()}곳이 조건에 맞아요`,
   any: "무관",
   clear: "초기화",
@@ -281,6 +297,7 @@ const ko: RedesignCopy = {
   spiceLess: "기준보다 덜 맵게",
   spiceSimilar: "기준과 비슷하게",
   spiceMore: "기준보다 더 맵게",
+  representativeSpice: (country, dish, level) => `${country} 기준: ${dish} · 맵기 ${level}/5`,
   priceRange: "가격 범위",
   priceMinimum: "최소 가격",
   priceMaximum: "최대 가격",
@@ -303,6 +320,9 @@ const ko: RedesignCopy = {
   editMyInfo: "내 정보 수정",
   orderSetup: (index, total) => `주문 설정 · 옵션 ${index}/${total}`,
   requiredTapOne: "필수 · 하나를 선택하세요",
+  optionalTap: "선택 · 고르거나 선택하지 않아도 돼요",
+  noneOption: "선택 안 함",
+  doneOptions: "선택 완료",
   useDefaults: "나머지는 기본값 사용",
   changeMenu: "메뉴 변경",
   niceChoice: (count) => (count > 0
@@ -330,6 +350,7 @@ const ko: RedesignCopy = {
   koreanTranslation: "식당에 보낼 메시지",
   backTranslation: "내 언어로 다시 확인",
   retryTranslation: "번역 다시 시도",
+  addWithoutNote: "요청사항 없이 장바구니에 담기",
 };
 
 const ja: RedesignCopy = {
@@ -342,6 +363,7 @@ const ja: RedesignCopy = {
   demoFootnote: "", back: "戻る", stepOf: (step, total, label) => `ステップ${step}/${total}・${label}`,
   sectionCore: "基本", sectionTaste: "味", sectionConditions: "条件", sectionPreferences: "好み",
   craveTitle: "どんな料理が食べたいですか？", craveSubtitle: "好きなだけ選べます。",
+  foundForYou: "こちらのメニューを見つけました。", morePreferences: (count) => `ほか${count}件`,
   liveCount: () => "", any: "指定なし", clear: "クリア", next: "次へ", findMyDish: "料理を探す",
   upTo: (level) => `${level}まで`, mild: "マイルド", veryHot: "とても辛い",
   halalLabel: "ハラールのみ", veganLabel: "ヴィーガンのみ", capabilityUnavailable: "現在利用できません",
@@ -354,6 +376,7 @@ const ja: RedesignCopy = {
   editChip: "編集", yobiPick: "YOBIのおすすめ", pickCount: (index, total) => `${index} / ${total}`,
   yogiyoLabel: "YOGIYO:", yobiLabel: "YOBI:", spiceLess: "基準より辛くない",
   spiceSimilar: "基準と同じくらい", spiceMore: "基準より辛い", priceRange: "価格帯",
+  representativeSpice: (country, dish, level) => `${country}の目安：${dish}・辛さ${level}/5`,
   priceMinimum: "最低価格", priceMaximum: "最高価格",
   countryPreference: "同じ国からの旅行者の好み", sampleSize: (count) => `${count.toLocaleString()}人を基準`,
   reviewSummary: "レビュー要約", spiceOk: (level) => `辛さ ${level}/5`, halalYes: "ハラール：はい",
@@ -361,7 +384,8 @@ const ja: RedesignCopy = {
   additionalExplanation: "詳しい説明", aiGenerated: "YOBIの説明", wikiEvidence: "Wikiの根拠",
   gotIt: "確認", seeOtherMenus: "ほかのメニューを見る", editFilters: "条件を編集", menuBar: "メニュー",
   openCart: "カートを開く", editMyInfo: "情報を編集", orderSetup: (index, total) => `注文設定・${index}/${total}`,
-  requiredTapOne: "必須・1つ選択", useDefaults: "残りは標準設定", changeMenu: "メニュー変更",
+  requiredTapOne: "必須・1つ選択", optionalTap: "任意・選択しなくてもOK", noneOption: "選択しない",
+  doneOptions: "選択完了", useDefaults: "残りは標準設定", changeMenu: "メニュー変更",
   niceChoice: (count) => count ? `あと${count}件のオプションを選んでください。` : "注文の準備ができました。",
   orderReady: "注文準備完了", deliverTo: "配達先", yourMenu: "注文メニュー", totalEstimated: "合計（予定）",
   demoOrderWarning: "メニュー、オプション、配達情報を確認して続けてください。",
@@ -371,7 +395,8 @@ const ja: RedesignCopy = {
   handoffDemoNotice: "注文を続けるため、YOBIがこのカートをYogiyoへ引き継ぎます。",
   restaurantNote: "お店にはどう伝えますか？", restaurantNoteHelp: "使っている言語で入力すると、YOBIが韓国語に翻訳します。",
   translateNote: "韓国語に翻訳", translatingNote: "翻訳中…", koreanTranslation: "お店へのメッセージ",
-  backTranslation: "自分の言語で確認", retryTranslation: "もう一度翻訳",
+  backTranslation: "自分の言語で確認", retryTranslation: "韓国語への翻訳を再試行",
+  addWithoutNote: "お店へのメモなしでカートに追加",
 };
 
 export function getRedesignCopy(language: SupportedLanguage): RedesignCopy {

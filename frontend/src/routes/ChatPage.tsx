@@ -386,16 +386,43 @@ export function ChatPage() {
   const transcriptCriteria = committedCriteria ?? draftCriteria;
   const selectedPreferenceLabels = useMemo(() => {
     if (!catalog) return [];
-    const labels = catalog.categories.flatMap((category) => {
+    const categoryOrder = [
+      "cuisine_origins",
+      "main_ingredients",
+      "food_forms",
+      "flavors",
+      "textures",
+      "cooking_methods",
+      "temperatures",
+      "price_bands",
+    ];
+    const categories = [...catalog.categories].sort(
+      (left, right) => categoryOrder.indexOf(left.code) - categoryOrder.indexOf(right.code),
+    );
+    const labels = categories.flatMap((category) => {
       const selected = new Set(transcriptCriteria[category.code]);
       return category.options
         .filter((option) => selected.has(option.code))
         .map((option) => option.label);
     });
+    if (transcriptCriteria.schema_version === "3") {
+      labels.push({
+        LESS: v2.spiceLess,
+        SIMILAR: v2.spiceSimilar,
+        MORE: v2.spiceMore,
+      }[transcriptCriteria.spice_preference ?? "SIMILAR"]);
+      if (transcriptCriteria.price_range_krw) {
+        labels.push(
+          `₩${transcriptCriteria.price_range_krw.min.toLocaleString(locale)}–₩${transcriptCriteria.price_range_krw.max.toLocaleString(locale)}`,
+        );
+      }
+    }
     if (transcriptCriteria.dietary_filters.halal_certified_only) labels.push(recommendationCopy.halal);
     if (transcriptCriteria.dietary_filters.vegan) labels.push(recommendationCopy.vegan);
-    return labels;
-  }, [catalog, recommendationCopy.halal, recommendationCopy.vegan, transcriptCriteria]);
+    const visible = labels.slice(0, 8);
+    if (labels.length > visible.length) visible.push(v2.morePreferences(labels.length - visible.length));
+    return visible;
+  }, [catalog, locale, recommendationCopy.halal, recommendationCopy.vegan, transcriptCriteria, v2]);
   const conversationDate = useMemo(() => new Intl.DateTimeFormat(locale, {
     month: "short",
     day: "numeric",
@@ -680,8 +707,13 @@ export function ChatPage() {
   }
 
   const messageTime = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }).format(new Date());
-  const showsResults = catalog && latestRecommendation
+  const showsResultActions = catalog && latestRecommendation
     && (recommendationPhase === "RESULTS" || recommendationPhase === "SEARCH_FALLBACK");
+  const showsRecommendationTranscript = Boolean(
+    catalog
+    && latestRecommendation
+    && ["RESULTS", "SEARCH_FALLBACK", "ORDERING"].includes(recommendationPhase),
+  );
 
   return (
     <main className="v2-screen v2-chat">
@@ -716,27 +748,28 @@ export function ChatPage() {
         <div className="v2-date-divider" aria-hidden="true"><span>{conversationDate}</span></div>
 
         {catalog && recommendationPhase !== "SELECTING" && (
-          <div className="v2-bot-message" data-testid="user-preference-message">
+          <>
+          <div className="v2-bot-message" data-testid="craving-question-message">
             <img className="v2-bot-avatar" src="/figma/bot-avatar.svg" alt="" />
             <div className="v2-bot-stack">
               <p className="v2-bot-name">{productCopy.recommendation.assistantName}</p>
               <div className="v2-bubble">
-                <p>
-                  {recommendationCopy.resultsTitle}
-                </p>
-                {selectedPreferenceLabels.length > 0 && (
-                  <div className="v2-bubble-chips" aria-label={recommendationCopy.selectedSummary}>
-                    {selectedPreferenceLabels.map((label, index) => <span key={`${label}-${index}`}>{label}</span>)}
-                    <button type="button" onClick={editCriteria}>{v2.editChip}</button>
-                  </div>
-                )}
+                <p>{v2.craveTitle}</p>
               </div>
               <p className="v2-timestamp">{messageTime}</p>
             </div>
           </div>
+          <div className="v2-user-message" data-testid="user-preference-message">
+            <div className="v2-user-bubble v2-user-preferences" aria-label={recommendationCopy.selectedSummary}>
+              {selectedPreferenceLabels.map((label, index) => (
+                <span key={`${label}-${index}`}>{label}</span>
+              ))}
+            </div>
+          </div>
+          </>
         )}
 
-        {showsResults && latestRecommendation && catalog && (
+        {showsRecommendationTranscript && latestRecommendation && catalog && (
           <RecommendationResults
             batch={latestRecommendation}
             copy={recommendationCopy}
@@ -744,6 +777,7 @@ export function ChatPage() {
             language={language}
             locale={locale}
             busy={busy}
+            readOnly={recommendationPhase === "ORDERING"}
             timestamp={messageTime}
             onChoose={(item) => void chooseMenu(item)}
             onRetry={() => void requestAnother("RETRY")}
@@ -800,7 +834,7 @@ export function ChatPage() {
       </div>
 
       <div className="v2-quick-replies">
-        {showsResults && (
+        {showsResultActions && (
           <>
             <button type="button" className="v2-quick-reply" onClick={() => void requestAnother("SIMILAR")} disabled={busy}>
               {v2.seeOtherMenus}

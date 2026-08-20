@@ -195,6 +195,17 @@ export function PreferenceWizard({
 
   const priceCatalog = catalog.price_range_krw ?? { min: 8_000, max: 25_000, step: 1_000 };
   const selectedPrice = criteria.price_range_krw ?? { min: priceCatalog.min, max: priceCatalog.max };
+  const countrySpiceProfile = catalog.country_spice_profiles?.find(
+    (item) => item.country_code === criteria.spice_reference_country,
+  );
+  const spiceCountryName = useMemo(() => {
+    try {
+      return new Intl.DisplayNames([catalog.locale || "en"], { type: "region" })
+        .of(criteria.spice_reference_country) ?? criteria.spice_reference_country;
+    } catch {
+      return criteria.spice_reference_country;
+    }
+  }, [catalog.locale, criteria.spice_reference_country]);
 
   function changePrice(edge: "min" | "max", value: number) {
     const min = edge === "min" ? Math.min(value, selectedPrice.max - priceCatalog.step) : selectedPrice.min;
@@ -260,6 +271,15 @@ export function PreferenceWizard({
                 <h2>{copy.spiceTitle}</h2>
               </header>
               <p className="v2-card-help">{copy.spiceHelp}</p>
+              {countrySpiceProfile && (
+                <p className="v2-spice-reference" data-testid="country-spice-reference">
+                  {v2.representativeSpice(
+                    spiceCountryName,
+                    countrySpiceProfile.representative_dish,
+                    countrySpiceProfile.spice_baseline,
+                  )}
+                </p>
+              )}
               <div className="v2-relative-spice" role="radiogroup" aria-label={copy.spiceTitle}>
                 {([
                   ["LESS", v2.spiceLess],

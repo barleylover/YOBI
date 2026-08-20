@@ -162,6 +162,7 @@ export interface PreferenceCatalog {
   country_spice_profiles?: Array<{
     country_code: SpiceReferenceCountry;
     spice_baseline: 1 | 2 | 3 | 4 | 5;
+    representative_dish: string;
   }>;
   synthetic_enrichment_release_id?: string | null;
   capabilities?: {
@@ -217,6 +218,7 @@ export interface StructuredRecommendation {
   selection_reason: string;
   description: string;
   localized_title?: string | null;
+  localized_subtitle?: string | null;
   yobi_short_explanation?: string | null;
   yobi_long_explanation?: string | null;
   source_description?: string | null;
@@ -689,6 +691,7 @@ export interface RestaurantNoteTranslation {
 export interface MerchantMenuPresentation {
   menu: MenuSummary;
   localized_title: string;
+  localized_subtitle?: string | null;
   yobi_short_explanation: string;
   yobi_long_explanation: string;
   source_description: string;

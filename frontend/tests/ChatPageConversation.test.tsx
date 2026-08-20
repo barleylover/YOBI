@@ -122,8 +122,8 @@ const catalog: PreferenceCatalog = {
   })),
   price_range_krw: { min: 8000, max: 25000, step: 1000 },
   country_spice_profiles: [
-    { country_code: "KR", spice_baseline: 4 },
-    { country_code: "US", spice_baseline: 2 },
+    { country_code: "KR", spice_baseline: 4, representative_dish: "Shin Ramyun" },
+    { country_code: "US", spice_baseline: 2, representative_dish: "Buffalo wings" },
   ],
   capabilities: {
     halal_certified_only: { enabled: true },
@@ -145,6 +145,8 @@ const batch: RecommendationBatchV2 = {
     rank: 1,
     menu,
     title: "An easy Korean meal",
+    localized_title: "An easy Korean meal",
+    localized_subtitle: "A compact Korean rice-and-seaweed roll",
     selection_reason: "It matches one selected value in each active category.",
     description: "The food Wiki describes this as a compact, lightly seasoned meal.",
     matched_criteria: [
@@ -253,6 +255,7 @@ describe("ChatPage structured recommendation contract", () => {
     expect(screen.getByRole("slider", { name: "Minimum price" })).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: /Halal-certified only/ })).toBeEnabled();
     expect(screen.getByRole("switch", { name: /Vegan options only/ })).toBeEnabled();
+    expect(screen.getByText("United States reference: Buffalo wings · spice 2/5")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Find my dish/ }));
 
     await waitFor(() => expect(putCriteria).toHaveBeenCalledWith(
@@ -274,8 +277,14 @@ describe("ChatPage structured recommendation contract", () => {
       expect.any(AbortSignal),
     ));
     expect(await screen.findByText("An easy Korean meal")).toBeInTheDocument();
-    expect(screen.getByTestId("user-preference-message")).toHaveTextContent("Korean");
-    expect(screen.getByTestId("user-preference-message")).toHaveTextContent("Sweet");
+    const craving = screen.getByTestId("craving-question-message");
+    const preference = screen.getByTestId("user-preference-message");
+    const recommendations = screen.getByTestId("recommendation-results-message");
+    expect(preference).toHaveTextContent("Korean");
+    expect(preference).toHaveTextContent("Sweet");
+    expect(craving.compareDocumentPosition(preference) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(preference.compareDocumentPosition(recommendations) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText("A compact Korean rice-and-seaweed roll")).toBeInTheDocument();
   }, 10_000);
 
   it("polls one persisted pending request until the same request completes", async () => {
@@ -513,7 +522,9 @@ describe("ChatPage structured recommendation contract", () => {
       }),
     ));
     await waitFor(() => expect(screen.getByTestId("order-flow")).toBeInTheDocument());
-    expect(screen.getByTestId("selected-menu-message")).toHaveTextContent("Wiki gimbap");
+    expect(screen.getByTestId("selected-menu-message")).toHaveTextContent("An easy Korean meal");
+    expect(screen.getByTestId("recommendation-results-message")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Choose this menu" })).not.toBeInTheDocument();
   });
 
   it("does not revive a stale v2 selection from the legacy snapshot", async () => {

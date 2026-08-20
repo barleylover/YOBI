@@ -45,7 +45,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
   const [phase, setPhase] = useState<Phase>("options");
   const [groups, setGroups] = useState<OptionGroup[]>([]);
   const [groupIndex, setGroupIndex] = useState(0);
-  const [selections, setSelections] = useState<Record<string, string>>({});
+  const [selections, setSelections] = useState<Record<string, string[]>>({});
   const [note, setNote] = useState(journeyCopy.mildNote);
   const [cart, setCart] = useState<CartPreview | null>(null);
   const [merchantMenus, setMerchantMenus] = useState<MerchantMenuPresentation[]>([]);
@@ -100,12 +100,33 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
   }
 
   const currentGroup = groups[groupIndex];
-  const selectedOptionIds = useMemo(() => Object.values(selections), [selections]);
+  const selectedOptionIds = useMemo(() => Object.values(selections).flat(), [selections]);
   const selectedDelta = useMemo(() => groups.reduce((total, group) => {
-    const optionId = selections[group.option_group_id];
-    const option = group.items.find((item) => item.option_item_id === optionId);
-    return total + (option?.price_delta ?? 0);
+    const optionIds = new Set(selections[group.option_group_id] ?? []);
+    return total + group.items.reduce(
+      (subtotal, option) => subtotal + (optionIds.has(option.option_item_id) ? option.price_delta : 0),
+      0,
+    );
   }, 0), [groups, selections]);
+
+  function advanceFromGroup() {
+    if (transitionTimer.current !== null) clearTimeout(transitionTimer.current);
+    transitionTimer.current = setTimeout(() => {
+      transitionTimer.current = null;
+      if (groupIndex < groups.length - 1) setGroupIndex((value) => value + 1);
+      else setPhase("note");
+    }, 160);
+  }
+
+  function sourceHasNoneOption(group: OptionGroup) {
+    return group.items.some((option) => {
+      const value = `${option.name_ko} ${option.name_en} ${option.display_name ?? ""}`
+        .replace(/\s+/g, "")
+        .toLowerCase();
+      return ["선택안함", "미선택", "none", "nooption", "選択しない", "なし"]
+        .some((token) => value.includes(token));
+    });
+  }
 
   function optionConflicts(option: OptionItem) {
     const breaksHalal = Boolean(dietaryFilters?.halal_certified_only && option.halal_certification_preserved === false);
@@ -118,14 +139,15 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
     setBusy(true);
     setError("");
     try {
-      await onOptionChange?.(activeMenu.menu_id, group.option_group_id, [optionId], false);
-      setSelections((current) => ({ ...current, [group.option_group_id]: optionId }));
-      if (transitionTimer.current !== null) clearTimeout(transitionTimer.current);
-      transitionTimer.current = setTimeout(() => {
-        transitionTimer.current = null;
-        if (groupIndex < groups.length - 1) setGroupIndex((value) => value + 1);
-        else setPhase("note");
-      }, 160);
+      const current = selections[group.option_group_id] ?? [];
+      const next = group.max_select > 1
+        ? current.includes(optionId)
+          ? current.filter((value) => value !== optionId)
+          : current.length < group.max_select ? [...current, optionId] : current
+        : [optionId];
+      await onOptionChange?.(activeMenu.menu_id, group.option_group_id, next, false);
+      setSelections((value) => ({ ...value, [group.option_group_id]: next }));
+      if (group.max_select === 1) advanceFromGroup();
     } catch (cause) {
       setError(actionableError(cause, journeyCopy.retry, language));
     } finally {
@@ -133,22 +155,54 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
     }
   }
 
+  async function selectNone(group: OptionGroup) {
+    setBusy(true);
+    setError("");
+    try {
+      await onOptionChange?.(activeMenu.menu_id, group.option_group_id, [], false);
+      setSelections((current) => ({ ...current, [group.option_group_id]: [] }));
+      advanceFromGroup();
+    } catch (cause) {
+      setError(actionableError(cause, journeyCopy.retry, language));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function finishMultiSelect(group: OptionGroup) {
+    const count = (selections[group.option_group_id] ?? []).length;
+    if (count < group.min_select) {
+      setError(v2.requiredTapOne);
+      return;
+    }
+    setError("");
+    advanceFromGroup();
+  }
+
   async function applyDefaultsForRest() {
     setBusy(true);
     setError("");
     try {
-      const next: Record<string, string> = { ...selections };
+      const next: Record<string, string[]> = { ...selections };
       for (let index = groupIndex; index < groups.length; index += 1) {
         const group = groups[index];
-        if (next[group.option_group_id]) continue;
-        const fallback = group.items.find((option) => {
+        if (next[group.option_group_id] !== undefined) continue;
+        if (group.min_select === 0) {
+          await onOptionChange?.(activeMenu.menu_id, group.option_group_id, [], false);
+          next[group.option_group_id] = [];
+          continue;
+        }
+        const safeOptions = group.items.filter((option) => {
           if (!option.available) return false;
           const { breaksHalal, breaksVegan } = optionConflicts(option);
           return !breaksHalal && !breaksVegan;
         });
-        if (!fallback) continue;
-        await onOptionChange?.(activeMenu.menu_id, group.option_group_id, [fallback.option_item_id], false);
-        next[group.option_group_id] = fallback.option_item_id;
+        const optionIds = safeOptions
+          .slice(0, Math.max(1, group.min_select))
+          .map((option) => option.option_item_id);
+        if (optionIds.length < group.min_select) continue;
+        await onOptionChange?.(activeMenu.menu_id, group.option_group_id, optionIds, false);
+        next[group.option_group_id] = optionIds;
       }
       setSelections(next);
       setPhase("note");
@@ -172,6 +226,26 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
         selectedOptionIds,
         note,
         noteTranslation?.translation_id,
+      );
+      syncCart(preview);
+      setPhase("more");
+    } catch (cause) {
+      setError(actionableError(cause, journeyCopy.retry, language));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addWithoutRestaurantNote() {
+    setBusy(true);
+    setError("");
+    try {
+      const preview = await api.addCartItem(
+        sessionId,
+        activeMenu.menu_id,
+        selectedOptionIds,
+        "",
+        undefined,
       );
       syncCart(preview);
       setPhase("more");
@@ -329,11 +403,26 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
             <div className="v2-order-body">
               <div className="v2-order-heading">
                 <h3>{currentGroup.display_name || (language === "한국어" ? currentGroup.name_ko : currentGroup.name_en)}</h3>
-                <p>{v2.requiredTapOne}</p>
+                <p>{currentGroup.min_select === 0 ? v2.optionalTap : v2.requiredTapOne}</p>
               </div>
+              {currentGroup.min_select === 0 && !sourceHasNoneOption(currentGroup) && (
+                <div className="v2-option-shell">
+                  <button
+                    type="button"
+                    className={(selections[currentGroup.option_group_id] ?? []).length === 0
+                      ? "v2-option-row selected"
+                      : "v2-option-row"}
+                    onClick={() => void selectNone(currentGroup)}
+                    disabled={busy}
+                  >
+                    <span className={(selections[currentGroup.option_group_id] ?? []).length === 0 ? "radio checked" : "radio"} aria-hidden="true" />
+                    <span className="labels"><strong>{v2.noneOption}</strong></span>
+                  </button>
+                </div>
+              )}
               {currentGroup.items.map((option) => {
                 const { breaksHalal, breaksVegan, needsVeganCheck } = optionConflicts(option);
-                const selected = selections[currentGroup.option_group_id] === option.option_item_id;
+                const selected = (selections[currentGroup.option_group_id] ?? []).includes(option.option_item_id);
                 return (
                   <div key={option.option_item_id} className="v2-option-shell">
                     <button
@@ -358,6 +447,16 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
                   </div>
                 );
               })}
+              {currentGroup.max_select > 1 && (
+                <button
+                  type="button"
+                  className="v2-card-primary"
+                  onClick={() => finishMultiSelect(currentGroup)}
+                  disabled={busy || (selections[currentGroup.option_group_id] ?? []).length < currentGroup.min_select}
+                >
+                  {v2.doneOptions}
+                </button>
+              )}
             </div>
           </article>
           <div className="v2-inline-replies no-indent">
@@ -384,14 +483,26 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
               value={note}
               onChange={(event) => { setNote(event.target.value); setNoteTranslation(null); setError(""); }}
             />
-            <button type="button" className="v2-card-secondary" onClick={() => void translateNote()} disabled={busy || !note.trim()}>
-              {busy ? v2.translatingNote : noteTranslation?.status === "FAILED" ? v2.retryTranslation : v2.translateNote}
-            </button>
+            {noteTranslation?.status !== "FAILED" && (
+              <button type="button" className="v2-card-secondary" onClick={() => void translateNote()} disabled={busy || !note.trim()}>
+                {busy ? v2.translatingNote : v2.translateNote}
+              </button>
+            )}
             {noteTranslation?.status === "SUCCEEDED" && (
               <div className="v2-translation-preview" aria-live="polite">
                 <small>{v2.koreanTranslation}</small>
                 <strong>{noteTranslation.korean_text}</strong>
                 <p>{v2.backTranslation}: {noteTranslation.back_translation}</p>
+              </div>
+            )}
+            {noteTranslation?.status === "FAILED" && (
+              <div className="v2-translation-fallback" role="status">
+                <button type="button" className="v2-card-secondary" onClick={() => void translateNote()} disabled={busy}>
+                  {v2.retryTranslation}
+                </button>
+                <button type="button" className="v2-card-secondary" onClick={() => void addWithoutRestaurantNote()} disabled={busy}>
+                  {v2.addWithoutNote}
+                </button>
               </div>
             )}
             <button
@@ -448,7 +559,13 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
                   <img className="v2-card-hero" src="/figma/menu-hero.png" alt="" />
                   <div className="v2-card-body">
                     <div className="v2-card-title-row">
-                      <div><h4>{item.localized_title || menuName(item.menu, language)}</h4><p>{item.menu.merchant_name}</p></div>
+                      <div>
+                        <h4>{item.localized_title || menuName(item.menu, language)}</h4>
+                        {item.localized_subtitle && item.localized_subtitle !== item.localized_title && (
+                          <small className="v2-card-subtitle">{item.localized_subtitle}</small>
+                        )}
+                        <p>{item.menu.merchant_name}</p>
+                      </div>
                       <strong>{won(item.menu.price)}</strong>
                     </div>
                     <p className="v2-card-yobi"><span>{v2.yobiLabel}</span> {item.yobi_short_explanation || dynamicCopy.catalogDescription}</p>

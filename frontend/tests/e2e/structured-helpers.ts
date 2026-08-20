@@ -81,6 +81,7 @@ export async function selectFirstPreferenceAndRecommend(
   await selectFirstPricePreference(page);
   await page.getByRole("button", { name: copy.next, exact: true }).click();
   await page.getByRole("button", { name: copy.next, exact: true }).click();
+  await expect(page.getByTestId("country-spice-reference")).toBeVisible();
   const responsePromise = page.waitForResponse((response) => (
     response.request().method() === "POST" && response.url().endsWith("/recommendations")
   ));

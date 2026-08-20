@@ -54,6 +54,7 @@ const batch: RecommendationBatchV2 = {
     menu: item,
     title: item.name_en,
     localized_title: item.localized_title,
+    localized_subtitle: index === 0 ? "Seasoned rice and fillings rolled in seaweed" : "Korean mixed rice bowl",
     selection_reason: "Legacy selection reason must stay hidden.",
     description: item.description,
     yobi_short_explanation: "A familiar rice-based Korean meal with mild flavours.",
@@ -93,6 +94,7 @@ describe("chat-style recommendation results", () => {
     );
 
     expect(screen.getAllByText("Gimbap").length).toBeGreaterThan(0);
+    expect(screen.getByText("Seasoned rice and fillings rolled in seaweed")).toBeInTheDocument();
     expect(screen.getAllByText("YOBI:").length).toBeGreaterThan(0);
     expect(screen.getAllByText("YOGIYO:").length).toBeGreaterThan(0);
     expect(screen.queryByText("Legacy selection reason must stay hidden.")).not.toBeInTheDocument();

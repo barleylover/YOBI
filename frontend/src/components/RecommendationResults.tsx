@@ -19,6 +19,7 @@ interface Props {
   language: string;
   locale: string;
   busy?: boolean;
+  readOnly?: boolean;
   timestamp: string;
   onChoose: (recommendation: StructuredRecommendation) => void;
   /** Comparison is intentionally no longer rendered in the v3 journey. */
@@ -33,6 +34,7 @@ export function RecommendationResults({
   language,
   locale,
   busy = false,
+  readOnly = false,
   timestamp,
   onChoose,
   onRetry,
@@ -54,7 +56,11 @@ export function RecommendationResults({
   const explanationItem = batch.recommendations.find((item) => item.menu.menu_id === explanationMenuId) ?? null;
 
   return (
-    <section className="v2-results" aria-labelledby="recommendation-results-title">
+    <section
+      className="v2-results"
+      aria-labelledby="recommendation-results-title"
+      data-testid="recommendation-results-message"
+    >
       <h2 id="recommendation-results-title" className="visually-hidden">
         {isFallback ? copy.searchFallbackTitle : copy.resultsTitle}
       </h2>
@@ -74,6 +80,8 @@ export function RecommendationResults({
       <div className="v2-bot-message">
         <img className="v2-bot-avatar" src="/figma/bot-avatar.svg" alt="" />
         <div className="v2-bot-stack">
+          <p className="v2-bot-name">{productCopy.assistantName}</p>
+          <div className="v2-bubble v2-results-intro"><p>{v2.foundForYou}</p></div>
           <div
             ref={carouselRef}
             className="v2-card-carousel"
@@ -98,6 +106,9 @@ export function RecommendationResults({
                     <div className="v2-card-title-row">
                       <div>
                         <h3>{item.localized_title || item.title || menuName(item.menu, language)}</h3>
+                        {item.localized_subtitle && item.localized_subtitle !== item.localized_title && (
+                          <small className="v2-card-subtitle">{item.localized_subtitle}</small>
+                        )}
                         <p>{item.menu.merchant_name}</p>
                       </div>
                       <strong>₩{item.menu.price.toLocaleString(locale)}</strong>
@@ -132,14 +143,16 @@ export function RecommendationResults({
                     >
                       {v2.viewExplanation}
                     </button>
-                    <button
-                      type="button"
-                      className="v2-card-primary"
-                      disabled={busy || !batch.snapshot_id}
-                      onClick={() => onChoose(item)}
-                    >
-                      {v2.chooseThisMenu}
-                    </button>
+                    {!readOnly && (
+                      <button
+                        type="button"
+                        className="v2-card-primary"
+                        disabled={busy || !batch.snapshot_id}
+                        onClick={() => onChoose(item)}
+                      >
+                        {v2.chooseThisMenu}
+                      </button>
+                    )}
                   </div>
                 </article>
               );
@@ -156,7 +169,7 @@ export function RecommendationResults({
         </div>
       </div>
 
-      {isFallback && (
+      {isFallback && !readOnly && (
         <div className="v2-inline-replies">
           <button type="button" className="v2-quick-reply" onClick={onRetry} disabled={busy}>
             {copy.tryAgain}
@@ -170,6 +183,9 @@ export function RecommendationResults({
             <header>
               <h2 id="explanation-sheet-title">{v2.additionalExplanation}</h2>
               <p>{explanationItem.localized_title || explanationItem.title || menuName(explanationItem.menu, language)} · {explanationItem.menu.merchant_name}</p>
+              {explanationItem.localized_subtitle && explanationItem.localized_subtitle !== explanationItem.localized_title && (
+                <small className="v2-explanation-subtitle">{explanationItem.localized_subtitle}</small>
+              )}
             </header>
             <div className="v2-legend">
               <span className="warn">{v2.aiGenerated}</span>

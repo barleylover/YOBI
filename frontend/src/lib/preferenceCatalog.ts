@@ -116,7 +116,22 @@ function normalizePriceRange(value: unknown) {
   return { min, max, step };
 }
 
-function normalizeCountrySpiceProfiles(value: unknown) {
+function fallbackRepresentativeDish(countryCode: string, locale: string) {
+  const language = locale.toLowerCase().split(/[-_]/, 1)[0];
+  if (countryCode === "KR") {
+    return language === "ko" ? "신라면" : language === "ja" ? "辛ラーメン" : "Shin Ramyun";
+  }
+  if (countryCode === "US") {
+    return language === "ko" ? "버팔로 윙" : language === "ja" ? "バッファローウィング" : "Buffalo wings";
+  }
+  return language === "ko"
+    ? "현지의 대표적인 중간 매운 음식"
+    : language === "ja"
+      ? "現地の代表的な中辛料理"
+      : "a familiar medium-spicy local dish";
+}
+
+function normalizeCountrySpiceProfiles(value: unknown, locale: string) {
   if (!Array.isArray(value)) return undefined;
   const profiles = value.flatMap((entry) => {
     const item = record(entry);
@@ -128,6 +143,10 @@ function normalizeCountrySpiceProfiles(value: unknown) {
     return [{
       country_code: countryCode as SpiceReferenceCountry,
       spice_baseline: spiceBaseline as 1 | 2 | 3 | 4 | 5,
+      representative_dish: textValue(
+        item.representative_dish,
+        fallbackRepresentativeDish(countryCode, locale),
+      ),
     }];
   });
   return profiles.length ? profiles : undefined;
@@ -162,7 +181,7 @@ export function normalizePreferenceCatalog(value: unknown, locale: string): Pref
   const veganCapability = normalizeCapability(rawCapabilities.vegan);
   const spiceCapability = normalizeCapability(rawCapabilities.max_spice_level ?? rawCapabilities.spice);
   const priceRange = normalizePriceRange(payload.price_range_krw);
-  const countrySpiceProfiles = normalizeCountrySpiceProfiles(payload.country_spice_profiles);
+  const countrySpiceProfiles = normalizeCountrySpiceProfiles(payload.country_spice_profiles, locale);
   return {
     schema_version: payload.schema_version === "3" ? "3" : "2",
     catalog_version: textValue(
