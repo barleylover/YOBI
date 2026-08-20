@@ -57,6 +57,7 @@ interface SessionState {
   setLatestRecommendation: (result: RecommendationBatchV2 | null) => void;
   resetRecommendation: () => void;
   clear: () => void;
+  restart: () => void;
 }
 
 export const useSessionStore = create<SessionState>()(
@@ -107,6 +108,21 @@ export const useSessionStore = create<SessionState>()(
         pendingRecommendation: null,
       })),
       clear: () => set({
+        profile: null,
+        session: null,
+        addressRefId: "",
+        addressSummary: "",
+        cartQuantity: 0,
+        draftCriteria: emptyCriteria(),
+        committedCriteria: null,
+        criteriaVersion: 0,
+        recommendationPhase: "SELECTING",
+        pendingRecommendation: null,
+        latestRecommendation: null,
+      }),
+      restart: () => set({
+        draftLanguage: "English",
+        draftCountry: "United States",
         profile: null,
         session: null,
         addressRefId: "",

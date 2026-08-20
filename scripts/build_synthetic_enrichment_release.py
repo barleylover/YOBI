@@ -49,7 +49,7 @@ def _load_sqlite_inputs(path: Path) -> tuple[str, str, list[EnrichmentMenu], lis
             raise RuntimeError("ACTIVE_RECOMMENDATION_FAMILY_REQUIRED")
         menu_rows = connection.execute(
             """
-            SELECT menu.menu_id,menu.name_ko,
+            SELECT menu.menu_id,menu.name_en,menu.name_ko,
                    COALESCE(group_concat(feature.option_code,' '),'') AS feature_codes
             FROM menu_wiki_eligibility eligibility
             JOIN menu ON menu.menu_id=eligibility.menu_id
@@ -58,7 +58,7 @@ def _load_sqlite_inputs(path: Path) -> tuple[str, str, list[EnrichmentMenu], lis
              AND feature.menu_id=eligibility.menu_id
              AND feature.support_status='SUPPORTED'
             WHERE eligibility.knowledge_release_id=?
-            GROUP BY menu.menu_id,menu.name_ko
+            GROUP BY menu.menu_id,menu.name_en,menu.name_ko
             ORDER BY menu.menu_id
             """,
             (str(active["knowledge_release_id"]),),
@@ -77,6 +77,7 @@ def _load_sqlite_inputs(path: Path) -> tuple[str, str, list[EnrichmentMenu], lis
                 menu_id=str(row["menu_id"]),
                 name_ko=str(row["name_ko"]),
                 feature_codes=tuple(str(row["feature_codes"] or "").split()),
+                name_en=str(row["name_en"] or ""),
             )
             for row in menu_rows
         ]
@@ -121,7 +122,7 @@ def _load_oracle_inputs(
         catalog_release_id, knowledge_release_id = map(str, active)
         cursor.execute(
             """
-            SELECT menu.menu_id,menu.name_ko,
+            SELECT menu.menu_id,menu.name_en,menu.name_ko,
                    LISTAGG(feature.option_code,' ') WITHIN GROUP (ORDER BY feature.option_code)
             FROM menu_wiki_eligibility eligibility
             JOIN menu ON menu.menu_id=eligibility.menu_id
@@ -130,14 +131,19 @@ def _load_oracle_inputs(
              AND feature.menu_id=eligibility.menu_id
              AND feature.support_status='SUPPORTED'
             WHERE eligibility.knowledge_release_id=:knowledge_release_id
-            GROUP BY menu.menu_id,menu.name_ko
+            GROUP BY menu.menu_id,menu.name_en,menu.name_ko
             ORDER BY menu.menu_id
             """,
             knowledge_release_id=knowledge_release_id,
         )
         menus = [
-            EnrichmentMenu(str(menu_id), str(name_ko), tuple(str(features or "").split()))
-            for menu_id, name_ko, features in cursor.fetchall()
+            EnrichmentMenu(
+                str(menu_id),
+                str(name_ko),
+                tuple(str(features or "").split()),
+                str(name_en or ""),
+            )
+            for menu_id, name_en, name_ko, features in cursor.fetchall()
         ]
         menu_ids = {menu.menu_id for menu in menus}
         cursor.execute(

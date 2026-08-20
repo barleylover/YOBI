@@ -80,6 +80,18 @@ _ENGLISH_DESCRIPTION_STOPWORDS = _ENGLISH_TITLE_STOPWORDS | {
     "tasty",
 }
 
+_REVIEW_SIGNAL_PATTERN = re.compile(
+    r"(?i)(?:\breview(?:er|ers|s)?\b|\bdiner(?:s)?\b|\bcustomer(?:s)?\b|"
+    r"\brating(?:s)?\b|\bfeedback\b|\bstrong marks\b|\bpositive comments\b|"
+    r"\bpeople (?:said|noted|mentioned|praised|found)\b|"
+    r"리뷰|후기|평점|손님|고객(?:이|들이)?\s*(?:말|평가|언급|칭찬)|"
+    r"レビュー|口コミ|評価|客(?:が|から).*(?:声|評価|好評))"
+)
+
+
+def _contains_review_signal(value: str) -> bool:
+    return bool(_REVIEW_SIGNAL_PATTERN.search(value))
+
 
 def _english_title_tokens(value: str) -> set[str]:
     without_brands = re.sub(r"\[[^\]]*\]|\([^)]*(?:store|branch|restaurant)[^)]*\)", " ", value)
@@ -275,6 +287,10 @@ class GeneratedMenuPresentation(BaseModel):
     review_summary: str = Field(min_length=1, max_length=1500)
     used_evidence_ids: list[str] = Field(default_factory=list, max_length=40)
     used_source_fields: list[str] = Field(min_length=1, max_length=20)
+    yobi_used_evidence_ids: list[str] = Field(default_factory=list, max_length=40)
+    review_used_ids: list[str] = Field(default_factory=list, max_length=40)
+    yobi_used_source_fields: list[str] = Field(min_length=1, max_length=20)
+    review_used_source_fields: list[str] = Field(default_factory=list, max_length=20)
     personalization_applied: bool = False
     covered_component_ids: list[str] = Field(default_factory=list, max_length=40)
     component_mentions: list[GeneratedComponentMention] = Field(default_factory=list, max_length=40)
@@ -355,6 +371,10 @@ MENU_PRESENTATION_JSON_SCHEMA: dict[str, Any] = {
                     "review_summary",
                     "used_evidence_ids",
                     "used_source_fields",
+                    "yobi_used_evidence_ids",
+                    "review_used_ids",
+                    "yobi_used_source_fields",
+                    "review_used_source_fields",
                     "personalization_applied",
                     "covered_component_ids",
                     "component_mentions",
@@ -400,6 +420,27 @@ MENU_PRESENTATION_JSON_SCHEMA: dict[str, Any] = {
                     "used_source_fields": {
                         "type": "array",
                         "minItems": 1,
+                        "maxItems": 20,
+                        "items": {"type": "string"},
+                    },
+                    "yobi_used_evidence_ids": {
+                        "type": "array",
+                        "maxItems": 40,
+                        "items": {"type": "string"},
+                    },
+                    "review_used_ids": {
+                        "type": "array",
+                        "maxItems": 40,
+                        "items": {"type": "string"},
+                    },
+                    "yobi_used_source_fields": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 20,
+                        "items": {"type": "string"},
+                    },
+                    "review_used_source_fields": {
+                        "type": "array",
                         "maxItems": 20,
                         "items": {"type": "string"},
                     },
@@ -522,7 +563,7 @@ class MenuPresentationGenerator:
             request["text"] = {
                 "format": {
                     "type": "json_schema",
-                    "name": "yobi_grounded_menu_presentation_v5",
+                    "name": "yobi_grounded_menu_presentation_v6",
                     "schema": MENU_PRESENTATION_JSON_SCHEMA,
                     "strict": True,
                 }
@@ -585,6 +626,10 @@ class MenuPresentationGenerator:
                 )
                 if generated.localized_title != expected_title:
                     raise ValueError("PRESENTATION_LOCALIZED_TITLE_CHANGED")
+                if _contains_review_signal(
+                    f"{generated.yobi_short_explanation} {generated.yobi_long_explanation}"
+                ):
+                    raise ValueError("PRESENTATION_YOBI_REVIEW_LEAKAGE")
                 generated_copy = (
                     generated.localized_subtitle,
                     generated.localized_source_description,
@@ -653,17 +698,24 @@ class MenuPresentationGenerator:
                     for token in _ascii_source_tokens(source_description)
                 ):
                     raise ValueError("PRESENTATION_SOURCE_DESCRIPTION_TOKEN_DROPPED")
-                allowed_evidence = {
+                allowed_yobi_evidence = {
                     str(item.get("evidence_id"))
                     for field in ("wiki_passages", "menu_facts")
                     for item in source.get(field, [])
                     if isinstance(item, dict) and item.get("evidence_id")
                 }
-                allowed_evidence.update(
+                allowed_review_evidence = {
                     str(item.get("review_id"))
                     for item in source.get("synthetic_reviews", [])
                     if isinstance(item, dict) and item.get("review_id")
-                )
+                }
+                allowed_evidence = allowed_yobi_evidence | allowed_review_evidence
+                if not set(generated.yobi_used_evidence_ids) <= allowed_yobi_evidence:
+                    raise ValueError("PRESENTATION_YOBI_EVIDENCE_SCOPE_INVALID")
+                if not set(generated.review_used_ids) <= allowed_review_evidence:
+                    raise ValueError("PRESENTATION_REVIEW_EVIDENCE_SCOPE_INVALID")
+                if allowed_review_evidence and not generated.review_used_ids:
+                    raise ValueError("PRESENTATION_REVIEW_EVIDENCE_MISSING")
                 generated.used_evidence_ids = [
                     evidence_id
                     for evidence_id in generated.used_evidence_ids
@@ -684,6 +736,36 @@ class MenuPresentationGenerator:
                 generated.used_source_fields = [
                     field for field in generated.used_source_fields if field in allowed_fields
                 ]
+                yobi_allowed_fields = {
+                    "menu_title_ko",
+                    "localized_title",
+                    "source_description_ko",
+                    "localized_source_description",
+                    "wiki_passages",
+                    "menu_facts",
+                    "country_preference",
+                    "menu_components",
+                }
+                if not set(generated.yobi_used_source_fields) <= yobi_allowed_fields:
+                    raise ValueError("PRESENTATION_YOBI_SOURCE_SCOPE_INVALID")
+                if "synthetic_reviews" in generated.yobi_used_source_fields:
+                    raise ValueError("PRESENTATION_YOBI_REVIEW_SOURCE_FORBIDDEN")
+                expected_review_fields = {"synthetic_reviews"} if source.get(
+                    "synthetic_reviews"
+                ) else set()
+                if set(generated.review_used_source_fields) != expected_review_fields:
+                    raise ValueError("PRESENTATION_REVIEW_SOURCE_SCOPE_INVALID")
+                required_yobi_fields = {"menu_title_ko", "localized_title"}
+                if source.get("source_description_ko"):
+                    required_yobi_fields.add("source_description_ko")
+                if source.get("wiki_passages"):
+                    required_yobi_fields.add("wiki_passages")
+                if generated.personalization_applied:
+                    required_yobi_fields.add("country_preference")
+                if source.get("menu_components"):
+                    required_yobi_fields.add("menu_components")
+                if not required_yobi_fields <= set(generated.yobi_used_source_fields):
+                    raise ValueError("PRESENTATION_YOBI_REQUIRED_SOURCE_FIELD_MISSING")
                 required_source_fields = {"menu_title_ko", "localized_title"}
                 if source.get("source_description_ko"):
                     required_source_fields.add("source_description_ko")
@@ -831,14 +913,26 @@ yobi_short_explanation, or yobi_long_explanation that specifically explains that
 Return both component arrays empty when menu_components is empty. Never let one component's
 temperature, form, ingredient, or cooking method describe another component.
 
-Write yobi_short_explanation in one or two short sentences, yobi_long_explanation in three to five
-short sentences, and review_summary in two or three sentences based only on synthetic_reviews.
+Write yobi_short_explanation in one or two short sentences and yobi_long_explanation in three to
+five short sentences. These two YOBI fields explain the food to a foreign visitor in their own
+language and cultural frame. They may use the title, restaurant description, menu facts, Wiki
+passages, components, and a grounded country cue. They MUST ignore synthetic_reviews completely.
+Never mention reviewers, diners, customers, ratings, feedback, praise, comments, or what people
+said in either YOBI field. Put only non-review evidence IDs in yobi_used_evidence_ids and only the
+non-review source fields actually used in yobi_used_source_fields.
+
+Write review_summary in two or three sentences based exclusively on synthetic_reviews. This is the
+only field that may summarize reviews. Put only review_id values in review_used_ids and set
+review_used_source_fields to ["synthetic_reviews"] when reviews are supplied (otherwise []). Never
+use Wiki or restaurant-description evidence to invent review sentiment.
+
 Country and language may guide familiar wording or a clearly grounded analogy, but never force a
 country mention, stereotype a nationality, or invent a similar food. Set personalization_applied
-true only when the country cue materially changed wording. Cite only supplied evidence/review IDs
-and list every source field actually used. menu_title_ko, localized_title, every non-empty
+true only when the country cue materially changed wording. Cite only supplied evidence/review IDs.
+used_evidence_ids is the union of evidence used across the output, and used_source_fields is the
+union of source fields used across the output. menu_title_ko, localized_title, every non-empty
 source_description_ko, supplied wiki_passages, and supplied synthetic_reviews are required source
-fields because the output must reflect the exact listing rather than only the generic Wiki family.
+fields because the output must reflect the exact listing and keep review copy isolated.
 Do not leave Korean Hangul in English or Japanese output. Japanese prose must use natural Japanese
 script. Do not expose internal IDs in prose, emit Markdown, or add a preamble. Prompt version:
 {self.settings.menu_presentation_prompt_version}.

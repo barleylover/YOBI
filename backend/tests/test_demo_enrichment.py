@@ -22,6 +22,18 @@ from app.demo_enrichment import (
 def _menus() -> list[EnrichmentMenu]:
     return [
         EnrichmentMenu("m-pork", "매운 제육 덮밥", ("PORK", "SPICY")),
+        EnrichmentMenu(
+            "m-cutlet",
+            "푸짐한 돈가스김밥",
+            ("RICE",),
+            "Generous Pork cutlet gimbap",
+        ),
+        EnrichmentMenu(
+            "m-pepperoni",
+            "한그릇 페퍼로니피자",
+            ("BAKED",),
+            "One-bowl Pepperoni pizza",
+        ),
         EnrichmentMenu("m-veg-1", "산채 비빔밥", ("VEGETABLE", "RICE")),
         EnrichmentMenu("m-veg-2", "두부 샐러드", ("TOFU", "VEGETABLE")),
         EnrichmentMenu("m-veg-3", "버섯 국수", ("MUSHROOM", "NOODLES")),
@@ -56,6 +68,7 @@ def test_enrichment_is_reproducible_and_exact() -> None:
     assert len(first["preferences"]) == len(_menus()) * 36
     assert len(first["reviews"]) == len(_menus()) * 6
     assert len(first["localizations"]) == len(_menus())
+    assert sum(int(row["halal_fit"]) for row in first["menus"]) == (len(_menus()) + 1) // 3
 
 
 def test_enrichment_guards_obvious_pork_and_animal_options() -> None:
@@ -66,9 +79,22 @@ def test_enrichment_guards_obvious_pork_and_animal_options() -> None:
         options=[EnrichmentOption("o-cheese", "m-veg-1", "치즈 추가")],
     )
     pork = next(row for row in rows["menus"] if row["menu_id"] == "m-pork")
+    cutlet = next(row for row in rows["menus"] if row["menu_id"] == "m-cutlet")
+    pepperoni = next(row for row in rows["menus"] if row["menu_id"] == "m-pepperoni")
     assert pork["halal_fit"] == 0
     assert pork["vegan_fit"] == 0
+    assert cutlet["halal_fit"] == 0
+    assert cutlet["vegan_fit"] == 0
+    assert pepperoni["halal_fit"] == 0
+    assert pepperoni["vegan_fit"] == 0
     assert rows["options"][0]["vegan_conflict"] == 1
+    halal_ids = {row["menu_id"] for row in rows["menus"] if row["halal_fit"]}
+    assert halal_ids <= {
+        menu.menu_id
+        for menu in _menus()
+        if menu.menu_id not in {"m-pork", "m-cutlet", "m-pepperoni"}
+    }
+    assert sum(int(row["vegan_fit"]) for row in rows["menus"] if row["menu_id"] in halal_ids) >= 3
 
 
 def test_production_size_coverage_counts_are_exact() -> None:
@@ -91,9 +117,7 @@ def test_production_size_coverage_counts_are_exact() -> None:
 def test_sqlite_release_apply_is_resumable_and_preserves_base_tables(tmp_path: Path) -> None:
     database_path = tmp_path / "enrichment.db"
     SQLiteYobiRepository(database_path).initialize()
-    catalog_release_id, knowledge_release_id, menus, options = _load_sqlite_inputs(
-        database_path
-    )
+    catalog_release_id, knowledge_release_id, menus, options = _load_sqlite_inputs(database_path)
     with sqlite3.connect(database_path) as connection:
         eligible_ids = {
             str(row[0])

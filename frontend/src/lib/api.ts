@@ -504,10 +504,19 @@ export const api = {
     request<CartPreview>(`/api/v1/sessions/${sessionId}/cart/confirm`, {
       method: "POST",
     }),
-  updateCartItem: (sessionId: string, cartItemId: string, quantity: number) =>
+  updateCartItem: (
+    sessionId: string,
+    cartItemId: string,
+    update: number | {
+      quantity?: number;
+      option_item_ids?: string[];
+      user_note?: string;
+      note_translation_id?: string;
+    },
+  ) =>
     request<CartPreview>(`/api/v1/sessions/${sessionId}/cart/items/${cartItemId}`, {
       method: "PATCH",
-      body: JSON.stringify({ quantity }),
+      body: JSON.stringify(typeof update === "number" ? { quantity: update } : update),
     }),
   deleteCartItem: (sessionId: string, cartItemId: string) =>
     request<CartPreview>(`/api/v1/sessions/${sessionId}/cart/items/${cartItemId}`, {

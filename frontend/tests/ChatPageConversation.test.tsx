@@ -527,6 +527,84 @@ describe("ChatPage structured recommendation contract", () => {
     expect(screen.queryByRole("button", { name: "Choose this menu" })).not.toBeInTheDocument();
   });
 
+  it("hydrates option events from the live conversation version, not the older recommendation snapshot", async () => {
+    prepareStore();
+    vi.spyOn(api, "getPreferenceCatalog").mockResolvedValue({
+      catalog,
+      etag: '"catalog-v2-test"',
+      notModified: false,
+    });
+    vi.spyOn(api, "getConversation").mockResolvedValue(conversation({
+      state_version: 10,
+      meal_need_state: { ...mealNeedState, selected_menu_id: menu.menu_id },
+      recommendation_criteria: criteria,
+      criteria_version: 1,
+      latest_recommendation: batch,
+    }));
+    vi.spyOn(api, "getOptions").mockResolvedValue([{
+      option_group_id: "group-size",
+      name_en: "Size",
+      name_ko: "크기",
+      display_name: "Size",
+      description: "Choose one",
+      required: true,
+      min_select: 1,
+      max_select: 1,
+      items: [{
+        option_item_id: "item-regular",
+        name_en: "Regular",
+        name_ko: "보통",
+        display_name: "Regular",
+        description: "Regular size",
+        price_delta: 0,
+        available: true,
+        conflicting_rules: [],
+      }],
+    }]);
+    vi.spyOn(api, "getCart").mockResolvedValue({
+      cart_id: "cart-empty",
+      version: 1,
+      items: [],
+      subtotal: 0,
+      delivery_fee: 0,
+      total_price: 0,
+      missing_slots: [],
+      dietary_warnings: [],
+      minimum_order_amount: 0,
+      minimum_order_shortfall: 0,
+      ready_to_checkout: false,
+      confirmed: false,
+    });
+    const postEvent = vi.spyOn(api, "postConversationEvent").mockResolvedValue({
+      event_id: "event-option-live-version",
+      event_type: "UPDATE_OPTIONS",
+      state_version: 11,
+      state: {
+        ...mealNeedState,
+        selected_menu_id: menu.menu_id,
+        option_selections: { "group-size": ["item-regular"] },
+      },
+      selected_menu_id: menu.menu_id,
+      selected_merchant_id: menu.merchant_id,
+      selected_menu: menu,
+      duplicate: false,
+    });
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: /Regular/ }));
+
+    await waitFor(() => expect(postEvent).toHaveBeenCalledWith(
+      session.session_id,
+      expect.objectContaining({
+        event_type: "UPDATE_OPTIONS",
+        expected_state_version: 10,
+        menu_id: menu.menu_id,
+        option_group_id: "group-size",
+        option_item_ids: ["item-regular"],
+      }),
+    ));
+  });
+
   it("does not revive a stale v2 selection from the legacy snapshot", async () => {
     prepareStore();
     vi.spyOn(api, "getPreferenceCatalog").mockResolvedValue({ catalog, etag: '"catalog-v2-test"', notModified: false });

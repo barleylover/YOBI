@@ -1005,6 +1005,58 @@ def test_option_event_enforces_group_cardinality(
         )
 
 
+def test_selecting_another_menu_clears_menu_scoped_option_state(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    profile = repository.create_profile(profile_data)
+    session = repository.create_session(profile.profile_id)
+    turn = _service(repository).respond(
+        session, profile, "Recommend a mild meal under 15,000 won"
+    )
+    assert turn.recommendation_result is not None
+    assert len(turn.recommendation_result.candidates) >= 2
+    first_menu, second_menu = turn.recommendation_result.candidates[:2]
+    selected = repository.apply_conversation_event(
+        session.session_id,
+        ConversationEventInput(
+            event_type=ConversationEventType.SELECT_MENU,
+            snapshot_id=turn.recommendation_snapshot_id,
+            menu_id=first_menu.menu_id,
+            expected_state_version=turn.state_version,
+            idempotency_key="select-before-menu-switch",
+        ),
+    )
+    group = repository.get_options(first_menu.menu_id)[0]
+    chosen = [item.option_item_id for item in group.items if item.available][: group.min_select]
+    updated = repository.apply_conversation_event(
+        session.session_id,
+        ConversationEventInput(
+            event_type=ConversationEventType.UPDATE_OPTIONS,
+            menu_id=first_menu.menu_id,
+            option_group_id=group.option_group_id,
+            option_item_ids=chosen,
+            expected_state_version=selected.state_version,
+            idempotency_key="option-before-menu-switch",
+        ),
+    )
+    assert updated.state.option_selections
+
+    switched = repository.apply_conversation_event(
+        session.session_id,
+        ConversationEventInput(
+            event_type=ConversationEventType.SELECT_MENU,
+            snapshot_id=turn.recommendation_snapshot_id,
+            menu_id=second_menu.menu_id,
+            expected_state_version=updated.state_version,
+            idempotency_key="select-after-menu-switch",
+        ),
+    )
+
+    assert switched.selected_menu_id == second_menu.menu_id
+    assert switched.state.option_selections == {}
+    assert switched.state.option_risk_acknowledged == []
+
+
 def test_concurrent_event_replay_returns_one_authoritative_result(
     repository: SQLiteYobiRepository, profile_data: ProfileCreate
 ) -> None:

@@ -136,6 +136,7 @@ class MenuSummary(BaseModel):
     description: str
     cultural_description: str
     price: int
+    minimum_order_amount: int = 0
     delivery_fee: int
     eta_min: int
     eta_max: int

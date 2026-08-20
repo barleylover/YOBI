@@ -65,6 +65,7 @@ const cart: CartPreview = {
   items: [{
     cart_item_id: "cart_item_1",
     menu_id: menu.menu_id,
+    merchant_id: menu.merchant_id,
     menu_name: menu.name_en,
     menu_name_ko: menu.name_ko,
     quantity: 1,
@@ -155,6 +156,159 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
     await screen.findByText("Yogiyo handoff page");
   });
 
+  it("requires an explicit cart clear before configuring a menu from another restaurant", async () => {
+    useSessionStore.setState({
+      profile,
+      session,
+      addressRefId: "address_checkout_test",
+      addressSummary: "YOBI hotel",
+      cartQuantity: 1,
+    });
+    vi.spyOn(api, "getOptions").mockResolvedValue([]);
+    const foreignCart: CartPreview = {
+      ...cart,
+      items: [{
+        ...cart.items[0],
+        cart_item_id: "foreign-cart-item",
+        menu_id: "foreign-menu",
+        merchant_id: "foreign-merchant",
+        menu_name: "Other restaurant noodles",
+        menu_name_ko: "다른 가게 국수",
+      }],
+    };
+    const emptyCart: CartPreview = {
+      ...cart,
+      version: cart.version + 1,
+      items: [],
+      subtotal: 0,
+      delivery_fee: 0,
+      total_price: 0,
+      ready_to_checkout: false,
+    };
+    vi.spyOn(api, "getCart").mockResolvedValue(foreignCart);
+    const deleteCartItem = vi.spyOn(api, "deleteCartItem").mockResolvedValue(emptyCart);
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <Routes><Route path="/chat" element={(
+          <OrderFlowPanel
+            sessionId={session.session_id}
+            menu={menu}
+            addressRefId="address_checkout_test"
+            onClose={() => undefined}
+          />
+        )} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Your cart has items from another restaurant" })).toBeInTheDocument();
+    expect(deleteCartItem).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Clear cart and continue" }));
+    await waitFor(() => expect(deleteCartItem).toHaveBeenCalledWith(session.session_id, "foreign-cart-item"));
+    expect(await screen.findByRole("heading", { name: "How should we say it?" })).toBeInTheDocument();
+    expect(useSessionStore.getState().cartQuantity).toBe(0);
+  });
+
+  it("edits an existing cart line in place instead of adding a duplicate menu", async () => {
+    useSessionStore.setState({
+      profile,
+      session,
+      addressRefId: "address_checkout_test",
+      addressSummary: "YOBI hotel",
+      cartQuantity: 1,
+    });
+    vi.spyOn(api, "getOptions").mockResolvedValue([{
+      option_group_id: "group-spice",
+      name_en: "Spice",
+      name_ko: "맵기",
+      display_name: "Spice",
+      description: "Choose one",
+      required: true,
+      min_select: 1,
+      max_select: 1,
+      items: [
+        {
+          option_item_id: "item-mild",
+          name_en: "Mild",
+          name_ko: "순한맛",
+          display_name: "Mild",
+          description: "Mild",
+          price_delta: 0,
+          available: true,
+          conflicting_rules: [],
+        },
+        {
+          option_item_id: "item-hot",
+          name_en: "Hot",
+          name_ko: "매운맛",
+          display_name: "Hot",
+          description: "Hot",
+          price_delta: 500,
+          available: true,
+          conflicting_rules: [],
+        },
+      ],
+    }]);
+    const cartWithOption: CartPreview = {
+      ...cart,
+      items: [{
+        ...cart.items[0],
+        options: [{
+          option_item_id: "item-mild",
+          name_en: "Mild",
+          name_ko: "순한맛",
+          display_name: "Mild",
+          price_delta: 0,
+        }],
+      }],
+    };
+    const updatedCart: CartPreview = {
+      ...cartWithOption,
+      version: cartWithOption.version + 1,
+      items: [{
+        ...cartWithOption.items[0],
+        options: [{
+          option_item_id: "item-hot",
+          name_en: "Hot",
+          name_ko: "매운맛",
+          display_name: "Hot",
+          price_delta: 500,
+        }],
+      }],
+    };
+    vi.spyOn(api, "getCart").mockResolvedValue(cartWithOption);
+    const updateCartItem = vi.spyOn(api, "updateCartItem").mockResolvedValue(updatedCart);
+    const addCartItem = vi.spyOn(api, "addCartItem");
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <Routes><Route path="/chat" element={(
+          <OrderFlowPanel
+            sessionId={session.session_id}
+            menu={menu}
+            addressRefId="address_checkout_test"
+            onClose={() => undefined}
+          />
+        )} /></Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByTestId("cart-review");
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[1]);
+    expect(await screen.findByRole("heading", { name: "Spice" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Hot/ }));
+    expect(await screen.findByRole("heading", { name: "How should we say it?" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Add to cart" }));
+
+    await waitFor(() => expect(updateCartItem).toHaveBeenCalledWith(
+      session.session_id,
+      "cart_item_1",
+      { option_item_ids: ["item-hot"] },
+    ));
+    expect(addCartItem).not.toHaveBeenCalled();
+    expect(await screen.findByTestId("cart-review")).toHaveTextContent("Hot");
+  });
+
   it("skips an empty option list and keeps the selected menu, server price, cart, and handoff contracts", async () => {
     useSessionStore.setState({
       profile,
@@ -214,7 +368,7 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
     ));
     expect(screen.queryByTestId(/option-group-/)).not.toBeInTheDocument();
 
-    fireEvent.click(await screen.findByRole("button", { name: "No, continue to delivery" }));
+    expect(screen.queryByText("Would you like anything else from this restaurant?")).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "Confirm delivery details" }));
     await waitFor(() => expect(updateDelivery).toHaveBeenCalledWith(session.session_id, "address_checkout_test"));
     const review = await screen.findByTestId("cart-review");
@@ -292,6 +446,7 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
     });
     vi.spyOn(api, "getOptions").mockResolvedValue([]);
     vi.spyOn(api, "addCartItem").mockResolvedValue(cart);
+    vi.spyOn(api, "getMerchantMenus").mockResolvedValue([presentation(1).menu]);
     const pageOne = Array.from({ length: 12 }, (_, index) => presentation(index + 1));
     const pageTwo = [presentation(13), presentation(14)];
     const getPresentations = vi.spyOn(api, "getMerchantMenuPresentations")

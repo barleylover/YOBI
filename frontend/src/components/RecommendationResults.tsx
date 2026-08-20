@@ -24,7 +24,6 @@ interface Props {
   onChoose: (recommendation: StructuredRecommendation) => void;
   /** Comparison is intentionally no longer rendered in the v3 journey. */
   onCompare?: () => Promise<unknown>;
-  onRetry: () => void;
 }
 
 export function RecommendationResults({
@@ -37,7 +36,6 @@ export function RecommendationResults({
   readOnly = false,
   timestamp,
   onChoose,
-  onRetry,
 }: Props) {
   const supportedLanguage = asSupportedLanguage(language);
   const productCopy = getProductCopy(supportedLanguage).recommendation;
@@ -95,6 +93,11 @@ export function RecommendationResults({
           >
             {batch.recommendations.map((item, index) => {
               const spiceLevel = item.menu.spice_level;
+              const minimumOrderLabel = language === "한국어"
+                ? "최소 주문"
+                : language === "日本語"
+                  ? "最低注文"
+                  : "Minimum order";
               const sourceDescription = item.source_description
                 || (asEffectiveLanguage(language) === "한국어" ? item.menu.description : "");
               return (
@@ -128,16 +131,19 @@ export function RecommendationResults({
                     <div className="v2-fact-chips">
                       <span>{formatMinuteRange(item.menu.eta_min, item.menu.eta_max, locale)}</span>
                       <span>{item.menu.delivery_fee ? `₩${item.menu.delivery_fee.toLocaleString(locale)}` : productCopy.freeDelivery}</span>
-                      {spiceLevel == null
-                        ? <span>{copy.spiceHelp}</span>
-                        : <span className="success">{v2.spiceOk(spiceLevel)}</span>}
+                      {Boolean(item.menu.minimum_order_amount) && (
+                        <span>{minimumOrderLabel} ₩{item.menu.minimum_order_amount!.toLocaleString(locale)}</span>
+                      )}
+                      {spiceLevel != null && <span className="success">{v2.spiceOk(spiceLevel)}</span>}
                       {item.halal_certified
                         ? <span className="success">{v2.halalYes}</span>
                         : <span className="warn">{v2.halalNo}</span>}
                       {item.vegan_status === "LIKELY_FIT" && <span className="success">{copy.veganLikely}</span>}
                       {item.vegan_status === "POSSIBLE_WITH_CHECKS" && <span className="warn">{copy.veganChecks}</span>}
                     </div>
-                    {item.vegan_warning && <p className="v2-card-warning">{item.vegan_warning}</p>}
+                    {item.vegan_warning && item.vegan_status !== "LIKELY_FIT" && (
+                      <p className="v2-card-warning">{item.vegan_warning}</p>
+                    )}
                     <button
                       type="button"
                       className="v2-card-secondary"
@@ -170,14 +176,6 @@ export function RecommendationResults({
           <p className="v2-timestamp">{timestamp}</p>
         </div>
       </div>
-
-      {isFallback && !readOnly && (
-        <div className="v2-inline-replies">
-          <button type="button" className="v2-quick-reply" onClick={onRetry} disabled={busy}>
-            {copy.tryAgain}
-          </button>
-        </div>
-      )}
 
       <BottomSheet open={Boolean(explanationItem)} labelledBy="explanation-sheet-title" onClose={() => setExplanationMenuId(null)}>
         {explanationItem && (

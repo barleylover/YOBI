@@ -51,6 +51,32 @@ def deterministic_localized_title(
     return "韓国料理メニュー" if language_code == "ja" else "Korean menu"
 
 
+def deterministic_localized_source_description(
+    language_code: str,
+    *,
+    source_ko: str,
+    candidates: list[str | None],
+) -> str:
+    """Return source copy only when it is already valid for the requested language.
+
+    The deterministic path must never expose Korean source prose in an English/Japanese UI,
+    but it should preserve a validated repository localization when generation is unavailable.
+    """
+
+    if language_code == "ko":
+        return source_ko.strip()
+    for candidate in candidates:
+        value = str(candidate or "").strip()
+        if not value or any("가" <= character <= "힣" for character in value):
+            continue
+        if language_code == "ja" and not any(
+            "ぁ" <= character <= "ヿ" or "一" <= character <= "龯" for character in value
+        ):
+            continue
+        return value
+    return ""
+
+
 def deterministic_localized_subtitle(
     language_code: str,
     *,
@@ -157,8 +183,10 @@ class MenuPresentationService:
                                 localized_title=fallback_title,
                                 components=list(evidence_map.get("menu_components", [])),
                             ),
-                            "source_description": (
-                                item.menu.description if language_code == "ko" else ""
+                            "source_description": deterministic_localized_source_description(
+                                language_code,
+                                source_ko=item.menu.description,
+                                candidates=[item.source_description],
                             ),
                             "evidence_map": evidence_map,
                         }
@@ -248,7 +276,11 @@ class MenuPresentationService:
                 item.menu.name_en,
             ],
         )
-        source_description = item.menu.description if language_code == "ko" else ""
+        source_description = deterministic_localized_source_description(
+            language_code,
+            source_ko=item.menu.description,
+            candidates=[item.localized_source_description],
+        )
         wiki_passages = [passage.model_dump(mode="json") for passage in item.wiki_passages]
         menu_facts = [fact.model_dump(mode="json") for fact in item.menu_facts]
         reviews = list(item.synthetic_reviews)
@@ -448,6 +480,10 @@ class MenuPresentationService:
                             **item.evidence_map,
                             "used_evidence_ids": value.used_evidence_ids,
                             "used_source_fields": value.used_source_fields,
+                            "yobi_used_evidence_ids": value.yobi_used_evidence_ids,
+                            "review_used_ids": value.review_used_ids,
+                            "yobi_used_source_fields": value.yobi_used_source_fields,
+                            "review_used_source_fields": value.review_used_source_fields,
                             "covered_component_ids": value.covered_component_ids,
                             "component_mentions": [
                                 mention.model_dump(mode="json")

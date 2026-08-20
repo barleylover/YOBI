@@ -494,7 +494,7 @@ def build_concept_candidate_query(
     group_by = """
       menu.menu_id,menu.merchant_id,merchant.name_en,merchant.name_ko,
       menu.name_en,menu.name_ko,menu.category,menu.description,
-      menu.cultural_description,menu.price,merchant.delivery_fee,
+      menu.cultural_description,menu.price,merchant.min_order_amount,merchant.delivery_fee,
       merchant.eta_min,merchant.eta_max,menu.spice_level,
       menu.serves_min,menu.serves_max,menu.is_synthetic
     """
@@ -535,6 +535,7 @@ def build_concept_candidate_query(
           COALESCE(merchant.name_en,merchant.name_ko) AS merchant_name,
           menu.name_en,menu.name_ko,menu.category,menu.description,
           menu.cultural_description,menu.price,
+          COALESCE(merchant.min_order_amount,0) AS minimum_order_amount,
           COALESCE(merchant.delivery_fee,0) AS delivery_fee,
           COALESCE(merchant.eta_min,0) AS eta_min,
           COALESCE(merchant.eta_max,0) AS eta_max,

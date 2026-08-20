@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import App from "../src/App";
@@ -70,6 +70,7 @@ describe("Yogiyo handoff", () => {
         <Routes>
           <Route path="/handoff" element={<HandoffPage />} />
           <Route path={`/chat/${session.session_id}`} element={<div>YOBI chat</div>} />
+          <Route path="/start" element={<div>Country and language settings</div>} />
         </Routes>
       </MemoryRouter>,
     );
@@ -83,6 +84,12 @@ describe("Yogiyo handoff", () => {
     expect(paymentSuccess).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: /^Pay/ })).not.toBeInTheDocument();
     expect(document.querySelector(".post-address-nav")).not.toBeInTheDocument();
+    sessionStorage.setItem("yobi-pending-test", "stale");
+    fireEvent.click(screen.getByText("Back to YOBI"));
+    expect(await screen.findByText("Country and language settings")).toBeInTheDocument();
+    await waitFor(() => expect(useSessionStore.getState().session).toBeNull());
+    expect(sessionStorage.getItem("yobi-pending-test")).toBeNull();
+    expect(useSessionStore.getState().draftLanguage).toBe("English");
   });
 
   it("redirects legacy payment URLs to the same handoff without a payment screen", async () => {

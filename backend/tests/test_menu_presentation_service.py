@@ -22,6 +22,7 @@ from app.domain.models import (
     OptionItem,
 )
 from app.domain.recommendation_copy import deterministic_presentation_copy
+from app.domain.structured_recommendation import EvidencePoolItem
 from app.genai.contracts import (
     GenAIErrorCode,
     GenAIProviderError,
@@ -319,6 +320,15 @@ def _generated_payload(menu_ids: list[str] | None = None) -> dict[str, Any]:
                     "wiki_passages",
                     "synthetic_reviews",
                 ],
+                "yobi_used_evidence_ids": ["wiki-1", "wiki-2"],
+                "review_used_ids": ["review-1", "review-2"],
+                "yobi_used_source_fields": [
+                    "menu_title_ko",
+                    "localized_title",
+                    "source_description_ko",
+                    "wiki_passages",
+                ],
+                "review_used_source_fields": ["synthetic_reviews"],
                 "personalization_applied": False,
                 "covered_component_ids": [],
                 "component_mentions": [],
@@ -580,6 +590,34 @@ def test_presentation_rejects_yobi_copy_that_does_not_reflect_restaurant_descrip
     )
 
 
+def test_presentation_rejects_review_summary_language_in_yobi_fields() -> None:
+    payload = _generated_payload()
+    payload["items"][0]["yobi_short_explanation"] = (
+        "Reviewers found the chewy rice cakes balanced and easy to enjoy."
+    )
+
+    assert (
+        _presentation_validation_reason(payload)
+        == "PRESENTATION_YOBI_REVIEW_LEAKAGE"
+    )
+
+
+def test_presentation_rejects_review_ids_or_sources_claimed_for_yobi_copy() -> None:
+    payload = _generated_payload()
+    payload["items"][0]["yobi_used_evidence_ids"] = ["review-1"]
+
+    assert (
+        _presentation_validation_reason(payload)
+        == "PRESENTATION_YOBI_EVIDENCE_SCOPE_INVALID"
+    )
+
+    payload = _generated_payload()
+    payload["items"][0]["yobi_used_source_fields"].append("synthetic_reviews")
+    assert (
+        _presentation_validation_reason(payload)
+        == "PRESENTATION_YOBI_SOURCE_SCOPE_INVALID"
+    )
+
 def test_presentation_rejects_changed_quantities_in_yogiyo_translation() -> None:
     payload = _generated_payload()
     payload["items"][0].update(
@@ -616,6 +654,25 @@ def test_menu_presentation_rate_limit_keeps_deterministic_copy_without_model_ret
 
     assert provider.calls == ["xai.grok-4.3"]
     assert page.items[0].generation_model == "DETERMINISTIC_GROUNDED_FALLBACK"
+
+
+def test_selected_menu_fallback_keeps_validated_target_language_yogiyo_copy() -> None:
+    repository = PresentationRepository(MerchantMenuPresentationPage(items=[]))
+    service = MenuPresentationService(repository, Settings())  # type: ignore[arg-type]
+    item = EvidencePoolItem(
+        menu=_menu(),
+        knowledge_release_id="knowledge-1",
+        catalog_release_id="catalog-1",
+        recommendation_release_family_id="family-1",
+        localized_title="Tteokbokki",
+        localized_source_description="Chewy rice cakes cooked to order.",
+    )
+
+    presented = service.present_selected(
+        [item], session_id="session-1", language_code="en", country_code="US"
+    )
+
+    assert presented["menu-1"].source_description == "Chewy rice cakes cooked to order."
 
 
 def test_invalid_grounding_contract_keeps_deterministic_copy_without_fallback() -> None:
@@ -721,6 +778,13 @@ def test_compound_presentation_requires_component_mentions_in_actual_copy() -> N
                 "synthetic_reviews",
                 "menu_components",
             ],
+            "yobi_used_source_fields": [
+                "menu_title_ko",
+                "localized_title",
+                "source_description_ko",
+                "wiki_passages",
+                "menu_components",
+            ],
             "covered_component_ids": ["cold-noodle", "cutlet"],
             "component_mentions": [
                 {"component_id": "cold-noodle", "mention_text": "cold noodles"},
@@ -745,6 +809,14 @@ def test_compound_presentation_requires_component_mentions_in_actual_copy() -> N
     assert page.items[0].evidence_map["component_mentions"] == [
         {"component_id": "cold-noodle", "mention_text": "cold noodles"},
         {"component_id": "cutlet", "mention_text": "pork cutlet"},
+    ]
+    assert page.items[0].evidence_map["yobi_used_evidence_ids"] == ["wiki-1", "wiki-2"]
+    assert page.items[0].evidence_map["review_used_ids"] == ["review-1", "review-2"]
+    assert "synthetic_reviews" not in page.items[0].evidence_map[
+        "yobi_used_source_fields"
+    ]
+    assert page.items[0].evidence_map["review_used_source_fields"] == [
+        "synthetic_reviews"
     ]
 
 
@@ -780,6 +852,13 @@ def test_compound_presentation_rejects_ids_mapped_to_wrong_component_copy() -> N
                 "source_description_ko",
                 "wiki_passages",
                 "synthetic_reviews",
+                "menu_components",
+            ],
+            "yobi_used_source_fields": [
+                "menu_title_ko",
+                "localized_title",
+                "source_description_ko",
+                "wiki_passages",
                 "menu_components",
             ],
             "covered_component_ids": ["cold-noodle", "cutlet"],
@@ -929,9 +1008,9 @@ def test_current_prompt_and_schema_logically_invalidate_legacy_cache_without_del
     )
 
     assert current_settings.menu_presentation_prompt_version == (
-        "yobi-menu-presentation-v8-strict-grounding"
+        "yobi-menu-presentation-v9-review-isolation"
     )
-    assert current_settings.menu_presentation_schema_version == "5"
+    assert current_settings.menu_presentation_schema_version == "6"
     assert provider.requested_ids == [["menu-1"]]
     assert page.items[0].generation_model == "xai.grok-4.3"
     assert len(repository.cache) == 2

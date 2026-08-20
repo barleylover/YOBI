@@ -3149,14 +3149,19 @@ class SQLiteYobiRepository:
     ]:
         family = connection.execute(
             """
-            SELECT knowledge_release_id FROM recommendation_release_family
+            SELECT knowledge_release_id,synthetic_enrichment_release_id
+            FROM recommendation_release_family
             WHERE release_family_id=?
             """,
             (release_family_id,),
         ).fetchone()
         if family is None:
             raise RuntimeError("RECOMMENDATION_RELEASE_NOT_FOUND")
-        parameters: list[Any] = [criteria.max_spice_level]
+        parameters: list[Any] = []
+        spice_clause = ""
+        if criteria.schema_version == "2":
+            spice_clause = "AND (menu.spice_level IS NULL OR menu.spice_level<=?)"
+            parameters.append(criteria.max_spice_level)
         menu_clause = ""
         if menu_ids is not None:
             unique_ids = list(dict.fromkeys(menu_ids))
@@ -3171,11 +3176,12 @@ class SQLiteYobiRepository:
                    menu.spice_level,menu.serves_min,menu.serves_max,menu.is_synthetic,
                    COALESCE(merchant.name_en,merchant.name_ko) AS merchant_name,
                    merchant.delivery_fee,merchant.eta_min,merchant.eta_max,
-                   merchant.service_area_id
+                   merchant.service_area_id,
+                   COALESCE(merchant.min_order_amount,0) AS minimum_order_amount
             FROM menu
             JOIN merchant ON merchant.merchant_id=menu.merchant_id
             WHERE menu.availability='AVAILABLE'
-              AND (menu.spice_level IS NULL OR menu.spice_level<=?)
+              {spice_clause}
               {menu_clause}
             """,
             parameters,
@@ -3221,9 +3227,84 @@ class SQLiteYobiRepository:
             and (not service_area_id or str(row["service_area_id"] or "") == service_area_id)
             and (
                 not enforce_price_bands
-                or cls._price_matches_v2(int(row["price"]), criteria.price_bands)
+                or (
+                    criteria.schema_version == "3"
+                    and criteria.price_range_krw is not None
+                    and criteria.price_range_krw.min
+                    <= int(row["price"])
+                    <= criteria.price_range_krw.max
+                )
+                or (
+                    criteria.schema_version == "2"
+                    and cls._price_matches_v2(int(row["price"]), criteria.price_bands)
+                )
             )
         ]
+        if criteria.schema_version == "3":
+            synthetic_release_id = str(family["synthetic_enrichment_release_id"] or "")
+            if not synthetic_release_id or not rows:
+                return [], {}, {}
+            baseline = connection.execute(
+                """
+                SELECT spice_baseline FROM synthetic_country_profile
+                WHERE release_id=? AND country_code=?
+                """,
+                (synthetic_release_id, criteria.spice_reference_country),
+            ).fetchone()
+            if baseline is None:
+                return [], {}, {}
+            spice_baseline = int(baseline["spice_baseline"])
+            menu_ids_for_profile = [str(row["menu_id"]) for row in rows]
+            placeholders = ",".join("?" for _ in menu_ids_for_profile)
+            profiles = connection.execute(
+                f"""
+                SELECT menu_id,spice_level,halal_fit,vegan_fit
+                FROM synthetic_menu_profile
+                WHERE release_id=? AND menu_id IN ({placeholders})
+                """,
+                (synthetic_release_id, *menu_ids_for_profile),
+            ).fetchall()
+            profile_by_menu = {str(profile["menu_id"]): profile for profile in profiles}
+
+            def v3_menu_matches(row: sqlite3.Row) -> bool:
+                profile = profile_by_menu.get(str(row["menu_id"]))
+                if profile is None:
+                    return False
+                spice_level = int(profile["spice_level"])
+                spice_matches = (
+                    spice_level < spice_baseline
+                    if criteria.spice_preference == "LESS"
+                    else spice_level > spice_baseline
+                    if criteria.spice_preference == "MORE"
+                    else spice_level == spice_baseline
+                )
+                return bool(
+                    spice_matches
+                    and (not criteria.dietary_filters.halal_certified_only or profile["halal_fit"])
+                    and (not criteria.dietary_filters.vegan or profile["vegan_fit"])
+                )
+
+            filtered_rows: list[sqlite3.Row] = [row for row in rows if v3_menu_matches(row)]
+            certifications = {
+                menu_id: (synthetic_release_id, "Synthetic halal-friendly profile")
+                for menu_id, profile in profile_by_menu.items()
+                if profile["halal_fit"]
+            }
+            synthetic_vegan: dict[str, tuple[str, str | None, list[EvidenceReference]]] = {
+                menu_id: (
+                    "LIKELY_FIT" if profile["vegan_fit"] else "UNKNOWN",
+                    (
+                        "The menu profile marks this menu vegan-friendly; "
+                        "confirm options before ordering."
+                        if profile["vegan_fit"]
+                        else "Vegan suitability is not confirmed; check ingredients and options."
+                    ),
+                    [],
+                )
+                for menu_id, profile in profile_by_menu.items()
+            }
+            return filtered_rows, certifications, synthetic_vegan
+
         halal_certifications = cls._valid_halal_certifications_in_connection(
             connection,
             release_family_id=release_family_id,
@@ -5016,6 +5097,45 @@ class SQLiteYobiRepository:
         criteria = RecommendationCriteriaV2.model_validate_json(str(row["criteria_json"]))
         conditions: list[str] = []
         parameters: dict[str, Any] = {}
+        if criteria.schema_version == "3":
+            price_range = criteria.price_range_krw
+            if price_range is None:
+                return " AND 1=0", {}
+            parameters.update(
+                {
+                    "browse_price_min_krw": price_range.min,
+                    "browse_price_max_krw": price_range.max,
+                    "browse_spice_reference_country": criteria.spice_reference_country,
+                    "browse_spice_preference": criteria.spice_preference,
+                }
+            )
+            conditions.append("menu.price BETWEEN :browse_price_min_krw AND :browse_price_max_krw")
+            synthetic_dietary_conditions = ""
+            if criteria.dietary_filters.halal_certified_only:
+                synthetic_dietary_conditions += " AND synthetic_menu.halal_fit=1"
+            if criteria.dietary_filters.vegan:
+                synthetic_dietary_conditions += " AND synthetic_menu.vegan_fit=1"
+            conditions.append(
+                f"""EXISTS (
+                  SELECT 1 FROM synthetic_menu_profile synthetic_menu
+                  JOIN synthetic_country_profile synthetic_country
+                    ON synthetic_country.release_id=synthetic_menu.release_id
+                   AND synthetic_country.country_code=:browse_spice_reference_country
+                  WHERE synthetic_menu.release_id=family.synthetic_enrichment_release_id
+                    AND synthetic_menu.menu_id=menu.menu_id
+                    AND (
+                      (:browse_spice_preference='LESS'
+                       AND synthetic_menu.spice_level<synthetic_country.spice_baseline)
+                      OR (:browse_spice_preference='SIMILAR'
+                          AND synthetic_menu.spice_level=synthetic_country.spice_baseline)
+                      OR (:browse_spice_preference='MORE'
+                          AND synthetic_menu.spice_level>synthetic_country.spice_baseline)
+                    )
+                    {synthetic_dietary_conditions}
+                )"""
+            )
+            return " AND " + " AND ".join(conditions), parameters
+
         price_conditions = [
             {
                 "UNDER_10000": "menu.price<10000",
@@ -5099,6 +5219,7 @@ class SQLiteYobiRepository:
                        COALESCE(merchant.name_en,merchant.name_ko) merchant_name,
                        menu.name_en,menu.name_ko,menu.category,menu.description,
                        menu.cultural_description,menu.price,
+                       COALESCE(merchant.min_order_amount,0) minimum_order_amount,
                        COALESCE(merchant.delivery_fee,0) delivery_fee,
                        COALESCE(merchant.eta_min,0) eta_min,
                        COALESCE(merchant.eta_max,0) eta_max,
@@ -5237,7 +5358,15 @@ class SQLiteYobiRepository:
         self,
         session_id: str,
     ) -> FeaturedMenuCollection:
-        feature_names = ("Gimbap", "Gukbap", "Hotteok", "Seolleongtang", "Eomuk")
+        feature_names = (
+            "Gimbap",
+            "Korean wheat noodles",
+            "Tteokbokki",
+            "Gukbap",
+            "Hotteok",
+            "Seolleongtang",
+            "Eomuk",
+        )
         with self._connection() as connection:
             service_area_id, _excluded = self._structured_session_filters(
                 connection, session_id, exclude_history=False
@@ -5257,6 +5386,7 @@ class SQLiteYobiRepository:
                          COALESCE(merchant.name_en,merchant.name_ko) merchant_name,
                          menu.name_en,menu.name_ko,menu.category,menu.description,
                          menu.cultural_description,menu.price,
+                         COALESCE(merchant.min_order_amount,0) minimum_order_amount,
                          COALESCE(merchant.delivery_fee,0) delivery_fee,
                          COALESCE(merchant.eta_min,0) eta_min,
                          COALESCE(merchant.eta_max,0) eta_max,
@@ -5304,8 +5434,9 @@ class SQLiteYobiRepository:
                     {exact_clause}
                 ) WHERE concept_rank<=20
                 ORDER BY CASE dish_name
-                  WHEN 'Gimbap' THEN 1 WHEN 'Gukbap' THEN 2 WHEN 'Hotteok' THEN 3
-                  WHEN 'Seolleongtang' THEN 4 WHEN 'Eomuk' THEN 5 ELSE 6 END,concept_rank
+                  WHEN 'Gimbap' THEN 1 WHEN 'Korean wheat noodles' THEN 2
+                  WHEN 'Tteokbokki' THEN 3 WHEN 'Gukbap' THEN 4 WHEN 'Hotteok' THEN 5
+                  WHEN 'Seolleongtang' THEN 6 WHEN 'Eomuk' THEN 7 ELSE 8 END,concept_rank
                 """,
                 parameters,
             ).fetchall()
@@ -5567,6 +5698,10 @@ class SQLiteYobiRepository:
                 selected_menu_id = candidate.menu_id
                 selected_merchant_id = candidate.merchant_id
                 need_state.selected_menu_id = candidate.menu_id
+                # Option group IDs belong to one menu. Never carry selections or risk
+                # acknowledgements across a menu change/reselection.
+                need_state.option_selections = {}
+                need_state.option_risk_acknowledged = []
                 selected_menu = (
                     self._menu_from_cards(snapshot.cards, candidate.menu_id) if snapshot else None
                 )
@@ -5581,6 +5716,8 @@ class SQLiteYobiRepository:
                     selected_menu_id = None
                     selected_merchant_id = None
                     need_state.selected_menu_id = None
+                    need_state.option_selections = {}
+                    need_state.option_risk_acknowledged = []
                 dialogue_act = DialogueAct.REJECT
                 chat_state = ChatState.DISCOVERY.value
             elif event.event_type == ConversationEventType.COMPARE_MENUS:
@@ -5948,6 +6085,13 @@ class SQLiteYobiRepository:
             description=_catalog_text(row["description"]),
             cultural_description=_catalog_text(row["cultural_description"]),
             price=row["price"],
+            minimum_order_amount=int(
+                row["minimum_order_amount"]
+                if "minimum_order_amount" in row.keys()
+                else row["min_order_amount"]
+                if "min_order_amount" in row.keys()
+                else 0
+            ),
             delivery_fee=row["delivery_fee"],
             eta_min=row["eta_min"],
             eta_max=row["eta_max"],
@@ -5970,7 +6114,9 @@ class SQLiteYobiRepository:
         with self._connection() as connection:
             row = connection.execute(
                 """
-                SELECT m.*, COALESCE(r.name_en,r.name_ko) AS merchant_name, r.delivery_fee, r.eta_min, r.eta_max
+                SELECT m.*, COALESCE(r.name_en,r.name_ko) AS merchant_name,
+                       r.min_order_amount AS minimum_order_amount,
+                       r.delivery_fee, r.eta_min, r.eta_max
                 FROM menu m JOIN merchant r ON r.merchant_id = m.merchant_id
                 WHERE m.menu_id = ?
                 """,
@@ -6043,7 +6189,9 @@ class SQLiteYobiRepository:
         with self._connection() as connection:
             rows = connection.execute(
                 """
-                SELECT m.*, COALESCE(r.name_en,r.name_ko) AS merchant_name, r.delivery_fee, r.eta_min, r.eta_max,
+                SELECT m.*, COALESCE(r.name_en,r.name_ko) AS merchant_name,
+                       r.min_order_amount AS minimum_order_amount,
+                       r.delivery_fee, r.eta_min, r.eta_max,
                        r.service_area_id AS merchant_service_area_id
                 FROM menu m JOIN merchant r ON r.merchant_id=m.merchant_id
                 WHERE m.merchant_id=? AND m.availability='AVAILABLE'
@@ -6149,6 +6297,7 @@ class SQLiteYobiRepository:
             rows = connection.execute(
                 f"""
                 SELECT menu.*,COALESCE(merchant.name_en,merchant.name_ko) merchant_name,
+                       merchant.min_order_amount AS minimum_order_amount,
                        merchant.delivery_fee,merchant.eta_min,merchant.eta_max,
                        localization.display_name,
                        localization.source_hash AS menu_localization_source_hash,

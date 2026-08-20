@@ -13,20 +13,133 @@ from app.country_spice_examples import (
 )
 
 COUNTRY_CODES = (
-    "US", "GB", "CA", "AU", "NZ", "IE", "KR", "JP", "CN", "TW", "HK", "SG",
-    "ES", "MX", "AR", "CO", "FR", "BE", "DE", "AT", "CH", "IT", "PT", "BR",
-    "TH", "VN", "ID", "MY", "SA", "AE", "EG", "IN", "RU", "PH", "TR", "NL",
+    "US",
+    "GB",
+    "CA",
+    "AU",
+    "NZ",
+    "IE",
+    "KR",
+    "JP",
+    "CN",
+    "TW",
+    "HK",
+    "SG",
+    "ES",
+    "MX",
+    "AR",
+    "CO",
+    "FR",
+    "BE",
+    "DE",
+    "AT",
+    "CH",
+    "IT",
+    "PT",
+    "BR",
+    "TH",
+    "VN",
+    "ID",
+    "MY",
+    "SA",
+    "AE",
+    "EG",
+    "IN",
+    "RU",
+    "PH",
+    "TR",
+    "NL",
 )
-GENERATOR_VERSION = "yobi-synthetic-enrichment-v1"
+GENERATOR_VERSION = "yobi-synthetic-enrichment-v4-halal-plausibility"
 SOURCE_TYPE = "SYNTHETIC_DEMO"
 LANGUAGE_CODES: tuple[LanguageCode, ...] = ("ko", "en", "ja")
 
-_ANIMAL_TOKENS = (
-    "PORK", "BEEF", "CHICKEN", "FISH", "SEAFOOD", "EGG", "DAIRY",
-    "돼지", "삼겹", "제육", "소고기", "쇠고기", "닭", "치킨", "생선", "새우",
-    "오징어", "해물", "계란", "달걀", "치즈", "우유",
+_PORK_TOKENS = (
+    "PORK",
+    "PORK CUTLET",
+    "DONKATSU",
+    "BACON",
+    "HAM",
+    "SAUSAGE",
+    "SPAM",
+    "PEPPERONI",
+    "SALAMI",
+    "PROSCIUTTO",
+    "MORTADELLA",
+    "돼지",
+    "삼겹",
+    "제육",
+    "족발",
+    "보쌈",
+    "베이컨",
+    "햄",
+    "소시지",
+    "스팸",
+    "돈가스",
+    "돈까스",
+    "순대",
+    "감자탕",
+    "탕수육",
+    "페퍼로니",
+    "살라미",
+    "프로슈토",
+    "모르타델라",
 )
-_PORK_TOKENS = ("PORK", "돼지", "삼겹", "제육", "족발", "보쌈", "베이컨", "햄")
+_ANIMAL_TOKENS = _PORK_TOKENS + (
+    "BEEF",
+    "CHICKEN",
+    "FISH",
+    "SEAFOOD",
+    "EGG",
+    "DAIRY",
+    "돼지",
+    "삼겹",
+    "제육",
+    "소고기",
+    "쇠고기",
+    "닭",
+    "치킨",
+    "생선",
+    "새우",
+    "오징어",
+    "해물",
+    "계란",
+    "달걀",
+    "치즈",
+    "우유",
+)
+_HALAL_PREFERRED_TOKENS = (
+    "VEGETABLE",
+    "TOFU",
+    "BEAN",
+    "MUSHROOM",
+    "POTATO",
+    "FRUIT",
+    "PUMPKIN",
+    "CORN",
+    "SWEET_POTATO",
+    "RICE",
+    "NOODLES",
+    "SEAFOOD",
+    "FISH",
+    "CHICKEN",
+    "채소",
+    "야채",
+    "두부",
+    "콩",
+    "버섯",
+    "감자",
+    "과일",
+    "호박",
+    "옥수수",
+    "고구마",
+    "밥",
+    "쌀",
+    "면",
+    "생선",
+    "해물",
+    "닭",
+)
 
 
 @dataclass(frozen=True)
@@ -34,6 +147,7 @@ class EnrichmentMenu:
     menu_id: str
     name_ko: str
     feature_codes: tuple[str, ...] = ()
+    name_en: str = ""
 
 
 @dataclass(frozen=True)
@@ -87,23 +201,24 @@ def build_menu_profiles(
     seed: str,
     menus: Iterable[EnrichmentMenu],
 ) -> list[dict[str, Any]]:
+    menu_list = sorted(menus, key=lambda item: item.menu_id)
     rows: list[dict[str, Any]] = []
     eligible_for_vegan: list[str] = []
-    for menu in sorted(menus, key=lambda item: item.menu_id):
-        basis = " ".join((menu.name_ko, *menu.feature_codes))
+    basis_by_menu: dict[str, str] = {}
+    for menu in menu_list:
+        basis = " ".join((menu.name_ko, menu.name_en, *menu.feature_codes))
+        basis_by_menu[menu.menu_id] = basis
         value = _number(seed, "menu", menu.menu_id)
-        has_pork = _contains(basis, _PORK_TOKENS)
         has_animal = _contains(basis, _ANIMAL_TOKENS)
         if not has_animal:
             eligible_for_vegan.append(menu.menu_id)
         vegan = not has_animal and value % 5 == 0
-        halal = not has_pork and (vegan or value % 3 != 0)
         rows.append(
             {
                 "release_id": release_id,
                 "menu_id": menu.menu_id,
                 "spice_level": 1 + ((value >> 8) % 5),
-                "halal_fit": int(halal),
+                "halal_fit": 0,
                 "vegan_fit": int(vegan),
                 "source_type": SOURCE_TYPE,
                 "generator_version": GENERATOR_VERSION,
@@ -121,7 +236,34 @@ def build_menu_profiles(
         for row in rows:
             if row["menu_id"] in promoted:
                 row["vegan_fit"] = 1
-                row["halal_fit"] = 1
+
+    # This is explicitly synthetic demo metadata, not a certification claim. Mark exactly the
+    # nearest whole-menu third as a fit and favor menus whose names/features are most plausibly
+    # pork-free: vegan/plant dishes first, then familiar fish/chicken candidates. Pork-token
+    # menus can never be promoted. The digest is only a stable tie-breaker.
+    target_halal_count = (len(rows) + 1) // 3
+    eligible_halal = [
+        row for row in rows if not _contains(basis_by_menu[str(row["menu_id"])], _PORK_TOKENS)
+    ]
+    if len(eligible_halal) < target_halal_count:
+        raise ValueError("SYNTHETIC_HALAL_ELIGIBLE_COVERAGE_LOW")
+
+    def halal_priority(row: dict[str, Any]) -> tuple[int, int, str]:
+        menu_id = str(row["menu_id"])
+        basis = basis_by_menu[menu_id]
+        preferred = _contains(basis, _HALAL_PREFERRED_TOKENS)
+        return (
+            0 if int(row["vegan_fit"]) else 1 if preferred else 2,
+            _number(seed, "halal-priority", menu_id),
+            menu_id,
+        )
+
+    selected_halal = {
+        str(row["menu_id"])
+        for row in sorted(eligible_halal, key=halal_priority)[:target_halal_count]
+    }
+    for row in rows:
+        row["halal_fit"] = int(str(row["menu_id"]) in selected_halal)
     return rows
 
 
@@ -237,8 +379,7 @@ def build_country_spice_examples(
     countries: Iterable[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     baselines = {
-        str(country["country_code"]): int(country["spice_baseline"])
-        for country in countries
+        str(country["country_code"]): int(country["spice_baseline"]) for country in countries
     }
     return [
         {
@@ -301,9 +442,12 @@ def validate_enrichment_rows(
         raise ValueError("SYNTHETIC_ENRICHMENT_MENU_DUPLICATE")
     if eligible_menu_count >= 3:
         menu_rows = rows["menus"]
-        if sum(int(row["halal_fit"]) for row in menu_rows) < 3:
-            raise ValueError("SYNTHETIC_HALAL_COVERAGE_LOW")
+        expected_halal_count = (eligible_menu_count + 1) // 3
+        actual_halal_count = sum(int(row["halal_fit"]) for row in menu_rows)
+        if actual_halal_count != expected_halal_count:
+            raise ValueError(
+                "SYNTHETIC_HALAL_COVERAGE_NOT_ONE_THIRD:"
+                f"{actual_halal_count}:{expected_halal_count}"
+            )
         if sum(int(row["vegan_fit"]) for row in menu_rows) < 3:
             raise ValueError("SYNTHETIC_VEGAN_COVERAGE_LOW")
-        if sum(int(row["halal_fit"]) and int(row["vegan_fit"]) for row in menu_rows) < 3:
-            raise ValueError("SYNTHETIC_HALAL_VEGAN_COVERAGE_LOW")

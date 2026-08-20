@@ -314,6 +314,7 @@ export interface MenuSummary {
   description: string;
   cultural_description: string;
   price: number;
+  minimum_order_amount?: number;
   delivery_fee: number;
   eta_min: number;
   eta_max: number;
@@ -657,6 +658,7 @@ export interface CartPreview {
   items: Array<{
     cart_item_id: string;
     menu_id: string;
+    merchant_id?: string;
     menu_name: string;
     menu_name_ko: string;
     display_name?: string | null;

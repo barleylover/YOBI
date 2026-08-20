@@ -16,6 +16,7 @@ const menu: MenuSummary = {
   description: "Rice and vegetables wrapped in seaweed.",
   cultural_description: "A compact Korean meal.",
   price: 9000,
+  minimum_order_amount: 15000,
   delivery_fee: 2000,
   eta_min: 20,
   eta_max: 30,
@@ -89,7 +90,6 @@ describe("chat-style recommendation results", () => {
         language="English"
         locale="en-US"
         onChoose={vi.fn()}
-        onRetry={vi.fn()}
       />,
     );
 
@@ -97,6 +97,7 @@ describe("chat-style recommendation results", () => {
     expect(screen.getByText("Seasoned rice and fillings rolled in seaweed")).toBeInTheDocument();
     expect(screen.getAllByText("YOBI:").length).toBeGreaterThan(0);
     expect(screen.getAllByText("YOGIYO:").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Minimum order ₩15,000").length).toBeGreaterThan(0);
     expect(screen.queryByText("Legacy selection reason must stay hidden.")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /compare/i })).not.toBeInTheDocument();
     expect(document.querySelector(".rank-bar")).not.toBeInTheDocument();
@@ -129,7 +130,6 @@ describe("chat-style recommendation results", () => {
         language="العربية"
         locale="en"
         onChoose={vi.fn()}
-        onRetry={vi.fn()}
       />,
     );
 
@@ -160,7 +160,6 @@ describe("chat-style recommendation results", () => {
         language="English"
         locale="en-US"
         onChoose={vi.fn()}
-        onRetry={vi.fn()}
       />,
     );
 
@@ -178,12 +177,37 @@ describe("chat-style recommendation results", () => {
         language="English"
         locale="en-US"
         onChoose={vi.fn()}
-        onRetry={vi.fn()}
       />,
     );
 
     expect(document.querySelector(".v2-card-carousel")).toHaveAttribute("aria-label", "Picked for your preferences");
     expect(document.querySelectorAll(".v2-alimtalk-card")).toHaveLength(2);
     expect(screen.getAllByText("Bibimbap").length).toBeGreaterThan(0);
+  });
+
+  it("omits the duplicated retry action and the old spice-baseline helper", () => {
+    const fallbackBatch: RecommendationBatchV2 = {
+      ...batch,
+      status: "SEARCH_FALLBACK",
+      recommendations: [{
+        ...batch.recommendations[0],
+        menu: { ...batch.recommendations[0].menu, spice_level: null },
+      }],
+    };
+
+    render(
+      <RecommendationResults
+        batch={fallbackBatch}
+        copy={getRecommendationCopy("English")}
+        v2={getRedesignCopy("English")}
+        timestamp="10:05"
+        language="English"
+        locale="en-US"
+        onChoose={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Try recommendation again" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/familiar spice baseline/i)).not.toBeInTheDocument();
   });
 });

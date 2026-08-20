@@ -40,7 +40,8 @@ def _connection() -> sqlite3.Connection:
         """
         CREATE TABLE merchant (
           merchant_id TEXT PRIMARY KEY, name_en TEXT, name_ko TEXT,
-          service_area_id TEXT, delivery_fee INTEGER, eta_min INTEGER, eta_max INTEGER
+          service_area_id TEXT, min_order_amount INTEGER,
+          delivery_fee INTEGER, eta_min INTEGER, eta_max INTEGER
         );
         CREATE TABLE menu (
           menu_id TEXT PRIMARY KEY, merchant_id TEXT, name_en TEXT, name_ko TEXT,
@@ -113,8 +114,8 @@ def _insert_menu(
     concept_id: str,
 ) -> None:
     connection.execute(
-        "INSERT OR IGNORE INTO merchant VALUES (?,?,?,?,?,?,?)",
-        (merchant_id, merchant_id, merchant_id, "area", 0, 20, 40),
+        "INSERT OR IGNORE INTO merchant VALUES (?,?,?,?,?,?,?,?)",
+        (merchant_id, merchant_id, merchant_id, "area", 15_000, 0, 20, 40),
     )
     connection.execute(
         "INSERT INTO menu VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
