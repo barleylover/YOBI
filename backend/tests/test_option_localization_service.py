@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -11,6 +12,8 @@ from app.domain.models import OptionGroup, OptionItem
 from app.genai.contracts import GenAIServingMode, ProviderCapabilities
 from app.genai.option_localization_generator import OptionLocalizationGenerator
 from app.services.option_localization import OptionLocalizationService
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class OptionProvider:
@@ -280,3 +283,16 @@ def test_concurrent_duplicate_option_requests_share_one_generation() -> None:
         "Drink add-ons",
     ]
     assert len(provider.calls) == 1
+
+
+def test_oracle_merge_never_updates_prompt_version_used_by_its_on_clause() -> None:
+    source = (ROOT / "backend" / "app" / "db" / "oracle_repository.py").read_text(
+        encoding="utf-8"
+    )
+    runtime_section = source.split("def save_option_localizations", maxsplit=1)[1].split(
+        "def save_menu_runtime_localizations", maxsplit=1
+    )[0]
+
+    assert runtime_section.count("target.prompt_version=:prompt_version") == 2
+    assert "UPDATE SET\n                      prompt_version=:prompt_version" not in runtime_section
+    assert "model_id=:model_id,\n                      prompt_version=:prompt_version" not in runtime_section

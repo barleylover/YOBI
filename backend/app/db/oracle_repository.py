@@ -6773,8 +6773,7 @@ class OracleYobiRepository:
                         AND target.prompt_version=:prompt_version)
                     WHEN MATCHED THEN UPDATE SET
                       display_name=:display_name,model_id=:model_id,
-                      prompt_version=:prompt_version,source_hash=:source_hash,
-                      generated_at=:generated_at
+                      source_hash=:source_hash,generated_at=:generated_at
                     WHEN NOT MATCHED THEN INSERT (
                       release_id,option_group_id,language_code,display_name,
                       model_id,prompt_version,source_hash,generated_at
@@ -6812,8 +6811,7 @@ class OracleYobiRepository:
                         AND target.prompt_version=:prompt_version)
                     WHEN MATCHED THEN UPDATE SET
                       display_name=:display_name,model_id=:model_id,
-                      prompt_version=:prompt_version,source_hash=:source_hash,
-                      generated_at=:generated_at
+                      source_hash=:source_hash,generated_at=:generated_at
                     WHEN NOT MATCHED THEN INSERT (
                       release_id,option_item_id,language_code,display_name,
                       model_id,prompt_version,source_hash,generated_at
