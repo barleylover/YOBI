@@ -8373,6 +8373,52 @@ class OracleYobiRepository:
                     release_id=release_id,
                 )
                 wiki_eligible_menu_count = int(cursor.fetchone()[0])
+                option_localization_counts = {
+                    "eligible_option_groups": 0,
+                    "eligible_option_items": 0,
+                    "localized_option_groups": 0,
+                    "localized_option_items": 0,
+                }
+                enrichment_release_id = (
+                    str(active_family_row.get("synthetic_enrichment_release_id") or "")
+                    if active_family_row
+                    else ""
+                )
+                if enrichment_release_id:
+                    cursor.execute(
+                        """
+                        SELECT
+                          COUNT(DISTINCT groups.option_group_id),
+                          COUNT(DISTINCT item.option_item_id)
+                        FROM menu_wiki_eligibility eligibility
+                        JOIN menu_option_group groups ON groups.menu_id=eligibility.menu_id
+                        LEFT JOIN menu_option_item item
+                          ON item.option_group_id=groups.option_group_id
+                        WHERE eligibility.knowledge_release_id=:release_id
+                        """,
+                        release_id=release_id,
+                    )
+                    eligible_options = cursor.fetchone()
+                    cursor.execute(
+                        """
+                        SELECT
+                          (SELECT COUNT(*) FROM option_group_localization
+                           WHERE release_id=:enrichment_release_id
+                             AND language_code IN ('ko','en','ja')),
+                          (SELECT COUNT(*) FROM option_item_localization
+                           WHERE release_id=:enrichment_release_id
+                             AND language_code IN ('ko','en','ja'))
+                        FROM dual
+                        """,
+                        enrichment_release_id=enrichment_release_id,
+                    )
+                    localized_options = cursor.fetchone()
+                    option_localization_counts = {
+                        "eligible_option_groups": int(eligible_options[0] or 0),
+                        "eligible_option_items": int(eligible_options[1] or 0),
+                        "localized_option_groups": int(localized_options[0] or 0),
+                        "localized_option_items": int(localized_options[1] or 0),
+                    }
                 cursor.execute(
                     """
                     SELECT (SELECT COUNT(*) FROM merchant WHERE is_synthetic<>0)
@@ -8523,6 +8569,7 @@ class OracleYobiRepository:
                         "menu_concept_memberships": membership_count,
                         "menu_concept_membership_menus": membership_menu_count,
                         "wiki_eligible_menus": wiki_eligible_menu_count,
+                        **option_localization_counts,
                         "menu_semantic_embeddings": semantic_embedding_count,
                         "menu_semantic_embedding_manifests": (
                             semantic_embedding_manifest_count

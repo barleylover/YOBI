@@ -147,7 +147,7 @@ readonly REQUIRED_RELEASE_TOOLS=(
   scripts/backfill_menu_semantic_embeddings.py
   scripts/build_external_knowledge_release.py
   scripts/build_synthetic_enrichment_release.py
-  scripts/generate_menu_localizations.py
+  scripts/generate_static_option_localizations.py
   scripts/catalog_mode.py
   scripts/manage_demo_address.py
   scripts/recommendation_http.py
@@ -724,21 +724,17 @@ if [[ "$catalog_mode" == "external" ]]; then
       "$new_release/venv/bin/python" "$new_release/scripts/manage_demo_address.py" \
       --verify-only
     if [[ "$synthetic_enrichment_deploy" == "true" ]]; then
-      # Keep the data release identity stable across deployment-script fixes so
-      # resumable localization never duplicates the already loaded base rows.
-      synthetic_release_id="synthetic-enrichment-861bed8e4f5c"
+      # Static option names are built in a new additive release. Existing menu
+      # localizations are copied release-to-release; no provider is dispatched.
+      synthetic_release_id="synthetic-enrichment-static-options-v1"
       sudo env PYTHONPATH="$new_release/backend:$new_release" \
         "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
         "$new_release/scripts/build_synthetic_enrichment_release.py" \
         --backend oracle --release-id "$synthetic_release_id" --apply
-      sudo env PYTHONPATH="$new_release/backend:$new_release" \
-        "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
-        "$new_release/scripts/generate_menu_localizations.py" \
-        --backend oracle --release-id "$synthetic_release_id" --workers 12 --apply
       enrichment_activation_json="$(sudo env \
         PYTHONPATH="$new_release/backend:$new_release" \
         "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
-        "$new_release/scripts/build_synthetic_enrichment_release.py" \
+        "$new_release/scripts/generate_static_option_localizations.py" \
         --backend oracle --release-id "$synthetic_release_id" --apply --activate)"
       new_recommendation_release_family_id="$(printf '%s' \
         "$enrichment_activation_json" | "$new_release/venv/bin/python" -c \

@@ -1,0 +1,566 @@
+from __future__ import annotations
+
+import re
+
+MODEL_ID = "CODEX_GPT5_STATIC_V1"
+PROMPT_VERSION = "option-static-localization-v1"
+
+# Curated by Codex for the demo catalog. Longest matches run first, then any
+# remaining Korean brand or dish words are transliterated deterministically.
+_EN_TERMS = {
+    "절대 한 주문에 리뷰이벤트 2개이상 넣지마세요": "Do not add more than one review reward per order",
+    "기본제공 품목 제외시 선택": "Choose items to remove from the default set",
+    "소스선택 *미선택시 추천소스 제공": "Choose sauce (chef's choice if skipped)",
+    "포크선택 *결제 시, 일회용품 제공 체크": "Fork choice (select disposable items at checkout)",
+    "케이크 배달용 패키지": "Cake delivery package",
+    "용기 별도 제공": "served in a separate container",
+    "국물떡볶이": "soupy tteokbokki",
+    "떡볶이 토핑": "tteokbokki topping",
+    "단백질 토핑": "protein topping",
+    "기본음료 미제공": "no default drink",
+    "기본제공": "included by default",
+    "추가선택": "add-ons",
+    "추가 선택": "add-ons",
+    "사이드메뉴": "side dish",
+    "사이드 메뉴": "side dish",
+    "음료": "drink",
+    "사이즈": "size",
+    "토핑": "topping",
+    "소스": "sauce",
+    "반찬": "side dish",
+    "베이스": "base",
+    "재료": "ingredient",
+    "메뉴": "menu",
+    "고기": "meat",
+    "맵기": "spice level",
+    "큰 초": "large candle",
+    "작은 초": "small candle",
+    "케이크 칼": "cake knife",
+    "포크": "fork",
+    "선택안함": "none",
+    "선택 안함": "none",
+    "미선택": "none",
+    "기본맛": "original",
+    "순한맛": "mild",
+    "중간맛": "medium spicy",
+    "매운맛": "spicy",
+    "아주매운맛": "extra spicy",
+    "덜맵게": "less spicy",
+    "치즈오븐스파게티": "cheese oven-baked spaghetti",
+    "함박스테이크": "Hamburg steak",
+    "치킨까스": "chicken cutlet",
+    "치즈돈까스": "cheese pork cutlet",
+    "생선까스": "fish cutlet",
+    "돈까스": "pork cutlet",
+    "돈가스": "pork cutlet",
+    "후라이드 치킨": "fried chicken",
+    "양념치킨": "seasoned fried chicken",
+    "순살치킨": "boneless chicken",
+    "치킨텐더": "chicken tenders",
+    "닭똥집": "chicken gizzard",
+    "닭껍질": "chicken skin",
+    "닭가슴살": "chicken breast",
+    "치킨윙": "chicken wings",
+    "치킨 봉": "chicken drumettes",
+    "치즈볼": "cheese balls",
+    "왕새우": "jumbo shrimp",
+    "감자튀김": "French fries",
+    "모둠감자튀김": "assorted fries",
+    "튀김만두": "fried dumplings",
+    "군만두": "fried dumplings",
+    "물만두": "boiled dumplings",
+    "김치만두": "kimchi dumplings",
+    "고기만두": "meat dumplings",
+    "갈비만두": "galbi dumplings",
+    "계란후라이": "fried egg",
+    "삶은 계란": "boiled egg",
+    "공기밥": "steamed rice",
+    "단무지": "pickled radish",
+    "피클무": "pickled radish",
+    "피클": "pickles",
+    "눈꽃치즈": "shredded cheese",
+    "뿌려치즈": "cheese",
+    "치즈": "cheese",
+    "시즈닝": "seasoning",
+    "김밥": "gimbap",
+    "김치": "kimchi",
+    "떡볶이": "tteokbokki",
+    "쫄면사리": "jjolmyeon noodles",
+    "우동사리": "udon noodles",
+    "라면사리": "ramyeon noodles",
+    "모밀": "soba",
+    "우동": "udon",
+    "라면": "ramyeon",
+    "스파게티": "spaghetti",
+    "가라아게": "karaage",
+    "참치": "tuna",
+    "두부": "tofu",
+    "훈제오리": "smoked duck",
+    "스팸": "Spam",
+    "마요네즈": "mayonnaise",
+    "허니머스타드": "honey mustard",
+    "오리엔탈": "oriental",
+    "와사비렌치": "wasabi ranch",
+    "스파이시": "spicy",
+    "발사믹": "balsamic",
+    "스리라차": "sriracha",
+    "사워크림": "sour cream",
+    "솔트앤페퍼": "salt and pepper",
+    "소이": "soy",
+    "클래식": "classic",
+    "특제간장베이스": "house soy base",
+    "트러플": "truffle",
+    "머쉬룸": "mushroom",
+    "콘크림": "corn cream",
+    "스프": "soup",
+    "폰즈": "ponzu",
+    "라임": "lime",
+    "콜라": "cola",
+    "사이다": "lemon-lime soda",
+    "생수": "water",
+    "탄산수": "sparkling water",
+    "포도": "grape",
+    "오렌지": "orange",
+    "무알콜": "non-alcoholic",
+    "추가": "add",
+    "선택": "choice",
+    "제외": "remove",
+    "제공": "included",
+    "별도": "separate",
+    "기본": "default",
+    "세트": "set",
+    "한마리": "one whole",
+    "1마리": "one whole",
+    "반": "half",
+    "개": "pcs",
+    "인분": "serving",
+}
+
+_JA_TERMS = {
+    "절대 한 주문에 리뷰이벤트 2개이상 넣지마세요": "レビュー特典は1注文につき1個まで",
+    "기본제공 품목 제외시 선택": "標準セットから外す品を選択",
+    "소스선택 *미선택시 추천소스 제공": "ソース選択（未選択時はおすすめ）",
+    "포크선택 *결제 시, 일회용품 제공 체크": "フォーク選択（会計時に使い捨て用品を選択）",
+    "케이크 배달용 패키지": "ケーキ配達用パッケージ",
+    "용기 별도 제공": "別容器で提供",
+    "국물떡볶이": "汁ありトッポッキ",
+    "떡볶이 토핑": "トッポッキトッピング",
+    "단백질 토핑": "たんぱく質トッピング",
+    "기본음료 미제공": "基本ドリンクなし",
+    "기본제공": "標準で提供",
+    "추가선택": "追加オプション",
+    "추가 선택": "追加オプション",
+    "사이드메뉴": "サイドメニュー",
+    "사이드 메뉴": "サイドメニュー",
+    "음료": "ドリンク",
+    "사이즈": "サイズ",
+    "토핑": "トッピング",
+    "소스": "ソース",
+    "반찬": "おかず",
+    "베이스": "ベース",
+    "재료": "具材",
+    "메뉴": "メニュー",
+    "고기": "肉",
+    "맵기": "辛さ",
+    "큰 초": "大きいろうそく",
+    "작은 초": "小さいろうそく",
+    "케이크 칼": "ケーキナイフ",
+    "포크": "フォーク",
+    "선택안함": "選択しない",
+    "선택 안함": "選択しない",
+    "미선택": "選択しない",
+    "기본맛": "オリジナル",
+    "순한맛": "マイルド",
+    "중간맛": "中辛",
+    "매운맛": "辛口",
+    "아주매운맛": "激辛",
+    "덜맵게": "辛さ控えめ",
+    "치즈오븐스파게티": "チーズオーブンスパゲッティ",
+    "함박스테이크": "ハンバーグ",
+    "치킨까스": "チキンカツ",
+    "치즈돈까스": "チーズとんかつ",
+    "생선까스": "白身魚フライ",
+    "돈까스": "とんかつ",
+    "돈가스": "とんかつ",
+    "후라이드 치킨": "フライドチキン",
+    "양념치킨": "ヤンニョムチキン",
+    "순살치킨": "骨なしチキン",
+    "치킨텐더": "チキンテンダー",
+    "닭똥집": "砂肝",
+    "닭껍질": "鶏皮",
+    "닭가슴살": "鶏むね肉",
+    "치킨윙": "手羽先",
+    "치킨 봉": "手羽元",
+    "치즈볼": "チーズボール",
+    "왕새우": "大エビ",
+    "감자튀김": "フライドポテト",
+    "모둠감자튀김": "フライドポテト盛り合わせ",
+    "튀김만두": "揚げ餃子",
+    "군만두": "焼き餃子",
+    "물만두": "水餃子",
+    "김치만두": "キムチ餃子",
+    "고기만두": "肉餃子",
+    "갈비만두": "カルビ餃子",
+    "계란후라이": "目玉焼き",
+    "삶은 계란": "ゆで卵",
+    "공기밥": "ご飯",
+    "단무지": "たくあん",
+    "피클무": "大根ピクルス",
+    "피클": "ピクルス",
+    "눈꽃치즈": "シュレッドチーズ",
+    "뿌려치즈": "チーズ",
+    "치즈": "チーズ",
+    "시즈닝": "シーズニング",
+    "김밥": "キンパ",
+    "김치": "キムチ",
+    "떡볶이": "トッポッキ",
+    "쫄면사리": "チョルミョン麺",
+    "우동사리": "うどん麺",
+    "라면사리": "ラーメン麺",
+    "모밀": "そば",
+    "우동": "うどん",
+    "라면": "ラーメン",
+    "스파게티": "スパゲッティ",
+    "가라아게": "唐揚げ",
+    "참치": "ツナ",
+    "두부": "豆腐",
+    "훈제오리": "鴨スモーク",
+    "스팸": "スパム",
+    "마요네즈": "マヨネーズ",
+    "허니머스타드": "ハニーマスタード",
+    "오리엔탈": "オリエンタル",
+    "와사비렌치": "わさびランチ",
+    "스파이시": "スパイシー",
+    "발사믹": "バルサミコ",
+    "스리라차": "シラチャー",
+    "사워크림": "サワークリーム",
+    "솔트앤페퍼": "ソルト＆ペッパー",
+    "소이": "醤油",
+    "클래식": "クラシック",
+    "특제간장베이스": "特製醤油ベース",
+    "트러플": "トリュフ",
+    "머쉬룸": "マッシュルーム",
+    "콘크림": "コーンクリーム",
+    "스프": "スープ",
+    "폰즈": "ポン酢",
+    "라임": "ライム",
+    "콜라": "コーラ",
+    "사이다": "サイダー",
+    "생수": "ミネラルウォーター",
+    "탄산수": "炭酸水",
+    "포도": "ぶどう",
+    "오렌지": "オレンジ",
+    "무알콜": "ノンアルコール",
+    "추가": "追加",
+    "선택": "選択",
+    "제외": "除外",
+    "제공": "提供",
+    "별도": "別添え",
+    "기본": "基本",
+    "세트": "セット",
+    "한마리": "1羽",
+    "1마리": "1羽",
+    "반": "ハーフ",
+    "개": "個",
+    "인분": "人前",
+}
+
+_CHO = (
+    "g",
+    "kk",
+    "n",
+    "d",
+    "tt",
+    "r",
+    "m",
+    "b",
+    "pp",
+    "s",
+    "ss",
+    "",
+    "j",
+    "jj",
+    "ch",
+    "k",
+    "t",
+    "p",
+    "h",
+)
+_JUNG = (
+    "a",
+    "ae",
+    "ya",
+    "yae",
+    "eo",
+    "e",
+    "yeo",
+    "ye",
+    "o",
+    "wa",
+    "wae",
+    "oe",
+    "yo",
+    "u",
+    "wo",
+    "we",
+    "wi",
+    "yu",
+    "eu",
+    "ui",
+    "i",
+)
+_JONG = (
+    "",
+    "k",
+    "k",
+    "ks",
+    "n",
+    "nj",
+    "nh",
+    "t",
+    "l",
+    "lk",
+    "lm",
+    "lp",
+    "ls",
+    "lt",
+    "lp",
+    "lh",
+    "m",
+    "p",
+    "ps",
+    "t",
+    "t",
+    "ng",
+    "t",
+    "t",
+    "k",
+    "t",
+    "p",
+    "h",
+)
+
+_KANA = {
+    "a": "ア",
+    "i": "イ",
+    "u": "ウ",
+    "e": "エ",
+    "o": "オ",
+    "eo": "オ",
+    "eu": "ウ",
+    "ui": "ウィ",
+    "ga": "ガ",
+    "gi": "ギ",
+    "gu": "グ",
+    "ge": "ゲ",
+    "go": "ゴ",
+    "geo": "ゴ",
+    "geu": "グ",
+    "gui": "グィ",
+    "ka": "カ",
+    "ki": "キ",
+    "ku": "ク",
+    "ke": "ケ",
+    "ko": "コ",
+    "keo": "コ",
+    "keu": "ク",
+    "kui": "クィ",
+    "na": "ナ",
+    "ni": "ニ",
+    "nu": "ヌ",
+    "ne": "ネ",
+    "no": "ノ",
+    "neo": "ノ",
+    "neu": "ヌ",
+    "nui": "ヌィ",
+    "da": "ダ",
+    "di": "ディ",
+    "du": "ドゥ",
+    "de": "デ",
+    "do": "ド",
+    "deo": "ド",
+    "deu": "ドゥ",
+    "dui": "ディ",
+    "ta": "タ",
+    "ti": "ティ",
+    "tu": "トゥ",
+    "te": "テ",
+    "to": "ト",
+    "teo": "ト",
+    "teu": "トゥ",
+    "tui": "ティ",
+    "ra": "ラ",
+    "ri": "リ",
+    "ru": "ル",
+    "re": "レ",
+    "ro": "ロ",
+    "reo": "ロ",
+    "reu": "ル",
+    "rui": "ルィ",
+    "ma": "マ",
+    "mi": "ミ",
+    "mu": "ム",
+    "me": "メ",
+    "mo": "モ",
+    "meo": "モ",
+    "meu": "ム",
+    "mui": "ムィ",
+    "ba": "バ",
+    "bi": "ビ",
+    "bu": "ブ",
+    "be": "ベ",
+    "bo": "ボ",
+    "beo": "ボ",
+    "beu": "ブ",
+    "bui": "ブィ",
+    "pa": "パ",
+    "pi": "ピ",
+    "pu": "プ",
+    "pe": "ペ",
+    "po": "ポ",
+    "peo": "ポ",
+    "peu": "プ",
+    "pui": "プィ",
+    "sa": "サ",
+    "si": "シ",
+    "su": "ス",
+    "se": "セ",
+    "so": "ソ",
+    "seo": "ソ",
+    "seu": "ス",
+    "sui": "スィ",
+    "ja": "ジャ",
+    "ji": "ジ",
+    "ju": "ジュ",
+    "je": "ジェ",
+    "jo": "ジョ",
+    "jeo": "ジョ",
+    "jeu": "ジュ",
+    "jui": "ジュィ",
+    "cha": "チャ",
+    "chi": "チ",
+    "chu": "チュ",
+    "che": "チェ",
+    "cho": "チョ",
+    "cheo": "チョ",
+    "cheu": "チュ",
+    "chui": "チュィ",
+    "ha": "ハ",
+    "hi": "ヒ",
+    "hu": "フ",
+    "he": "ヘ",
+    "ho": "ホ",
+    "heo": "ホ",
+    "heu": "フ",
+    "hui": "フィ",
+}
+_FINAL_KANA = {
+    "k": "ク",
+    "ks": "ク",
+    "n": "ン",
+    "nj": "ン",
+    "nh": "ン",
+    "t": "ッ",
+    "l": "ル",
+    "lk": "ク",
+    "lm": "ム",
+    "lp": "プ",
+    "ls": "ル",
+    "lt": "ル",
+    "lh": "ル",
+    "m": "ム",
+    "p": "プ",
+    "ps": "プ",
+    "ng": "ン",
+    "h": "ッ",
+}
+
+
+def _decompose(character: str) -> tuple[str, str, str] | None:
+    code = ord(character) - 0xAC00
+    if not 0 <= code < 11172:
+        return None
+    return _CHO[code // 588], _JUNG[(code % 588) // 28], _JONG[code % 28]
+
+
+def _romanize(text: str) -> str:
+    parts: list[str] = []
+    for character in text:
+        syllable = _decompose(character)
+        parts.append("".join(syllable) if syllable else character)
+    return "".join(parts)
+
+
+def _kana_syllable(onset: str, vowel: str, final: str) -> str:
+    normalized_onset = {"kk": "k", "tt": "t", "pp": "p", "ss": "s", "jj": "j"}.get(onset, onset)
+    if vowel in {"ya", "yae", "yeo", "ye", "yo", "yu"}:
+        base_vowel = {"ya": "a", "yae": "e", "yeo": "eo", "ye": "e", "yo": "o", "yu": "u"}[vowel]
+        base = (
+            _KANA.get(normalized_onset + "i", _KANA.get("i", "イ"))
+            + "ャュョ"[{"a": 0, "e": 0, "eo": 0, "o": 2, "u": 1}[base_vowel]]
+        )
+    elif vowel in {"wa", "wae", "oe", "wo", "we", "wi"}:
+        base = (
+            _KANA.get(normalized_onset + "o", _KANA.get("o", "オ"))
+            + {"wa": "ァ", "wae": "ェ", "oe": "ェ", "wo": "ォ", "we": "ェ", "wi": "ィ"}[vowel]
+        )
+    else:
+        simple_vowel = {"ae": "e", "eo": "o", "eu": "u", "ui": "i"}.get(vowel, vowel)
+        base = _KANA.get(
+            normalized_onset + simple_vowel,
+            _KANA.get(simple_vowel, ""),
+        )
+    return base + _FINAL_KANA.get(final, "")
+
+
+def _katakana(text: str) -> str:
+    parts: list[str] = []
+    for character in text:
+        syllable = _decompose(character)
+        parts.append(_kana_syllable(*syllable) if syllable else character)
+    return "".join(parts)
+
+
+def _replace_terms(source: str, terms: dict[str, str]) -> str:
+    value = source
+    for korean, localized in sorted(terms.items(), key=lambda item: len(item[0]), reverse=True):
+        value = value.replace(korean, f" {localized} ")
+    return value
+
+
+def _replace_remaining_hangul(value: str, *, japanese: bool) -> str:
+    converter = _katakana if japanese else _romanize
+    return re.sub(r"[가-힣]+", lambda match: f" {converter(match.group())} ", value)
+
+
+def _clean(value: str, *, japanese: bool) -> str:
+    value = re.sub(r"\s+", " ", value).strip()
+    value = re.sub(r"\s+([,.;:!?%)\]】])", r"\1", value)
+    value = re.sub(r"([(\[【])\s+", r"\1", value)
+    if japanese:
+        value = value.replace(" / ", "／").replace(" + ", "＋")
+    else:
+        value = re.sub(r"(?i)(\d+)\s*p\b", r"\1 pcs", value)
+        value = re.sub(r"(?i)\b(ml)\b", "mL", value)
+        value = re.sub(r"(?i)\b(kg)\b", "kg", value)
+        value = re.sub(r"(?i)(\d+)\s*g\b", r"\1g", value)
+        if value:
+            value = value[0].upper() + value[1:]
+    return value[:300].rstrip()
+
+
+def localize_option_name(source_name_ko: str, language_code: str) -> str:
+    source = " ".join(source_name_ko.split()).strip()
+    if not source:
+        raise ValueError("OPTION_LOCALIZATION_SOURCE_EMPTY")
+    if language_code == "ko":
+        return source
+    if language_code not in {"en", "ja"}:
+        raise ValueError("OPTION_LOCALIZATION_LANGUAGE_UNSUPPORTED")
+    japanese = language_code == "ja"
+    value = _replace_terms(source, _JA_TERMS if japanese else _EN_TERMS)
+    value = _replace_remaining_hangul(value, japanese=japanese)
+    value = _clean(value, japanese=japanese)
+    if not value or re.search(r"[가-힣]", value):
+        raise ValueError("OPTION_LOCALIZATION_OUTPUT_INVALID")
+    return value

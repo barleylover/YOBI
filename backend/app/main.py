@@ -37,7 +37,6 @@ from app.dependencies import (
     get_chat_service,
     get_demo_control,
     get_menu_presentation_service,
-    get_option_localization_service,
     get_repository,
     get_restaurant_note_translation_service,
     get_structured_recommendation_service,
@@ -82,7 +81,6 @@ from app.services.address_ocr import AddressCandidateTokenCodec, choose_address_
 from app.services.chat_service import ChatService
 from app.services.demo_control import DemoControl, FailureMode
 from app.services.menu_presentation import MenuPresentationService
-from app.services.option_localization import OptionLocalizationService
 from app.services.restaurant_note_translation import RestaurantNoteTranslationService
 from app.services.structured_recommendation import StructuredRecommendationService
 
@@ -901,21 +899,14 @@ def post_conversation_event(
 @app.get("/api/v1/menus/{menu_id}/options")
 def get_menu_options(
     menu_id: str,
-    background_tasks: BackgroundTasks,
     session_id: str | None = Query(default=None),
     repository: YobiRepository = Depends(get_repository),
-    option_service: OptionLocalizationService = Depends(get_option_localization_service),
 ) -> list[dict[str, Any]]:
     if session_id is not None:
         _require_session(repository, session_id)
-    groups = option_service.get_cached_options(menu_id, session_id)
-    if session_id is not None and groups:
-        # Option localization is an enrichment, not a prerequisite for ordering.
-        # A cache miss must never hold the Choose-this-menu path behind an LLM call.
-        background_tasks.add_task(option_service.get_options, menu_id, session_id)
     return [
         group.model_dump(mode="json")
-        for group in groups
+        for group in repository.get_options(menu_id, session_id=session_id)
     ]
 
 
