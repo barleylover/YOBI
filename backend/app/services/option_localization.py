@@ -78,8 +78,15 @@ class OptionLocalizationService:
         self.settings = settings
         self.provider = provider or choose_genai_provider(settings)
 
+    def get_cached_options(
+        self, menu_id: str, session_id: str | None
+    ) -> list[OptionGroup]:
+        """Return persisted names immediately without waiting for a model call."""
+
+        return self.repository.get_options(menu_id, session_id=session_id)
+
     def get_options(self, menu_id: str, session_id: str | None) -> list[OptionGroup]:
-        groups = self.repository.get_options(menu_id, session_id=session_id)
+        groups = self.get_cached_options(menu_id, session_id)
         if not session_id or not groups:
             return groups
         session = self.repository.get_session(session_id)

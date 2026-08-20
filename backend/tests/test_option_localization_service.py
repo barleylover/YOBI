@@ -5,9 +5,12 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 
+from fastapi import BackgroundTasks
+
 from app.core.config import Settings
 from app.domain.models import ChatState, OptionGroup, OptionItem, Profile, Session
 from app.genai.contracts import GenAIServingMode, ProviderCapabilities
+from app.main import get_menu_options
 from app.services.option_localization import OptionLocalizationService
 
 
@@ -163,6 +166,45 @@ def test_japanese_options_are_generated_once_then_read_from_cache() -> None:
     assert provider.max_output_tokens == 4_096
     assert first[0].display_name == second[0].display_name == "辛さレベル"
     assert first[0].items[0].display_name == "マイルド"
+
+
+def test_cached_options_never_wait_for_provider_generation() -> None:
+    repository = OptionRepository(language="English")
+    provider = OptionProvider(group_name="Spice choice", item_name="Not spicy")
+    service = OptionLocalizationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        provider=provider,
+    )
+
+    result = service.get_cached_options("menu-1", "session-localized")
+
+    assert provider.calls == 0
+    assert result[0].display_name == "Spice level"
+    assert result[0].items[0].display_name == "Mild"
+
+
+def test_options_endpoint_returns_cached_names_before_background_localization() -> None:
+    repository = OptionRepository(language="English")
+    provider = OptionProvider(group_name="Spice choice", item_name="Not spicy")
+    service = OptionLocalizationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        provider=provider,
+    )
+    background_tasks = BackgroundTasks()
+
+    result = get_menu_options(
+        "menu-1",
+        background_tasks,
+        session_id="session-localized",
+        repository=repository,  # type: ignore[arg-type]
+        option_service=service,
+    )
+
+    assert provider.calls == 0
+    assert result[0]["display_name"] == "Spice level"
+    assert len(background_tasks.tasks) == 1
 
 
 def test_english_options_are_generated_once_then_read_from_cache() -> None:
