@@ -70,7 +70,15 @@ def test_runtime_environment_can_resume_and_upgrade_release_policy(
     assert 'OCI_EMBED_AUTH="instance_principal"' in persisted
     assert 'STRUCTURED_RECOMMENDATION_MODEL="openai.gpt-oss-120b"' in persisted
     assert 'MENU_PRESENTATION_MODEL="xai.grok-4.3"' in persisted
-    assert 'OPTION_LOCALIZATION_MODEL="xai.grok-4.3"' in persisted
+    assert 'OPTION_LOCALIZATION_MODEL="openai.gpt-oss-20b"' in persisted
+    assert (
+        'OPTION_LOCALIZATION_MODEL_CHAIN="openai.gpt-oss-20b,openai.gpt-oss-120b"'
+        in persisted
+    )
+    assert (
+        'RESTAURANT_NOTE_MODEL_CHAIN="meta.llama-4-maverick-17b-128e-instruct-fp8,'
+        'openai.gpt-oss-20b"' in persisted
+    )
     assert 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="16384"' in persisted
     assert 'STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS="2"' in persisted
     assert 'RECOMMENDATION_CANDIDATE_LIMIT="100"' in persisted
@@ -95,6 +103,9 @@ def test_runtime_environment_can_resume_and_upgrade_release_policy(
         "STRUCTURED_RECOMMENDATION_MODEL",
         "MENU_PRESENTATION_MODEL",
         "OPTION_LOCALIZATION_MODEL",
+        "OPTION_LOCALIZATION_MODEL_CHAIN",
+        "RESTAURANT_NOTE_MODEL",
+        "RESTAURANT_NOTE_MODEL_CHAIN",
         "MENU_PRESENTATION_MAX_OUTPUT_TOKENS",
         "OPTION_LOCALIZATION_MAX_OUTPUT_TOKENS",
         "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS",
@@ -105,6 +116,14 @@ def test_runtime_environment_can_resume_and_upgrade_release_policy(
         "RECOMMENDATION_LLM_SELECTION_ENABLED",
         "OCI_GENAI_STRUCTURED_OUTPUT_ENABLED",
         "OCI_GENAI_STREAMING_ENABLED",
+        "OCI_GENAI_ADMISSION_CONTROL_ENABLED",
+        "OCI_GENAI_MAX_CONCURRENT_REQUESTS_PER_MODEL",
+        "OCI_GENAI_MIN_INTERVAL_SECONDS",
+        "OCI_GENAI_RATE_LIMIT_COOLDOWN_SECONDS",
+        "OCI_GENAI_MAX_INPUT_TOKENS",
+        "OCI_GENAI_MAX_OUTPUT_TOKENS",
+        "LLM_MAX_INPUT_TOKENS",
+        "LLM_MAX_OUTPUT_TOKENS",
     ):
         os.environ.pop(key, None)
 
@@ -151,7 +170,19 @@ def test_retry_policy_matches_settings_and_runtime_restore() -> None:
     assert '"STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS": "2"' in main_source
     assert 'STRUCTURED_RECOMMENDATION_MODEL="openai.gpt-oss-120b"' in restore
     assert 'MENU_PRESENTATION_MODEL="xai.grok-4.3"' in restore
-    assert 'OPTION_LOCALIZATION_MODEL="xai.grok-4.3"' in restore
+    assert 'OPTION_LOCALIZATION_MODEL="openai.gpt-oss-20b"' in restore
+    assert (
+        'OPTION_LOCALIZATION_MODEL_CHAIN="openai.gpt-oss-20b,openai.gpt-oss-120b"'
+        in restore
+    )
+    assert (
+        'RESTAURANT_NOTE_MODEL="meta.llama-4-maverick-17b-128e-instruct-fp8"'
+        in restore
+    )
+    assert (
+        'RESTAURANT_NOTE_MODEL_CHAIN="meta.llama-4-maverick-17b-128e-instruct-fp8,'
+        'openai.gpt-oss-20b"' in restore
+    )
     assert 'MENU_PRESENTATION_MAX_OUTPUT_TOKENS="16384"' in restore
     assert 'OPTION_LOCALIZATION_MAX_OUTPUT_TOKENS="16384"' in restore
     assert 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="16384"' in restore
@@ -178,6 +209,7 @@ def test_split_model_release_envelope_is_persisted() -> None:
         "STRUCTURED_RECOMMENDATION_MODEL",
         "MENU_PRESENTATION_MODEL",
         "OPTION_LOCALIZATION_MODEL",
+        "OPTION_LOCALIZATION_MODEL_CHAIN",
         "MENU_PRESENTATION_MAX_OUTPUT_TOKENS",
         "OPTION_LOCALIZATION_MAX_OUTPUT_TOKENS",
         "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS",

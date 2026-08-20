@@ -53,7 +53,23 @@ test("primary tourist flow selects criteria, recommends once and reaches the ord
   await expect(page.locator("body")).not.toContainText(/demo|mock|synthetic/i);
   await page.getByRole("button", { name: "Choose this menu" }).first().click();
   await expect(page.getByTestId("order-flow")).toBeVisible();
-  await completeCurrentOptions(page);
+  if (process.env.YOBI_E2E_LIVE_MODEL_ROLES === "1") {
+    const optionGroup = page.locator("[data-testid^='option-group-']:visible").first();
+    if (await optionGroup.isVisible().catch(() => false)) {
+      await page.getByRole("button", { name: /Use defaults for the rest/ }).click();
+    }
+    const note = page.locator("textarea.v2-note-input");
+    await expect(note).toBeVisible();
+    await note.fill("Please leave the sauce on the side.");
+    await page.getByRole("button", { name: "Translate to Korean" }).click();
+    await expect(page.locator(".v2-translation-preview")).toContainText(/[가-힣]/, {
+      timeout: 30_000,
+    });
+    await expect(page.getByRole("button", { name: "Add to cart", exact: true })).toBeEnabled();
+    await page.getByRole("button", { name: "Add to cart", exact: true }).click();
+  } else {
+    await completeCurrentOptions(page);
+  }
 
   await expect(page.getByRole("button", { name: "Yes, show more menus" })).toBeVisible();
   expect(recommendationModes).toEqual(["INITIAL"]);

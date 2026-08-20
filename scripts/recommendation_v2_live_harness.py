@@ -272,6 +272,14 @@ def _settings_errors(settings: Settings) -> list[str]:
     checks = {
         "STRUCTURED_MODEL": settings.structured_recommendation_model
         == "openai.gpt-oss-120b",
+        "PRESENTATION_MODEL": settings.menu_presentation_model == "xai.grok-4.3",
+        "OPTION_LOCALIZATION_CHAIN": settings.option_localization_model_chain
+        == "openai.gpt-oss-20b,openai.gpt-oss-120b",
+        "RESTAURANT_NOTE_CHAIN": settings.restaurant_note_model_chain
+        == (
+            "meta.llama-4-maverick-17b-128e-instruct-fp8,"
+            "openai.gpt-oss-20b"
+        ),
         "MAX_OUTPUT_TOKENS": settings.structured_recommendation_max_output_tokens
         == 16384,
         "CANDIDATE_LIMIT": settings.recommendation_candidate_limit == 100,
@@ -502,7 +510,14 @@ def _ready_errors(ready: dict[str, Any]) -> list[str]:
         "MODEL": structured.get("model_id") == "openai.gpt-oss-120b",
         "PRESENTATION_MODEL": structured.get("presentation_model_id") == "xai.grok-4.3",
         "OPTION_LOCALIZATION_MODEL": structured.get("option_localization_model_id")
-        == "xai.grok-4.3",
+        == "openai.gpt-oss-20b",
+        "OPTION_LOCALIZATION_CHAIN": structured.get("option_localization_model_chain")
+        == ["openai.gpt-oss-20b", "openai.gpt-oss-120b"],
+        "RESTAURANT_NOTE_CHAIN": structured.get("restaurant_note_model_chain")
+        == [
+            "meta.llama-4-maverick-17b-128e-instruct-fp8",
+            "openai.gpt-oss-20b",
+        ],
         "GROUNDING_DIAGNOSTICS": structured.get("grounding_diagnostics_version")
         == "yobi-grounding-diagnostics-v2",
         "SELECTION": structured.get("selection_enabled") is True,

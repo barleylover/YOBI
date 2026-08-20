@@ -9,7 +9,12 @@ from typing import Any
 
 from app.core.config import Settings
 from app.domain.models import OptionGroup, OptionItem
-from app.genai.contracts import GenAIServingMode, ProviderCapabilities
+from app.genai.contracts import (
+    GenAIErrorCode,
+    GenAIProviderError,
+    GenAIServingMode,
+    ProviderCapabilities,
+)
 from app.genai.option_localization_generator import OptionLocalizationGenerator
 from app.services.option_localization import OptionLocalizationService
 
@@ -38,7 +43,7 @@ class OptionProvider:
         self.calls: list[dict[str, Any]] = []
 
     def supports_model(self, model: str) -> bool:
-        return model == "xai.grok-4.3"
+        return model in {"openai.gpt-oss-20b", "openai.gpt-oss-120b"}
 
     def create_response(self, model: str, **kwargs: Any) -> Any:
         self.calls.append({"model": model, **kwargs})
@@ -52,6 +57,22 @@ class SlowOptionProvider(OptionProvider):
     def create_response(self, model: str, **kwargs: Any) -> Any:
         time.sleep(0.05)
         return super().create_response(model, **kwargs)
+
+
+class FallbackOptionProvider(OptionProvider):
+    def __init__(self, plan: dict[str, Any]) -> None:
+        super().__init__({})
+        self.plan = plan
+
+    def create_response(self, model: str, **kwargs: Any) -> Any:
+        self.calls.append({"model": model, **kwargs})
+        result = self.plan[model]
+        if isinstance(result, BaseException):
+            raise result
+        return SimpleNamespace(
+            output_text=json.dumps(result),
+            usage={"input_tokens": 120, "output_tokens": 40},
+        )
 
 
 def _groups() -> list[OptionGroup]:
@@ -190,11 +211,50 @@ def test_generator_maps_ordered_strings_without_model_owned_ids() -> None:
         locale="English",
     )
 
-    assert result.generation_model == "xai.grok-4.3"
+    assert result.generation_model == "openai.gpt-oss-20b"
     assert result.groups[0].item_display_names == ["Add Coca-Cola 355ml", "None"]
     request_payload = json.loads(provider.calls[0]["input"][0]["content"])
     assert "option_group_id" not in json.dumps(request_payload)
     assert provider.calls[0]["max_output_tokens"] == 16_384
+
+
+def test_generator_falls_back_from_20b_to_120b() -> None:
+    translated = {
+        "groups": [
+            {
+                "display_name": "Drink add-ons",
+                "item_display_names": ["Add Coca-Cola 355ml", "None"],
+            }
+        ]
+    }
+    provider = FallbackOptionProvider(
+        {
+            "openai.gpt-oss-20b": GenAIProviderError(
+                GenAIErrorCode.RATE_LIMIT,
+                retryable=True,
+            ),
+            "openai.gpt-oss-120b": translated,
+        }
+    )
+
+    result = OptionLocalizationGenerator(Settings(), provider=provider).generate(
+        groups=[
+            {
+                "name_ko": "음료 추가선택",
+                "items": [
+                    {"name_ko": "코카콜라 355ml 추가"},
+                    {"name_ko": "선택 안함"},
+                ],
+            }
+        ],
+        locale="English",
+    )
+
+    assert result.generation_model == "openai.gpt-oss-120b"
+    assert [call["model"] for call in provider.calls] == [
+        "openai.gpt-oss-20b",
+        "openai.gpt-oss-120b",
+    ]
 
 
 def test_selected_menu_options_generate_once_then_use_prompt_versioned_cache() -> None:

@@ -70,23 +70,26 @@ class RestaurantNoteTranslationService:
         if cached is not None:
             return cached
 
-        models = list(
+        configured_models = list(
             dict.fromkeys(
                 model.strip()
                 for model in self.settings.restaurant_note_model_chain.split(",")
                 if model.strip()
             )
         )
-        models = list(
+        models = configured_models or list(
             dict.fromkeys(
-                [
-                    *models,
+                model
+                for model in (
                     self.settings.restaurant_note_model.strip(),
                     self.settings.oci_genai_fallback_model.strip(),
-                ]
+                )
+                if model
             )
         )
         models = [model for model in models if model]
+        if not models:
+            models = [self.settings.restaurant_note_model.strip()]
         input_payload: dict[str, Any] = {
             "source_language": data.source_language,
             "source_text": data.source_text,

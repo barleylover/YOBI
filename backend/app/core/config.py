@@ -29,14 +29,16 @@ class Settings(BaseSettings):
     oci_genai_model: str = "xai.grok-4.3"
     oci_genai_fallback_model: str = "openai.gpt-oss-120b"
     structured_recommendation_model: str = "openai.gpt-oss-120b"
-    restaurant_note_model: str = "openai.gpt-oss-20b"
+    restaurant_note_model: str = "meta.llama-4-maverick-17b-128e-instruct-fp8"
     restaurant_note_model_chain: str = (
-        "google.gemini-2.5-flash-lite,google.gemini-2.5-flash,"
-        "openai.gpt-oss-20b,openai.gpt-oss-120b"
+        "meta.llama-4-maverick-17b-128e-instruct-fp8,openai.gpt-oss-20b"
     )
     menu_localization_model: str = "xai.grok-4.3"
     menu_presentation_model: str = "xai.grok-4.3"
-    option_localization_model: str = "xai.grok-4.3"
+    option_localization_model: str = "openai.gpt-oss-20b"
+    option_localization_model_chain: str = (
+        "openai.gpt-oss-20b,openai.gpt-oss-120b"
+    )
     structured_recommendation_max_output_tokens: int = Field(default=16384, ge=64)
     menu_presentation_max_output_tokens: int = Field(default=16384, ge=256)
     option_localization_max_output_tokens: int = Field(default=16384, ge=256)
@@ -86,7 +88,7 @@ class Settings(BaseSettings):
     recommendation_prompt_version: str = "yobi-structured-rag-v3-server-wiki-binding"
     menu_presentation_prompt_version: str = "yobi-menu-presentation-v7-card-only"
     menu_presentation_schema_version: str = "4"
-    option_localization_prompt_version: str = "yobi-option-localization-v1-ordered"
+    option_localization_prompt_version: str = "yobi-option-localization-v2-gptoss-chain"
     menu_presentation_wait_seconds: float = Field(default=10.0, ge=0.0, le=30.0)
     menu_presentation_poll_seconds: float = Field(default=0.25, ge=0.05, le=2.0)
     recommendation_raw_hits_per_value: int = Field(default=20, ge=4, le=100)

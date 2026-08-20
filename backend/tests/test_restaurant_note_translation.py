@@ -45,8 +45,7 @@ class PlannedProvider:
 
     def supports_model(self, model: str) -> bool:
         return model in {
-            "google.gemini-2.5-flash-lite",
-            "google.gemini-2.5-flash",
+            "meta.llama-4-maverick-17b-128e-instruct-fp8",
             "openai.gpt-oss-20b",
             "openai.gpt-oss-120b",
         }
@@ -81,7 +80,9 @@ def test_note_translation_uses_first_available_model_and_enables_cart_note(
     repository: SQLiteYobiRepository,
 ) -> None:
     session_id = _session(repository)
-    provider = PlannedProvider({"google.gemini-2.5-flash-lite": _payload()})
+    provider = PlannedProvider(
+        {"meta.llama-4-maverick-17b-128e-instruct-fp8": _payload()}
+    )
     service = RestaurantNoteTranslationService(repository, Settings(), provider=provider)
 
     translated = service.translate(
@@ -93,7 +94,7 @@ def test_note_translation_uses_first_available_model_and_enables_cart_note(
     )
 
     assert translated.status == "SUCCEEDED"
-    assert provider.calls == ["google.gemini-2.5-flash-lite"]
+    assert provider.calls == ["meta.llama-4-maverick-17b-128e-instruct-fp8"]
     preview = repository.add_cart_item(
         session_id,
         CartItemInput(
@@ -119,10 +120,10 @@ def test_note_translation_falls_back_to_next_model_on_rate_limit(
     session_id = _session(repository)
     provider = PlannedProvider(
         {
-            "google.gemini-2.5-flash-lite": GenAIProviderError(
+            "meta.llama-4-maverick-17b-128e-instruct-fp8": GenAIProviderError(
                 GenAIErrorCode.RATE_LIMIT, retryable=True
             ),
-            "google.gemini-2.5-flash": _payload(),
+            "openai.gpt-oss-20b": _payload(),
         }
     )
     service = RestaurantNoteTranslationService(repository, Settings(), provider=provider)
@@ -133,10 +134,10 @@ def test_note_translation_falls_back_to_next_model_on_rate_limit(
     )
 
     assert translated.status == "SUCCEEDED"
-    assert translated.model_id == "google.gemini-2.5-flash"
+    assert translated.model_id == "openai.gpt-oss-20b"
     assert provider.calls == [
-        "google.gemini-2.5-flash-lite",
-        "google.gemini-2.5-flash",
+        "meta.llama-4-maverick-17b-128e-instruct-fp8",
+        "openai.gpt-oss-20b",
     ]
     with repository._connection() as connection:
         attempts = connection.execute(
@@ -146,8 +147,8 @@ def test_note_translation_falls_back_to_next_model_on_rate_limit(
             (session_id,),
         ).fetchall()
     assert [tuple(row) for row in attempts] == [
-        (1, "google.gemini-2.5-flash-lite", "FAILED", "RATE_LIMIT"),
-        (2, "google.gemini-2.5-flash", "SUCCEEDED", None),
+        (1, "meta.llama-4-maverick-17b-128e-instruct-fp8", "FAILED", "RATE_LIMIT"),
+        (2, "openai.gpt-oss-20b", "SUCCEEDED", None),
     ]
 
 
@@ -157,16 +158,10 @@ def test_failed_note_translation_blocks_nonempty_note_but_allows_note_free_cart(
     session_id = _session(repository)
     provider = PlannedProvider(
         {
-            "google.gemini-2.5-flash-lite": GenAIProviderError(
+            "meta.llama-4-maverick-17b-128e-instruct-fp8": GenAIProviderError(
                 GenAIErrorCode.TIMEOUT, retryable=True
             ),
-            "google.gemini-2.5-flash": GenAIProviderError(
-                GenAIErrorCode.PROVIDER_UNAVAILABLE, retryable=True
-            ),
             "openai.gpt-oss-20b": GenAIProviderError(
-                GenAIErrorCode.PROVIDER_UNAVAILABLE, retryable=True
-            ),
-            "openai.gpt-oss-120b": GenAIProviderError(
                 GenAIErrorCode.PROVIDER_UNAVAILABLE, retryable=True
             ),
         }
@@ -179,10 +174,8 @@ def test_failed_note_translation_blocks_nonempty_note_but_allows_note_free_cart(
 
     assert failed.status == "FAILED"
     assert provider.calls == [
-        "google.gemini-2.5-flash-lite",
-        "google.gemini-2.5-flash",
+        "meta.llama-4-maverick-17b-128e-instruct-fp8",
         "openai.gpt-oss-20b",
-        "openai.gpt-oss-120b",
     ]
     with pytest.raises(ValueError, match="RESTAURANT_NOTE_TRANSLATION_REQUIRED"):
         repository.add_cart_item(
@@ -212,8 +205,8 @@ def test_invalid_fenced_response_advances_to_next_model(
     session_id = _session(repository)
     provider = PlannedProvider(
         {
-            "google.gemini-2.5-flash-lite": "not json",
-            "google.gemini-2.5-flash": f"```json\n{json.dumps(_payload(), ensure_ascii=False)}\n```",
+            "meta.llama-4-maverick-17b-128e-instruct-fp8": "not json",
+            "openai.gpt-oss-20b": f"```json\n{json.dumps(_payload(), ensure_ascii=False)}\n```",
         }
     )
     translated = RestaurantNoteTranslationService(
@@ -224,14 +217,16 @@ def test_invalid_fenced_response_advances_to_next_model(
     )
 
     assert translated.status == "SUCCEEDED"
-    assert translated.model_id == "google.gemini-2.5-flash"
+    assert translated.model_id == "openai.gpt-oss-20b"
 
 
 def test_non_structured_provider_receives_explicit_translation_contract(
     repository: SQLiteYobiRepository,
 ) -> None:
     session_id = _session(repository)
-    provider = PlannedProvider({"google.gemini-2.5-flash-lite": _payload()})
+    provider = PlannedProvider(
+        {"meta.llama-4-maverick-17b-128e-instruct-fp8": _payload()}
+    )
     provider.capabilities = provider.capabilities.model_copy(
         update={"structured_output": False}
     )
@@ -256,13 +251,10 @@ def test_non_korean_translation_is_rejected_and_20b_can_recover(
     session_id = _session(repository)
     provider = PlannedProvider(
         {
-            "google.gemini-2.5-flash-lite": {
+            "meta.llama-4-maverick-17b-128e-instruct-fp8": {
                 "korean_text": "No onions, please.",
                 "back_translation": "No onions, please.",
             },
-            "google.gemini-2.5-flash": GenAIProviderError(
-                GenAIErrorCode.PROVIDER_UNAVAILABLE, retryable=True
-            ),
             "openai.gpt-oss-20b": _payload(),
         }
     )
@@ -286,11 +278,11 @@ def test_unsupported_configured_model_advances_to_a_working_model(
     session_id = _session(repository)
     provider = PlannedProvider(
         {
-            "google.gemini-2.5-flash-lite": GenAIProviderError(
+            "meta.llama-4-maverick-17b-128e-instruct-fp8": GenAIProviderError(
                 GenAIErrorCode.PROVIDER_UNAVAILABLE,
                 retryable=False,
             ),
-            "google.gemini-2.5-flash": _payload(),
+            "openai.gpt-oss-20b": _payload(),
         }
     )
 
@@ -308,6 +300,6 @@ def test_unsupported_configured_model_advances_to_a_working_model(
 
     assert translated.status == "SUCCEEDED"
     assert provider.calls == [
-        "google.gemini-2.5-flash-lite",
-        "google.gemini-2.5-flash",
+        "meta.llama-4-maverick-17b-128e-instruct-fp8",
+        "openai.gpt-oss-20b",
     ]

@@ -130,7 +130,15 @@ def test_ready_contract_exposes_only_bounded_structured_metadata() -> None:
             "grounding_diagnostics_version": "yobi-grounding-diagnostics-v2",
             "model_id": "openai.gpt-oss-120b",
             "presentation_model_id": "xai.grok-4.3",
-            "option_localization_model_id": "xai.grok-4.3",
+            "option_localization_model_id": "openai.gpt-oss-20b",
+            "option_localization_model_chain": [
+                "openai.gpt-oss-20b",
+                "openai.gpt-oss-120b",
+            ],
+            "restaurant_note_model_chain": [
+                "meta.llama-4-maverick-17b-128e-instruct-fp8",
+                "openai.gpt-oss-20b",
+            ],
             "selection_enabled": True,
             "candidate_limit": 100,
             "shortlist_limit": 15,
@@ -231,7 +239,7 @@ def test_code_only_provisional_reuses_active_data_without_a_provider_probe() -> 
 
     assert 'YOBI_CODE_ONLY_PROVISIONAL:-false' in source
     code_only_branch = source.split(
-        'if [[ "$code_only_provisional" == "true" ]]; then', 1
+        'if [[ "$code_only_provisional" == "true"', 1
     )[1].split("else", 1)[0]
     assert 'new_knowledge_release_id="$old_knowledge_release_id"' in code_only_branch
     assert (

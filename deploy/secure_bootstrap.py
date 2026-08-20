@@ -32,16 +32,23 @@ RUNTIME_ADMISSION_ENABLED_POLICY = 'OCI_GENAI_ADMISSION_CONTROL_ENABLED="true"'
 RUNTIME_MODEL_CONCURRENCY_POLICY = 'OCI_GENAI_MAX_CONCURRENT_REQUESTS_PER_MODEL="1"'
 RUNTIME_MODEL_INTERVAL_POLICY = 'OCI_GENAI_MIN_INTERVAL_SECONDS="2"'
 RUNTIME_RATE_LIMIT_COOLDOWN_POLICY = 'OCI_GENAI_RATE_LIMIT_COOLDOWN_SECONDS="65"'
-RUNTIME_NOTE_MODEL_POLICY = 'RESTAURANT_NOTE_MODEL="openai.gpt-oss-20b"'
+RUNTIME_NOTE_MODEL_POLICY = (
+    'RESTAURANT_NOTE_MODEL="meta.llama-4-maverick-17b-128e-instruct-fp8"'
+)
 RUNTIME_NOTE_MODEL_CHAIN_POLICY = (
-    'RESTAURANT_NOTE_MODEL_CHAIN="google.gemini-2.5-flash-lite,'
-    'google.gemini-2.5-flash,openai.gpt-oss-20b,openai.gpt-oss-120b"'
+    'RESTAURANT_NOTE_MODEL_CHAIN="meta.llama-4-maverick-17b-128e-instruct-fp8,'
+    'openai.gpt-oss-20b"'
 )
 RUNTIME_STRUCTURED_MODEL_POLICY = (
     'STRUCTURED_RECOMMENDATION_MODEL="openai.gpt-oss-120b"'
 )
 RUNTIME_MENU_PRESENTATION_MODEL_POLICY = 'MENU_PRESENTATION_MODEL="xai.grok-4.3"'
-RUNTIME_OPTION_LOCALIZATION_MODEL_POLICY = 'OPTION_LOCALIZATION_MODEL="xai.grok-4.3"'
+RUNTIME_OPTION_LOCALIZATION_MODEL_POLICY = (
+    'OPTION_LOCALIZATION_MODEL="openai.gpt-oss-20b"'
+)
+RUNTIME_OPTION_LOCALIZATION_MODEL_CHAIN_POLICY = (
+    'OPTION_LOCALIZATION_MODEL_CHAIN="openai.gpt-oss-20b,openai.gpt-oss-120b"'
+)
 RUNTIME_MENU_PRESENTATION_OUTPUT_POLICY = 'MENU_PRESENTATION_MAX_OUTPUT_TOKENS="16384"'
 RUNTIME_OPTION_LOCALIZATION_OUTPUT_POLICY = 'OPTION_LOCALIZATION_MAX_OUTPUT_TOKENS="16384"'
 RUNTIME_STRUCTURED_OUTPUT_POLICY = 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="16384"'
@@ -128,15 +135,14 @@ def write_env(
         f"OCI_GENAI_MAX_CONCURRENT_REQUESTS_PER_MODEL={quote('1')}",
         f"OCI_GENAI_MIN_INTERVAL_SECONDS={quote('2')}",
         f"OCI_GENAI_RATE_LIMIT_COOLDOWN_SECONDS={quote('65')}",
-        f"RESTAURANT_NOTE_MODEL={quote('openai.gpt-oss-20b')}",
+        f"RESTAURANT_NOTE_MODEL={quote('meta.llama-4-maverick-17b-128e-instruct-fp8')}",
         "RESTAURANT_NOTE_MODEL_CHAIN="
-        + quote(
-            "google.gemini-2.5-flash-lite,google.gemini-2.5-flash,"
-            "openai.gpt-oss-20b,openai.gpt-oss-120b"
-        ),
+        + quote("meta.llama-4-maverick-17b-128e-instruct-fp8,openai.gpt-oss-20b"),
         f"STRUCTURED_RECOMMENDATION_MODEL={quote('openai.gpt-oss-120b')}",
         f"MENU_PRESENTATION_MODEL={quote('xai.grok-4.3')}",
-        f"OPTION_LOCALIZATION_MODEL={quote('xai.grok-4.3')}",
+        f"OPTION_LOCALIZATION_MODEL={quote('openai.gpt-oss-20b')}",
+        "OPTION_LOCALIZATION_MODEL_CHAIN="
+        + quote("openai.gpt-oss-20b,openai.gpt-oss-120b"),
         f"MENU_PRESENTATION_MAX_OUTPUT_TOKENS={quote('16384')}",
         f"OPTION_LOCALIZATION_MAX_OUTPUT_TOKENS={quote('16384')}",
         f"STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS={quote('16384')}",
@@ -306,6 +312,10 @@ def persist_runtime_release_policy(path: Path = RUNTIME_ENV) -> bool:
         ("STRUCTURED_RECOMMENDATION_MODEL", RUNTIME_STRUCTURED_MODEL_POLICY),
         ("MENU_PRESENTATION_MODEL", RUNTIME_MENU_PRESENTATION_MODEL_POLICY),
         ("OPTION_LOCALIZATION_MODEL", RUNTIME_OPTION_LOCALIZATION_MODEL_POLICY),
+        (
+            "OPTION_LOCALIZATION_MODEL_CHAIN",
+            RUNTIME_OPTION_LOCALIZATION_MODEL_CHAIN_POLICY,
+        ),
         (
             "MENU_PRESENTATION_MAX_OUTPUT_TOKENS",
             RUNTIME_MENU_PRESENTATION_OUTPUT_POLICY,
@@ -482,14 +492,19 @@ def main() -> None:
                 "OCI_GENAI_MAX_CONCURRENT_REQUESTS_PER_MODEL": "1",
                 "OCI_GENAI_MIN_INTERVAL_SECONDS": "2",
                 "OCI_GENAI_RATE_LIMIT_COOLDOWN_SECONDS": "65",
-                "RESTAURANT_NOTE_MODEL": "openai.gpt-oss-20b",
+                "RESTAURANT_NOTE_MODEL": (
+                    "meta.llama-4-maverick-17b-128e-instruct-fp8"
+                ),
                 "RESTAURANT_NOTE_MODEL_CHAIN": (
-                    "google.gemini-2.5-flash-lite,google.gemini-2.5-flash,"
-                    "openai.gpt-oss-20b,openai.gpt-oss-120b"
+                    "meta.llama-4-maverick-17b-128e-instruct-fp8,"
+                    "openai.gpt-oss-20b"
                 ),
                 "STRUCTURED_RECOMMENDATION_MODEL": "openai.gpt-oss-120b",
                 "MENU_PRESENTATION_MODEL": "xai.grok-4.3",
-                "OPTION_LOCALIZATION_MODEL": "xai.grok-4.3",
+                "OPTION_LOCALIZATION_MODEL": "openai.gpt-oss-20b",
+                "OPTION_LOCALIZATION_MODEL_CHAIN": (
+                    "openai.gpt-oss-20b,openai.gpt-oss-120b"
+                ),
                 "MENU_PRESENTATION_MAX_OUTPUT_TOKENS": "16384",
                 "OPTION_LOCALIZATION_MAX_OUTPUT_TOKENS": "16384",
                 "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS": "16384",

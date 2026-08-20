@@ -366,6 +366,16 @@ def readyz(
             "model_id": current_settings.structured_recommendation_model,
             "presentation_model_id": current_settings.menu_presentation_model,
             "option_localization_model_id": current_settings.option_localization_model,
+            "option_localization_model_chain": [
+                model.strip()
+                for model in current_settings.option_localization_model_chain.split(",")
+                if model.strip()
+            ],
+            "restaurant_note_model_chain": [
+                model.strip()
+                for model in current_settings.restaurant_note_model_chain.split(",")
+                if model.strip()
+            ],
             "selection_enabled": current_settings.recommendation_llm_selection_enabled,
             "candidate_limit": current_settings.recommendation_candidate_limit,
             "shortlist_limit": current_settings.recommendation_llm_shortlist_limit,
@@ -389,7 +399,16 @@ def readyz(
                 and current_settings.structured_recommendation_model
                 == "openai.gpt-oss-120b"
                 and current_settings.menu_presentation_model == "xai.grok-4.3"
-                and current_settings.option_localization_model == "xai.grok-4.3"
+                and current_settings.option_localization_model == "openai.gpt-oss-20b"
+                and current_settings.option_localization_model_chain
+                == "openai.gpt-oss-20b,openai.gpt-oss-120b"
+                and current_settings.restaurant_note_model
+                == "meta.llama-4-maverick-17b-128e-instruct-fp8"
+                and current_settings.restaurant_note_model_chain
+                == (
+                    "meta.llama-4-maverick-17b-128e-instruct-fp8,"
+                    "openai.gpt-oss-20b"
+                )
                 and current_settings.recommendation_llm_passages_per_menu == 2
                 and current_settings.structured_recommendation_max_output_tokens == 16384
                 and current_settings.menu_presentation_max_output_tokens == 16384

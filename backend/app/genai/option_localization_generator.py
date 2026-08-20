@@ -103,12 +103,16 @@ class OptionLocalizationGenerator:
             return OptionLocalizationGeneration(groups=[])
         if len(groups) > 100 or any(len(group.get("items", [])) > 500 for group in groups):
             raise ValueError("OPTION_LOCALIZATION_BATCH_SIZE_INVALID")
-        model_id = self.settings.option_localization_model.strip()
-        if (
-            not self.provider.configured
-            or not model_id
-            or not self.provider.supports_model(model_id)
-        ):
+        models = list(
+            dict.fromkeys(
+                model.strip()
+                for model in self.settings.option_localization_model_chain.split(",")
+                if model.strip()
+            )
+        )
+        if not models and self.settings.option_localization_model.strip():
+            models = [self.settings.option_localization_model.strip()]
+        if not self.provider.configured or not models:
             raise GenAIProviderError(GenAIErrorCode.PROVIDER_UNAVAILABLE, retryable=False)
 
         input_payload: dict[str, Any] = {"groups": groups}
@@ -141,84 +145,101 @@ class OptionLocalizationGenerator:
                 }
             }
 
-        started = monotonic()
-        try:
-            response = self.provider.create_response(model_id, **request)
-        except GenAIProviderError as exc:
-            if on_provider_attempt is not None:
-                on_provider_attempt(
-                    model_id,
-                    "FAILED",
-                    exc.code.value,
-                    int((monotonic() - started) * 1000),
-                    exc.safe_metadata,
+        last_error: GenAIProviderError | None = None
+        for model_id in models:
+            started = monotonic()
+            if not self.provider.supports_model(model_id):
+                last_error = GenAIProviderError(
+                    GenAIErrorCode.PROVIDER_UNAVAILABLE,
+                    retryable=True,
                 )
-            raise
+                if on_provider_attempt is not None:
+                    on_provider_attempt(model_id, "FAILED", last_error.code.value, 0, {})
+                continue
+            try:
+                response = self.provider.create_response(model_id, **request)
+            except GenAIProviderError as exc:
+                last_error = exc
+                if on_provider_attempt is not None:
+                    on_provider_attempt(
+                        model_id,
+                        "FAILED",
+                        exc.code.value,
+                        int((monotonic() - started) * 1000),
+                        exc.safe_metadata,
+                    )
+                continue
 
-        usage = self._usage(response)
-        try:
-            result = OptionLocalizationGeneration.model_validate(
-                parse_json_object(str(getattr(response, "output_text", "")))
-            )
-            if len(result.groups) != len(groups):
-                raise ValueError("OPTION_LOCALIZATION_GROUP_COUNT_INVALID")
-            target_language = {"한국어": "ko", "日本語": "ja"}.get(locale, "en")
-            for source_group, generated_group in zip(groups, result.groups):
-                source_items = list(source_group.get("items", []))
-                if len(generated_group.item_display_names) != len(source_items):
-                    raise ValueError("OPTION_LOCALIZATION_ITEM_COUNT_INVALID")
-                pairs = [
-                    (str(source_group["name_ko"]), generated_group.display_name),
-                    *[
-                        (str(source_item["name_ko"]), translated)
-                        for source_item, translated in zip(
-                            source_items,
-                            generated_group.item_display_names,
-                        )
-                    ],
-                ]
-                for source_text, translated_text in pairs:
-                    if _number_tokens(source_text) != _number_tokens(translated_text):
-                        raise ValueError("OPTION_LOCALIZATION_NUMBER_MISMATCH")
-                    if target_language == "ko" and source_text != translated_text:
-                        raise ValueError("OPTION_LOCALIZATION_KOREAN_SOURCE_CHANGED")
-                    if target_language != "ko" and re.search(r"[가-힣]", translated_text):
-                        raise ValueError("OPTION_LOCALIZATION_HANGUL_REMAINS")
-                    if target_language != "ko" and not _option_control_meaning_preserved(
-                        source_text,
-                        translated_text,
-                        target_language,
-                    ):
-                        raise ValueError("OPTION_LOCALIZATION_CONTROL_MEANING_LOST")
-        except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-            reason = str(exc).strip() or "OPTION_LOCALIZATION_RESPONSE_INVALID"
+            usage = self._usage(response)
+            try:
+                result = OptionLocalizationGeneration.model_validate(
+                    parse_json_object(str(getattr(response, "output_text", "")))
+                )
+                if len(result.groups) != len(groups):
+                    raise ValueError("OPTION_LOCALIZATION_GROUP_COUNT_INVALID")
+                target_language = {"한국어": "ko", "日本語": "ja"}.get(locale, "en")
+                for source_group, generated_group in zip(groups, result.groups):
+                    source_items = list(source_group.get("items", []))
+                    if len(generated_group.item_display_names) != len(source_items):
+                        raise ValueError("OPTION_LOCALIZATION_ITEM_COUNT_INVALID")
+                    pairs = [
+                        (str(source_group["name_ko"]), generated_group.display_name),
+                        *[
+                            (str(source_item["name_ko"]), translated)
+                            for source_item, translated in zip(
+                                source_items,
+                                generated_group.item_display_names,
+                            )
+                        ],
+                    ]
+                    for source_text, translated_text in pairs:
+                        if _number_tokens(source_text) != _number_tokens(translated_text):
+                            raise ValueError("OPTION_LOCALIZATION_NUMBER_MISMATCH")
+                        if target_language == "ko" and source_text != translated_text:
+                            raise ValueError("OPTION_LOCALIZATION_KOREAN_SOURCE_CHANGED")
+                        if target_language != "ko" and re.search(r"[가-힣]", translated_text):
+                            raise ValueError("OPTION_LOCALIZATION_HANGUL_REMAINS")
+                        if target_language != "ko" and not _option_control_meaning_preserved(
+                            source_text,
+                            translated_text,
+                            target_language,
+                        ):
+                            raise ValueError("OPTION_LOCALIZATION_CONTROL_MEANING_LOST")
+            except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+                reason = str(exc).strip() or "OPTION_LOCALIZATION_RESPONSE_INVALID"
+                last_error = GenAIProviderError(
+                    GenAIErrorCode.GROUNDING_REJECTED,
+                    retryable=False,
+                    cause=exc,
+                    safe_reason_code=reason[:120],
+                    safe_reason_stage="OPTION_LOCALIZATION_VALIDATION",
+                )
+                if on_provider_attempt is not None:
+                    on_provider_attempt(
+                        model_id,
+                        "FAILED",
+                        reason[:120],
+                        int((monotonic() - started) * 1000),
+                        usage,
+                    )
+                continue
+
             if on_provider_attempt is not None:
                 on_provider_attempt(
                     model_id,
-                    "FAILED",
-                    reason[:120],
+                    "SUCCEEDED",
+                    None,
                     int((monotonic() - started) * 1000),
                     usage,
                 )
-            raise GenAIProviderError(
-                GenAIErrorCode.GROUNDING_REJECTED,
-                retryable=False,
-                cause=exc,
-                safe_reason_code=reason[:120],
-                safe_reason_stage="OPTION_LOCALIZATION_VALIDATION",
-            ) from exc
+            result._generation_model = model_id
+            result._provider_metrics = usage
+            return result
 
-        if on_provider_attempt is not None:
-            on_provider_attempt(
-                model_id,
-                "SUCCEEDED",
-                None,
-                int((monotonic() - started) * 1000),
-                usage,
-            )
-        result._generation_model = model_id
-        result._provider_metrics = usage
-        return result
+        raise last_error or GenAIProviderError(
+            GenAIErrorCode.PROVIDER_UNAVAILABLE,
+            retryable=False,
+        )
 
     def _instructions(self, locale: str) -> str:
         return f"""

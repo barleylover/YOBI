@@ -415,6 +415,13 @@ def test_agent_rejects_provider_input_and_tool_limits_before_calling_provider(
 def test_required_genai_configuration_fails_closed_without_breaking_local_demo() -> None:
     assert genai_configuration_errors(Settings()) == []
     assert Settings().structured_recommendation_model == "openai.gpt-oss-120b"
+    assert Settings().menu_presentation_model == "xai.grok-4.3"
+    assert Settings().option_localization_model_chain == (
+        "openai.gpt-oss-20b,openai.gpt-oss-120b"
+    )
+    assert Settings().restaurant_note_model_chain == (
+        "meta.llama-4-maverick-17b-128e-instruct-fp8,openai.gpt-oss-20b"
+    )
     assert Settings().structured_recommendation_max_output_tokens == 16384
     assert Settings().menu_presentation_max_output_tokens == 16384
     assert Settings().structured_recommendation_max_concurrent_requests == 2
@@ -462,6 +469,7 @@ def test_required_genai_configuration_fails_closed_without_breaking_local_demo()
                 oci_genai_serving_mode="dedicated",
                 oci_genai_endpoint_id="ocid1.generativeaiendpoint.primary",
                 oci_genai_fallback_endpoint_id="ocid1.generativeaiendpoint.fallback",
+                option_localization_model="openai.gpt-oss-120b",
             )
         )
         == []
