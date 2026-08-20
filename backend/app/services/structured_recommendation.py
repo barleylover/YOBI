@@ -46,6 +46,10 @@ from app.genai.recommendation_generator import (
     RecommendationGenerator,
 )
 from app.services.demo_control import DemoControl
+from app.services.menu_presentation import (
+    MenuPresentationService,
+    deterministic_localized_subtitle,
+)
 
 
 def _effective_display_language(preferred_language: str) -> tuple[str, str]:
@@ -82,6 +86,9 @@ def compact_generation_payload(
         "catalog_release_id",
         "recommendation_release_family_id",
         "menu_facts",
+        "localized_title",
+        "country_preference",
+        "synthetic_reviews",
     ):
         payload.pop(operational_key, None)
     criterion_evidence = payload.get("criterion_evidence", {})
@@ -112,11 +119,15 @@ class StructuredRecommendationService:
         demo_control: DemoControl,
         *,
         generator: RecommendationGenerator | None = None,
+        presentation_service: MenuPresentationService | None = None,
     ) -> None:
         self.repository = repository
         self.settings = settings
         self.demo_control = demo_control
         self.generator = generator or RecommendationGenerator(settings)
+        self.presentation_service = presentation_service or MenuPresentationService(
+            repository, settings
+        )
         self._preference_selection_metrics: dict[str, dict[str, float | int]] = {}
         self._comparison_locks: dict[str, Lock] = {}
         self._request_locks: dict[str, Lock] = {}
@@ -399,15 +410,15 @@ class StructuredRecommendationService:
         ):
             return self._batch_from_record(dispatched)
 
-        _display_locale, display_language = _effective_display_language(
+        display_locale, _display_language = _effective_display_language(
             profile.preferred_language
         )
-        soft_profile_context = {
-            "preferred_language": display_language,
-            "country_code": profile.country_code or criteria_record.criteria.spice_reference_country,
-        }
+        # Selection must be identical for equivalent criteria regardless of
+        # nationality/language. Visitor context is consumed only by presentation.
+        soft_profile_context: dict[str, Any] = {}
         provider_started = monotonic()
         provider_metrics: dict[str, int] = {}
+        provider_attempt_sequence = 0
 
         def mark_provider_call() -> None:
             called = self.repository.mark_recommendation_provider_called(
@@ -418,6 +429,7 @@ class StructuredRecommendationService:
                 raise RuntimeError("RECOMMENDATION_PROVIDER_CALL_NOT_RECORDED")
 
         def record_provider_attempt(
+            attempt_role: Literal["SELECTION", "PRESENTATION"],
             attempt_no: int,
             model_id: str,
             attempt_status: str,
@@ -425,12 +437,16 @@ class StructuredRecommendationService:
             latency_ms: int,
             usage: dict[str, int],
         ) -> None:
+            nonlocal provider_attempt_sequence
+            del attempt_no
+            provider_attempt_sequence += 1
             recorder = getattr(self.repository, "record_recommendation_provider_attempt", None)
             if callable(recorder):
                 recorder(
                     session.session_id,
                     request.request_id,
-                    attempt_no=attempt_no,
+                    attempt_no=provider_attempt_sequence,
+                    attempt_role=attempt_role,
                     provider=self.settings.genai_provider,
                     model_id=model_id,
                     status=attempt_status,
@@ -449,16 +465,34 @@ class StructuredRecommendationService:
                 criteria=criteria_record.criteria.model_dump(mode="json"),
                 soft_profile_context=soft_profile_context,
                 evidence_pool=pool_payload,
-                locale=display_language,
+                # Selection has no user-facing prose. Keep this prompt byte-for-byte
+                # stable across visitor languages; localization happens only after
+                # the three selected menu IDs pass grounding validation.
+                locale="English",
                 before_provider_call=mark_provider_call,
-                on_provider_attempt=record_provider_attempt,
+                on_provider_attempt=lambda *args: record_provider_attempt("SELECTION", *args),
             )
             provider_metrics = generated.provider_metrics
             if generated.status is RecommendationGenerationStatus.NO_MATCH:
                 raise ValueError("GENERATOR_NO_MATCH_NOT_AUTHORIZED")
+            selected_pool = {
+                item.menu.menu_id: item for item in evidence_pool
+            }
+            selected_evidence = [
+                selected_pool[item.menu_id] for item in generated.recommendations
+            ]
+            presentations = self.presentation_service.present_selected(
+                selected_evidence,
+                language_code=display_locale,
+                country_code=profile.country_code or "ZZ",
+                on_provider_attempt=lambda *args: record_provider_attempt(
+                    "PRESENTATION", *args
+                ),
+            )
             result_json = self._validated_result_payload(
                 generated,
                 evidence_pool,
+                presentations,
                 max_wiki_passages=self.settings.recommendation_llm_passages_per_menu,
             )
             status = RecommendationRequestStatus.COMPLETED
@@ -1066,7 +1100,7 @@ class StructuredRecommendationService:
         return "; ".join(values) or copy.criteria_default
 
     def _generation_payload(self, item: EvidencePoolItem) -> dict[str, Any]:
-        """Send only fields needed for bounded selection and grounded prose."""
+        """Send only fields needed for bounded selection and evidence validation."""
 
         return compact_generation_payload(
             item,
@@ -1077,6 +1111,7 @@ class StructuredRecommendationService:
     def _validated_result_payload(
         generated: Any,
         evidence_pool: list[EvidencePoolItem],
+        presentations: dict[str, Any],
         *,
         max_wiki_passages: int,
     ) -> dict[str, Any]:
@@ -1089,29 +1124,32 @@ class StructuredRecommendationService:
             wiki_passages = pool_item.wiki_passages[:max_wiki_passages]
             if not wiki_passages:
                 raise ValueError("GENERATED_MENU_WIKI_EVIDENCE_MISSING")
+            presentation = presentations.get(pool_item.menu.menu_id)
+            if presentation is None:
+                raise ValueError("GENERATED_MENU_PRESENTATION_MISSING")
             recommendations.append(
                 {
                     **generated_item.model_dump(mode="json"),
                     "rank": rank,
                     "menu_id": pool_item.menu.menu_id,
                     "menu": pool_item.menu.model_copy(
-                        update={"localized_title": generated_item.localized_title}
+                        update={"localized_title": presentation.localized_title}
                     ).model_dump(mode="json"),
                     "wiki_evidence_ids": [passage.evidence_id for passage in wiki_passages],
                     "wiki_passages": [passage.model_dump(mode="json") for passage in wiki_passages],
-                    "localized_title": generated_item.localized_title,
-                    "yobi_short_explanation": generated_item.yobi_short_explanation,
-                    "yobi_long_explanation": generated_item.yobi_long_explanation,
-                    "source_description": pool_item.menu.description,
-                    "review_summary": generated_item.review_summary,
-                    "country_preference": pool_item.country_preference,
-                    "evidence_ids": [passage.evidence_id for passage in wiki_passages],
-                    "review_ids": [
-                        str(review.get("review_id"))
-                        for review in pool_item.synthetic_reviews
-                        if review.get("review_id")
-                    ],
-                    "generation_model": generated.generation_model,
+                    "title": presentation.localized_title,
+                    "selection_reason": "",
+                    "description": presentation.yobi_short_explanation,
+                    "localized_title": presentation.localized_title,
+                    "localized_subtitle": presentation.localized_subtitle,
+                    "yobi_short_explanation": presentation.yobi_short_explanation,
+                    "yobi_long_explanation": presentation.yobi_long_explanation,
+                    "source_description": presentation.source_description,
+                    "review_summary": presentation.review_summary,
+                    "country_preference": presentation.country_preference,
+                    "evidence_ids": presentation.evidence_ids,
+                    "review_ids": presentation.review_ids,
+                    "generation_model": presentation.generation_model,
                     "halal_certified": pool_item.halal_certified,
                     "halal_scope_label": pool_item.halal_scope_label,
                     "vegan_status": pool_item.vegan_status,
@@ -1171,9 +1209,18 @@ class StructuredRecommendationService:
                     "selection_reason": copy.search_selection_reason,
                     "description": description or item.menu.description,
                     "localized_title": localized_title,
+                    "localized_subtitle": deterministic_localized_subtitle(
+                        locale,
+                        title_ko=item.menu.name_ko,
+                        localized_title=localized_title,
+                    ),
                     "yobi_short_explanation": presentation_copy.short_explanation,
                     "yobi_long_explanation": presentation_copy.long_explanation,
-                    "source_description": item.menu.description,
+                    "source_description": (
+                        item.localized_source_description
+                        if locale != "ko" and item.localized_source_description
+                        else item.menu.description
+                    ),
                     "review_summary": presentation_copy.review_summary,
                     "country_preference": item.country_preference,
                     "evidence_ids": [passage.evidence_id for passage in passages],

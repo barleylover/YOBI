@@ -255,13 +255,18 @@ def test_generator_dispatches_once_without_tools_and_allows_bounded_rerank() -> 
     assert "tools" not in provider.calls[0]
     instructions = str(provider.calls[0]["instructions"])
     assert "Return the JSON immediately without analysis or preamble." in instructions
-    assert "yobi_short_explanation in one or two short sentences" in instructions
-    assert "yobi_long_explanation in three to five short sentences" in instructions
+    assert "This call performs SELECTION only" in instructions
+    assert "do not write titles, explanations, review summaries" in instructions
     assert provider.calls[0]["text"]["format"]["strict"] is True
     request_payload = json.loads(provider.calls[0]["input"][0]["content"])
     assert request_payload["response_contract"] == provider.calls[0]["text"]["format"][
         "schema"
     ]
+    item_properties = request_payload["response_contract"]["properties"][
+        "recommendations"
+    ]["items"]["properties"]
+    assert "localized_title" not in item_properties
+    assert "yobi_short_explanation" not in item_properties
 
 
 def test_generator_supplies_json_contract_without_native_structured_output() -> None:

@@ -1095,8 +1095,7 @@ def test_korean_and_arabic_fallbacks_follow_effective_display_language() -> None
         normal_request = _request(f"recommendation-localized-normal-{index:04d}")
         normal_batch = normal_service.request_recommendation(_session(), profile, normal_request)
         assert normal_batch.snapshot_id is not None
-        if language == "العربية":
-            assert "requested locale/language: English" in normal_provider.calls[0]["instructions"]
+        assert "locale is English" in normal_provider.calls[0]["instructions"]
         normal_provider.output = {
             "summary": "Locale-specific provider summary.",
             "items": [
@@ -1150,10 +1149,7 @@ def test_generation_soft_profile_context_excludes_sensitive_legacy_fields() -> N
 
     assert len(provider.calls) == 1
     generation_input = json.loads(provider.calls[0]["input"][0]["content"])
-    assert generation_input["soft_profile_context"] == {
-        "country_code": "KR",
-        "preferred_language": "English",
-    }
+    assert generation_input["soft_profile_context"] == {}
     serialized_context = json.dumps(generation_input["soft_profile_context"])
     assert "dietary_rules" not in serialized_context
     assert "religion" not in serialized_context

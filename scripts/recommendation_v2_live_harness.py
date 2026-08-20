@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Bounded Grok release probes for recommendation-v2.
+"""Bounded GenAI release probes for recommendation-v3.
 
-``predeploy`` performs one direct staged-family provider dispatch. ``postdeploy``
-performs the five fixed public-API dispatches. Neither mode retries provider calls.
+``predeploy`` performs one staged-family selection dispatch and, on a cold cache,
+one presentation dispatch. ``postdeploy`` performs five fixed public-API logical
+recommendation jobs. Provider fallbacks remain disabled by the gate configuration.
 Every run reserves a unique run id before dispatch and writes an immutable JSON
 artifact plus SHA-256 sidecar.
 """
@@ -39,8 +40,10 @@ from app.domain.structured_recommendation import (
     RecommendationMode,
     RecommendationRequestStatus,
 )
+from app.genai.presentation_generator import MenuPresentationGenerator
 from app.genai.providers import choose_genai_provider
 from app.genai.recommendation_generator import RecommendationGenerator
+from app.services.menu_presentation import MenuPresentationService
 from app.services.structured_recommendation import (
     StructuredRecommendationService,
     compact_generation_payload,
@@ -408,7 +411,7 @@ def run_predeploy(release_family_id: str, settings: Settings) -> dict[str, Any]:
             started = perf_counter()
             generated = generator.generate(
                 criteria=criteria.model_dump(mode="json"),
-                soft_profile_context={"preferred_language": "English"},
+                soft_profile_context={},
                 evidence_pool=[
                     compact_generation_payload(
                         item,
@@ -419,9 +422,27 @@ def run_predeploy(release_family_id: str, settings: Settings) -> dict[str, Any]:
                 locale="English",
             )
             latency_ms = round((perf_counter() - started) * 1_000, 3)
+            pool_by_id = {item.menu.menu_id: item for item in shortlist}
+            selected_evidence = [
+                pool_by_id[item.menu_id] for item in generated.recommendations
+            ]
+            presentation_service = MenuPresentationService(
+                repository,
+                settings,
+                generator=MenuPresentationGenerator(
+                    settings,
+                    provider=counting_provider,
+                ),
+            )
+            presentations = presentation_service.present_selected(
+                selected_evidence,
+                language_code="en",
+                country_code=context.profile.country_code or "ZZ",
+            )
             result_payload = StructuredRecommendationService._validated_result_payload(
                 generated,
                 shortlist,
+                presentations,
                 max_wiki_passages=settings.recommendation_llm_passages_per_menu,
             )
             menu_ids, merchant_ids = _selected_ids(result_payload)
@@ -435,8 +456,8 @@ def run_predeploy(release_family_id: str, settings: Settings) -> dict[str, Any]:
         if context is not None:
             repository.delete_profile(context.profile.profile_id)
 
-    if counting_provider.call_count != 1:
-        errors.append("PREDEPLOY_PROVIDER_CALL_COUNT_NOT_ONE")
+    if counting_provider.call_count not in {1, 2}:
+        errors.append("PREDEPLOY_PROVIDER_CALL_COUNT_NOT_ONE_OR_TWO")
     menu_ids, merchant_ids = _selected_ids(result_payload)
     return {
         "schema_version": "1",
@@ -446,6 +467,9 @@ def run_predeploy(release_family_id: str, settings: Settings) -> dict[str, Any]:
         "release_family_id": release_family_id,
         "structured_model_id": settings.structured_recommendation_model,
         "provider_call_count": counting_provider.call_count,
+        "presentation_cache_state": (
+            "HIT" if counting_provider.call_count == 1 else "MISS"
+        ),
         "provider_retry_count": 0,
         "candidate_limit": settings.recommendation_candidate_limit,
         "shortlist_count": len(shortlist),

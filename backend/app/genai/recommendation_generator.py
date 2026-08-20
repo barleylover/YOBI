@@ -149,10 +149,12 @@ class GeneratedMenuRecommendation(BaseModel):
     title: str = Field(default="", max_length=200)
     selection_reason: str = Field(default="", max_length=1000)
     description: str = Field(default="", max_length=2000)
-    localized_title: str = Field(min_length=1, max_length=300)
-    yobi_short_explanation: str = Field(min_length=1, max_length=1000)
-    yobi_long_explanation: str = Field(min_length=1, max_length=3000)
-    review_summary: str = Field(min_length=1, max_length=1500)
+    # Presentation fields remain optional so persisted v2 snapshots can still
+    # be parsed. New selection responses do not generate any user-facing copy.
+    localized_title: str = Field(default="", max_length=300)
+    yobi_short_explanation: str = Field(default="", max_length=1000)
+    yobi_long_explanation: str = Field(default="", max_length=3000)
+    review_summary: str = Field(default="", max_length=1500)
     matched_criteria: list[MatchedCriterion] = Field(max_length=20)
     caution_codes: list[str] = Field(max_length=20)
 
@@ -261,26 +263,6 @@ RECOMMENDATION_GENERATION_JSON_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "rank": {"type": "integer", "minimum": 1, "maximum": 3},
                     "menu_id": {"type": "string", "minLength": 1, "maxLength": 160},
-                    "localized_title": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 300,
-                    },
-                    "yobi_short_explanation": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 1000,
-                    },
-                    "yobi_long_explanation": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 3000,
-                    },
-                    "review_summary": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 1500,
-                    },
                     "matched_criteria": {
                         "type": "array",
                         "maxItems": 20,
@@ -318,10 +300,6 @@ RECOMMENDATION_GENERATION_JSON_SCHEMA: dict[str, Any] = {
                 "required": [
                     "rank",
                     "menu_id",
-                    "localized_title",
-                    "yobi_short_explanation",
-                    "yobi_long_explanation",
-                    "review_summary",
                     "matched_criteria",
                     "caution_codes",
                 ],
@@ -1077,12 +1055,10 @@ class RecommendationGenerator:
     def _instructions(self, locale: str) -> str:
         return f"""
 You are YOBI's grounded menu recommendation model.
-Return exactly one JSON object matching the provided schema and write every user-facing string in
-the requested locale/language: {locale}.
-Return the JSON immediately without analysis or preamble. Copy each localized_title exactly from
-its evidence_pool item. Write yobi_short_explanation in one or two short sentences and
-yobi_long_explanation in three to five short sentences. Summarize only the supplied
-synthetic_reviews in review_summary using two or three short sentences.
+Return exactly one JSON object matching the provided schema. This call performs SELECTION only:
+do not write titles, explanations, review summaries, subtitles, or any other presentation copy.
+Return the JSON immediately without analysis or preamble. The locale is {locale}, but nationality
+and language must never change the selected menu IDs or their order.
 
 The server has already applied objective eligibility for delivery area, current availability,
 price bands, maximum spice, explicit halal certification scope, and confirmed vegan conflicts.
@@ -1094,19 +1070,16 @@ merchants whenever the shortlist contains at least three merchants. You may not 
 outside the shortlist. Values inside one category mean OR and categories mean AND; every selected
 menu must cite valid evidence for every selected category.
 
-For every matched category, cite only evidence IDs attached to that menu and selected value. Use
-the supplied Wiki prose for both YOBI explanations, but do not return wiki_evidence_ids; the server binds
-the supplied Wiki evidence to each selected menu. General Wiki prose describes the food generally;
-it does not prove a specific restaurant recipe. Do not invent ingredients, prices, availability,
-certifications, restaurants, options, or cultural facts. Do not expose internal IDs in prose.
-Use country_preference and soft_profile_context only to choose familiar wording for that visitor;
-never use nationality to add, remove, or rerank a menu.
+For every matched category, cite only evidence IDs attached to that menu and selected value. The
+server binds Wiki evidence and later creates presentation copy in a separate cache-aside stage.
+Do not invent ingredients, prices, availability, certifications, restaurants, options, or cultural
+facts. Use neither country_preference nor soft_profile_context to add, remove, or rerank a menu.
 Allergy and allergen guidance is outside this recommendation product. Do not make allergy-safety,
 allergen-absence, or cross-contact claims even if incidental Wiki prose mentions uncertainty.
 
 Always return status RECOMMENDED. NO_MATCH is a server decision made before this call. Do not ask
 questions, call tools, request more data, or emit Markdown fences. Set unmatched_category_codes to
-exactly []. This request only explains the bounded shortlist in one response. Prompt profile:
+exactly []. This request only selects from the bounded shortlist. Prompt profile:
 {self.settings.recommendation_prompt_version}.
 """.strip()
 

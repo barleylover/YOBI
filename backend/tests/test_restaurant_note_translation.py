@@ -40,7 +40,11 @@ class PlannedProvider:
         self.calls: list[str] = []
 
     def supports_model(self, model: str) -> bool:
-        return model in {"openai.gpt-oss-20b", "openai.gpt-oss-120b"}
+        return model in {
+            "google.gemini-2.5-flash-lite",
+            "google.gemini-2.5-flash",
+            "openai.gpt-oss-120b",
+        }
 
     def normalize_request(self, model: str, **kwargs: Any) -> dict[str, Any]:
         return {"model": model, **kwargs}
@@ -51,7 +55,9 @@ class PlannedProvider:
         result = self.plan[model]
         if isinstance(result, BaseException):
             raise result
-        return SimpleNamespace(output_text=json.dumps(result, ensure_ascii=False))
+        return SimpleNamespace(
+            output_text=result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+        )
 
 
 def _session(repository: SQLiteYobiRepository) -> str:
@@ -66,11 +72,11 @@ def _payload() -> dict[str, str]:
     }
 
 
-def test_note_translation_uses_20b_and_enables_cart_note(
+def test_note_translation_uses_first_available_model_and_enables_cart_note(
     repository: SQLiteYobiRepository,
 ) -> None:
     session_id = _session(repository)
-    provider = PlannedProvider({"openai.gpt-oss-20b": _payload()})
+    provider = PlannedProvider({"google.gemini-2.5-flash-lite": _payload()})
     service = RestaurantNoteTranslationService(repository, Settings(), provider=provider)
 
     translated = service.translate(
@@ -82,7 +88,7 @@ def test_note_translation_uses_20b_and_enables_cart_note(
     )
 
     assert translated.status == "SUCCEEDED"
-    assert provider.calls == ["openai.gpt-oss-20b"]
+    assert provider.calls == ["google.gemini-2.5-flash-lite"]
     preview = repository.add_cart_item(
         session_id,
         CartItemInput(
@@ -102,16 +108,16 @@ def test_note_translation_uses_20b_and_enables_cart_note(
     assert row["note_translation_id"] == translated.translation_id
 
 
-def test_note_translation_falls_back_from_20b_to_120b_on_rate_limit(
+def test_note_translation_falls_back_to_next_model_on_rate_limit(
     repository: SQLiteYobiRepository,
 ) -> None:
     session_id = _session(repository)
     provider = PlannedProvider(
         {
-            "openai.gpt-oss-20b": GenAIProviderError(
+            "google.gemini-2.5-flash-lite": GenAIProviderError(
                 GenAIErrorCode.RATE_LIMIT, retryable=True
             ),
-            "openai.gpt-oss-120b": _payload(),
+            "google.gemini-2.5-flash": _payload(),
         }
     )
     service = RestaurantNoteTranslationService(repository, Settings(), provider=provider)
@@ -122,18 +128,35 @@ def test_note_translation_falls_back_from_20b_to_120b_on_rate_limit(
     )
 
     assert translated.status == "SUCCEEDED"
-    assert translated.model_id == "openai.gpt-oss-120b"
-    assert provider.calls == ["openai.gpt-oss-20b", "openai.gpt-oss-120b"]
+    assert translated.model_id == "google.gemini-2.5-flash"
+    assert provider.calls == [
+        "google.gemini-2.5-flash-lite",
+        "google.gemini-2.5-flash",
+    ]
+    with repository._connection() as connection:
+        attempts = connection.execute(
+            "SELECT attempt_no,model_id,status,error_code "
+            "FROM restaurant_note_translation_attempt "
+            "WHERE session_id=? ORDER BY attempt_no",
+            (session_id,),
+        ).fetchall()
+    assert [tuple(row) for row in attempts] == [
+        (1, "google.gemini-2.5-flash-lite", "FAILED", "RATE_LIMIT"),
+        (2, "google.gemini-2.5-flash", "SUCCEEDED", None),
+    ]
 
 
-def test_failed_note_translation_blocks_nonempty_cart_note(
+def test_failed_note_translation_blocks_nonempty_note_but_allows_note_free_cart(
     repository: SQLiteYobiRepository,
 ) -> None:
     session_id = _session(repository)
     provider = PlannedProvider(
         {
-            "openai.gpt-oss-20b": GenAIProviderError(
+            "google.gemini-2.5-flash-lite": GenAIProviderError(
                 GenAIErrorCode.TIMEOUT, retryable=True
+            ),
+            "google.gemini-2.5-flash": GenAIProviderError(
+                GenAIErrorCode.PROVIDER_UNAVAILABLE, retryable=True
             ),
             "openai.gpt-oss-120b": GenAIProviderError(
                 GenAIErrorCode.PROVIDER_UNAVAILABLE, retryable=True
@@ -147,7 +170,11 @@ def test_failed_note_translation_blocks_nonempty_cart_note(
     )
 
     assert failed.status == "FAILED"
-    assert provider.calls == ["openai.gpt-oss-20b", "openai.gpt-oss-120b"]
+    assert provider.calls == [
+        "google.gemini-2.5-flash-lite",
+        "google.gemini-2.5-flash",
+        "openai.gpt-oss-120b",
+    ]
     with pytest.raises(ValueError, match="RESTAURANT_NOTE_TRANSLATION_REQUIRED"):
         repository.add_cart_item(
             session_id,
@@ -158,3 +185,67 @@ def test_failed_note_translation_blocks_nonempty_cart_note(
                 note_translation_id=failed.translation_id,
             ),
         )
+    preview = repository.add_cart_item(
+        session_id,
+        CartItemInput(
+            menu_id="menu_001_01",
+            option_item_ids=["oi_001_01_spice_mild", "oi_001_01_size_regular"],
+            user_note="",
+            note_translation_id=None,
+        ),
+    )
+    assert len(preview.items) == 1
+
+
+def test_invalid_fenced_response_advances_to_next_model(
+    repository: SQLiteYobiRepository,
+) -> None:
+    session_id = _session(repository)
+    provider = PlannedProvider(
+        {
+            "google.gemini-2.5-flash-lite": "not json",
+            "google.gemini-2.5-flash": f"```json\n{json.dumps(_payload(), ensure_ascii=False)}\n```",
+        }
+    )
+    translated = RestaurantNoteTranslationService(
+        repository, Settings(), provider=provider
+    ).translate(
+        session_id,
+        RestaurantNoteTranslationInput(source_text="No onions, please.", source_language="en"),
+    )
+
+    assert translated.status == "SUCCEEDED"
+    assert translated.model_id == "google.gemini-2.5-flash"
+
+
+def test_unsupported_configured_model_advances_to_a_working_model(
+    repository: SQLiteYobiRepository,
+) -> None:
+    session_id = _session(repository)
+    provider = PlannedProvider(
+        {
+            "google.gemini-2.5-flash-lite": GenAIProviderError(
+                GenAIErrorCode.PROVIDER_UNAVAILABLE,
+                retryable=False,
+            ),
+            "google.gemini-2.5-flash": _payload(),
+        }
+    )
+
+    translated = RestaurantNoteTranslationService(
+        repository,
+        Settings(),
+        provider=provider,
+    ).translate(
+        session_id,
+        RestaurantNoteTranslationInput(
+            source_text="Please leave it at reception.",
+            source_language="en",
+        ),
+    )
+
+    assert translated.status == "SUCCEEDED"
+    assert provider.calls == [
+        "google.gemini-2.5-flash-lite",
+        "google.gemini-2.5-flash",
+    ]

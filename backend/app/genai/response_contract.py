@@ -82,6 +82,41 @@ MODEL_NARRATIVE_JSON_SCHEMA: dict[str, Any] = {
 }
 
 
+def parse_json_object(raw: str) -> dict[str, Any]:
+    """Extract one JSON object from common provider response wrappers.
+
+    OCI-hosted models do not all honor JSON-only instructions identically.  This
+    accepts fenced JSON and a short leading/trailing explanation while still
+    rejecting arrays, scalar values, and multiple unrelated objects.
+    """
+
+    stripped = raw.strip()
+    if stripped.startswith("```") and stripped.endswith("```"):
+        lines = stripped.splitlines()
+        stripped = "\n".join(lines[1:-1]).strip()
+    try:
+        value = json.loads(stripped)
+    except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+        value = None
+        for index, character in enumerate(stripped):
+            if character != "{":
+                continue
+            try:
+                candidate, consumed = decoder.raw_decode(stripped[index:])
+            except json.JSONDecodeError:
+                continue
+            trailing = stripped[index + consumed :].strip()
+            if isinstance(candidate, dict) and not trailing.lstrip().startswith("{"):
+                value = candidate
+                break
+        if value is None:
+            raise
+    if not isinstance(value, dict):
+        raise ValueError("MODEL_RESPONSE_JSON_OBJECT_REQUIRED")
+    return value
+
+
 def model_narrative_text_config() -> dict[str, Any]:
     """Responses API text format used only when the provider advertises support."""
 
