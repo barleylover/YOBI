@@ -21,6 +21,10 @@ def test_common_option_names_are_natural_in_english_and_japanese() -> None:
     assert localize_option_name("선택안함", "ja") == "選択しない"
     assert localize_option_name("콜라 1.25L", "en") == "Cola 1.25L"
     assert localize_option_name("콜라 1.25L", "ja") == "コーラ 1.25L"
+    assert localize_option_name("건강밥 선택", "en") == "Healthy rice choice"
+    assert localize_option_name("건강밥 선택", "ja") == "ヘルシーご飯 選択"
+    assert localize_option_name("귀리보리밥（변경）", "en") == "Oat and barley rice （ change ）"
+    assert localize_option_name("귀리보리밥（변경）", "ja") == "オーツ麦と大麦のご飯 （ 変更 ）"
 
 
 def test_unknown_korean_brand_text_uses_deterministic_transliteration() -> None:
