@@ -10,11 +10,105 @@ from app.domain.structured_recommendation import RecommendationCriteriaV2
 SqlDialect = Literal["sqlite", "oracle"]
 SelectedSupportChannel = Literal["COMBINED", "MENU_FEATURE", "CONCEPT_SUPPORT"]
 
+_COMPONENT_PHYSICAL_CATEGORIES = (
+    "food_forms",
+    "temperatures",
+    "textures",
+    "cooking_methods",
+)
+
 
 @dataclass(frozen=True)
 class ConceptCandidateQuery:
     sql: str
     parameters: dict[str, Any]
+
+
+def _component_coherence_sql(
+    criteria: RecommendationCriteriaV2,
+    parameters: dict[str, Any],
+) -> tuple[str, str, str]:
+    """Return CTEs, joins, and predicates that prevent component feature mixing.
+
+    A compound set must not satisfy form/temperature/cooking constraints by
+    taking each condition from a different component. A set whose reviewed
+    component concepts span both hot and cold is also not treated as a pure
+    temperature match. The rule is based entirely on release-scoped component
+    memberships and therefore applies to every menu, not named examples.
+    """
+
+    selected_groups = criteria.subjective_groups()
+    physical_count = sum(
+        1 for category in _COMPONENT_PHYSICAL_CATEGORIES if selected_groups.get(category)
+    )
+    parameters["selected_physical_category_count"] = physical_count
+    parameters["temperature_selected"] = int(bool(selected_groups.get("temperatures")))
+    ctes = """,
+      component_profile AS (
+        SELECT membership.menu_id,COUNT(DISTINCT membership.concept_id) AS component_count
+        FROM menu_concept_membership membership
+        WHERE membership.knowledge_release_id=:knowledge_release_id
+          AND membership.membership_role='COMPONENT'
+        GROUP BY membership.menu_id
+      ),
+      coherent_physical_component AS (
+        SELECT membership.menu_id,membership.concept_id
+        FROM menu_concept_membership membership
+        JOIN concept_preference_support component_support
+          ON component_support.knowledge_release_id=membership.knowledge_release_id
+         AND component_support.concept_id=membership.concept_id
+         AND component_support.support_status='SUPPORTED'
+         AND component_support.evidence_chunk_id IS NOT NULL
+        JOIN selected
+          ON selected.category_code=component_support.category_code
+         AND selected.option_code=component_support.option_code
+        WHERE membership.knowledge_release_id=:knowledge_release_id
+          AND membership.membership_role='COMPONENT'
+          AND component_support.category_code IN (
+            'food_forms','temperatures','textures','cooking_methods'
+          )
+        GROUP BY membership.menu_id,membership.concept_id
+        HAVING COUNT(DISTINCT component_support.category_code)
+          =:selected_physical_category_count
+      ),
+      coherent_physical_menu AS (
+        SELECT DISTINCT menu_id FROM coherent_physical_component
+      ),
+      component_temperature_profile AS (
+        SELECT membership.menu_id,
+               COUNT(DISTINCT component_support.option_code) AS temperature_count
+        FROM menu_concept_membership membership
+        JOIN concept_preference_support component_support
+          ON component_support.knowledge_release_id=membership.knowledge_release_id
+         AND component_support.concept_id=membership.concept_id
+         AND component_support.support_status='SUPPORTED'
+         AND component_support.evidence_chunk_id IS NOT NULL
+         AND component_support.category_code='temperatures'
+        WHERE membership.knowledge_release_id=:knowledge_release_id
+          AND membership.membership_role='COMPONENT'
+        GROUP BY membership.menu_id
+      )"""
+    joins = """
+          LEFT JOIN component_profile component_profile_row
+            ON component_profile_row.menu_id=menu.menu_id
+          LEFT JOIN coherent_physical_menu coherent_component_row
+            ON coherent_component_row.menu_id=menu.menu_id
+          LEFT JOIN component_temperature_profile component_temperature_row
+            ON component_temperature_row.menu_id=menu.menu_id
+    """
+    predicates = """
+      AND (
+        COALESCE(component_profile_row.component_count,0)<2
+        OR :selected_physical_category_count<2
+        OR coherent_component_row.menu_id IS NOT NULL
+      )
+      AND (
+        :temperature_selected=0
+        OR COALESCE(component_profile_row.component_count,0)<2
+        OR COALESCE(component_temperature_row.temperature_count,0)<=1
+      )
+    """
+    return ctes, joins, predicates
 
 
 def _reviewed_public_wiki_condition(dialect: SqlDialect) -> str:
@@ -334,6 +428,11 @@ def build_concept_candidate_query(
           AVG(support.direct_supported) AS direct_evidence_ratio
         """
         support_having = "HAVING COUNT(DISTINCT support.category_code)=:selected_category_count"
+        coherence_ctes, coherence_joins, coherence_predicates = _component_coherence_sql(
+            criteria, parameters
+        )
+        support_ctes += coherence_ctes
+        support_join += coherence_joins
     else:
         selected_cte = "selected AS (SELECT NULL category_code,NULL option_code WHERE 1=0)"
         if dialect == "oracle":
@@ -378,6 +477,7 @@ def build_concept_candidate_query(
           0.0 AS direct_evidence_ratio
         """
         support_having = ""
+        coherence_predicates = ""
 
     conditions = _hard_eligibility_conditions(
         criteria=criteria,
@@ -445,6 +545,7 @@ def build_concept_candidate_query(
         LEFT JOIN menu_source_detail source_detail ON source_detail.menu_id=menu.menu_id
         {support_join}
         WHERE {" AND ".join(conditions)}
+        {coherence_predicates}
         {group_by_clause}
         {support_having}
       ){diversity_cte}
@@ -494,6 +595,9 @@ def build_concept_preview_count_query(
             if dialect == "sqlite"
             else "selected AS (" + " UNION ALL ".join(values) + ")"
         )
+        coherence_ctes, coherence_joins, coherence_predicates = _component_coherence_sql(
+            criteria, parameters
+        )
         grounding_ctes = f"""
           {selected_cte},
           grounded_support AS (
@@ -532,6 +636,7 @@ def build_concept_preview_count_query(
             GROUP BY menu_id
             HAVING COUNT(DISTINCT category_code)=:selected_category_count
           )
+          {coherence_ctes}
         """
     else:
         grounding_ctes = """
@@ -542,6 +647,8 @@ def build_concept_preview_count_query(
               AND reviewed_chunk_count>0
           )
         """
+        coherence_joins = ""
+        coherence_predicates = ""
     conditions = _hard_eligibility_conditions(
         criteria=criteria,
         certification_release_id=certification_release_id,
@@ -561,7 +668,9 @@ def build_concept_preview_count_query(
       JOIN menu ON menu.menu_id=grounding.menu_id
       JOIN merchant ON merchant.merchant_id=menu.merchant_id
       LEFT JOIN menu_source_detail source_detail ON source_detail.menu_id=menu.menu_id
+      {coherence_joins}
       WHERE {" AND ".join(conditions)}
+      {coherence_predicates}
     """
     return ConceptCandidateQuery(sql=sql, parameters=parameters)
 
@@ -794,11 +903,7 @@ def build_semantic_candidate_query(
         parameters["semantic_embedding_dimension"] = semantic_embedding_dimension
         parameters["semantic_catalog_release_id"] = catalog_release_id
         parameters["candidate_limit"] = candidate_limit
-        conditions.extend(
-            (
-                "semantic_embedding.embedding_vector IS NOT NULL",
-            )
-        )
+        conditions.extend(("semantic_embedding.embedding_vector IS NOT NULL",))
         semantic_projection = (
             "1-VECTOR_DISTANCE(semantic_embedding.embedding_vector,:query_vector,COSINE) "
             "AS semantic_score"

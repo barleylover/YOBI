@@ -1,4 +1,8 @@
-from app.knowledge.passage_ranking import normalized_tokens, rank_wiki_passages
+from app.knowledge.passage_ranking import (
+    normalized_tokens,
+    rank_component_wiki_passages,
+    rank_wiki_passages,
+)
 
 
 def _row(
@@ -71,3 +75,54 @@ def test_token_boundaries_do_not_treat_wheat_as_heat() -> None:
     )
 
     assert [row["chunk_id"] for row in ranked] == ["heat"]
+
+
+def test_compound_menu_passages_reserve_grounding_for_every_component() -> None:
+    rows = [
+        {
+            **_row("cold-noodles", "Cold buckwheat noodles are served in chilled broth."),
+            "member_concept_id": "noodles",
+            "membership_role": "COMPONENT",
+        },
+        {
+            **_row("cutlet", "A pork cutlet is breaded and fried."),
+            "member_concept_id": "cutlet",
+            "membership_role": "COMPONENT",
+        },
+        {
+            **_row("generic", "This is a popular set menu."),
+            "member_concept_id": "set",
+            "membership_role": "PRIMARY",
+        },
+    ]
+
+    ranked = rank_component_wiki_passages(
+        rows,
+        selected_groups={"food_forms": ["NOODLES"]},
+        limit=2,
+    )
+
+    assert {row["chunk_id"] for row in ranked} == {"cold-noodles", "cutlet"}
+
+
+def test_single_component_ranking_keeps_the_configured_limit() -> None:
+    rows = [
+        {
+            **_row("primary", "A hot noodle soup."),
+            "member_concept_id": "noodles",
+            "membership_role": "PRIMARY",
+        },
+        {
+            **_row("component", "Noodles are served in broth."),
+            "member_concept_id": "noodles",
+            "membership_role": "COMPONENT",
+        },
+    ]
+
+    ranked = rank_component_wiki_passages(
+        rows,
+        selected_groups={"food_forms": ["NOODLES"]},
+        limit=1,
+    )
+
+    assert len(ranked) == 1

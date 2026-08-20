@@ -112,3 +112,59 @@ def rank_wiki_passages(
         if len(selected) >= limit:
             break
     return selected
+
+
+def rank_component_wiki_passages(
+    rows: Iterable[T],
+    *,
+    selected_groups: Mapping[str, Sequence[str]],
+    preferred_evidence_ids: Iterable[str] = (),
+    limit: int,
+) -> list[T]:
+    """Rank passages while reserving one passage for every menu component.
+
+    Compound menu explanations used to inherit whichever Wiki family happened
+    to rank first. Reserving component coverage makes a set of noodles and
+    cutlet explain both components without any menu-specific exception.
+    """
+
+    materialized = list(rows)
+    component_ids = sorted(
+        {
+            str(_row_value(row, "member_concept_id", ""))
+            for row in materialized
+            if str(_row_value(row, "membership_role", "")) == "COMPONENT"
+            and str(_row_value(row, "member_concept_id", ""))
+        }
+    )
+    reserved: list[T] = []
+    for component_id in component_ids:
+        ranked = rank_wiki_passages(
+            [
+                row
+                for row in materialized
+                if str(_row_value(row, "member_concept_id", "")) == component_id
+            ],
+            selected_groups=selected_groups,
+            preferred_evidence_ids=preferred_evidence_ids,
+            limit=1,
+        )
+        reserved.extend(ranked)
+    target = max(limit, len(reserved))
+    globally_ranked = rank_wiki_passages(
+        materialized,
+        selected_groups=selected_groups,
+        preferred_evidence_ids=preferred_evidence_ids,
+        limit=max(target, len(materialized)),
+    )
+    selected: list[T] = []
+    seen_ids: set[str] = set()
+    for row in [*reserved, *globally_ranked]:
+        chunk_id = str(_row_value(row, "chunk_id", ""))
+        if chunk_id in seen_ids:
+            continue
+        seen_ids.add(chunk_id)
+        selected.append(row)
+        if len(selected) >= target:
+            break
+    return selected

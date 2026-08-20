@@ -19,9 +19,42 @@ PreferenceCategoryCode = Literal[
     "cooking_methods",
 ]
 SpiceReferenceCountry = Literal[
-    "US", "GB", "CA", "AU", "NZ", "IE", "KR", "JP", "CN", "TW", "HK", "SG",
-    "ES", "MX", "AR", "CO", "FR", "BE", "DE", "AT", "CH", "IT", "PT", "BR",
-    "TH", "VN", "ID", "MY", "SA", "AE", "EG", "IN", "RU", "PH", "TR", "NL",
+    "US",
+    "GB",
+    "CA",
+    "AU",
+    "NZ",
+    "IE",
+    "KR",
+    "JP",
+    "CN",
+    "TW",
+    "HK",
+    "SG",
+    "ES",
+    "MX",
+    "AR",
+    "CO",
+    "FR",
+    "BE",
+    "DE",
+    "AT",
+    "CH",
+    "IT",
+    "PT",
+    "BR",
+    "TH",
+    "VN",
+    "ID",
+    "MY",
+    "SA",
+    "AE",
+    "EG",
+    "IN",
+    "RU",
+    "PH",
+    "TR",
+    "NL",
 ]
 SpicePreferenceV3 = Literal["LESS", "SIMILAR", "MORE"]
 VeganEvidenceStatus = Literal[
@@ -271,6 +304,10 @@ class EvidenceReference(BaseModel):
     ]
     content: str
     score: float | None = None
+    component_id: str | None = None
+    component_name_ko: str | None = None
+    component_name_en: str | None = None
+    membership_role: Literal["PRIMARY", "COMPONENT", "SECONDARY"] | None = None
 
 
 class CriterionEvidence(BaseModel):
@@ -297,6 +334,7 @@ class EvidencePoolItem(BaseModel):
     country_spice_baseline: int | None = Field(default=None, ge=1, le=5)
     country_preference: dict[str, Any] | None = None
     synthetic_reviews: list[dict[str, Any]] = Field(default_factory=list)
+    menu_components: list[dict[str, str]] = Field(default_factory=list)
     retrieval_score: float = 0.0
     # Repository retrieval can retain the complete 100-menu candidate union.
     # The service rewrites this to 1..15 when it freezes the LLM shortlist.
@@ -337,6 +375,7 @@ class EvidencePoolItem(BaseModel):
             "localized_title": self.localized_title,
             "country_preference": self.country_preference,
             "synthetic_reviews": self.synthetic_reviews,
+            "menu_components": self.menu_components,
             "criterion_evidence": grouped,
             "wiki_passages": [item.model_dump(mode="json") for item in self.wiki_passages],
             "menu_facts": [item.model_dump(mode="json") for item in self.menu_facts],

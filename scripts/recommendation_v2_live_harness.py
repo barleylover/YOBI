@@ -184,7 +184,9 @@ def _write_artifact(path: Path, payload: dict[str, Any]) -> str:
     encoded = _canonical_bytes(payload)
     digest = hashlib.sha256(encoded).hexdigest()
     _exclusive_write(path, encoded)
-    _exclusive_write(path.with_suffix(path.suffix + ".sha256"), f"{digest}  {path.name}\n".encode())
+    _exclusive_write(
+        path.with_suffix(path.suffix + ".sha256"), f"{digest}  {path.name}\n".encode()
+    )
     return digest
 
 
@@ -269,7 +271,8 @@ def _reuse_completed_predeploy(
 def _settings_errors(settings: Settings) -> list[str]:
     checks = {
         "STRUCTURED_MODEL": settings.structured_recommendation_model == "xai.grok-4.3",
-        "MAX_OUTPUT_TOKENS": settings.structured_recommendation_max_output_tokens == 2048,
+        "MAX_OUTPUT_TOKENS": settings.structured_recommendation_max_output_tokens
+        == 2048,
         "CANDIDATE_LIMIT": settings.recommendation_candidate_limit == 100,
         "SHORTLIST_LIMIT": settings.recommendation_llm_shortlist_limit == 15,
         "PASSAGES_PER_MENU": settings.recommendation_llm_passages_per_menu == 2,
@@ -332,8 +335,14 @@ def _record_errors(record: Any, criteria: RecommendationCriteriaV2) -> list[str]
         for item in record.evidence_pool_json
         if isinstance(item, dict)
     }
-    final_ids = [str(item.get("menu_id") or "") for item in record.final_candidates_json]
-    if not final_ids or len(set(final_ids)) != len(final_ids) or not set(final_ids) <= shortlist_ids:
+    final_ids = [
+        str(item.get("menu_id") or "") for item in record.final_candidates_json
+    ]
+    if (
+        not final_ids
+        or len(set(final_ids)) != len(final_ids)
+        or not set(final_ids) <= shortlist_ids
+    ):
         errors.append("FINAL_IDS_OUTSIDE_SHORTLIST")
 
     selected_categories = criteria.subjective_groups()
@@ -436,6 +445,7 @@ def run_predeploy(release_family_id: str, settings: Settings) -> dict[str, Any]:
             )
             presentations = presentation_service.present_selected(
                 selected_evidence,
+                session_id=context.session_id,
                 language_code="en",
                 country_code=context.profile.country_code or "ZZ",
             )
@@ -496,10 +506,13 @@ def _ready_errors(ready: dict[str, Any]) -> list[str]:
         "SHORTLIST_LIMIT": structured.get("shortlist_limit") == 15,
         "PASSAGES_PER_MENU": structured.get("passages_per_menu") == 2,
         "MAX_OUTPUT_TOKENS": structured.get("max_output_tokens") == 2048,
-        "RANK_POLICY": structured.get("ranking_policy_version") == "yobi-hybrid-rank-v2",
+        "RANK_POLICY": structured.get("ranking_policy_version")
+        == "yobi-hybrid-rank-v2",
         "FEATURE_COUNT": int(structured.get("feature_count") or 0) > 0,
         "FEATURE_MANIFEST": bool(
-            re.fullmatch(r"[0-9a-f]{64}", str(structured.get("feature_manifest_sha256") or ""))
+            re.fullmatch(
+                r"[0-9a-f]{64}", str(structured.get("feature_manifest_sha256") or "")
+            )
         ),
         "STRUCTURED_READY": structured.get("ready") is True,
     }
@@ -612,7 +625,9 @@ def run_postdeploy(
                     "result_count": 0,
                     "merchant_count": 0,
                     "evidence_count": 0,
-                    "required_group_count": len(case.scenario.criteria.subjective_groups()),
+                    "required_group_count": len(
+                        case.scenario.criteria.subjective_groups()
+                    ),
                     "matched_group_count_min": 0,
                     "menu_order_sha256": None,
                 }
@@ -629,7 +644,9 @@ def run_postdeploy(
                     errors.append("RESPONSE_BODY_MISSING")
                 errors.extend(_record_errors(record, case.scenario.criteria))
                 provider_metrics = (
-                    record.ranking_trace_json.get("provider_metrics", {}) if record else {}
+                    record.ranking_trace_json.get("provider_metrics", {})
+                    if record
+                    else {}
                 )
                 provider_metrics = (
                     provider_metrics if isinstance(provider_metrics, dict) else {}
@@ -644,7 +661,9 @@ def run_postdeploy(
                         "dispatch_count": record.dispatch_count if record else 0,
                         "ledger_status": record.status.value if record else None,
                         "selection_status": (
-                            record.ranking_trace_json.get("selection_status") if record else None
+                            record.ranking_trace_json.get("selection_status")
+                            if record
+                            else None
                         ),
                         "fallback_reason": record.failure_code if record else None,
                         "grounding_rejection_code": (
@@ -663,8 +682,12 @@ def run_postdeploy(
                             else None
                         ),
                         "provider_metrics": provider_metrics,
-                        "shortlist_count": len(record.evidence_pool_json) if record else 0,
-                        "release_family_id": record.release_family_id if record else None,
+                        "shortlist_count": len(record.evidence_pool_json)
+                        if record
+                        else 0,
+                        "release_family_id": record.release_family_id
+                        if record
+                        else None,
                         "feature_manifest_sha256": (
                             record.feature_manifest_sha256 if record else None
                         ),
@@ -706,9 +729,15 @@ def run_postdeploy(
         "dispatch_interval_seconds": POSTDEPLOY_INTERVAL_SECONDS,
         "token_usage": {
             "measured_case_count": len(measured_usage),
-            "input_tokens": sum(int(item.get("input_tokens") or 0) for item in measured_usage),
-            "output_tokens": sum(int(item.get("output_tokens") or 0) for item in measured_usage),
-            "total_tokens": sum(int(item.get("total_tokens") or 0) for item in measured_usage),
+            "input_tokens": sum(
+                int(item.get("input_tokens") or 0) for item in measured_usage
+            ),
+            "output_tokens": sum(
+                int(item.get("output_tokens") or 0) for item in measured_usage
+            ),
+            "total_tokens": sum(
+                int(item.get("total_tokens") or 0) for item in measured_usage
+            ),
         },
         "preflight_error_codes": sorted(set(preflight_errors)),
         "latency": latency_summary,

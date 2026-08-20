@@ -6,7 +6,7 @@ from array import array
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from time import monotonic
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 import oracledb
@@ -114,7 +114,7 @@ from app.domain.structured_recommendation import (
     RecommendationRequestStatus,
 )
 from app.knowledge.catalog_seed import KNOWLEDGE_CATALOG_VERSION, KNOWLEDGE_RELEASE_ID
-from app.knowledge.passage_ranking import rank_wiki_passages
+from app.knowledge.passage_ranking import rank_component_wiki_passages
 from app.knowledge.resolver import (
     VEGAN_INGREDIENTS,
     allergen_constraint_conflicts,
@@ -807,9 +807,7 @@ class OracleYobiRepository:
             dispatched_at=(_datetime(row["dispatched_at"]) if row.get("dispatched_at") else None),
             completed_at=(_datetime(row["completed_at"]) if row.get("completed_at") else None),
             client_cancelled_at=(
-                _datetime(row["client_cancelled_at"])
-                if row.get("client_cancelled_at")
-                else None
+                _datetime(row["client_cancelled_at"]) if row.get("client_cancelled_at") else None
             ),
             duplicate=duplicate,
         )
@@ -2328,17 +2326,13 @@ class OracleYobiRepository:
         )
         payload["capabilities"] = {
             "halal_certified_only": {
-                "enabled": bool(
-                    synthetic_capability and int(synthetic_capability[0] or 0) >= 3
-                ),
+                "enabled": bool(synthetic_capability and int(synthetic_capability[0] or 0) >= 3),
                 "disabled_reason": None
                 if synthetic_capability and int(synthetic_capability[0] or 0) >= 3
                 else "Enrichment data is not ready.",
             },
             "vegan": {
-                "enabled": bool(
-                    synthetic_capability and int(synthetic_capability[1] or 0) >= 3
-                ),
+                "enabled": bool(synthetic_capability and int(synthetic_capability[1] or 0) >= 3),
                 "disabled_reason": None
                 if synthetic_capability and int(synthetic_capability[1] or 0) >= 3
                 else "Enrichment data is not ready.",
@@ -3636,8 +3630,15 @@ class OracleYobiRepository:
         cursor.execute(
             f"""
             SELECT membership.menu_id,chunk.chunk_id,chunk.content,chunk.facet,
-                   closure.depth,chunk.chunk_index
+                   closure.depth,chunk.chunk_index,
+                   membership.concept_id AS member_concept_id,
+                   membership.membership_role,
+                   member_concept.canonical_name_ko AS component_name_ko,
+                   member_concept.canonical_name_en AS component_name_en
               FROM menu_concept_membership membership
+              JOIN dish_concept member_concept
+                ON member_concept.release_id=membership.knowledge_release_id
+               AND member_concept.concept_id=membership.concept_id
               JOIN dish_concept_closure closure
                 ON closure.release_id=membership.knowledge_release_id
                AND closure.descendant_concept_id=membership.concept_id
@@ -3665,7 +3666,7 @@ class OracleYobiRepository:
         for row in _rows(cursor):
             grouped[str(row["menu_id"])].append(row)
         return {
-            menu_id: rank_wiki_passages(
+            menu_id: rank_component_wiki_passages(
                 rows,
                 selected_groups=criteria.subjective_groups(),
                 preferred_evidence_ids=preferred_evidence_ids_by_menu.get(menu_id, set()),
@@ -3673,6 +3674,48 @@ class OracleYobiRepository:
             )
             for menu_id, rows in grouped.items()
         }
+
+    @staticmethod
+    def _menu_component_rows(
+        connection: oracledb.Connection,
+        *,
+        release_id: str,
+        menu_ids: list[str],
+    ) -> dict[str, list[dict[str, str]]]:
+        if not menu_ids:
+            return {}
+        binds: dict[str, Any] = {"release_id": release_id}
+        placeholders: list[str] = []
+        for index, menu_id in enumerate(menu_ids):
+            key = f"component_menu_{index}"
+            binds[key] = menu_id
+            placeholders.append(f":{key}")
+        cursor = connection.cursor()
+        cursor.execute(
+            f"""
+            SELECT membership.menu_id,membership.concept_id,
+                   concept.canonical_name_ko,concept.canonical_name_en
+            FROM menu_concept_membership membership
+            JOIN dish_concept concept
+              ON concept.release_id=membership.knowledge_release_id
+             AND concept.concept_id=membership.concept_id
+            WHERE membership.knowledge_release_id=:release_id
+              AND membership.membership_role='COMPONENT'
+              AND membership.menu_id IN ({",".join(placeholders)})
+            ORDER BY membership.menu_id,membership.concept_id
+            """,
+            binds,
+        )
+        grouped: dict[str, list[dict[str, str]]] = defaultdict(list)
+        for row in _rows(cursor):
+            grouped[str(row["menu_id"])].append(
+                {
+                    "component_id": str(row["concept_id"]),
+                    "name_ko": str(row["canonical_name_ko"]),
+                    "name_en": str(row["canonical_name_en"]),
+                }
+            )
+        return grouped
 
     def _build_concept_ranked_pool(
         self,
@@ -3975,8 +4018,13 @@ class OracleYobiRepository:
             },
             passages_per_menu=passages_per_menu,
         )
+        components_by_menu = self._menu_component_rows(
+            connection,
+            release_id=family.knowledge_release_id,
+            menu_ids=[decision.menu_id for decision in decisions],
+        )
         if decisions:
-            query_count += 1
+            query_count += 2
         synthetic_by_menu: dict[str, dict[str, Any]] = {}
         synthetic_reviews_by_menu: dict[str, list[dict[str, Any]]] = defaultdict(list)
         country_code = profile.country_code or "ZZ"
@@ -4026,19 +4074,17 @@ class OracleYobiRepository:
                  AND preference.menu_id=profile.menu_id
                  AND preference.country_code=:country_code
                 WHERE profile.release_id=:synthetic_release_id
-                  AND profile.menu_id IN ({','.join(selected_binds)})
+                  AND profile.menu_id IN ({",".join(selected_binds)})
                 """,
                 synthetic_binds,
             )
-            synthetic_by_menu = {
-                str(item["menu_id"]): item for item in _rows(synthetic_cursor)
-            }
+            synthetic_by_menu = {str(item["menu_id"]): item for item in _rows(synthetic_cursor)}
             synthetic_cursor.execute(
                 f"""
                 SELECT review_id,menu_id,topic,rating,review_text,display_order
                 FROM synthetic_review_snippet
                 WHERE release_id=:synthetic_release_id
-                  AND menu_id IN ({','.join(selected_binds)})
+                  AND menu_id IN ({",".join(selected_binds)})
                 ORDER BY menu_id,display_order,review_id
                 """,
                 _synthetic_review_query_binds(synthetic_binds),
@@ -4062,6 +4108,13 @@ class OracleYobiRepository:
                     evidence_id=str(chunk["chunk_id"]),
                     evidence_type="WIKI_PASSAGE",
                     content=str(chunk["content"]),
+                    component_id=str(chunk["member_concept_id"]),
+                    component_name_ko=str(chunk["component_name_ko"]),
+                    component_name_en=str(chunk["component_name_en"]),
+                    membership_role=cast(
+                        Literal["PRIMARY", "COMPONENT", "SECONDARY"],
+                        str(chunk["membership_role"]),
+                    ),
                 )
                 for chunk in wiki_by_menu.get(decision.menu_id, [])
             ]
@@ -4160,7 +4213,9 @@ class OracleYobiRepository:
                     halal_certified=(
                         bool(synthetic["halal_fit"])
                         if synthetic is not None
-                        else True if criteria.dietary_filters.halal_certified_only else None
+                        else True
+                        if criteria.dietary_filters.halal_certified_only
+                        else None
                     ),
                     vegan_status=(
                         "LIKELY_FIT"
@@ -4170,24 +4225,23 @@ class OracleYobiRepository:
                     localized_title=(
                         str(synthetic["display_name"])
                         if synthetic is not None and synthetic.get("display_name")
-                        else menu.name_ko if presentation_locale == "ko" else menu.name_en
+                        else menu.name_ko
+                        if presentation_locale == "ko"
+                        else menu.name_en
                     ),
                     localized_source_description=(
                         _oracle_logical_text(synthetic.get("localized_source_description"))
-                        if synthetic is not None
-                        and synthetic.get("localized_source_description")
+                        if synthetic is not None and synthetic.get("localized_source_description")
                         else menu.description
                     ),
                     menu_localization_source_hash=(
                         str(synthetic["menu_localization_source_hash"])
-                        if synthetic is not None
-                        and synthetic.get("menu_localization_source_hash")
+                        if synthetic is not None and synthetic.get("menu_localization_source_hash")
                         else None
                     ),
                     source_description_source_hash=(
                         str(synthetic["source_description_source_hash"])
-                        if synthetic is not None
-                        and synthetic.get("source_description_source_hash")
+                        if synthetic is not None and synthetic.get("source_description_source_hash")
                         else None
                     ),
                     synthetic_spice_level=(
@@ -4202,11 +4256,11 @@ class OracleYobiRepository:
                             "preference_percent": int(synthetic["preference_percent"]),
                             "sample_size": int(synthetic["sample_size"]),
                         }
-                        if synthetic is not None
-                        and synthetic.get("preference_percent") is not None
+                        if synthetic is not None and synthetic.get("preference_percent") is not None
                         else None
                     ),
                     synthetic_reviews=synthetic_reviews_by_menu.get(decision.menu_id, []),
+                    menu_components=components_by_menu.get(decision.menu_id, []),
                     retrieval_score=decision.score,
                     server_rank=decision.rank,
                     explicit_score=decision.explicit_score,
@@ -5158,14 +5212,26 @@ class OracleYobiRepository:
             rows = _rows(cursor)
             has_more = len(rows) > request.limit
             visible_rows = rows[: request.limit]
+            components_by_menu = self._menu_component_rows(
+                connection,
+                release_id=str(context["knowledge_release_id"]),
+                menu_ids=[str(row["menu_id"]) for row in visible_rows],
+            )
             items: list[MerchantMenuPresentation] = []
             for row in visible_rows:
                 menu_id = str(row["menu_id"])
                 cursor.execute(
                     """
-                    SELECT * FROM (
-                      SELECT chunk.chunk_id,chunk.content
+                      SELECT chunk.chunk_id,chunk.content,
+                             membership.concept_id AS member_concept_id,
+                             membership.membership_role,
+                             member_concept.canonical_name_ko AS component_name_ko,
+                             member_concept.canonical_name_en AS component_name_en,
+                             chunk.facet,closure.depth,chunk.chunk_index
                       FROM menu_concept_membership membership
+                      JOIN dish_concept member_concept
+                        ON member_concept.release_id=membership.knowledge_release_id
+                       AND member_concept.concept_id=membership.concept_id
                       JOIN dish_concept_closure closure
                         ON closure.release_id=membership.knowledge_release_id
                        AND closure.descendant_concept_id=membership.concept_id
@@ -5182,12 +5248,13 @@ class OracleYobiRepository:
                         AND document.review_status='REVIEWED_DEMO'
                         AND lower(chunk.facet)<>'safety'
                       ORDER BY closure.depth,chunk.chunk_index,chunk.chunk_id
-                    ) WHERE ROWNUM<=2
                     """,
                     knowledge_release_id=str(context["knowledge_release_id"]),
                     menu_id=menu_id,
                 )
-                passage_rows = _rows(cursor)
+                passage_rows = rank_component_wiki_passages(
+                    _rows(cursor), selected_groups={}, limit=2
+                )
                 cursor.execute(
                     """
                     SELECT * FROM (
@@ -5213,8 +5280,7 @@ class OracleYobiRepository:
                     localized_title=title,
                     wiki_passages=passage_texts,
                     reviews=[
-                        {"topic": review["topic"], "rating": review["rating"]}
-                        for review in reviews
+                        {"topic": review["topic"], "rating": review["rating"]} for review in reviews
                     ],
                 )
                 short = presentation_copy.short_explanation
@@ -5256,6 +5322,10 @@ class OracleYobiRepository:
                                     "evidence_id": str(passage["chunk_id"]),
                                     "evidence_type": "WIKI_PASSAGE",
                                     "content": _oracle_logical_text(passage["content"]),
+                                    "component_id": str(passage["member_concept_id"]),
+                                    "component_name_ko": str(passage["component_name_ko"]),
+                                    "component_name_en": str(passage["component_name_en"]),
+                                    "membership_role": str(passage["membership_role"]),
                                 }
                                 for passage in passage_rows
                             ],
@@ -5269,6 +5339,7 @@ class OracleYobiRepository:
                                 }
                                 for review in reviews
                             ],
+                            "menu_components": components_by_menu.get(menu_id, []),
                             "source_identity": {
                                 "menu_localization_source_hash": row.get(
                                     "menu_localization_source_hash"
@@ -5386,9 +5457,7 @@ class OracleYobiRepository:
             updated_at=_datetime(row.get("updated_at") or row["created_at"]),
         )
 
-    def get_menu_presentation_cache(
-        self, cache_key: str
-    ) -> MenuPresentationCacheEntry | None:
+    def get_menu_presentation_cache(self, cache_key: str) -> MenuPresentationCacheEntry | None:
         with self.pool.connection() as connection:
             cursor = connection.cursor()
             cursor.execute(
@@ -5398,9 +5467,7 @@ class OracleYobiRepository:
             row = _row(cursor)
         return self._menu_presentation_cache_entry_from_row(row) if row else None
 
-    def save_menu_presentation_cache_entry(
-        self, entry: MenuPresentationCacheEntry
-    ) -> None:
+    def save_menu_presentation_cache_entry(self, entry: MenuPresentationCacheEntry) -> None:
         with self.pool.connection() as connection:
             cursor = connection.cursor()
             cursor.execute(
@@ -6461,8 +6528,7 @@ class OracleYobiRepository:
                     menu_id=menu_id,
                 )
                 group_localizations = {
-                    str(row["option_group_id"]): str(row["display_name"])
-                    for row in _rows(cursor)
+                    str(row["option_group_id"]): str(row["display_name"]) for row in _rows(cursor)
                 }
                 cursor.execute(
                     """
@@ -6481,8 +6547,7 @@ class OracleYobiRepository:
                     menu_id=menu_id,
                 )
                 item_localizations = {
-                    str(row["option_item_id"]): str(row["display_name"])
-                    for row in _rows(cursor)
+                    str(row["option_item_id"]): str(row["display_name"]) for row in _rows(cursor)
                 }
             result = []
             for group in groups:
@@ -6739,6 +6804,116 @@ class OracleYobiRepository:
                     display_name=item_names[str(row["option_item_id"])],
                     model_id=model_id,
                     source_hash=source_hash,
+                    generated_at=generated_at,
+                )
+
+    def save_menu_runtime_localizations(
+        self,
+        session_id: str,
+        menu_id: str,
+        localized_title: str,
+        localized_source_description: str,
+        model_id: str,
+        prompt_version: str,
+    ) -> None:
+        with self.pool.connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                SELECT profile.preferred_language,
+                       family.synthetic_enrichment_release_id,
+                       menu.name_ko,menu.description
+                FROM chat_session chat
+                JOIN user_profile profile ON profile.profile_id=chat.profile_id
+                JOIN recommendation_runtime_state state ON state.state_key='ACTIVE'
+                JOIN recommendation_release_family family
+                  ON family.release_family_id=state.active_release_family_id
+                JOIN menu ON menu.menu_id=:menu_id
+                WHERE chat.session_id=:session_id
+                """,
+                menu_id=menu_id,
+                session_id=session_id,
+            )
+            context = _row(cursor)
+            if context is None or not context.get("synthetic_enrichment_release_id"):
+                raise RuntimeError("SYNTHETIC_ENRICHMENT_UNAVAILABLE")
+            requested = normalize_preference_locale(str(context["preferred_language"]))
+            language_code = requested if requested in {"ko", "ja"} else "en"
+            release_id = str(context["synthetic_enrichment_release_id"])
+            generated_at = _now()
+            title_source_hash = hashlib.sha256(
+                json.dumps(
+                    [context.get("name_ko"), language_code, prompt_version],
+                    ensure_ascii=False,
+                ).encode()
+            ).hexdigest()
+            cursor.execute(
+                """
+                MERGE INTO menu_localization target
+                USING (
+                  SELECT :release_id release_id,:menu_id menu_id,
+                         :language_code language_code FROM dual
+                ) source
+                ON (target.release_id=source.release_id
+                    AND target.menu_id=source.menu_id
+                    AND target.language_code=source.language_code)
+                WHEN MATCHED THEN UPDATE SET
+                  display_name=:display_name,model_id=:model_id,
+                  prompt_version=:prompt_version,source_hash=:source_hash,
+                  validation_status='VALID',generated_at=:generated_at
+                WHEN NOT MATCHED THEN INSERT (
+                  release_id,menu_id,language_code,display_name,model_id,prompt_version,
+                  wiki_evidence_ids_json,source_hash,validation_status,generated_at
+                ) VALUES (
+                  :release_id,:menu_id,:language_code,:display_name,:model_id,
+                  :prompt_version,'[]',:source_hash,'VALID',:generated_at
+                )
+                """,
+                release_id=release_id,
+                menu_id=menu_id,
+                language_code=language_code,
+                display_name=localized_title,
+                model_id=model_id,
+                prompt_version=prompt_version,
+                source_hash=title_source_hash,
+                generated_at=generated_at,
+            )
+            if _oracle_logical_text(context.get("description")):
+                description_source_hash = hashlib.sha256(
+                    json.dumps(
+                        [context.get("description"), language_code, prompt_version],
+                        ensure_ascii=False,
+                    ).encode()
+                ).hexdigest()
+                cursor.execute(
+                    """
+                    MERGE INTO menu_source_description_localization target
+                    USING (
+                      SELECT :release_id release_id,:menu_id menu_id,
+                             :language_code language_code FROM dual
+                    ) source
+                    ON (target.release_id=source.release_id
+                        AND target.menu_id=source.menu_id
+                        AND target.language_code=source.language_code)
+                    WHEN MATCHED THEN UPDATE SET
+                      description_text=:description_text,model_id=:model_id,
+                      prompt_version=:prompt_version,source_hash=:source_hash,
+                      validation_status='VALID',generated_at=:generated_at
+                    WHEN NOT MATCHED THEN INSERT (
+                      release_id,menu_id,language_code,description_text,model_id,
+                      prompt_version,source_hash,validation_status,generated_at
+                    ) VALUES (
+                      :release_id,:menu_id,:language_code,:description_text,:model_id,
+                      :prompt_version,:source_hash,'VALID',:generated_at
+                    )
+                    """,
+                    release_id=release_id,
+                    menu_id=menu_id,
+                    language_code=language_code,
+                    description_text=localized_source_description,
+                    model_id=model_id,
+                    prompt_version=prompt_version,
+                    source_hash=description_source_hash,
                     generated_at=generated_at,
                 )
 
@@ -7371,7 +7546,9 @@ class OracleYobiRepository:
                             menu_id=menu_id,
                         )
                         profile = cursor.fetchone()
-                        cursor.execute("SELECT price FROM menu WHERE menu_id=:menu_id", menu_id=menu_id)
+                        cursor.execute(
+                            "SELECT price FROM menu WHERE menu_id=:menu_id", menu_id=menu_id
+                        )
                         current_menu = cursor.fetchone()
                         conflict = profile is None or current_menu is None
                         if price_range and current_menu is not None:
@@ -7400,7 +7577,9 @@ class OracleYobiRepository:
                             for option in _json(row["option_snapshot_json"])
                         ]
                         if selected_ids:
-                            bind_names = [f"synthetic_option_{index}" for index in range(len(selected_ids))]
+                            bind_names = [
+                                f"synthetic_option_{index}" for index in range(len(selected_ids))
+                            ]
                             binds: dict[str, Any] = {"release_id": synthetic_release_id}
                             binds.update(dict(zip(bind_names, selected_ids)))
                             cursor.execute(
@@ -7408,7 +7587,7 @@ class OracleYobiRepository:
                                 SELECT halal_conflict,vegan_conflict
                                 FROM synthetic_option_profile
                                 WHERE release_id=:release_id AND option_item_id IN (
-                                  {','.join(':' + name for name in bind_names)}
+                                  {",".join(":" + name for name in bind_names)}
                                 )
                                 """,
                                 binds,
@@ -7528,9 +7707,7 @@ class OracleYobiRepository:
             cart_menu_localizations: dict[str, str] = {}
             cart_option_localizations: dict[str, str] = {}
             synthetic_release_id = (
-                str(structured_criteria_row[4] or "")
-                if structured_criteria_row is not None
-                else ""
+                str(structured_criteria_row[4] or "") if structured_criteria_row is not None else ""
             )
             if synthetic_release_id and profile_row is not None:
                 requested_locale = normalize_preference_locale(
@@ -7558,8 +7735,7 @@ class OracleYobiRepository:
                     language_code=language_code,
                 )
                 cart_option_localizations = {
-                    str(item["option_item_id"]): str(item["display_name"])
-                    for item in _rows(cursor)
+                    str(item["option_item_id"]): str(item["display_name"]) for item in _rows(cursor)
                 }
         items = [
             CartLine(
@@ -7838,7 +8014,10 @@ class OracleYobiRepository:
                 if synthetic_profile is None:
                     raise ValueError("CART_MENU_NO_LONGER_ELIGIBLE")
                 price_range = structured_criteria.price_range_krw
-                if price_range is None or not price_range.min <= int(menu["price"]) <= price_range.max:
+                if (
+                    price_range is None
+                    or not price_range.min <= int(menu["price"]) <= price_range.max
+                ):
                     raise ValueError("CART_MENU_NO_LONGER_ELIGIBLE")
                 spice_level = int(synthetic_profile[0])
                 spice_matches = (
@@ -7853,10 +8032,7 @@ class OracleYobiRepository:
                 if (
                     structured_criteria.dietary_filters.halal_certified_only
                     and not synthetic_profile[1]
-                ) or (
-                    structured_criteria.dietary_filters.vegan
-                    and not synthetic_profile[2]
-                ):
+                ) or (structured_criteria.dietary_filters.vegan and not synthetic_profile[2]):
                     raise ValueError("CART_DIETARY_CONFLICT")
             elif structured_criteria is not None:
                 if (
@@ -8818,9 +8994,7 @@ class OracleYobiRepository:
                     "source_integrity_ready": all(source_integrity_checks.values()),
                     "recommendation_ready": all(recommendation_checks.values()),
                     "canonical_ready": all(source_integrity_checks.values()),
-                    "vector_ready": recommendation_checks[
-                        "semantic_embedding_identity_compatible"
-                    ],
+                    "vector_ready": recommendation_checks["semantic_embedding_identity_compatible"],
                     "semantic_channel_status": (
                         "READY"
                         if recommendation_checks["semantic_embedding_identity_compatible"]
@@ -8843,9 +9017,7 @@ class OracleYobiRepository:
                         "wiki_eligible_menus": wiki_eligible_menu_count,
                         **option_localization_counts,
                         "menu_semantic_embeddings": semantic_embedding_count,
-                        "menu_semantic_embedding_manifests": (
-                            semantic_embedding_manifest_count
-                        ),
+                        "menu_semantic_embedding_manifests": (semantic_embedding_manifest_count),
                     },
                     "feature_count": feature_count,
                     "wiki_eligible_menu_count": wiki_eligible_menu_count,

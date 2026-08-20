@@ -147,8 +147,6 @@ readonly REQUIRED_RELEASE_TOOLS=(
   scripts/backfill_menu_semantic_embeddings.py
   scripts/build_external_knowledge_release.py
   scripts/build_synthetic_enrichment_release.py
-  scripts/generate_static_menu_descriptions.py
-  scripts/generate_static_option_localizations.py
   scripts/catalog_mode.py
   scripts/manage_demo_address.py
   scripts/recommendation_http.py
@@ -727,21 +725,13 @@ if [[ "$catalog_mode" == "external" ]]; then
       "$new_release/venv/bin/python" "$new_release/scripts/manage_demo_address.py" \
       --verify-only
     if [[ "$synthetic_enrichment_deploy" == "true" ]]; then
-      # Static option names are built in a new additive release. Existing menu
-      # localizations are copied release-to-release; no provider is dispatched.
+      # The additive enrichment release starts with no runtime-generated option
+      # or presentation cache. Those rows are populated lazily after selection.
       synthetic_release_id="synthetic-enrichment-${release_id}"
-      sudo env PYTHONPATH="$new_release/backend:$new_release" \
-        "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
-        "$new_release/scripts/build_synthetic_enrichment_release.py" \
-        --backend oracle --release-id "$synthetic_release_id" --apply
-      sudo env PYTHONPATH="$new_release/backend:$new_release" \
-        "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
-        "$new_release/scripts/generate_static_menu_descriptions.py" \
-        --backend oracle --release-id "$synthetic_release_id" --apply
       enrichment_activation_json="$(sudo env \
         PYTHONPATH="$new_release/backend:$new_release" \
         "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
-        "$new_release/scripts/generate_static_option_localizations.py" \
+        "$new_release/scripts/build_synthetic_enrichment_release.py" \
         --backend oracle --release-id "$synthetic_release_id" --apply --activate)"
       new_recommendation_release_family_id="$(printf '%s' \
         "$enrichment_activation_json" | "$new_release/venv/bin/python" -c \

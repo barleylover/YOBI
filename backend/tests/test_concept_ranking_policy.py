@@ -270,6 +270,69 @@ def test_same_category_is_max_or_then_cross_categories_are_and() -> None:
         connection.close()
 
 
+def test_compound_menu_cannot_mix_form_and_temperature_across_components() -> None:
+    connection = _connection()
+    try:
+        _insert_menu(
+            connection,
+            menu_id="compound-menu",
+            merchant_id="merchant-compound",
+            concept_id="set-primary",
+        )
+        connection.executemany(
+            "INSERT INTO menu_concept_membership VALUES (?,?,?,?)",
+            [
+                ("knowledge-v1", "compound-menu", "cold-noodle", "COMPONENT"),
+                ("knowledge-v1", "compound-menu", "hot-cutlet", "COMPONENT"),
+            ],
+        )
+        _support(connection, "cold-noodle", "food_forms", "NOODLES", 0.95)
+        _support(connection, "cold-noodle", "temperatures", "COOL", 0.95)
+        _support(connection, "hot-cutlet", "food_forms", "SOLID", 0.95)
+        _support(connection, "hot-cutlet", "temperatures", "HOT", 0.95)
+
+        query = _query(
+            RecommendationCriteriaV2(food_forms=["NOODLES"], temperatures=["HOT"]),
+            limit=None,
+        )
+
+        assert connection.execute(query.sql, query.parameters).fetchall() == []
+    finally:
+        connection.close()
+
+
+def test_compound_menu_is_kept_when_one_component_coherently_matches() -> None:
+    connection = _connection()
+    try:
+        _insert_menu(
+            connection,
+            menu_id="coherent-set",
+            merchant_id="merchant-coherent",
+            concept_id="set-primary",
+        )
+        connection.executemany(
+            "INSERT INTO menu_concept_membership VALUES (?,?,?,?)",
+            [
+                ("knowledge-v1", "coherent-set", "hot-noodle", "COMPONENT"),
+                ("knowledge-v1", "coherent-set", "hot-dumpling", "COMPONENT"),
+            ],
+        )
+        _support(connection, "hot-noodle", "food_forms", "NOODLES", 0.95)
+        _support(connection, "hot-noodle", "temperatures", "HOT", 0.95)
+        _support(connection, "hot-dumpling", "food_forms", "SOLID", 0.85)
+        _support(connection, "hot-dumpling", "temperatures", "HOT", 0.85)
+
+        query = _query(
+            RecommendationCriteriaV2(food_forms=["NOODLES"], temperatures=["HOT"]),
+            limit=None,
+        )
+        rows = connection.execute(query.sql, query.parameters).fetchall()
+
+        assert [row["menu_id"] for row in rows] == ["coherent-set"]
+    finally:
+        connection.close()
+
+
 def test_wiki_eligibility_is_applied_before_candidate_ranking() -> None:
     connection = _connection()
     try:
@@ -287,12 +350,8 @@ def test_wiki_eligibility_is_applied_before_candidate_ranking() -> None:
         )
         _support(connection, "grounded", "flavors", "SPICY", 0.8)
         _support(connection, "without-wiki", "flavors", "SPICY", 1.0)
-        connection.execute(
-            "DELETE FROM knowledge_chunk WHERE concept_id='without-wiki'"
-        )
-        connection.execute(
-            "DELETE FROM menu_wiki_eligibility WHERE menu_id='menu-without-wiki'"
-        )
+        connection.execute("DELETE FROM knowledge_chunk WHERE concept_id='without-wiki'")
+        connection.execute("DELETE FROM menu_wiki_eligibility WHERE menu_id='menu-without-wiki'")
 
         query = _query(
             RecommendationCriteriaV2(flavors=["SPICY"], max_spice_level=5),
@@ -363,9 +422,7 @@ def test_v3_price_spice_and_synthetic_dietary_filters(
 
         # One otherwise matching row fails the v3 price gate and another fails
         # both synthetic dietary switches.
-        connection.execute(
-            "UPDATE menu SET price=30000 WHERE menu_id='menu-price-blocked'"
-        )
+        connection.execute("UPDATE menu SET price=30000 WHERE menu_id='menu-price-blocked'")
 
         criteria = RecommendationCriteriaV2.model_validate(
             {

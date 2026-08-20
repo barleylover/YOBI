@@ -372,6 +372,16 @@ class YobiRepository(Protocol):
         model_id: str,
     ) -> None: ...
 
+    def save_menu_runtime_localizations(
+        self,
+        session_id: str,
+        menu_id: str,
+        localized_title: str,
+        localized_source_description: str,
+        model_id: str,
+        prompt_version: str,
+    ) -> None: ...
+
     def list_merchant_menu_presentations(
         self,
         session_id: str,
@@ -383,13 +393,9 @@ class YobiRepository(Protocol):
         self, session_id: str, presentation: MerchantMenuPresentation
     ) -> None: ...
 
-    def get_menu_presentation_cache(
-        self, cache_key: str
-    ) -> MenuPresentationCacheEntry | None: ...
+    def get_menu_presentation_cache(self, cache_key: str) -> MenuPresentationCacheEntry | None: ...
 
-    def save_menu_presentation_cache_entry(
-        self, entry: MenuPresentationCacheEntry
-    ) -> None: ...
+    def save_menu_presentation_cache_entry(self, entry: MenuPresentationCacheEntry) -> None: ...
 
     def acquire_menu_presentation_lease(
         self,

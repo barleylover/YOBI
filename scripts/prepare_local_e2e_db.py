@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Prepare an isolated SQLite database for browser journeys.
 
-This helper never touches Oracle or calls a model.  It copies the checked local
+This helper never touches Oracle or calls a model. It copies the checked local
 fixture database, applies additive migrations and installs a deterministic
-synthetic-enrichment release. EN/JA menu names are deliberately marked
-``LOCAL_E2E_FIXTURE``; options and YOGIYO descriptions use the same deterministic
-Codex offline localizers as the future additive production data load.
+synthetic-enrichment release. Runtime presentation and option translations are
+cache-aside in production, so this fixture deliberately starts with empty caches.
 """
 
 from __future__ import annotations
@@ -34,21 +33,6 @@ from build_synthetic_enrichment_release import (
 )
 from build_synthetic_enrichment_release import (
     _load_sqlite_inputs,
-)
-from generate_static_menu_descriptions import (
-    _apply_sqlite as _apply_description_sqlite,
-)
-from generate_static_menu_descriptions import (
-    _rows_for_sources as _description_rows_for_sources,
-)
-from generate_static_menu_descriptions import (
-    _sqlite_sources as _description_sources,
-)
-from generate_static_menu_descriptions import (
-    _validate as _validate_description_rows,
-)
-from generate_static_option_localizations import (
-    _apply_sqlite as _apply_option_localizations_sqlite,
 )
 
 
@@ -139,24 +123,10 @@ def main() -> None:
         manifest=manifest,
         activate=False,
     )
-    localization_count = _install_localization_fixtures(args.destination, args.release_id)
-    option_localization_result = _apply_option_localizations_sqlite(
-        args.destination,
-        args.release_id,
-        activate=False,
+    localization_count = _install_localization_fixtures(
+        args.destination, args.release_id
     )
-    release_manifest = str(option_localization_result["manifest_sha256"])
-    description_sources = _description_sources(args.destination, args.release_id)
-    description_rows = _description_rows_for_sources(description_sources)
-    description_counts = _validate_description_rows(
-        description_sources,
-        description_rows,
-    )
-    description_before, description_after, description_count = _apply_description_sqlite(
-        args.destination,
-        args.release_id,
-        description_rows,
-    )
+    release_manifest = manifest
     second_before, second_after = _apply_enrichment_sqlite(
         args.destination,
         release_id=args.release_id,
@@ -167,18 +137,17 @@ def main() -> None:
         manifest=release_manifest,
         activate=True,
     )
-    if len(
-        {
-            first_before,
-            first_after,
-            option_localization_result["protected_base_fingerprint_before"],
-            option_localization_result["protected_base_fingerprint_after"],
-            description_before,
-            description_after,
-            second_before,
-            second_after,
-        }
-    ) != 1:
+    if (
+        len(
+            {
+                first_before,
+                first_after,
+                second_before,
+                second_after,
+            }
+        )
+        != 1
+    ):
         raise RuntimeError("LOCAL_E2E_PROTECTED_BASE_TABLES_CHANGED")
 
     print(
@@ -188,14 +157,9 @@ def main() -> None:
                 "manifest_sha256": release_manifest,
                 "eligible_menus": len(menus),
                 "localization_fixtures": localization_count,
-                "option_group_localizations": option_localization_result[
-                    "localization_counts"
-                ]["option_group"],
-                "option_item_localizations": option_localization_result[
-                    "localization_counts"
-                ]["option_item"],
-                "source_description_menus": description_counts["source_menus"],
-                "source_description_localizations": description_count,
+                "option_group_localizations": 0,
+                "option_item_localizations": 0,
+                "source_description_localizations": 0,
                 "protected_base_fingerprint": first_before,
                 "active": True,
             },

@@ -158,9 +158,11 @@ class StructuredRecommendationService:
             raise ValueError(blocked)
         record = self.repository.save_recommendation_criteria(session.session_id, commit)
         metric = self._preference_selection_metrics.pop(session.session_id, None)
-        selected_option_count = sum(
-            len(values) for values in commit.criteria.subjective_groups().values()
-        ) + len(commit.criteria.price_bands) + int(commit.criteria.price_range_krw is not None)
+        selected_option_count = (
+            sum(len(values) for values in commit.criteria.subjective_groups().values())
+            + len(commit.criteria.price_bands)
+            + int(commit.criteria.price_range_krw is not None)
+        )
         log_event(
             logging.getLogger("yobi"),
             event="recommendation_preference_committed",
@@ -404,15 +406,10 @@ class StructuredRecommendationService:
             request.request_id,
             evidence_pool,
         )
-        if (
-            dispatched.status is not RecommendationRequestStatus.DISPATCHED
-            or dispatched.duplicate
-        ):
+        if dispatched.status is not RecommendationRequestStatus.DISPATCHED or dispatched.duplicate:
             return self._batch_from_record(dispatched)
 
-        display_locale, _display_language = _effective_display_language(
-            profile.preferred_language
-        )
+        display_locale, _display_language = _effective_display_language(profile.preferred_language)
         # Selection must be identical for equivalent criteria regardless of
         # nationality/language. Visitor context is consumed only by presentation.
         soft_profile_context: dict[str, Any] = {}
@@ -475,19 +472,14 @@ class StructuredRecommendationService:
             provider_metrics = generated.provider_metrics
             if generated.status is RecommendationGenerationStatus.NO_MATCH:
                 raise ValueError("GENERATOR_NO_MATCH_NOT_AUTHORIZED")
-            selected_pool = {
-                item.menu.menu_id: item for item in evidence_pool
-            }
-            selected_evidence = [
-                selected_pool[item.menu_id] for item in generated.recommendations
-            ]
+            selected_pool = {item.menu.menu_id: item for item in evidence_pool}
+            selected_evidence = [selected_pool[item.menu_id] for item in generated.recommendations]
             presentations = self.presentation_service.present_selected(
                 selected_evidence,
+                session_id=session.session_id,
                 language_code=display_locale,
                 country_code=profile.country_code or "ZZ",
-                on_provider_attempt=lambda *args: record_provider_attempt(
-                    "PRESENTATION", *args
-                ),
+                on_provider_attempt=lambda *args: record_provider_attempt("PRESENTATION", *args),
             )
             result_json = self._validated_result_payload(
                 generated,
@@ -840,9 +832,7 @@ class StructuredRecommendationService:
         recommendations = list((record.result_json or {}).get("recommendations", []))
         if not 2 <= len(recommendations) <= 3:
             raise ValueError("RECOMMENDATION_COMPARISON_REQUIRES_TWO_MENUS")
-        _display_locale, display_language = _effective_display_language(
-            profile.preferred_language
-        )
+        _display_locale, display_language = _effective_display_language(profile.preferred_language)
         copy = localized_recommendation_fallback_copy(display_language)
         evidence_items = [
             self._comparison_evidence(item, display_language) for item in recommendations
@@ -1203,9 +1193,7 @@ class StructuredRecommendationService:
                     "menu": item.menu.model_copy(
                         update={"localized_title": localized_title}
                     ).model_dump(mode="json"),
-                    "title": (
-                        localized_title
-                    ),
+                    "title": (localized_title),
                     "selection_reason": copy.search_selection_reason,
                     "description": description or item.menu.description,
                     "localized_title": localized_title,
@@ -1213,6 +1201,7 @@ class StructuredRecommendationService:
                         locale,
                         title_ko=item.menu.name_ko,
                         localized_title=localized_title,
+                        components=item.menu_components,
                     ),
                     "yobi_short_explanation": presentation_copy.short_explanation,
                     "yobi_long_explanation": presentation_copy.long_explanation,

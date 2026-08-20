@@ -35,9 +35,8 @@ class Settings(BaseSettings):
     )
     menu_localization_model: str = "xai.grok-4.3"
     structured_recommendation_max_output_tokens: int = Field(default=2048, ge=64)
-    structured_recommendation_max_concurrent_requests: int = Field(
-        default=2, ge=1, le=8
-    )
+    menu_presentation_max_output_tokens: int = Field(default=4096, ge=256)
+    structured_recommendation_max_concurrent_requests: int = Field(default=2, ge=1, le=8)
     genai_provider: Literal["oci"] = "oci"
     oci_genai_serving_mode: Literal["on_demand", "dedicated"] = "on_demand"
     oci_genai_endpoint_id: str = ""
@@ -75,8 +74,8 @@ class Settings(BaseSettings):
     llm_max_tool_calls_per_response: int = Field(default=4, ge=1, le=14)
     tool_call_max_steps: int = Field(default=6, ge=1, le=12)
     recommendation_prompt_version: str = "yobi-structured-rag-v3-server-wiki-binding"
-    menu_presentation_prompt_version: str = "yobi-menu-presentation-v2-grounded-source"
-    menu_presentation_schema_version: str = "2"
+    menu_presentation_prompt_version: str = "yobi-menu-presentation-v4-lazy-localized"
+    menu_presentation_schema_version: str = "4"
     menu_presentation_wait_seconds: float = Field(default=10.0, ge=0.0, le=30.0)
     menu_presentation_poll_seconds: float = Field(default=0.25, ge=0.05, le=2.0)
     recommendation_raw_hits_per_value: int = Field(default=20, ge=4, le=100)

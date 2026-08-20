@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from time import monotonic
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 from app.country_spice_examples import effective_language, representative_dish
@@ -126,7 +126,7 @@ from app.knowledge.menu_features import MEMBERSHIP_EXTRACTOR_VERSION
 from app.knowledge.menu_features import (
     feature_manifest_sha256 as menu_feature_manifest_sha256,
 )
-from app.knowledge.passage_ranking import rank_wiki_passages
+from app.knowledge.passage_ranking import rank_component_wiki_passages
 from app.knowledge.preference_support import (
     REVIEWED_CUISINE_ORIGIN_CODES,
     SUPPORT_MANIFEST_FIELDS,
@@ -843,8 +843,7 @@ class SQLiteYobiRepository:
             ),
         )
         connection.execute(
-            "UPDATE recommendation_release_family SET status='ACTIVE' "
-            "WHERE release_family_id=?",
+            "UPDATE recommendation_release_family SET status='ACTIVE' WHERE release_family_id=?",
             (active_family_id,),
         )
         connection.execute(
@@ -2362,9 +2361,7 @@ class SQLiteYobiRepository:
             source_text=str(row["source_text"]),
             source_language=str(row["source_language"]),
             korean_text=str(row["korean_text"]) if row["korean_text"] else None,
-            back_translation=(
-                str(row["back_translation"]) if row["back_translation"] else None
-            ),
+            back_translation=(str(row["back_translation"]) if row["back_translation"] else None),
             model_id=str(row["model_id"]),
             status=cast(Any, str(row["status"])),
             error_code=str(row["error_code"]) if row["error_code"] else None,
@@ -3754,8 +3751,15 @@ class SQLiteYobiRepository:
         rows = connection.execute(
             f"""
             SELECT membership.menu_id,chunk.chunk_id,chunk.content,chunk.facet,
-                   closure.depth,chunk.chunk_index
+                   closure.depth,chunk.chunk_index,
+                   membership.concept_id AS member_concept_id,
+                   membership.membership_role,
+                   member_concept.canonical_name_ko AS component_name_ko,
+                   member_concept.canonical_name_en AS component_name_en
               FROM menu_concept_membership membership
+              JOIN dish_concept member_concept
+                ON member_concept.release_id=membership.knowledge_release_id
+               AND member_concept.concept_id=membership.concept_id
               JOIN dish_concept_closure closure
                 ON closure.release_id=membership.knowledge_release_id
                AND closure.descendant_concept_id=membership.concept_id
@@ -3783,7 +3787,7 @@ class SQLiteYobiRepository:
         for row in rows:
             grouped[str(row["menu_id"])].append(row)
         return {
-            menu_id: rank_wiki_passages(
+            menu_id: rank_component_wiki_passages(
                 rows,
                 selected_groups=criteria.subjective_groups(),
                 preferred_evidence_ids=preferred_evidence_ids_by_menu.get(menu_id, set()),
@@ -3791,6 +3795,42 @@ class SQLiteYobiRepository:
             )
             for menu_id, rows in grouped.items()
         }
+
+    @staticmethod
+    def _menu_component_rows(
+        connection: sqlite3.Connection,
+        *,
+        release_id: str,
+        menu_ids: list[str],
+    ) -> dict[str, list[dict[str, str]]]:
+        if not menu_ids:
+            return {}
+        placeholders = ",".join("?" for _ in menu_ids)
+        rows = connection.execute(
+            f"""
+            SELECT membership.menu_id,membership.concept_id,
+                   concept.canonical_name_ko,concept.canonical_name_en
+            FROM menu_concept_membership membership
+            JOIN dish_concept concept
+              ON concept.release_id=membership.knowledge_release_id
+             AND concept.concept_id=membership.concept_id
+            WHERE membership.knowledge_release_id=?
+              AND membership.membership_role='COMPONENT'
+              AND membership.menu_id IN ({placeholders})
+            ORDER BY membership.menu_id,membership.concept_id
+            """,
+            (release_id, *menu_ids),
+        ).fetchall()
+        grouped: dict[str, list[dict[str, str]]] = defaultdict(list)
+        for row in rows:
+            grouped[str(row["menu_id"])].append(
+                {
+                    "component_id": str(row["concept_id"]),
+                    "name_ko": str(row["canonical_name_ko"]),
+                    "name_en": str(row["canonical_name_en"]),
+                }
+            )
+        return grouped
 
     def _build_concept_ranked_pool(
         self,
@@ -4123,8 +4163,13 @@ class SQLiteYobiRepository:
             },
             passages_per_menu=passages_per_menu,
         )
+        components_by_menu = self._menu_component_rows(
+            connection,
+            release_id=str(family["knowledge_release_id"]),
+            menu_ids=[decision.menu_id for decision in decisions],
+        )
         if decisions:
-            query_count += 1
+            query_count += 2
         synthetic_by_menu: dict[str, sqlite3.Row] = {}
         synthetic_reviews_by_menu: dict[str, list[dict[str, Any]]] = defaultdict(list)
         synthetic_release_id = (
@@ -4209,6 +4254,13 @@ class SQLiteYobiRepository:
                     evidence_id=str(chunk["chunk_id"]),
                     evidence_type="WIKI_PASSAGE",
                     content=str(chunk["content"]),
+                    component_id=str(chunk["member_concept_id"]),
+                    component_name_ko=str(chunk["component_name_ko"]),
+                    component_name_en=str(chunk["component_name_en"]),
+                    membership_role=cast(
+                        Literal["PRIMARY", "COMPONENT", "SECONDARY"],
+                        str(chunk["membership_role"]),
+                    ),
                 )
                 for chunk in wiki_by_menu.get(decision.menu_id, [])
             ]
@@ -4307,7 +4359,9 @@ class SQLiteYobiRepository:
                     halal_certified=(
                         bool(synthetic["halal_fit"])
                         if synthetic is not None
-                        else True if criteria.dietary_filters.halal_certified_only else None
+                        else True
+                        if criteria.dietary_filters.halal_certified_only
+                        else None
                     ),
                     vegan_status=(
                         "LIKELY_FIT"
@@ -4317,24 +4371,23 @@ class SQLiteYobiRepository:
                     localized_title=(
                         str(synthetic["display_name"])
                         if synthetic is not None and synthetic["display_name"]
-                        else menu.name_ko if presentation_locale == "ko" else menu.name_en
+                        else menu.name_ko
+                        if presentation_locale == "ko"
+                        else menu.name_en
                     ),
                     localized_source_description=(
                         str(synthetic["localized_source_description"])
-                        if synthetic is not None
-                        and synthetic["localized_source_description"]
+                        if synthetic is not None and synthetic["localized_source_description"]
                         else menu.description
                     ),
                     menu_localization_source_hash=(
                         str(synthetic["menu_localization_source_hash"])
-                        if synthetic is not None
-                        and synthetic["menu_localization_source_hash"]
+                        if synthetic is not None and synthetic["menu_localization_source_hash"]
                         else None
                     ),
                     source_description_source_hash=(
                         str(synthetic["source_description_source_hash"])
-                        if synthetic is not None
-                        and synthetic["source_description_source_hash"]
+                        if synthetic is not None and synthetic["source_description_source_hash"]
                         else None
                     ),
                     synthetic_spice_level=(
@@ -4349,11 +4402,11 @@ class SQLiteYobiRepository:
                             "preference_percent": int(synthetic["preference_percent"]),
                             "sample_size": int(synthetic["sample_size"]),
                         }
-                        if synthetic is not None
-                        and synthetic["preference_percent"] is not None
+                        if synthetic is not None and synthetic["preference_percent"] is not None
                         else None
                     ),
                     synthetic_reviews=synthetic_reviews_by_menu.get(decision.menu_id, []),
+                    menu_components=components_by_menu.get(decision.menu_id, []),
                     retrieval_score=decision.score,
                     server_rank=decision.rank,
                     explicit_score=decision.explicit_score,
@@ -4427,10 +4480,7 @@ class SQLiteYobiRepository:
             )
             if criteria.schema_version == "3" and synthetic_release_id is None:
                 unsupported_reasons.append("SYNTHETIC_ENRICHMENT_UNAVAILABLE")
-            if (
-                criteria.schema_version == "2"
-                and criteria.dietary_filters.halal_certified_only
-            ):
+            if criteria.schema_version == "2" and criteria.dietary_filters.halal_certified_only:
                 halal_menus = len(
                     self._valid_halal_certifications_in_connection(
                         connection,
@@ -4819,22 +4869,18 @@ class SQLiteYobiRepository:
         payload["capabilities"] = {
             "halal_certified_only": {
                 "enabled": bool(
-                    synthetic_capability
-                    and int(synthetic_capability["halal_menus"] or 0) >= 3
+                    synthetic_capability and int(synthetic_capability["halal_menus"] or 0) >= 3
                 ),
                 "disabled_reason": None
-                if synthetic_capability
-                and int(synthetic_capability["halal_menus"] or 0) >= 3
+                if synthetic_capability and int(synthetic_capability["halal_menus"] or 0) >= 3
                 else "Enrichment data is not ready.",
             },
             "vegan": {
                 "enabled": bool(
-                    synthetic_capability
-                    and int(synthetic_capability["vegan_menus"] or 0) >= 3
+                    synthetic_capability and int(synthetic_capability["vegan_menus"] or 0) >= 3
                 ),
                 "disabled_reason": None
-                if synthetic_capability
-                and int(synthetic_capability["vegan_menus"] or 0) >= 3
+                if synthetic_capability and int(synthetic_capability["vegan_menus"] or 0) >= 3
                 else "Enrichment data is not ready.",
             },
             "max_spice_level": {
@@ -6135,13 +6181,26 @@ class SQLiteYobiRepository:
             ).fetchall()
             has_more = len(rows) > request.limit
             visible_rows = rows[: request.limit]
+            components_by_menu = self._menu_component_rows(
+                connection,
+                release_id=str(context["knowledge_release_id"]),
+                menu_ids=[str(row["menu_id"]) for row in visible_rows],
+            )
             items: list[MerchantMenuPresentation] = []
             for row in visible_rows:
                 menu_id = str(row["menu_id"])
                 passage_rows = connection.execute(
                     """
-                    SELECT chunk.chunk_id,chunk.content
+                    SELECT chunk.chunk_id,chunk.content,
+                           membership.concept_id AS member_concept_id,
+                           membership.membership_role,
+                           member_concept.canonical_name_ko AS component_name_ko,
+                           member_concept.canonical_name_en AS component_name_en,
+                           chunk.facet,closure.depth,chunk.chunk_index
                     FROM menu_concept_membership membership
+                    JOIN dish_concept member_concept
+                      ON member_concept.release_id=membership.knowledge_release_id
+                     AND member_concept.concept_id=membership.concept_id
                     JOIN dish_concept_closure closure
                       ON closure.release_id=membership.knowledge_release_id
                      AND closure.descendant_concept_id=membership.concept_id
@@ -6156,10 +6215,13 @@ class SQLiteYobiRepository:
                       AND document.source_type='SYNTHETIC_WIKI'
                       AND document.review_status='REVIEWED_DEMO'
                       AND lower(chunk.facet)<>'safety'
-                    ORDER BY closure.depth,chunk.chunk_index,chunk.chunk_id LIMIT 2
+                    ORDER BY closure.depth,chunk.chunk_index,chunk.chunk_id
                     """,
                     (str(context["knowledge_release_id"]), menu_id),
                 ).fetchall()
+                passage_rows = rank_component_wiki_passages(
+                    passage_rows, selected_groups={}, limit=2
+                )
                 reviews = connection.execute(
                     """
                     SELECT review_id,topic,rating,review_text FROM synthetic_review_snippet
@@ -6178,8 +6240,7 @@ class SQLiteYobiRepository:
                     localized_title=title,
                     wiki_passages=passage_texts,
                     reviews=[
-                        {"topic": review["topic"], "rating": review["rating"]}
-                        for review in reviews
+                        {"topic": review["topic"], "rating": review["rating"]} for review in reviews
                     ],
                 )
                 short = presentation_copy.short_explanation
@@ -6222,11 +6283,16 @@ class SQLiteYobiRepository:
                                     "evidence_id": str(passage["chunk_id"]),
                                     "evidence_type": "WIKI_PASSAGE",
                                     "content": str(passage["content"]),
+                                    "component_id": str(passage["member_concept_id"]),
+                                    "component_name_ko": str(passage["component_name_ko"]),
+                                    "component_name_en": str(passage["component_name_en"]),
+                                    "membership_role": str(passage["membership_role"]),
                                 }
                                 for passage in passage_rows
                             ],
                             "menu_facts": [],
                             "synthetic_reviews": [dict(review) for review in reviews],
+                            "menu_components": components_by_menu.get(menu_id, []),
                             "source_identity": {
                                 "menu_localization_source_hash": row[
                                     "menu_localization_source_hash"
@@ -6313,9 +6379,7 @@ class SQLiteYobiRepository:
         row: sqlite3.Row,
     ) -> MenuPresentationCacheEntry:
         created_at = datetime.fromisoformat(str(row["created_at"]))
-        updated_at = datetime.fromisoformat(
-            str(row["updated_at"] or row["created_at"])
-        )
+        updated_at = datetime.fromisoformat(str(row["updated_at"] or row["created_at"]))
         return MenuPresentationCacheEntry(
             cache_key=str(row["cache_key"]),
             release_id=str(row["release_id"]),
@@ -6339,9 +6403,7 @@ class SQLiteYobiRepository:
             updated_at=updated_at,
         )
 
-    def get_menu_presentation_cache(
-        self, cache_key: str
-    ) -> MenuPresentationCacheEntry | None:
+    def get_menu_presentation_cache(self, cache_key: str) -> MenuPresentationCacheEntry | None:
         with self._connection() as connection:
             row = connection.execute(
                 "SELECT * FROM menu_presentation_cache WHERE cache_key=?",
@@ -6349,9 +6411,7 @@ class SQLiteYobiRepository:
             ).fetchone()
         return self._menu_presentation_cache_entry_from_row(row) if row else None
 
-    def save_menu_presentation_cache_entry(
-        self, entry: MenuPresentationCacheEntry
-    ) -> None:
+    def save_menu_presentation_cache_entry(self, entry: MenuPresentationCacheEntry) -> None:
         with self._connection() as connection:
             connection.execute(
                 """
@@ -6409,14 +6469,18 @@ class SQLiteYobiRepository:
                       error_code,created_at,updated_at
                     ) VALUES (?,?, 'GENERATING',?,NULL,1,NULL,?,?)
                     """,
-                    (cache_key, owner_token, expires_at.isoformat(), now.isoformat(), now.isoformat()),
+                    (
+                        cache_key,
+                        owner_token,
+                        expires_at.isoformat(),
+                        now.isoformat(),
+                        now.isoformat(),
+                    ),
                 )
                 return True
             current_expiry = datetime.fromisoformat(str(row["expires_at"]))
             retry_after = (
-                datetime.fromisoformat(str(row["retry_after"]))
-                if row["retry_after"]
-                else None
+                datetime.fromisoformat(str(row["retry_after"])) if row["retry_after"] else None
             )
             claimable = (
                 str(row["owner_token"]) == owner_token
@@ -7640,6 +7704,98 @@ class SQLiteYobiRepository:
                     ),
                 )
 
+    def save_menu_runtime_localizations(
+        self,
+        session_id: str,
+        menu_id: str,
+        localized_title: str,
+        localized_source_description: str,
+        model_id: str,
+        prompt_version: str,
+    ) -> None:
+        with self._connection() as connection:
+            context = connection.execute(
+                """
+                SELECT profile.preferred_language,
+                       family.synthetic_enrichment_release_id,
+                       menu.name_ko,menu.description
+                FROM chat_session session
+                JOIN user_profile profile ON profile.profile_id=session.profile_id
+                JOIN recommendation_runtime_state state ON state.state_key='ACTIVE'
+                JOIN recommendation_release_family family
+                  ON family.release_family_id=state.active_release_family_id
+                JOIN menu ON menu.menu_id=?
+                WHERE session.session_id=?
+                """,
+                (menu_id, session_id),
+            ).fetchone()
+            if context is None or not context["synthetic_enrichment_release_id"]:
+                raise RuntimeError("SYNTHETIC_ENRICHMENT_UNAVAILABLE")
+            requested = normalize_preference_locale(str(context["preferred_language"]))
+            language_code = requested if requested in {"ko", "ja"} else "en"
+            release_id = str(context["synthetic_enrichment_release_id"])
+            generated_at = _now()
+            title_source_hash = hashlib.sha256(
+                json.dumps(
+                    [context["name_ko"], language_code, prompt_version],
+                    ensure_ascii=False,
+                ).encode()
+            ).hexdigest()
+            connection.execute(
+                """
+                INSERT INTO menu_localization(
+                  release_id,menu_id,language_code,display_name,model_id,prompt_version,
+                  wiki_evidence_ids_json,source_hash,validation_status,generated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(release_id,menu_id,language_code) DO UPDATE SET
+                  display_name=excluded.display_name,model_id=excluded.model_id,
+                  prompt_version=excluded.prompt_version,source_hash=excluded.source_hash,
+                  validation_status='VALID',generated_at=excluded.generated_at
+                """,
+                (
+                    release_id,
+                    menu_id,
+                    language_code,
+                    localized_title,
+                    model_id,
+                    prompt_version,
+                    "[]",
+                    title_source_hash,
+                    "VALID",
+                    generated_at,
+                ),
+            )
+            if str(context["description"] or ""):
+                description_source_hash = hashlib.sha256(
+                    json.dumps(
+                        [context["description"], language_code, prompt_version],
+                        ensure_ascii=False,
+                    ).encode()
+                ).hexdigest()
+                connection.execute(
+                    """
+                    INSERT INTO menu_source_description_localization(
+                      release_id,menu_id,language_code,description_text,model_id,
+                      prompt_version,source_hash,validation_status,generated_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(release_id,menu_id,language_code) DO UPDATE SET
+                      description_text=excluded.description_text,model_id=excluded.model_id,
+                      prompt_version=excluded.prompt_version,source_hash=excluded.source_hash,
+                      validation_status='VALID',generated_at=excluded.generated_at
+                    """,
+                    (
+                        release_id,
+                        menu_id,
+                        language_code,
+                        localized_source_description,
+                        model_id,
+                        prompt_version,
+                        description_source_hash,
+                        "VALID",
+                        generated_at,
+                    ),
+                )
+
     def resolve_address(self, text: str, file_hash: str | None = None) -> list[AddressCandidate]:
         normalized = normalize_address_text(text)
         with self._connection() as connection:
@@ -8645,7 +8801,10 @@ class SQLiteYobiRepository:
                 if synthetic_profile is None:
                     raise ValueError("CART_MENU_NO_LONGER_ELIGIBLE")
                 price_range = structured_criteria.price_range_krw
-                if price_range is None or not price_range.min <= int(menu["price"]) <= price_range.max:
+                if (
+                    price_range is None
+                    or not price_range.min <= int(menu["price"]) <= price_range.max
+                ):
                     raise ValueError("CART_MENU_NO_LONGER_ELIGIBLE")
                 spice_level = int(synthetic_profile["spice_level"])
                 spice_matches = (
@@ -8661,8 +8820,7 @@ class SQLiteYobiRepository:
                     structured_criteria.dietary_filters.halal_certified_only
                     and not synthetic_profile["halal_fit"]
                 ) or (
-                    structured_criteria.dietary_filters.vegan
-                    and not synthetic_profile["vegan_fit"]
+                    structured_criteria.dietary_filters.vegan and not synthetic_profile["vegan_fit"]
                 ):
                     raise ValueError("CART_DIETARY_CONFLICT")
             elif structured_criteria is not None:
@@ -9333,8 +9491,7 @@ class SQLiteYobiRepository:
                 membership_menu_count = int(membership_counts[1])
                 wiki_eligible_menu_count = int(
                     connection.execute(
-                        "SELECT COUNT(*) FROM menu_wiki_eligibility "
-                        "WHERE knowledge_release_id=?",
+                        "SELECT COUNT(*) FROM menu_wiki_eligibility WHERE knowledge_release_id=?",
                         (release_id,),
                     ).fetchone()[0]
                 )
@@ -9477,8 +9634,7 @@ class SQLiteYobiRepository:
                     "semantic_embedding_identity_compatible": bool(
                         source_release
                         and active_family_row
-                        and str(source_release["embedding_model"])
-                        == self.embedding_provider.model
+                        and str(source_release["embedding_model"]) == self.embedding_provider.model
                         and int(source_release["embedding_dimension"])
                         == self.embedding_provider.dimension
                         and str(source_release["embedding_version"])
@@ -9513,9 +9669,7 @@ class SQLiteYobiRepository:
                         "SELECT MAX(updated_at) FROM menu"
                     ).fetchone()[0],
                     "knowledge_ready": all(recommendation_checks.values()),
-                    "vector_ready": recommendation_checks[
-                        "semantic_embedding_identity_compatible"
-                    ],
+                    "vector_ready": recommendation_checks["semantic_embedding_identity_compatible"],
                     "semantic_channel_status": (
                         "READY"
                         if recommendation_checks["semantic_embedding_identity_compatible"]
