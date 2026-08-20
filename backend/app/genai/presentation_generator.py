@@ -491,12 +491,14 @@ class MenuPresentationGenerator:
                     source_description, generated.localized_source_description
                 ):
                     raise ValueError("PRESENTATION_SOURCE_DESCRIPTION_PHONETIC_COPY")
+                expected_title = (
+                    str(source["menu_title_ko"])
+                    if target_language == "ko"
+                    else str(source["localized_title"])
+                )
+                if generated.localized_title != expected_title:
+                    raise ValueError("PRESENTATION_LOCALIZED_TITLE_CHANGED")
                 translated_pairs = [
-                    (str(source["menu_title_ko"]), generated.localized_title),
-                    (
-                        str(source.get("source_description_ko") or ""),
-                        generated.localized_source_description,
-                    ),
                     *[(group_sources[key], generated_groups[key]) for key in group_sources],
                     *[(item_sources[key], generated_items[key]) for key in item_sources],
                 ]
@@ -507,6 +509,10 @@ class MenuPresentationGenerator:
                         raise ValueError("PRESENTATION_KOREAN_SOURCE_CHANGED")
                     if target_language != "ko" and re.search(r"[가-힣]", translated_text):
                         raise ValueError("PRESENTATION_TRANSLATION_HANGUL_REMAINS")
+                if not set(_number_tokens(generated.localized_source_description)) <= set(
+                    _number_tokens(source_description)
+                ):
+                    raise ValueError("PRESENTATION_SOURCE_DESCRIPTION_NUMBER_ADDED")
                 if target_language != "ko" and any(
                     not _option_control_meaning_preserved(source_text, target_text, target_language)
                     for source_text, target_text in (
@@ -621,23 +627,23 @@ once. Never select, remove, add, reorder, or rank menus.
 
 Translate and write each field according to its display purpose:
 
-- localized_title is identity copy. Translate the Korean listing title faithfully and compactly.
-  Preserve brands, quantities, set composition, ingredient names, spice labels, and preparation
-  words. Do not summarize or add marketing language. Romanize only an established Korean dish or
-  brand name that genuinely has no natural translation; translate all ordinary Korean words by
-  meaning. Never turn an entire sentence or option into phonetic Korean written in Latin letters.
+- localized_title is identity copy. Copy the supplied localized_title exactly, character for
+  character. It was translated and validated before this request; do not retranslate, paraphrase,
+  romanize, punctuate, or otherwise alter it.
 - localized_subtitle is explanatory copy. Paraphrase the actual menu composition in one short,
   foreign-visitor-friendly phrase. It may explain an unfamiliar term such as nakji as small
   octopus when the title or restaurant description supports that meaning, but must add no facts.
 - localized_source_description is a natural translation of the YOGIYO restaurant description.
   Preserve its promotional tone, sentence meaning, quantities, cautions, and uncertainty, but do
   not transliterate ordinary prose, summarize it, or introduce claims. Return an empty string when
-  the Korean source description is empty.
+  the Korean source description is empty. A number may be written naturally as a word, but never
+  add a numeric quantity that is absent from the Korean source.
 - option_group_localizations and option_item_localizations are order-control copy, not creative
   copy. Translate literally enough that selecting the option produces the same order. Preserve
   every object_id, number, unit, size, inclusion/removal, negation, required/optional implication,
   doneness, spice level, and extra-charge meaning. Prefer natural target-language menu wording,
-  but never paraphrase away an operational distinction. Brand names may stay as brands.
+  but never paraphrase away an operational distinction. Copy every Arabic digit sequence exactly
+  instead of spelling it as a word. Brand names may stay as brands.
 
 Prefer explicit ingredients in the menu title and restaurant description over a generic Wiki
 family description. Use Wiki passages to understand the general dish, not to overwrite this

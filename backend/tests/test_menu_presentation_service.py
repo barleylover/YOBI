@@ -294,7 +294,7 @@ def _generated_payload(menu_ids: list[str] | None = None) -> dict[str, Any]:
         "items": [
             {
                 "menu_id": menu_id,
-                "localized_title": f"Tteokbokki {menu_id}",
+                "localized_title": "Tteokbokki",
                 "localized_subtitle": "Chewy Korean rice cakes in sauce",
                 "localized_source_description": "Natural restaurant description.",
                 "yobi_short_explanation": (
@@ -375,7 +375,7 @@ def test_presentation_translates_fields_by_purpose_and_caches_options() -> None:
     payload = _generated_payload()
     payload["items"][0].update(
         {
-            "localized_title": "Spicy rice cakes menu-1",
+            "localized_title": "Tteokbokki",
             "localized_subtitle": "Chewy rice cakes in a spicy Korean sauce",
             "localized_source_description": "Fresh rice cakes cooked to order.",
             "option_group_localizations": [
@@ -408,7 +408,7 @@ def test_presentation_translates_fields_by_purpose_and_caches_options() -> None:
 
     page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
 
-    assert page.items[0].localized_title == "Spicy rice cakes menu-1"
+    assert page.items[0].localized_title == "Tteokbokki"
     assert page.items[0].source_description == "Fresh rice cakes cooked to order."
     assert repository.saved_option_localizations == [
         (
@@ -420,7 +420,7 @@ def test_presentation_translates_fields_by_purpose_and_caches_options() -> None:
         )
     ]
     assert repository.saved_menu_localizations[0][2:4] == (
-        "Spicy rice cakes menu-1",
+        "Tteokbokki",
         "Fresh rice cakes cooked to order.",
     )
     assert len(repository.cache) == 1
@@ -621,7 +621,7 @@ def test_nakji_fallback_waits_for_grounded_presentation_translation() -> None:
 
 def test_partial_cache_hit_batches_only_missing_presentations() -> None:
     first = _presentation("menu-1")
-    second = _presentation("menu-2", localized_title="Rabokki")
+    second = _presentation("menu-2")
     repository = PresentationRepository(MerchantMenuPresentationPage(items=[first, second]))
     provider = PresentationProvider()
     service = MenuPresentationService(
