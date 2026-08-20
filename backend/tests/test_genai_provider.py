@@ -54,7 +54,7 @@ def test_on_demand_provider_preserves_legacy_model_request_and_capabilities() ->
     assert provider.capabilities.client_managed_continuation is True
     assert provider.capabilities.server_managed_continuation is False
     assert provider.capabilities.max_input_tokens == 131072
-    assert provider.capabilities.max_output_tokens == 4096
+    assert provider.capabilities.max_output_tokens == 8192
     assert provider.capabilities.max_tools_per_request == 4
     assert provider.capabilities.max_tool_calls_per_response == 4
 
@@ -327,7 +327,7 @@ def test_required_genai_configuration_fails_closed_without_breaking_local_demo()
     assert genai_configuration_errors(Settings()) == []
     assert Settings().structured_recommendation_model == "xai.grok-4.3"
     assert Settings().structured_recommendation_max_output_tokens == 2048
-    assert Settings().menu_presentation_max_output_tokens == 4096
+    assert Settings().menu_presentation_max_output_tokens == 8192
     assert Settings().structured_recommendation_max_concurrent_requests == 2
 
     production_errors = genai_configuration_errors(Settings(app_env="production"))

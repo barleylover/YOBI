@@ -96,7 +96,7 @@ emit_runtime_env() {
   printf 'RECOMMENDATION_LLM_PASSAGES_PER_MENU="2"\n'
   printf 'RECOMMENDATION_LLM_SELECTION_ENABLED="true"\n'
   printf 'OCI_GENAI_MAX_INPUT_TOKENS="131072"\n'
-  printf 'OCI_GENAI_MAX_OUTPUT_TOKENS="4096"\n'
+  printf 'OCI_GENAI_MAX_OUTPUT_TOKENS="8192"\n'
   printf 'OCI_EMBED_MODEL="cohere.embed-v4.0"\n'
   printf 'OCI_EMBED_DIMENSION="1536"\n'
   printf 'OCI_EMBED_AUTH="instance_principal"\n'

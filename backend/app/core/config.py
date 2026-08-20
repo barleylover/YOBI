@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     )
     menu_localization_model: str = "xai.grok-4.3"
     structured_recommendation_max_output_tokens: int = Field(default=2048, ge=64)
-    menu_presentation_max_output_tokens: int = Field(default=4096, ge=256)
+    menu_presentation_max_output_tokens: int = Field(default=8192, ge=256)
     structured_recommendation_max_concurrent_requests: int = Field(default=2, ge=1, le=8)
     genai_provider: Literal["oci"] = "oci"
     oci_genai_serving_mode: Literal["on_demand", "dedicated"] = "on_demand"
@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     # configured OCI model/endpoint is expected to support, not advertised model
     # headline limits. Operators must lower them for a more restrictive endpoint.
     oci_genai_max_input_tokens: int = Field(default=131072, ge=512)
-    oci_genai_max_output_tokens: int = Field(default=4096, ge=64)
+    oci_genai_max_output_tokens: int = Field(default=8192, ge=64)
     oci_genai_max_tools_per_request: int = Field(default=4, ge=1, le=14)
     oci_genai_max_tool_calls_per_response: int = Field(default=4, ge=1, le=14)
     genai_prompt_profile: Literal["yobi-grounded-v1"] = "yobi-grounded-v1"

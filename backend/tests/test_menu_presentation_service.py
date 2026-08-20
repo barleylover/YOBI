@@ -153,7 +153,7 @@ class PresentationProvider:
         client_managed_continuation=True,
         server_managed_continuation=False,
         max_input_tokens=32_768,
-        max_output_tokens=4_096,
+        max_output_tokens=8_192,
         max_tools_per_request=4,
         max_tool_calls_per_response=4,
     )
@@ -536,8 +536,9 @@ def test_invalid_grounding_contract_keeps_deterministic_copy_without_fallback() 
     assert provider.calls == ["xai.grok-4.3"]
     assert page.items[0].model_dump(mode="json") == original.model_copy(
         update={
-            "localized_title": "떡볶이 menu-1",
-            "localized_subtitle": "떡볶이 menu-1",
+            "localized_title": "Tteokbokki",
+            "localized_subtitle": "Tteokbokki",
+            "source_description": "",
         }
     ).model_dump(mode="json")
     assert repository.cache == {}
@@ -721,8 +722,9 @@ def test_cache_read_failure_returns_selected_menu_with_deterministic_copy() -> N
 
     assert page.items[0].model_dump(mode="json") == original.model_copy(
         update={
-            "localized_title": "떡볶이 menu-1",
-            "localized_subtitle": "떡볶이 menu-1",
+            "localized_title": "Tteokbokki",
+            "localized_subtitle": "Tteokbokki",
+            "source_description": "",
         }
     ).model_dump(mode="json")
     assert provider.calls == []

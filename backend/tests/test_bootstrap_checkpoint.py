@@ -117,7 +117,7 @@ def test_retry_policy_matches_settings_and_runtime_restore() -> None:
     assert "OCI_COMPARTMENT_ID=" in restore
     assert 'OCI_GENAI_MAX_INPUT_TOKENS="131072"' in restore
     assert 'LLM_MAX_INPUT_TOKENS="131072"' in restore
-    assert 'OCI_GENAI_MAX_OUTPUT_TOKENS="4096"' in restore
+    assert 'OCI_GENAI_MAX_OUTPUT_TOKENS="8192"' in restore
     assert 'LLM_MAX_OUTPUT_TOKENS="4096"' in restore
     assert (
         bootstrap.Settings.model_fields["structured_recommendation_model"].default
@@ -157,7 +157,7 @@ def test_retry_policy_matches_settings_and_runtime_restore() -> None:
 def test_grok_43_release_envelope_is_persisted() -> None:
     assert bootstrap.Settings.model_fields["oci_genai_max_input_tokens"].default == 131072
     assert bootstrap.Settings.model_fields["llm_max_input_tokens"].default == 131072
-    assert bootstrap.Settings.model_fields["oci_genai_max_output_tokens"].default == 4096
+    assert bootstrap.Settings.model_fields["oci_genai_max_output_tokens"].default == 8192
     assert bootstrap.Settings.model_fields["llm_max_output_tokens"].default == 4096
     source = inspect.getsource(bootstrap.persist_runtime_release_policy)
     for key in (

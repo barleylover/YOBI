@@ -36,6 +36,21 @@ def _canonical_hash(value: Any) -> str:
     )
 
 
+def deterministic_localized_title(
+    language_code: str,
+    *,
+    title_ko: str,
+    candidates: list[str | None],
+) -> str:
+    if language_code == "ko":
+        return title_ko
+    for candidate in candidates:
+        value = str(candidate or "").strip()
+        if value and not any("가" <= character <= "힣" for character in value):
+            return value
+    return "韓国料理メニュー" if language_code == "ja" else "Korean menu"
+
+
 def deterministic_localized_subtitle(
     language_code: str,
     *,
@@ -123,6 +138,15 @@ class MenuPresentationService:
         prepared: list[MerchantMenuPresentation] = []
         for item in page.items:
             menu_options = self._get_options(item.menu.menu_id, session_id)
+            fallback_title = deterministic_localized_title(
+                language_code,
+                title_ko=item.menu.name_ko,
+                candidates=[
+                    item.localized_title,
+                    item.menu.localized_title,
+                    item.menu.name_en,
+                ],
+            )
             evidence_map = {
                 **item.evidence_map,
                 "menu_options": self._menu_options_payload(menu_options),
@@ -131,14 +155,16 @@ class MenuPresentationService:
                 self._with_cache_identity(
                     item.model_copy(
                         update={
-                            "localized_title": item.menu.name_ko,
+                            "localized_title": fallback_title,
                             "localized_subtitle": deterministic_localized_subtitle(
                                 language_code,
                                 title_ko=item.menu.name_ko,
-                                localized_title=item.menu.name_ko,
+                                localized_title=fallback_title,
                                 components=list(evidence_map.get("menu_components", [])),
                             ),
-                            "source_description": item.menu.description,
+                            "source_description": (
+                                item.menu.description if language_code == "ko" else ""
+                            ),
                             "evidence_map": evidence_map,
                         }
                     )
@@ -220,8 +246,16 @@ class MenuPresentationService:
         language_code: Literal["ko", "en", "ja"],
         country_code: str,
     ) -> MerchantMenuPresentation:
-        title = item.menu.name_ko
-        source_description = item.menu.description
+        title = deterministic_localized_title(
+            language_code,
+            title_ko=item.menu.name_ko,
+            candidates=[
+                item.localized_title,
+                item.menu.localized_title,
+                item.menu.name_en,
+            ],
+        )
+        source_description = item.menu.description if language_code == "ko" else ""
         wiki_passages = [passage.model_dump(mode="json") for passage in item.wiki_passages]
         menu_facts = [fact.model_dump(mode="json") for fact in item.menu_facts]
         reviews = list(item.synthetic_reviews)
