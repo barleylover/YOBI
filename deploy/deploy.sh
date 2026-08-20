@@ -708,6 +708,7 @@ old_knowledge_release_id="$(run_knowledge_manager get-active)"
 old_recommendation_release_family_id="$(run_recommendation_manager get-active)"
 knowledge_restore_required=true
 recommendation_restore_required=true
+reuse_active_data_releases=false
 catalog_mode="$(sudo env PYTHONPATH="$new_release/backend:$new_release" \
   "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
   "$new_release/scripts/catalog_mode.py" get-mode)"
@@ -718,6 +719,7 @@ if [[ "$catalog_mode" == "external" ]]; then
   # semantic backfill workflow was authorized.
   if [[ "$code_only_provisional" == "true" \
     || "$menu_semantic_backfill" != "true" ]]; then
+    reuse_active_data_releases=true
     [[ -n "$old_knowledge_release_id" \
       && -n "$old_recommendation_release_family_id" ]] \
       || { printf 'Code-only deployment requires active data release pointers.\n' >&2; exit 1; }
@@ -912,7 +914,7 @@ harden_release_tree "$new_release" \
   || { printf 'Activated release permissions are not trusted.\n' >&2; exit 1; }
 sudo ln -sfn "$new_release" /opt/yobi/current
 if [[ "$catalog_mode" == "external" \
-  && "$code_only_provisional" != "true" ]]; then
+  && "$reuse_active_data_releases" != "true" ]]; then
   sudo env PYTHONPATH="$new_release/backend:$new_release" \
     "${runtime_env_runner[@]}" "$new_release/venv/bin/python" \
     "$new_release/scripts/build_external_knowledge_release.py" \

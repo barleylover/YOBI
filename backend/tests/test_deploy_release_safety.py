@@ -49,6 +49,8 @@ def test_release_archive_contains_knowledge_and_all_migrations() -> None:
     assert '"$new_release/scripts/catalog_mode.py" get-mode' in source
     assert '"$new_release/scripts/catalog_mode.py" verify-external' in source
     assert '|| "$menu_semantic_backfill" != "true"' in source
+    assert "reuse_active_data_releases=true" in source
+    assert '&& "$reuse_active_data_releases" != "true"' in source
     assert "including its additive synthetic enrichment pointer" in source
     assert "reusing active knowledge and recommendation family without data rebuilds" in source
     assert '"$new_release/scripts/manage_demo_address.py" --apply' in source
