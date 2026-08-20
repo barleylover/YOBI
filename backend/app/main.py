@@ -391,7 +391,7 @@ def readyz(
                 and current_settings.menu_presentation_model == "xai.grok-4.3"
                 and current_settings.option_localization_model == "xai.grok-4.3"
                 and current_settings.recommendation_llm_passages_per_menu == 2
-                and current_settings.structured_recommendation_max_output_tokens == 2048
+                and current_settings.structured_recommendation_max_output_tokens == 16384
                 and current_settings.menu_presentation_max_output_tokens == 16384
                 and current_settings.option_localization_max_output_tokens == 16384
                 and db.get("recommendation_ready") is True

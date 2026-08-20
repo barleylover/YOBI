@@ -415,7 +415,7 @@ def test_agent_rejects_provider_input_and_tool_limits_before_calling_provider(
 def test_required_genai_configuration_fails_closed_without_breaking_local_demo() -> None:
     assert genai_configuration_errors(Settings()) == []
     assert Settings().structured_recommendation_model == "openai.gpt-oss-120b"
-    assert Settings().structured_recommendation_max_output_tokens == 2048
+    assert Settings().structured_recommendation_max_output_tokens == 16384
     assert Settings().menu_presentation_max_output_tokens == 16384
     assert Settings().structured_recommendation_max_concurrent_requests == 2
 

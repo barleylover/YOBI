@@ -71,7 +71,7 @@ def test_runtime_environment_can_resume_and_upgrade_release_policy(
     assert 'STRUCTURED_RECOMMENDATION_MODEL="openai.gpt-oss-120b"' in persisted
     assert 'MENU_PRESENTATION_MODEL="xai.grok-4.3"' in persisted
     assert 'OPTION_LOCALIZATION_MODEL="xai.grok-4.3"' in persisted
-    assert 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="2048"' in persisted
+    assert 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="16384"' in persisted
     assert 'STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS="2"' in persisted
     assert 'RECOMMENDATION_CANDIDATE_LIMIT="100"' in persisted
     assert 'RECOMMENDATION_LLM_SHORTLIST_LIMIT="15"' in persisted
@@ -133,7 +133,7 @@ def test_retry_policy_matches_settings_and_runtime_restore() -> None:
         bootstrap.Settings.model_fields[
             "structured_recommendation_max_output_tokens"
         ].default
-        == 2048
+        == 16384
     )
     assert (
         bootstrap.Settings.model_fields[
@@ -144,17 +144,17 @@ def test_retry_policy_matches_settings_and_runtime_restore() -> None:
     write_source = inspect.getsource(bootstrap.write_env)
     main_source = inspect.getsource(bootstrap.main)
     assert "STRUCTURED_RECOMMENDATION_MODEL={quote('openai.gpt-oss-120b')}" in write_source
-    assert "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS={quote('2048')}" in write_source
+    assert "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS={quote('16384')}" in write_source
     assert "STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS={quote('2')}" in write_source
     assert '"STRUCTURED_RECOMMENDATION_MODEL": "openai.gpt-oss-120b"' in main_source
-    assert '"STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS": "2048"' in main_source
+    assert '"STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS": "16384"' in main_source
     assert '"STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS": "2"' in main_source
     assert 'STRUCTURED_RECOMMENDATION_MODEL="openai.gpt-oss-120b"' in restore
     assert 'MENU_PRESENTATION_MODEL="xai.grok-4.3"' in restore
     assert 'OPTION_LOCALIZATION_MODEL="xai.grok-4.3"' in restore
     assert 'MENU_PRESENTATION_MAX_OUTPUT_TOKENS="16384"' in restore
     assert 'OPTION_LOCALIZATION_MAX_OUTPUT_TOKENS="16384"' in restore
-    assert 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="2048"' in restore
+    assert 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="16384"' in restore
     assert 'STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS="2"' in restore
     assert 'RECOMMENDATION_CANDIDATE_LIMIT="100"' in restore
     assert 'RECOMMENDATION_LLM_SHORTLIST_LIMIT="15"' in restore

@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     menu_localization_model: str = "xai.grok-4.3"
     menu_presentation_model: str = "xai.grok-4.3"
     option_localization_model: str = "xai.grok-4.3"
-    structured_recommendation_max_output_tokens: int = Field(default=2048, ge=64)
+    structured_recommendation_max_output_tokens: int = Field(default=16384, ge=64)
     menu_presentation_max_output_tokens: int = Field(default=16384, ge=256)
     option_localization_max_output_tokens: int = Field(default=16384, ge=256)
     structured_recommendation_max_concurrent_requests: int = Field(default=2, ge=1, le=8)

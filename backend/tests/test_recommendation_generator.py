@@ -251,7 +251,7 @@ def test_generator_dispatches_once_without_tools_and_allows_bounded_rerank() -> 
     ]
     assert len(provider.calls) == 1
     assert provider.calls[0]["model"] == "openai.gpt-oss-120b"
-    assert provider.calls[0]["max_output_tokens"] == 2048
+    assert provider.calls[0]["max_output_tokens"] == 4096
     assert "tools" not in provider.calls[0]
     instructions = str(provider.calls[0]["instructions"])
     assert "Return the JSON immediately without analysis or preamble." in instructions
@@ -313,7 +313,7 @@ def test_generator_records_actual_usage_and_request_size_without_exposing_it_to_
     assert result.provider_metrics["output_tokens"] == 456
     assert result.provider_metrics["reasoning_tokens"] == 200
     assert result.provider_metrics["request_utf8_bytes"] > 0
-    assert result.provider_metrics["requested_max_output_tokens"] == 2048
+    assert result.provider_metrics["requested_max_output_tokens"] == 4096
     assert "provider_metrics" not in result.model_dump()
 
 
@@ -666,7 +666,7 @@ def test_comparison_uses_structured_model_cap_in_one_dispatch() -> None:
     assert [item.menu_id for item in result.items] == ["dish-a", "dish-b"]
     assert len(provider.calls) == 1
     assert provider.calls[0]["model"] == "openai.gpt-oss-120b"
-    assert provider.calls[0]["max_output_tokens"] == 2048
+    assert provider.calls[0]["max_output_tokens"] == 4096
 
 
 def test_structured_rate_limit_never_retries_or_dispatches_fallback_model() -> None:
@@ -689,7 +689,7 @@ def test_structured_rate_limit_never_retries_or_dispatches_fallback_model() -> N
 
     assert caught.value.code is GenAIErrorCode.RATE_LIMIT
     assert caught.value.safe_metadata["request_utf8_bytes"] > 0
-    assert caught.value.safe_metadata["requested_max_output_tokens"] == 2048
+    assert caught.value.safe_metadata["requested_max_output_tokens"] == 4096
     assert [call["model"] for call in provider.calls] == ["openai.gpt-oss-120b"]
 
 

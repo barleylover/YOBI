@@ -273,7 +273,7 @@ def _settings_errors(settings: Settings) -> list[str]:
         "STRUCTURED_MODEL": settings.structured_recommendation_model
         == "openai.gpt-oss-120b",
         "MAX_OUTPUT_TOKENS": settings.structured_recommendation_max_output_tokens
-        == 2048,
+        == 16384,
         "CANDIDATE_LIMIT": settings.recommendation_candidate_limit == 100,
         "SHORTLIST_LIMIT": settings.recommendation_llm_shortlist_limit == 15,
         "PASSAGES_PER_MENU": settings.recommendation_llm_passages_per_menu == 2,
@@ -509,7 +509,7 @@ def _ready_errors(ready: dict[str, Any]) -> list[str]:
         "CANDIDATE_LIMIT": structured.get("candidate_limit") == 100,
         "SHORTLIST_LIMIT": structured.get("shortlist_limit") == 15,
         "PASSAGES_PER_MENU": structured.get("passages_per_menu") == 2,
-        "MAX_OUTPUT_TOKENS": structured.get("max_output_tokens") == 2048,
+        "MAX_OUTPUT_TOKENS": structured.get("max_output_tokens") == 16384,
         "PRESENTATION_MAX_OUTPUT_TOKENS": structured.get(
             "presentation_max_output_tokens"
         )

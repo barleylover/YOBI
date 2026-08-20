@@ -135,7 +135,7 @@ def test_ready_contract_exposes_only_bounded_structured_metadata() -> None:
             "candidate_limit": 100,
             "shortlist_limit": 15,
             "passages_per_menu": 2,
-            "max_output_tokens": 2048,
+            "max_output_tokens": 16384,
             "presentation_max_output_tokens": 16384,
             "option_localization_max_output_tokens": 16384,
             "ranking_policy_version": "yobi-hybrid-rank-v2",
