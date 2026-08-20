@@ -544,7 +544,7 @@ def test_invalid_grounding_contract_keeps_deterministic_copy_without_fallback() 
     assert repository.cache == {}
 
 
-def test_truncated_batch_is_split_and_each_valid_menu_is_cached() -> None:
+def test_invalid_batch_is_not_retried_and_keeps_deterministic_copy() -> None:
     items = [_presentation(f"menu-{index}") for index in range(1, 4)]
     repository = PresentationRepository(MerchantMenuPresentationPage(items=items))
     provider = SplitOnBatchProvider()
@@ -556,15 +556,9 @@ def test_truncated_batch_is_split_and_each_valid_menu_is_cached() -> None:
 
     page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
 
-    assert provider.requested_ids == [
-        ["menu-1", "menu-2", "menu-3"],
-        ["menu-1"],
-        ["menu-2", "menu-3"],
-        ["menu-2"],
-        ["menu-3"],
-    ]
-    assert len(repository.cache) == 3
-    assert all(item.generation_model == "xai.grok-4.3" for item in page.items)
+    assert provider.requested_ids == [["menu-1", "menu-2", "menu-3"]]
+    assert repository.cache == {}
+    assert all(item.generation_model == "DETERMINISTIC_GROUNDED_FALLBACK" for item in page.items)
 
 
 def test_compound_presentation_requires_every_component_id() -> None:

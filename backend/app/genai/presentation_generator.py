@@ -14,9 +14,11 @@ from app.genai.providers import choose_genai_provider
 from app.genai.response_contract import parse_json_object
 
 
-def _sentence_count(value: str) -> int:
+def _bounded_sentences(value: str, *, minimum: int, maximum: int, code: str) -> str:
     parts = [part for part in re.split(r"(?<=[.!?。！？])\s*", value.strip()) if part]
-    return max(1, len(parts))
+    if len(parts) < minimum:
+        raise ValueError(code)
+    return " ".join(parts[:maximum]).strip()
 
 
 def _number_tokens(value: str) -> list[str]:
@@ -191,23 +193,32 @@ class GeneratedMenuPresentation(BaseModel):
     @field_validator("yobi_short_explanation")
     @classmethod
     def validate_short(cls, value: str) -> str:
-        if not 1 <= _sentence_count(value) <= 2:
-            raise ValueError("PRESENTATION_SHORT_SENTENCE_COUNT_INVALID")
-        return value.strip()
+        return _bounded_sentences(
+            value,
+            minimum=1,
+            maximum=2,
+            code="PRESENTATION_SHORT_SENTENCE_COUNT_INVALID",
+        )
 
     @field_validator("yobi_long_explanation")
     @classmethod
     def validate_long(cls, value: str) -> str:
-        if not 3 <= _sentence_count(value) <= 5:
-            raise ValueError("PRESENTATION_LONG_SENTENCE_COUNT_INVALID")
-        return value.strip()
+        return _bounded_sentences(
+            value,
+            minimum=3,
+            maximum=5,
+            code="PRESENTATION_LONG_SENTENCE_COUNT_INVALID",
+        )
 
     @field_validator("review_summary")
     @classmethod
     def validate_reviews(cls, value: str) -> str:
-        if not 2 <= _sentence_count(value) <= 3:
-            raise ValueError("PRESENTATION_REVIEW_SENTENCE_COUNT_INVALID")
-        return value.strip()
+        return _bounded_sentences(
+            value,
+            minimum=2,
+            maximum=3,
+            code="PRESENTATION_REVIEW_SENTENCE_COUNT_INVALID",
+        )
 
 
 class MenuPresentationGeneration(BaseModel):
@@ -377,16 +388,16 @@ class MenuPresentationGenerator:
         if not self.provider.configured or not primary or not self.provider.supports_model(primary):
             raise GenAIProviderError(GenAIErrorCode.PROVIDER_UNAVAILABLE, retryable=False)
 
+        input_payload: dict[str, Any] = {"menus": items}
+        if not self.provider.capabilities.structured_output:
+            input_payload["response_contract"] = MENU_PRESENTATION_JSON_SCHEMA
         request: dict[str, Any] = {
             "instructions": self._instructions(locale),
             "input": [
                 {
                     "role": "user",
                     "content": json.dumps(
-                        {
-                            "menus": items,
-                            "response_contract": MENU_PRESENTATION_JSON_SCHEMA,
-                        },
+                        input_payload,
                         ensure_ascii=False,
                         separators=(",", ":"),
                     ),
@@ -515,8 +526,11 @@ class MenuPresentationGenerator:
                     for item in source.get("synthetic_reviews", [])
                     if isinstance(item, dict) and item.get("review_id")
                 )
-                if not set(generated.used_evidence_ids) <= allowed_evidence:
-                    raise ValueError("PRESENTATION_EVIDENCE_SET_INVALID")
+                generated.used_evidence_ids = [
+                    evidence_id
+                    for evidence_id in generated.used_evidence_ids
+                    if evidence_id in allowed_evidence
+                ]
                 allowed_fields = {
                     "menu_title_ko",
                     "localized_title",
@@ -529,15 +543,17 @@ class MenuPresentationGenerator:
                     "menu_components",
                     "menu_options",
                 }
-                if not set(generated.used_source_fields) <= allowed_fields:
-                    raise ValueError("PRESENTATION_SOURCE_FIELD_INVALID")
+                generated.used_source_fields = [
+                    field for field in generated.used_source_fields if field in allowed_fields
+                ]
                 required_source_fields = {"menu_title_ko"}
                 if source.get("source_description_ko"):
                     required_source_fields.add("source_description_ko")
                 if source.get("menu_options"):
                     required_source_fields.add("menu_options")
-                if not required_source_fields <= set(generated.used_source_fields):
-                    raise ValueError("PRESENTATION_REQUIRED_SOURCE_FIELD_MISSING")
+                generated.used_source_fields = sorted(
+                    set(generated.used_source_fields) | required_source_fields
+                )
                 required_components = {
                     str(component.get("component_id"))
                     for component in source.get("menu_components", [])
@@ -546,12 +562,13 @@ class MenuPresentationGenerator:
                 if set(generated.covered_component_ids) != required_components:
                     raise ValueError("PRESENTATION_COMPONENT_COVERAGE_INVALID")
         except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+            reason_code = self._validation_reason(exc)
             if on_provider_attempt is not None:
                 on_provider_attempt(
                     selected_attempt_no,
                     selected_model,
                     "FAILED",
-                    GenAIErrorCode.GROUNDING_REJECTED.value,
+                    f"{GenAIErrorCode.GROUNDING_REJECTED.value}:{reason_code}",
                     int((monotonic() - selected_started) * 1000),
                     self._usage(response),
                 )
@@ -559,6 +576,8 @@ class MenuPresentationGenerator:
                 GenAIErrorCode.GROUNDING_REJECTED,
                 retryable=False,
                 cause=exc,
+                safe_reason_code=reason_code,
+                safe_reason_stage="PRESENTATION_VALIDATION",
             ) from exc
         if on_provider_attempt is not None:
             on_provider_attempt(
@@ -572,6 +591,27 @@ class MenuPresentationGenerator:
         result._generation_model = selected_model
         result._provider_metrics = self._usage(response)
         return result
+
+    @staticmethod
+    def _validation_reason(exc: BaseException) -> str:
+        if isinstance(exc, json.JSONDecodeError):
+            return "PRESENTATION_JSON_INVALID"
+        if isinstance(exc, ValidationError):
+            errors = exc.errors(include_url=False)
+            if not errors:
+                return "PRESENTATION_SCHEMA_INVALID"
+            first = errors[0]
+            context = first.get("ctx") or {}
+            validator_error = str(context.get("error") or "")
+            match = re.search(r"PRESENTATION_[A-Z0-9_]+", validator_error)
+            if match is not None:
+                return match.group(0)[:100]
+            error_type = str(first.get("type") or "SCHEMA_INVALID").upper()
+            return f"PRESENTATION_SCHEMA_{error_type}"[:100]
+        value = str(exc).strip()
+        if re.fullmatch(r"[A-Z][A-Z0-9_]{2,99}", value):
+            return value
+        return "PRESENTATION_VALIDATION_FAILED"
 
     def _instructions(self, locale: str) -> str:
         return f"""

@@ -17,7 +17,7 @@ from app.domain.models import (
 )
 from app.domain.recommendation_copy import deterministic_presentation_copy
 from app.domain.structured_recommendation import EvidencePoolItem
-from app.genai.contracts import GenAIErrorCode, GenAIProviderError
+from app.genai.contracts import GenAIProviderError
 from app.genai.presentation_generator import MenuPresentationGenerator
 
 
@@ -556,7 +556,7 @@ class MenuPresentationService:
             Callable[[int, str, str, str | None, int, dict[str, int]], None] | None
         ),
     ) -> tuple[dict[str, tuple[Any, str]], dict[str, str]]:
-        """Split a schema-truncated batch without changing model fallback rules."""
+        """Generate one presentation batch without retrying grounding failures."""
 
         try:
             generated = self.generator.generate(
@@ -567,23 +567,7 @@ class MenuPresentationService:
             model = generated.generation_model or "UNKNOWN"
             return ({value.menu_id: (value, model) for value in generated.items}, {})
         except GenAIProviderError as exc:
-            if exc.code is GenAIErrorCode.GROUNDING_REJECTED and len(items) > 1:
-                midpoint = len(items) // 2
-                left_values, left_errors = self._generate_resilient(
-                    items[:midpoint],
-                    locale=locale,
-                    on_provider_attempt=on_provider_attempt,
-                )
-                right_values, right_errors = self._generate_resilient(
-                    items[midpoint:],
-                    locale=locale,
-                    on_provider_attempt=on_provider_attempt,
-                )
-                return (
-                    {**left_values, **right_values},
-                    {**left_errors, **right_errors},
-                )
-            error_code = exc.code.value
+            error_code = exc.safe_reason_code or exc.code.value
         except Exception as exc:
             error_code = str(exc)[:160] or type(exc).__name__.upper()
         return ({}, {item.menu.menu_id: error_code for item in items})
