@@ -380,11 +380,8 @@ class MenuPresentationGenerator:
     ) -> MenuPresentationGeneration:
         if not 1 <= len(items) <= 12:
             raise ValueError("PRESENTATION_BATCH_SIZE_INVALID")
-        primary = self.settings.menu_localization_model.strip()
-        fallback = self.settings.oci_genai_fallback_model.strip()
+        primary = self.settings.menu_presentation_model.strip()
         models = [primary]
-        if fallback and fallback != primary and self.provider.supports_model(fallback):
-            models.append(fallback)
         if not self.provider.configured or not primary or not self.provider.supports_model(primary):
             raise GenAIProviderError(GenAIErrorCode.PROVIDER_UNAVAILABLE, retryable=False)
 
@@ -459,31 +456,8 @@ class MenuPresentationGenerator:
                     "한국어": "ko",
                     "日本語": "ja",
                 }.get(locale, "en")
-                group_sources = {
-                    str(group["option_group_id"]): str(group["name_ko"])
-                    for group in source.get("menu_options", [])
-                }
-                item_sources = {
-                    str(option["option_item_id"]): str(option["name_ko"])
-                    for group in source.get("menu_options", [])
-                    for option in group.get("items", [])
-                }
-                generated_groups = {
-                    value.object_id: value.display_name
-                    for value in generated.option_group_localizations
-                }
-                generated_items = {
-                    value.object_id: value.display_name
-                    for value in generated.option_item_localizations
-                }
-                if set(generated_groups) != set(group_sources):
-                    raise ValueError("PRESENTATION_OPTION_GROUP_SET_INVALID")
-                if set(generated_items) != set(item_sources):
-                    raise ValueError("PRESENTATION_OPTION_ITEM_SET_INVALID")
-                if len(generated.option_group_localizations) != len(generated_groups):
-                    raise ValueError("PRESENTATION_OPTION_GROUP_DUPLICATE")
-                if len(generated.option_item_localizations) != len(generated_items):
-                    raise ValueError("PRESENTATION_OPTION_ITEM_DUPLICATE")
+                if generated.option_group_localizations or generated.option_item_localizations:
+                    raise ValueError("PRESENTATION_OPTIONS_NOT_ALLOWED")
                 source_description = str(source.get("source_description_ko") or "")
                 if bool(source_description) != bool(generated.localized_source_description):
                     raise ValueError("PRESENTATION_SOURCE_DESCRIPTION_PRESENCE_INVALID")
@@ -498,29 +472,10 @@ class MenuPresentationGenerator:
                 )
                 if generated.localized_title != expected_title:
                     raise ValueError("PRESENTATION_LOCALIZED_TITLE_CHANGED")
-                translated_pairs = [
-                    *[(group_sources[key], generated_groups[key]) for key in group_sources],
-                    *[(item_sources[key], generated_items[key]) for key in item_sources],
-                ]
-                for source_text, translated_text in translated_pairs:
-                    if _number_tokens(source_text) != _number_tokens(translated_text):
-                        raise ValueError("PRESENTATION_TRANSLATION_NUMBER_MISMATCH")
-                    if target_language == "ko" and translated_text != source_text:
-                        raise ValueError("PRESENTATION_KOREAN_SOURCE_CHANGED")
-                    if target_language != "ko" and re.search(r"[가-힣]", translated_text):
-                        raise ValueError("PRESENTATION_TRANSLATION_HANGUL_REMAINS")
                 if not set(_number_tokens(generated.localized_source_description)) <= set(
                     _number_tokens(source_description)
                 ):
                     raise ValueError("PRESENTATION_SOURCE_DESCRIPTION_NUMBER_ADDED")
-                if target_language != "ko" and any(
-                    not _option_control_meaning_preserved(source_text, target_text, target_language)
-                    for source_text, target_text in (
-                        *[(group_sources[key], generated_groups[key]) for key in group_sources],
-                        *[(item_sources[key], generated_items[key]) for key in item_sources],
-                    )
-                ):
-                    raise ValueError("PRESENTATION_OPTION_CONTROL_MEANING_LOST")
                 allowed_evidence = {
                     str(item.get("evidence_id"))
                     for field in ("wiki_passages", "menu_facts")
@@ -555,8 +510,6 @@ class MenuPresentationGenerator:
                 required_source_fields = {"menu_title_ko"}
                 if source.get("source_description_ko"):
                     required_source_fields.add("source_description_ko")
-                if source.get("menu_options"):
-                    required_source_fields.add("menu_options")
                 generated.used_source_fields = sorted(
                     set(generated.used_source_fields) | required_source_fields
                 )
@@ -638,12 +591,8 @@ Translate and write each field according to its display purpose:
   not transliterate ordinary prose, summarize it, or introduce claims. Return an empty string when
   the Korean source description is empty. A number may be written naturally as a word, but never
   add a numeric quantity that is absent from the Korean source.
-- option_group_localizations and option_item_localizations are order-control copy, not creative
-  copy. Translate literally enough that selecting the option produces the same order. Preserve
-  every object_id, number, unit, size, inclusion/removal, negation, required/optional implication,
-  doneness, spice level, and extra-charge meaning. Prefer natural target-language menu wording,
-  but never paraphrase away an operational distinction. Copy every Arabic digit sequence exactly
-  instead of spelling it as a word. Brand names may stay as brands.
+- option_group_localizations and option_item_localizations must both be empty arrays. Option
+  translation is handled later, only for the menu the visitor actually chooses.
 
 Prefer explicit ingredients in the menu title and restaurant description over a generic Wiki
 family description. Use Wiki passages to understand the general dish, not to overwrite this

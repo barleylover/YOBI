@@ -37,6 +37,7 @@ from app.dependencies import (
     get_chat_service,
     get_demo_control,
     get_menu_presentation_service,
+    get_option_localization_service,
     get_repository,
     get_restaurant_note_translation_service,
     get_structured_recommendation_service,
@@ -81,6 +82,7 @@ from app.services.address_ocr import AddressCandidateTokenCodec, choose_address_
 from app.services.chat_service import ChatService
 from app.services.demo_control import DemoControl, FailureMode
 from app.services.menu_presentation import MenuPresentationService
+from app.services.option_localization import OptionLocalizationService
 from app.services.restaurant_note_translation import RestaurantNoteTranslationService
 from app.services.structured_recommendation import StructuredRecommendationService
 
@@ -362,11 +364,19 @@ def readyz(
         "structured_recommendation": {
             "grounding_diagnostics_version": GROUNDING_DIAGNOSTICS_VERSION,
             "model_id": current_settings.structured_recommendation_model,
+            "presentation_model_id": current_settings.menu_presentation_model,
+            "option_localization_model_id": current_settings.option_localization_model,
             "selection_enabled": current_settings.recommendation_llm_selection_enabled,
             "candidate_limit": current_settings.recommendation_candidate_limit,
             "shortlist_limit": current_settings.recommendation_llm_shortlist_limit,
             "passages_per_menu": current_settings.recommendation_llm_passages_per_menu,
             "max_output_tokens": current_settings.structured_recommendation_max_output_tokens,
+            "presentation_max_output_tokens": (
+                current_settings.menu_presentation_max_output_tokens
+            ),
+            "option_localization_max_output_tokens": (
+                current_settings.option_localization_max_output_tokens
+            ),
             "ranking_policy_version": db.get("ranking_policy_version"),
             "feature_count": db.get("feature_count", 0),
             "feature_manifest_sha256": db.get("feature_manifest_sha256"),
@@ -376,9 +386,14 @@ def readyz(
             "semantic_vector_ready": db.get("vector_ready") is True,
             "ready": bool(
                 current_settings.recommendation_llm_selection_enabled
-                and current_settings.structured_recommendation_model == "xai.grok-4.3"
+                and current_settings.structured_recommendation_model
+                == "openai.gpt-oss-120b"
+                and current_settings.menu_presentation_model == "xai.grok-4.3"
+                and current_settings.option_localization_model == "xai.grok-4.3"
                 and current_settings.recommendation_llm_passages_per_menu == 2
                 and current_settings.structured_recommendation_max_output_tokens == 2048
+                and current_settings.menu_presentation_max_output_tokens == 16384
+                and current_settings.option_localization_max_output_tokens == 16384
                 and db.get("recommendation_ready") is True
             ),
         },
@@ -911,12 +926,15 @@ def get_menu_options(
     menu_id: str,
     session_id: str | None = Query(default=None),
     repository: YobiRepository = Depends(get_repository),
+    option_localization_service: OptionLocalizationService = Depends(
+        get_option_localization_service
+    ),
 ) -> list[dict[str, Any]]:
     if session_id is not None:
         _require_session(repository, session_id)
     return [
         group.model_dump(mode="json")
-        for group in repository.get_options(menu_id, session_id=session_id)
+        for group in option_localization_service.get_options(menu_id, session_id)
     ]
 
 

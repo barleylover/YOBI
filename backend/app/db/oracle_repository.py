@@ -6628,7 +6628,21 @@ class OracleYobiRepository:
         menu_id: str,
         group_ids: list[str],
         item_ids: list[str],
+        prompt_version: str,
     ) -> bool:
+        localized_groups, localized_items = self.load_option_localizations(
+            session_id,
+            menu_id,
+            prompt_version,
+        )
+        return set(localized_groups) == set(group_ids) and set(localized_items) == set(item_ids)
+
+    def load_option_localizations(
+        self,
+        session_id: str,
+        menu_id: str,
+        prompt_version: str,
+    ) -> tuple[dict[str, str], dict[str, str]]:
         with self.pool.connection() as connection:
             cursor = connection.cursor()
             cursor.execute(
@@ -6645,42 +6659,46 @@ class OracleYobiRepository:
             )
             context = _row(cursor)
             if context is None or not context.get("synthetic_enrichment_release_id"):
-                return False
+                return {}, {}
             requested = normalize_preference_locale(str(context["preferred_language"]))
             language_code = requested if requested in {"ko", "ja"} else "en"
             cursor.execute(
                 """
-                SELECT localization.option_group_id
-                FROM option_group_localization localization
+                SELECT localization.option_group_id,localization.display_name
+                FROM runtime_option_group_localization localization
                 JOIN menu_option_group groups
                   ON groups.option_group_id=localization.option_group_id
                 WHERE localization.release_id=:release_id
                   AND localization.language_code=:language_code
+                  AND localization.prompt_version=:prompt_version
                   AND groups.menu_id=:menu_id
                 """,
                 release_id=str(context["synthetic_enrichment_release_id"]),
                 language_code=language_code,
+                prompt_version=prompt_version,
                 menu_id=menu_id,
             )
-            localized_groups = {str(row[0]) for row in cursor.fetchall()}
+            localized_groups = {str(row[0]): str(row[1]) for row in cursor.fetchall()}
             cursor.execute(
                 """
-                SELECT localization.option_item_id
-                FROM option_item_localization localization
+                SELECT localization.option_item_id,localization.display_name
+                FROM runtime_option_item_localization localization
                 JOIN menu_option_item item
                   ON item.option_item_id=localization.option_item_id
                 JOIN menu_option_group groups
                   ON groups.option_group_id=item.option_group_id
                 WHERE localization.release_id=:release_id
                   AND localization.language_code=:language_code
+                  AND localization.prompt_version=:prompt_version
                   AND groups.menu_id=:menu_id
                 """,
                 release_id=str(context["synthetic_enrichment_release_id"]),
                 language_code=language_code,
+                prompt_version=prompt_version,
                 menu_id=menu_id,
             )
-            localized_items = {str(row[0]) for row in cursor.fetchall()}
-        return localized_groups == set(group_ids) and localized_items == set(item_ids)
+            localized_items = {str(row[0]): str(row[1]) for row in cursor.fetchall()}
+        return localized_groups, localized_items
 
     def save_option_localizations(
         self,
@@ -6689,6 +6707,7 @@ class OracleYobiRepository:
         group_names: dict[str, str],
         item_names: dict[str, str],
         model_id: str,
+        prompt_version: str,
     ) -> None:
         with self.pool.connection() as connection:
             cursor = connection.cursor()
@@ -6743,23 +6762,25 @@ class OracleYobiRepository:
                 ).hexdigest()
                 cursor.execute(
                     """
-                    MERGE INTO option_group_localization target
+                    MERGE INTO runtime_option_group_localization target
                     USING (
                       SELECT :release_id release_id,:object_id option_group_id,
                              :language_code language_code FROM dual
                     ) source
                     ON (target.release_id=source.release_id
                         AND target.option_group_id=source.option_group_id
-                        AND target.language_code=source.language_code)
+                        AND target.language_code=source.language_code
+                        AND target.prompt_version=:prompt_version)
                     WHEN MATCHED THEN UPDATE SET
                       display_name=:display_name,model_id=:model_id,
-                      source_hash=:source_hash,generated_at=:generated_at
+                      prompt_version=:prompt_version,source_hash=:source_hash,
+                      generated_at=:generated_at
                     WHEN NOT MATCHED THEN INSERT (
                       release_id,option_group_id,language_code,display_name,
-                      model_id,source_hash,generated_at
+                      model_id,prompt_version,source_hash,generated_at
                     ) VALUES (
                       :release_id,:object_id,:language_code,:display_name,
-                      :model_id,:source_hash,:generated_at
+                      :model_id,:prompt_version,:source_hash,:generated_at
                     )
                     """,
                     release_id=release_id,
@@ -6767,6 +6788,7 @@ class OracleYobiRepository:
                     language_code=language_code,
                     display_name=group_names[str(row["option_group_id"])],
                     model_id=model_id,
+                    prompt_version=prompt_version,
                     source_hash=source_hash,
                     generated_at=generated_at,
                 )
@@ -6779,23 +6801,25 @@ class OracleYobiRepository:
                 ).hexdigest()
                 cursor.execute(
                     """
-                    MERGE INTO option_item_localization target
+                    MERGE INTO runtime_option_item_localization target
                     USING (
                       SELECT :release_id release_id,:object_id option_item_id,
                              :language_code language_code FROM dual
                     ) source
                     ON (target.release_id=source.release_id
                         AND target.option_item_id=source.option_item_id
-                        AND target.language_code=source.language_code)
+                        AND target.language_code=source.language_code
+                        AND target.prompt_version=:prompt_version)
                     WHEN MATCHED THEN UPDATE SET
                       display_name=:display_name,model_id=:model_id,
-                      source_hash=:source_hash,generated_at=:generated_at
+                      prompt_version=:prompt_version,source_hash=:source_hash,
+                      generated_at=:generated_at
                     WHEN NOT MATCHED THEN INSERT (
                       release_id,option_item_id,language_code,display_name,
-                      model_id,source_hash,generated_at
+                      model_id,prompt_version,source_hash,generated_at
                     ) VALUES (
                       :release_id,:object_id,:language_code,:display_name,
-                      :model_id,:source_hash,:generated_at
+                      :model_id,:prompt_version,:source_hash,:generated_at
                     )
                     """,
                     release_id=release_id,
@@ -6803,6 +6827,7 @@ class OracleYobiRepository:
                     language_code=language_code,
                     display_name=item_names[str(row["option_item_id"])],
                     model_id=model_id,
+                    prompt_version=prompt_version,
                     source_hash=source_hash,
                     generated_at=generated_at,
                 )

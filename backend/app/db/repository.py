@@ -361,7 +361,15 @@ class YobiRepository(Protocol):
         menu_id: str,
         group_ids: list[str],
         item_ids: list[str],
+        prompt_version: str,
     ) -> bool: ...
+
+    def load_option_localizations(
+        self,
+        session_id: str,
+        menu_id: str,
+        prompt_version: str,
+    ) -> tuple[dict[str, str], dict[str, str]]: ...
 
     def save_option_localizations(
         self,
@@ -370,6 +378,7 @@ class YobiRepository(Protocol):
         group_names: dict[str, str],
         item_names: dict[str, str],
         model_id: str,
+        prompt_version: str,
     ) -> None: ...
 
     def save_menu_runtime_localizations(

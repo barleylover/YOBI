@@ -110,7 +110,6 @@ class MenuPresentationService:
         presentations = [
             self._from_evidence_item(
                 item,
-                menu_options=self._get_options(item.menu.menu_id, session_id),
                 language_code=normalized_language,
                 country_code=country_code or "ZZ",
             )
@@ -137,7 +136,6 @@ class MenuPresentationService:
         locale = {"ko": "한국어", "ja": "日本語"}.get(language_code, "English")
         prepared: list[MerchantMenuPresentation] = []
         for item in page.items:
-            menu_options = self._get_options(item.menu.menu_id, session_id)
             fallback_title = deterministic_localized_title(
                 language_code,
                 title_ko=item.menu.name_ko,
@@ -147,10 +145,7 @@ class MenuPresentationService:
                     item.menu.name_en,
                 ],
             )
-            evidence_map = {
-                **item.evidence_map,
-                "menu_options": self._menu_options_payload(menu_options),
-            }
+            evidence_map = dict(item.evidence_map)
             prepared.append(
                 self._with_cache_identity(
                     item.model_copy(
@@ -211,7 +206,6 @@ class MenuPresentationService:
                 ],
                 "country_preference": item.country_preference,
                 "menu_components": components,
-                "menu_options": item.evidence_map.get("menu_options", []),
                 "knowledge_release_id": source_identity.get("knowledge_release_id"),
                 "enrichment_release_id": item.release_id,
             }
@@ -242,7 +236,6 @@ class MenuPresentationService:
         self,
         item: EvidencePoolItem,
         *,
-        menu_options: list[Any],
         language_code: Literal["ko", "en", "ja"],
         country_code: str,
     ) -> MerchantMenuPresentation:
@@ -265,7 +258,6 @@ class MenuPresentationService:
             "menu_facts": menu_facts,
             "synthetic_reviews": reviews,
             "menu_components": components,
-            "menu_options": self._menu_options_payload(menu_options),
         }
         source_hash = _canonical_hash(
             {
@@ -294,7 +286,6 @@ class MenuPresentationService:
                 ],
                 "country_preference": item.country_preference,
                 "menu_components": components,
-                "menu_options": evidence_map["menu_options"],
                 "knowledge_release_id": item.knowledge_release_id,
                 "enrichment_release_id": item.synthetic_enrichment_release_id,
             }
@@ -473,21 +464,8 @@ class MenuPresentationService:
                         generation_model,
                         self.settings.menu_presentation_prompt_version,
                     )
-                    self.repository.save_option_localizations(
-                        session_id,
-                        item.menu.menu_id,
-                        {
-                            option.object_id: option.display_name
-                            for option in value.option_group_localizations
-                        },
-                        {
-                            option.object_id: option.display_name
-                            for option in value.option_item_localizations
-                        },
-                        generation_model,
-                    )
                 except Exception as exc:
-                    cache_error = f"OPTION_CACHE_{type(exc).__name__.upper()}"
+                    cache_error = f"MENU_LOCALIZATION_{type(exc).__name__.upper()}"
                 if (
                     cache_error is None
                     and callable(cache_writer)
@@ -584,40 +562,7 @@ class MenuPresentationService:
             "synthetic_reviews": item.evidence_map.get("synthetic_reviews", []),
             "country_preference": item.country_preference,
             "menu_components": item.evidence_map.get("menu_components", []),
-            "menu_options": item.evidence_map.get("menu_options", []),
         }
-
-    @staticmethod
-    def _menu_options_payload(menu_options: list[Any]) -> list[dict[str, Any]]:
-        return [
-            {
-                "option_group_id": group.option_group_id,
-                "name_ko": group.name_ko,
-                "required": group.required,
-                "min_select": group.min_select,
-                "max_select": group.max_select,
-                "items": [
-                    {
-                        "option_item_id": option.option_item_id,
-                        "name_ko": option.name_ko,
-                        "price_delta": option.price_delta,
-                    }
-                    for option in group.items
-                ],
-            }
-            for group in menu_options
-        ]
-
-    def _get_options(self, menu_id: str, session_id: str) -> list[Any]:
-        reader = getattr(self.repository, "get_options", None)
-        if not callable(reader):
-            return []
-        try:
-            return list(reader(menu_id, session_id=session_id))
-        except Exception:
-            # Option localization is presentation enrichment. A transient option
-            # read must not replace an already validated three-menu selection.
-            return []
 
     @staticmethod
     def _components_from_wiki(

@@ -51,7 +51,7 @@ class FakeProvider:
         return self._capabilities
 
     def supports_model(self, model: str) -> bool:
-        return model == "xai.grok-4.3"
+        return model == "openai.gpt-oss-120b"
 
     def normalize_request(self, model: str, **kwargs: Any) -> dict[str, Any]:
         return {"model": model, **kwargs}
@@ -250,7 +250,7 @@ def test_generator_dispatches_once_without_tools_and_allows_bounded_rerank() -> 
         "dish-b",
     ]
     assert len(provider.calls) == 1
-    assert provider.calls[0]["model"] == "xai.grok-4.3"
+    assert provider.calls[0]["model"] == "openai.gpt-oss-120b"
     assert provider.calls[0]["max_output_tokens"] == 2048
     assert "tools" not in provider.calls[0]
     instructions = str(provider.calls[0]["instructions"])
@@ -665,7 +665,7 @@ def test_comparison_uses_structured_model_cap_in_one_dispatch() -> None:
 
     assert [item.menu_id for item in result.items] == ["dish-a", "dish-b"]
     assert len(provider.calls) == 1
-    assert provider.calls[0]["model"] == "xai.grok-4.3"
+    assert provider.calls[0]["model"] == "openai.gpt-oss-120b"
     assert provider.calls[0]["max_output_tokens"] == 2048
 
 
@@ -690,7 +690,7 @@ def test_structured_rate_limit_never_retries_or_dispatches_fallback_model() -> N
     assert caught.value.code is GenAIErrorCode.RATE_LIMIT
     assert caught.value.safe_metadata["request_utf8_bytes"] > 0
     assert caught.value.safe_metadata["requested_max_output_tokens"] == 2048
-    assert [call["model"] for call in provider.calls] == ["xai.grok-4.3"]
+    assert [call["model"] for call in provider.calls] == ["openai.gpt-oss-120b"]
 
 
 def test_structured_concurrency_setting_limits_provider_dispatches_to_two() -> None:

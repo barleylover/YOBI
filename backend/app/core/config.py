@@ -28,15 +28,18 @@ class Settings(BaseSettings):
     oci_genai_api_key: SecretStr = SecretStr("")
     oci_genai_model: str = "xai.grok-4.3"
     oci_genai_fallback_model: str = "openai.gpt-oss-120b"
-    structured_recommendation_model: str = "xai.grok-4.3"
+    structured_recommendation_model: str = "openai.gpt-oss-120b"
     restaurant_note_model: str = "openai.gpt-oss-20b"
     restaurant_note_model_chain: str = (
         "google.gemini-2.5-flash-lite,google.gemini-2.5-flash,"
         "openai.gpt-oss-20b,openai.gpt-oss-120b"
     )
     menu_localization_model: str = "xai.grok-4.3"
+    menu_presentation_model: str = "xai.grok-4.3"
+    option_localization_model: str = "xai.grok-4.3"
     structured_recommendation_max_output_tokens: int = Field(default=2048, ge=64)
-    menu_presentation_max_output_tokens: int = Field(default=8192, ge=256)
+    menu_presentation_max_output_tokens: int = Field(default=16384, ge=256)
+    option_localization_max_output_tokens: int = Field(default=16384, ge=256)
     structured_recommendation_max_concurrent_requests: int = Field(default=2, ge=1, le=8)
     genai_provider: Literal["oci"] = "oci"
     oci_genai_serving_mode: Literal["on_demand", "dedicated"] = "on_demand"
@@ -54,7 +57,7 @@ class Settings(BaseSettings):
     # configured OCI model/endpoint is expected to support, not advertised model
     # headline limits. Operators must lower them for a more restrictive endpoint.
     oci_genai_max_input_tokens: int = Field(default=131072, ge=512)
-    oci_genai_max_output_tokens: int = Field(default=8192, ge=64)
+    oci_genai_max_output_tokens: int = Field(default=16384, ge=64)
     oci_genai_max_tools_per_request: int = Field(default=4, ge=1, le=14)
     oci_genai_max_tool_calls_per_response: int = Field(default=4, ge=1, le=14)
     genai_prompt_profile: Literal["yobi-grounded-v1"] = "yobi-grounded-v1"
@@ -81,8 +84,9 @@ class Settings(BaseSettings):
     llm_max_tool_calls_per_response: int = Field(default=4, ge=1, le=14)
     tool_call_max_steps: int = Field(default=6, ge=1, le=12)
     recommendation_prompt_version: str = "yobi-structured-rag-v3-server-wiki-binding"
-    menu_presentation_prompt_version: str = "yobi-menu-presentation-v6-purpose-localized"
+    menu_presentation_prompt_version: str = "yobi-menu-presentation-v7-card-only"
     menu_presentation_schema_version: str = "4"
+    option_localization_prompt_version: str = "yobi-option-localization-v1-ordered"
     menu_presentation_wait_seconds: float = Field(default=10.0, ge=0.0, le=30.0)
     menu_presentation_poll_seconds: float = Field(default=0.25, ge=0.05, le=2.0)
     recommendation_raw_hits_per_value: int = Field(default=20, ge=4, le=100)

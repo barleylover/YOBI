@@ -350,7 +350,7 @@ def test_menu_presentation_uses_grok_once_and_caches_structured_copy() -> None:
     assert provider.calls == ["xai.grok-4.3"]
 
 
-def test_presentation_translates_fields_by_purpose_and_caches_options() -> None:
+def test_presentation_translates_card_fields_without_option_localization() -> None:
     options = [
         OptionGroup(
             option_group_id="group-1",
@@ -378,21 +378,13 @@ def test_presentation_translates_fields_by_purpose_and_caches_options() -> None:
             "localized_title": "Tteokbokki",
             "localized_subtitle": "Chewy rice cakes in a spicy Korean sauce",
             "localized_source_description": "Fresh rice cakes cooked to order.",
-            "option_group_localizations": [
-                {"object_id": "group-1", "display_name": "Drink add-ons"}
-            ],
-            "option_item_localizations": [
-                {
-                    "object_id": "item-1",
-                    "display_name": "Add Coca-Cola (355ml)",
-                }
-            ],
+            "option_group_localizations": [],
+            "option_item_localizations": [],
             "used_source_fields": [
                 "menu_title_ko",
                 "source_description_ko",
                 "wiki_passages",
                 "synthetic_reviews",
-                "menu_options",
             ],
         }
     )
@@ -410,15 +402,7 @@ def test_presentation_translates_fields_by_purpose_and_caches_options() -> None:
 
     assert page.items[0].localized_title == "Tteokbokki"
     assert page.items[0].source_description == "Fresh rice cakes cooked to order."
-    assert repository.saved_option_localizations == [
-        (
-            "session-1",
-            "menu-1",
-            {"group-1": "Drink add-ons"},
-            {"item-1": "Add Coca-Cola (355ml)"},
-            "xai.grok-4.3",
-        )
-    ]
+    assert repository.saved_option_localizations == []
     assert repository.saved_menu_localizations[0][2:4] == (
         "Tteokbokki",
         "Fresh rice cakes cooked to order.",
@@ -426,7 +410,7 @@ def test_presentation_translates_fields_by_purpose_and_caches_options() -> None:
     assert len(repository.cache) == 1
 
 
-def test_phonetic_option_copy_is_rejected_instead_of_cached() -> None:
+def test_presentation_rejects_option_localizations_from_card_model() -> None:
     options = [
         OptionGroup(
             option_group_id="group-1",
@@ -506,7 +490,7 @@ def test_phonetic_yogiyo_description_is_rejected_instead_of_cached() -> None:
     assert repository.saved_menu_localizations == []
 
 
-def test_menu_presentation_rate_limit_falls_back_to_120b_with_same_page() -> None:
+def test_menu_presentation_rate_limit_keeps_deterministic_copy_without_model_retry() -> None:
     repository = PresentationRepository(MerchantMenuPresentationPage(items=[_presentation()]))
     provider = PresentationProvider(rate_limit_primary=True)
     service = MenuPresentationService(
@@ -517,8 +501,8 @@ def test_menu_presentation_rate_limit_falls_back_to_120b_with_same_page() -> Non
 
     page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
 
-    assert provider.calls == ["xai.grok-4.3", "openai.gpt-oss-120b"]
-    assert page.items[0].generation_model == "openai.gpt-oss-120b"
+    assert provider.calls == ["xai.grok-4.3"]
+    assert page.items[0].generation_model == "DETERMINISTIC_GROUNDED_FALLBACK"
 
 
 def test_invalid_grounding_contract_keeps_deterministic_copy_without_fallback() -> None:

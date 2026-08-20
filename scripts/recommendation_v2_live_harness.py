@@ -270,7 +270,8 @@ def _reuse_completed_predeploy(
 
 def _settings_errors(settings: Settings) -> list[str]:
     checks = {
-        "STRUCTURED_MODEL": settings.structured_recommendation_model == "xai.grok-4.3",
+        "STRUCTURED_MODEL": settings.structured_recommendation_model
+        == "openai.gpt-oss-120b",
         "MAX_OUTPUT_TOKENS": settings.structured_recommendation_max_output_tokens
         == 2048,
         "CANDIDATE_LIMIT": settings.recommendation_candidate_limit == 100,
@@ -498,7 +499,10 @@ def _ready_errors(ready: dict[str, Any]) -> list[str]:
     structured = structured if isinstance(structured, dict) else {}
     checks = {
         "READY_STATUS": ready.get("status") == "ready",
-        "MODEL": structured.get("model_id") == "xai.grok-4.3",
+        "MODEL": structured.get("model_id") == "openai.gpt-oss-120b",
+        "PRESENTATION_MODEL": structured.get("presentation_model_id") == "xai.grok-4.3",
+        "OPTION_LOCALIZATION_MODEL": structured.get("option_localization_model_id")
+        == "xai.grok-4.3",
         "GROUNDING_DIAGNOSTICS": structured.get("grounding_diagnostics_version")
         == "yobi-grounding-diagnostics-v2",
         "SELECTION": structured.get("selection_enabled") is True,
@@ -506,6 +510,14 @@ def _ready_errors(ready: dict[str, Any]) -> list[str]:
         "SHORTLIST_LIMIT": structured.get("shortlist_limit") == 15,
         "PASSAGES_PER_MENU": structured.get("passages_per_menu") == 2,
         "MAX_OUTPUT_TOKENS": structured.get("max_output_tokens") == 2048,
+        "PRESENTATION_MAX_OUTPUT_TOKENS": structured.get(
+            "presentation_max_output_tokens"
+        )
+        == 16384,
+        "OPTION_LOCALIZATION_MAX_OUTPUT_TOKENS": structured.get(
+            "option_localization_max_output_tokens"
+        )
+        == 16384,
         "RANK_POLICY": structured.get("ranking_policy_version")
         == "yobi-hybrid-rank-v2",
         "FEATURE_COUNT": int(structured.get("feature_count") or 0) > 0,

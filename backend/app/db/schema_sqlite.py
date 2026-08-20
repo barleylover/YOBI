@@ -1008,6 +1008,30 @@ CREATE TABLE IF NOT EXISTS option_item_localization (
   PRIMARY KEY(release_id, option_item_id, language_code)
 );
 
+CREATE TABLE IF NOT EXISTS runtime_option_group_localization (
+  release_id TEXT NOT NULL REFERENCES synthetic_enrichment_release(release_id),
+  option_group_id TEXT NOT NULL REFERENCES menu_option_group(option_group_id),
+  language_code TEXT NOT NULL CHECK (language_code IN ('en','ja')),
+  prompt_version TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  PRIMARY KEY(release_id, option_group_id, language_code, prompt_version)
+);
+
+CREATE TABLE IF NOT EXISTS runtime_option_item_localization (
+  release_id TEXT NOT NULL REFERENCES synthetic_enrichment_release(release_id),
+  option_item_id TEXT NOT NULL REFERENCES menu_option_item(option_item_id),
+  language_code TEXT NOT NULL CHECK (language_code IN ('en','ja')),
+  prompt_version TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  PRIMARY KEY(release_id, option_item_id, language_code, prompt_version)
+);
+
 CREATE TABLE IF NOT EXISTS menu_source_description_localization (
   release_id TEXT NOT NULL REFERENCES synthetic_enrichment_release(release_id),
   menu_id TEXT NOT NULL REFERENCES menu(menu_id),

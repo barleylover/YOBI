@@ -66,6 +66,7 @@ def test_release_discovers_conversation_and_knowledge_migrations() -> None:
     assert "016_recommendation_v3_runtime.sql" in names
     assert "017_grounded_menu_presentation.sql" in names
     assert "018_llm_runtime_resilience.sql" in names
+    assert "019_option_localization_runtime.sql" in names
 
 
 def test_conversation_migration_is_append_only_and_partial_rerun_safe() -> None:
@@ -275,6 +276,19 @@ def test_llm_resilience_migration_is_additive_and_rerun_safe() -> None:
     assert "recommendation_provider_attempt ADD attempt_role" in source
     assert "restaurant_note_translation_attempt" in source
     assert all(statement.startswith("BEGIN") and statement.endswith("END;") for statement in statements)
+
+
+def test_option_localization_runtime_migration_preserves_legacy_rows() -> None:
+    path = ROOT / "database" / "migrations" / "019_option_localization_runtime.sql"
+    source = path.read_text(encoding="utf-8")
+    statements = migrate.split_statements(source)
+
+    assert "DROP " not in source.upper()
+    assert "ALTER TABLE option_group_localization" not in source
+    assert "ALTER TABLE option_item_localization" not in source
+    assert "runtime_option_group_localization" in source
+    assert "runtime_option_item_localization" in source
+    assert len(statements) == 4
 
 
 def test_discovery_rejects_a_missing_migration_version(tmp_path: Path) -> None:

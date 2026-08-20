@@ -182,6 +182,16 @@ def genai_configuration_errors(settings: Settings) -> list[str]:
         and not provider.supports_model(settings.structured_recommendation_model)
     ):
         errors.append("STRUCTURED_MODEL_UNAVAILABLE")
+    if (
+        settings.menu_presentation_model.strip()
+        and not provider.supports_model(settings.menu_presentation_model)
+    ):
+        errors.append("PRESENTATION_MODEL_UNAVAILABLE")
+    if (
+        settings.option_localization_model.strip()
+        and not provider.supports_model(settings.option_localization_model)
+    ):
+        errors.append("OPTION_LOCALIZATION_MODEL_UNAVAILABLE")
     if provider.serving_mode is GenAIServingMode.DEDICATED:
         if not settings.oci_genai_endpoint_id.strip():
             errors.append("PRIMARY_ENDPOINT_MISSING")
@@ -198,6 +208,10 @@ def genai_configuration_errors(settings: Settings) -> list[str]:
         errors.append("INPUT_LIMIT_INCOMPATIBLE")
     if settings.llm_max_output_tokens > capabilities.max_output_tokens:
         errors.append("OUTPUT_LIMIT_INCOMPATIBLE")
+    if settings.menu_presentation_max_output_tokens > capabilities.max_output_tokens:
+        errors.append("PRESENTATION_OUTPUT_LIMIT_INCOMPATIBLE")
+    if settings.option_localization_max_output_tokens > capabilities.max_output_tokens:
+        errors.append("OPTION_LOCALIZATION_OUTPUT_LIMIT_INCOMPATIBLE")
     if settings.llm_max_tools_per_request > capabilities.max_tools_per_request:
         errors.append("TOOL_SCHEMA_LIMIT_INCOMPATIBLE")
     if settings.llm_max_tool_calls_per_response > capabilities.max_tool_calls_per_response:

@@ -7543,7 +7543,21 @@ class SQLiteYobiRepository:
         menu_id: str,
         group_ids: list[str],
         item_ids: list[str],
+        prompt_version: str,
     ) -> bool:
+        localized_groups, localized_items = self.load_option_localizations(
+            session_id,
+            menu_id,
+            prompt_version,
+        )
+        return set(localized_groups) == set(group_ids) and set(localized_items) == set(item_ids)
+
+    def load_option_localizations(
+        self,
+        session_id: str,
+        menu_id: str,
+        prompt_version: str,
+    ) -> tuple[dict[str, str], dict[str, str]]:
         with self._connection() as connection:
             context = connection.execute(
                 """
@@ -7558,48 +7572,50 @@ class SQLiteYobiRepository:
                 (session_id,),
             ).fetchone()
             if context is None or not context["synthetic_enrichment_release_id"]:
-                return False
+                return {}, {}
             requested = normalize_preference_locale(str(context["preferred_language"]))
             language_code = requested if requested in {"ko", "ja"} else "en"
             localized_groups = {
-                str(row[0])
+                str(row["option_group_id"]): str(row["display_name"])
                 for row in connection.execute(
                     """
-                    SELECT localization.option_group_id
-                    FROM option_group_localization localization
+                    SELECT localization.option_group_id,localization.display_name
+                    FROM runtime_option_group_localization localization
                     JOIN menu_option_group groups
                       ON groups.option_group_id=localization.option_group_id
                     WHERE localization.release_id=? AND localization.language_code=?
-                      AND groups.menu_id=?
+                      AND localization.prompt_version=? AND groups.menu_id=?
                     """,
                     (
                         str(context["synthetic_enrichment_release_id"]),
                         language_code,
+                        prompt_version,
                         menu_id,
                     ),
                 )
             }
             localized_items = {
-                str(row[0])
+                str(row["option_item_id"]): str(row["display_name"])
                 for row in connection.execute(
                     """
-                    SELECT localization.option_item_id
-                    FROM option_item_localization localization
+                    SELECT localization.option_item_id,localization.display_name
+                    FROM runtime_option_item_localization localization
                     JOIN menu_option_item item
                       ON item.option_item_id=localization.option_item_id
                     JOIN menu_option_group groups
                       ON groups.option_group_id=item.option_group_id
                     WHERE localization.release_id=? AND localization.language_code=?
-                      AND groups.menu_id=?
+                      AND localization.prompt_version=? AND groups.menu_id=?
                     """,
                     (
                         str(context["synthetic_enrichment_release_id"]),
                         language_code,
+                        prompt_version,
                         menu_id,
                     ),
                 )
             }
-        return localized_groups == set(group_ids) and localized_items == set(item_ids)
+        return localized_groups, localized_items
 
     def save_option_localizations(
         self,
@@ -7608,6 +7624,7 @@ class SQLiteYobiRepository:
         group_names: dict[str, str],
         item_names: dict[str, str],
         model_id: str,
+        prompt_version: str,
     ) -> None:
         with self._connection() as connection:
             context = connection.execute(
@@ -7658,12 +7675,14 @@ class SQLiteYobiRepository:
                 ).hexdigest()
                 connection.execute(
                     """
-                    INSERT INTO option_group_localization(
+                    INSERT INTO runtime_option_group_localization(
                       release_id,option_group_id,language_code,display_name,
-                      model_id,source_hash,generated_at
-                    ) VALUES (?,?,?,?,?,?,?)
-                    ON CONFLICT(release_id,option_group_id,language_code) DO UPDATE SET
+                      model_id,prompt_version,source_hash,generated_at
+                    ) VALUES (?,?,?,?,?,?,?,?)
+                    ON CONFLICT(release_id,option_group_id,language_code,prompt_version)
+                    DO UPDATE SET
                       display_name=excluded.display_name,model_id=excluded.model_id,
+                      prompt_version=excluded.prompt_version,
                       source_hash=excluded.source_hash,generated_at=excluded.generated_at
                     """,
                     (
@@ -7672,6 +7691,7 @@ class SQLiteYobiRepository:
                         language_code,
                         group_names[str(row["option_group_id"])],
                         model_id,
+                        prompt_version,
                         source_hash,
                         generated_at,
                     ),
@@ -7685,12 +7705,14 @@ class SQLiteYobiRepository:
                 ).hexdigest()
                 connection.execute(
                     """
-                    INSERT INTO option_item_localization(
+                    INSERT INTO runtime_option_item_localization(
                       release_id,option_item_id,language_code,display_name,
-                      model_id,source_hash,generated_at
-                    ) VALUES (?,?,?,?,?,?,?)
-                    ON CONFLICT(release_id,option_item_id,language_code) DO UPDATE SET
+                      model_id,prompt_version,source_hash,generated_at
+                    ) VALUES (?,?,?,?,?,?,?,?)
+                    ON CONFLICT(release_id,option_item_id,language_code,prompt_version)
+                    DO UPDATE SET
                       display_name=excluded.display_name,model_id=excluded.model_id,
+                      prompt_version=excluded.prompt_version,
                       source_hash=excluded.source_hash,generated_at=excluded.generated_at
                     """,
                     (
@@ -7699,6 +7721,7 @@ class SQLiteYobiRepository:
                         language_code,
                         item_names[str(row["option_item_id"])],
                         model_id,
+                        prompt_version,
                         source_hash,
                         generated_at,
                     ),
