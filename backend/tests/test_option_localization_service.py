@@ -254,7 +254,7 @@ def test_large_option_menu_is_localized_in_bounded_batches() -> None:
                     description="",
                     required=False,
                     min_select=0,
-                    max_select=9,
+                    max_select=40,
                     items=[
                         OptionItem(
                             option_item_id=f"item-{index}",
@@ -265,7 +265,7 @@ def test_large_option_menu_is_localized_in_bounded_batches() -> None:
                             price_delta=0,
                             available=True,
                         )
-                        for index in range(9)
+                        for index in range(40)
                     ],
                 )
             ]
@@ -301,4 +301,4 @@ def test_large_option_menu_is_localized_in_bounded_batches() -> None:
 
     assert provider.calls == 2
     assert result[0].display_name == "翻訳 추가 선택"
-    assert result[0].items[-1].display_name == "翻訳 옵션 8"
+    assert result[0].items[-1].display_name == "翻訳 옵션 39"

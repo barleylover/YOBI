@@ -49,7 +49,7 @@ _OPTION_LOCALIZATION_SCHEMA: dict[str, Any] = {
     "required": ["items"],
     "additionalProperties": False,
 }
-_OPTION_LOCALIZATION_BATCH_SIZE = 8
+_OPTION_LOCALIZATION_BATCH_SIZE = 32
 
 
 def _localized_name_is_usable(
@@ -97,9 +97,10 @@ class OptionLocalizationService:
             )
             for group in groups
         )
-        if cached_names_usable and self.repository.option_localizations_complete(
+        cache_complete = self.repository.option_localizations_complete(
             session_id, menu_id, group_ids, item_ids
-        ):
+        )
+        if cached_names_usable and cache_complete:
             return groups
         if not self.provider.configured:
             return groups
@@ -110,6 +111,11 @@ class OptionLocalizationService:
             models.append(fallback)
         if not self.provider.supports_model(models[0]):
             return groups
+        if cache_complete and not cached_names_usable and len(models) > 1:
+            # A prior primary-model response passed the schema but copied Korean
+            # source text. Retry directly with the alternate model so a repair
+            # request stays within the synchronous UI deadline.
+            models = [models[1]]
         input_items = [
             {
                 "kind": "GROUP",
