@@ -5,7 +5,7 @@ import type {
 } from "../types";
 import type { RecommendationCopy } from "../lib/recommendationI18n";
 import type { RedesignCopy } from "../lib/redesignI18n";
-import { asSupportedLanguage, formatMinuteRange, menuName } from "../lib/locale";
+import { asEffectiveLanguage, asSupportedLanguage, formatMinuteRange, menuName } from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
 import { carouselIndexFromOffset } from "../lib/carouselScroll";
 import { BottomSheet } from "./BottomSheet";
@@ -95,6 +95,8 @@ export function RecommendationResults({
           >
             {batch.recommendations.map((item, index) => {
               const spiceLevel = item.menu.spice_level;
+              const sourceDescription = item.source_description
+                || (asEffectiveLanguage(language) === "한국어" ? item.menu.description : "");
               return (
                 <article className="v2-alimtalk-card" key={item.menu.menu_id} data-testid={`menu-${item.menu.menu_id}`}>
                   <div className="v2-card-strip">
@@ -118,9 +120,9 @@ export function RecommendationResults({
                         <span>{v2.yobiLabel}</span> {item.yobi_short_explanation || item.description}
                       </p>
                     )}
-                    {(item.source_description || item.menu.description) && (
+                    {sourceDescription && (
                       <p className="v2-card-yogiyo">
-                        <span>{v2.yogiyoLabel}</span> {item.source_description || item.menu.description}
+                        <span>{v2.yogiyoLabel}</span> {sourceDescription}
                       </p>
                     )}
                     <div className="v2-fact-chips">

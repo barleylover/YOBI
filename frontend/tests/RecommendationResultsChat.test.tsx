@@ -138,6 +138,36 @@ describe("chat-style recommendation results", () => {
     expect(screen.queryByText(/وجبة اصطناعية|synthetic menu/i)).not.toBeInTheDocument();
   });
 
+  it("does not expose an untranslated Korean source description after an English fallback", () => {
+    const fallbackBatch: RecommendationBatchV2 = {
+      ...batch,
+      recommendations: [{
+        ...batch.recommendations[0],
+        source_description: "",
+        menu: {
+          ...batch.recommendations[0].menu,
+          description: "번역되지 않은 식당 원문 설명",
+        },
+      }],
+    };
+
+    render(
+      <RecommendationResults
+        batch={fallbackBatch}
+        copy={getRecommendationCopy("English")}
+        v2={getRedesignCopy("English")}
+        timestamp="10:05"
+        language="English"
+        locale="en-US"
+        onChoose={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText("번역되지 않은 식당 원문 설명")).not.toBeInTheDocument();
+    expect(screen.queryByText("YOGIYO:")).not.toBeInTheDocument();
+  });
+
   it("renders every recommendation in the horizontal card carousel", () => {
     render(
       <RecommendationResults
