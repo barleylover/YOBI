@@ -18,7 +18,10 @@ from app.domain.models import (
 from app.domain.recommendation_copy import deterministic_presentation_copy
 from app.domain.structured_recommendation import EvidencePoolItem
 from app.genai.contracts import GenAIProviderError
-from app.genai.presentation_generator import MenuPresentationGenerator
+from app.genai.presentation_generator import (
+    MenuPresentationGenerator,
+    source_translation_is_safe,
+)
 
 
 def _sha(value: str) -> str:
@@ -67,13 +70,8 @@ def deterministic_localized_source_description(
         return source_ko.strip()
     for candidate in candidates:
         value = str(candidate or "").strip()
-        if not value or any("가" <= character <= "힣" for character in value):
-            continue
-        if language_code == "ja" and not any(
-            "ぁ" <= character <= "ヿ" or "一" <= character <= "龯" for character in value
-        ):
-            continue
-        return value
+        if source_translation_is_safe(source_ko, value, language_code):
+            return value
     return ""
 
 

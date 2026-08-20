@@ -50,7 +50,7 @@ COUNTRY_CODES = (
     "TR",
     "NL",
 )
-GENERATOR_VERSION = "yobi-synthetic-enrichment-v5-halal-plausibility-source-carry-forward"
+GENERATOR_VERSION = "yobi-synthetic-enrichment-v6-safe-family-and-source-carry-forward"
 SOURCE_TYPE = "SYNTHETIC_DEMO"
 LANGUAGE_CODES: tuple[LanguageCode, ...] = ("ko", "en", "ja")
 

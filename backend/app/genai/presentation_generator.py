@@ -297,6 +297,40 @@ def _looks_like_english_phonetic_copy(source: str, target: str) -> bool:
     return difflib.SequenceMatcher(None, _romanize_for_quality_check(source), latin).ratio() >= 0.7
 
 
+def _looks_like_japanese_phonetic_copy(source: str, target: str) -> bool:
+    """Reject old all-katakana Korean transliterations masquerading as translations."""
+
+    if len(re.findall(r"[가-힣]", source)) < 8:
+        return False
+    japanese = re.findall(r"[ぁ-ヿ一-龯]", target)
+    if len(japanese) < 8:
+        return False
+    katakana = len(re.findall(r"[ァ-ヿ]", target))
+    hiragana = len(re.findall(r"[ぁ-ゟ]", target))
+    kanji = len(re.findall(r"[一-龯]", target))
+    return katakana / len(japanese) >= 0.7 and hiragana <= 1 and kanji <= 1
+
+
+def source_translation_is_safe(source: str, target: str, language: str) -> bool:
+    """Validate a reusable restaurant-description translation without an LLM call."""
+
+    source = source.strip()
+    target = target.strip()
+    if not source or not target:
+        return False
+    if language == "ko":
+        return target == source
+    if _contains_hangul(target):
+        return False
+    if language == "en":
+        return not _looks_like_english_phonetic_copy(source, target)
+    if language == "ja":
+        return _contains_japanese_script(target) and not _looks_like_japanese_phonetic_copy(
+            source, target
+        )
+    return False
+
+
 class GeneratedOptionLocalization(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -362,7 +396,7 @@ class GeneratedMenuPresentation(BaseModel):
     def validate_reviews(cls, value: str) -> str:
         return _bounded_sentences(
             value,
-            minimum=2,
+            minimum=1,
             maximum=3,
             code="PRESENTATION_REVIEW_SENTENCE_COUNT_INVALID",
         )
@@ -639,13 +673,26 @@ class MenuPresentationGenerator:
         if response is None:
             raise GenAIProviderError(GenAIErrorCode.PROVIDER_UNAVAILABLE, retryable=False)
         try:
-            result = MenuPresentationGeneration.model_validate(
-                parse_json_object(str(getattr(response, "output_text", "")))
-            )
-            returned_ids = [item.menu_id for item in result.items]
+            raw_result = parse_json_object(str(getattr(response, "output_text", "")))
+            raw_items = raw_result.get("items") if set(raw_result) == {"items"} else None
+            if not isinstance(raw_items, list) or not 1 <= len(raw_items) <= 12:
+                raise ValueError("PRESENTATION_SCHEMA_INVALID")
+            returned_ids = [
+                str(item.get("menu_id") or "") if isinstance(item, dict) else ""
+                for item in raw_items
+            ]
             if len(returned_ids) != len(set(returned_ids)) or set(returned_ids) != set(expected):
                 raise ValueError("PRESENTATION_MENU_SET_INVALID")
             item_errors: dict[str, str] = {}
+            generated_items: list[GeneratedMenuPresentation] = []
+            for raw_item, menu_id in zip(raw_items, returned_ids):
+                try:
+                    generated_items.append(GeneratedMenuPresentation.model_validate(raw_item))
+                except ValidationError as exc:
+                    item_errors[menu_id] = self._validation_reason(exc)
+            if not generated_items:
+                raise ValueError(next(iter(item_errors.values())))
+            result = MenuPresentationGeneration(items=generated_items)
             for generated in result.items:
                 source = expected[generated.menu_id]
                 target_language = {
@@ -653,25 +700,49 @@ class MenuPresentationGenerator:
                     "日本語": "ja",
                 }.get(locale, "en")
                 if generated.option_group_localizations or generated.option_item_localizations:
-                    raise ValueError("PRESENTATION_OPTIONS_NOT_ALLOWED")
+                    item_errors[generated.menu_id] = "PRESENTATION_OPTIONS_NOT_ALLOWED"
+                    continue
                 source_description = str(source.get("source_description_ko") or "")
                 if bool(source_description) != bool(generated.localized_source_description):
-                    raise ValueError("PRESENTATION_SOURCE_DESCRIPTION_PRESENCE_INVALID")
-                if target_language == "en" and _looks_like_english_phonetic_copy(
-                    source_description, generated.localized_source_description
+                    item_errors[generated.menu_id] = (
+                        "PRESENTATION_SOURCE_DESCRIPTION_PRESENCE_INVALID"
+                    )
+                    continue
+                if source_description and not source_translation_is_safe(
+                    source_description,
+                    generated.localized_source_description,
+                    target_language,
                 ):
-                    raise ValueError("PRESENTATION_SOURCE_DESCRIPTION_PHONETIC_COPY")
+                    phonetic_copy = (
+                        target_language == "en"
+                        and _looks_like_english_phonetic_copy(
+                            source_description, generated.localized_source_description
+                        )
+                    ) or (
+                        target_language == "ja"
+                        and _looks_like_japanese_phonetic_copy(
+                            source_description, generated.localized_source_description
+                        )
+                    )
+                    item_errors[generated.menu_id] = (
+                        "PRESENTATION_SOURCE_DESCRIPTION_PHONETIC_COPY"
+                        if phonetic_copy
+                        else "PRESENTATION_TARGET_LANGUAGE_SCRIPT_INVALID"
+                    )
+                    continue
                 expected_title = (
                     str(source["menu_title_ko"])
                     if target_language == "ko"
                     else str(source["localized_title"])
                 )
                 if generated.localized_title != expected_title:
-                    raise ValueError("PRESENTATION_LOCALIZED_TITLE_CHANGED")
+                    item_errors[generated.menu_id] = "PRESENTATION_LOCALIZED_TITLE_CHANGED"
+                    continue
                 if _contains_review_signal(
                     f"{generated.yobi_short_explanation} {generated.yobi_long_explanation}"
                 ):
-                    raise ValueError("PRESENTATION_YOBI_REVIEW_LEAKAGE")
+                    item_errors[generated.menu_id] = "PRESENTATION_YOBI_REVIEW_LEAKAGE"
+                    continue
                 generated_copy = (
                     generated.localized_subtitle,
                     generated.localized_source_description,
@@ -682,7 +753,10 @@ class MenuPresentationGenerator:
                 if target_language in {"en", "ja"} and any(
                     _contains_hangul(value) for value in generated_copy
                 ):
-                    raise ValueError("PRESENTATION_TARGET_LANGUAGE_HANGUL_REMAINS")
+                    item_errors[generated.menu_id] = (
+                        "PRESENTATION_TARGET_LANGUAGE_HANGUL_REMAINS"
+                    )
+                    continue
                 if target_language == "ja" and any(
                     value and not _contains_japanese_script(value)
                     for value in (
@@ -692,18 +766,27 @@ class MenuPresentationGenerator:
                         generated.review_summary,
                     )
                 ):
-                    raise ValueError("PRESENTATION_TARGET_LANGUAGE_SCRIPT_INVALID")
+                    item_errors[generated.menu_id] = (
+                        "PRESENTATION_TARGET_LANGUAGE_SCRIPT_INVALID"
+                    )
+                    continue
                 if (
                     target_language == "ja"
                     and source_description
                     and _contains_hangul(source_description)
                     and not _contains_japanese_script(generated.localized_source_description)
                 ):
-                    raise ValueError("PRESENTATION_TARGET_LANGUAGE_SCRIPT_INVALID")
+                    item_errors[generated.menu_id] = (
+                        "PRESENTATION_TARGET_LANGUAGE_SCRIPT_INVALID"
+                    )
+                    continue
                 if _normalized_text(generated.localized_subtitle) == _normalized_text(
                     generated.localized_title
                 ):
-                    raise ValueError("PRESENTATION_LOCALIZED_SUBTITLE_NOT_EXPLANATORY")
+                    item_errors[generated.menu_id] = (
+                        "PRESENTATION_LOCALIZED_SUBTITLE_NOT_EXPLANATORY"
+                    )
+                    continue
                 if target_language == "en" and not _english_title_coverage_is_sufficient(
                     generated.localized_title,
                     " ".join(
@@ -714,7 +797,10 @@ class MenuPresentationGenerator:
                         )
                     ),
                 ):
-                    raise ValueError("PRESENTATION_MENU_TITLE_COVERAGE_INVALID")
+                    item_errors[generated.menu_id] = (
+                        "PRESENTATION_MENU_TITLE_COVERAGE_INVALID"
+                    )
+                    continue
                 if (
                     target_language == "en"
                     and generated.localized_source_description
@@ -729,7 +815,10 @@ class MenuPresentationGenerator:
                         ),
                     )
                 ):
-                    raise ValueError("PRESENTATION_SOURCE_DESCRIPTION_NOT_REFLECTED")
+                    item_errors[generated.menu_id] = (
+                        "PRESENTATION_SOURCE_DESCRIPTION_NOT_REFLECTED"
+                    )
+                    continue
                 if sorted(
                     _quantity_tokens(generated.localized_source_description, target_language)
                 ) != sorted(
@@ -746,7 +835,10 @@ class MenuPresentationGenerator:
                     token not in translated_source_folded
                     for token in _ascii_source_tokens(source_description)
                 ):
-                    raise ValueError("PRESENTATION_SOURCE_DESCRIPTION_TOKEN_DROPPED")
+                    item_errors[generated.menu_id] = (
+                        "PRESENTATION_SOURCE_DESCRIPTION_TOKEN_DROPPED"
+                    )
+                    continue
                 allowed_yobi_evidence = {
                     str(item.get("evidence_id"))
                     for field in ("wiki_passages", "menu_facts")
@@ -760,11 +852,20 @@ class MenuPresentationGenerator:
                 }
                 allowed_evidence = allowed_yobi_evidence | allowed_review_evidence
                 if not set(generated.yobi_used_evidence_ids) <= allowed_yobi_evidence:
-                    raise ValueError("PRESENTATION_YOBI_EVIDENCE_SCOPE_INVALID")
+                    item_errors[generated.menu_id] = (
+                        "PRESENTATION_YOBI_EVIDENCE_SCOPE_INVALID"
+                    )
+                    continue
                 if not set(generated.review_used_ids) <= allowed_review_evidence:
-                    raise ValueError("PRESENTATION_REVIEW_EVIDENCE_SCOPE_INVALID")
+                    item_errors[generated.menu_id] = (
+                        "PRESENTATION_REVIEW_EVIDENCE_SCOPE_INVALID"
+                    )
+                    continue
                 if allowed_review_evidence and not generated.review_used_ids:
-                    raise ValueError("PRESENTATION_REVIEW_EVIDENCE_MISSING")
+                    item_errors[generated.menu_id] = (
+                        "PRESENTATION_REVIEW_EVIDENCE_MISSING"
+                    )
+                    continue
                 generated.used_evidence_ids = [
                     evidence_id
                     for evidence_id in generated.used_evidence_ids
@@ -796,14 +897,23 @@ class MenuPresentationGenerator:
                     "menu_components",
                 }
                 if not set(generated.yobi_used_source_fields) <= yobi_allowed_fields:
-                    raise ValueError("PRESENTATION_YOBI_SOURCE_SCOPE_INVALID")
+                    item_errors[generated.menu_id] = (
+                        "PRESENTATION_YOBI_SOURCE_SCOPE_INVALID"
+                    )
+                    continue
                 if "synthetic_reviews" in generated.yobi_used_source_fields:
-                    raise ValueError("PRESENTATION_YOBI_REVIEW_SOURCE_FORBIDDEN")
+                    item_errors[generated.menu_id] = (
+                        "PRESENTATION_YOBI_REVIEW_SOURCE_FORBIDDEN"
+                    )
+                    continue
                 expected_review_fields = {"synthetic_reviews"} if source.get(
                     "synthetic_reviews"
                 ) else set()
                 if set(generated.review_used_source_fields) != expected_review_fields:
-                    raise ValueError("PRESENTATION_REVIEW_SOURCE_SCOPE_INVALID")
+                    item_errors[generated.menu_id] = (
+                        "PRESENTATION_REVIEW_SOURCE_SCOPE_INVALID"
+                    )
+                    continue
                 required_yobi_fields = {"menu_title_ko", "localized_title"}
                 if source.get("source_description_ko"):
                     required_yobi_fields.add("source_description_ko")
@@ -814,7 +924,10 @@ class MenuPresentationGenerator:
                 if source.get("menu_components"):
                     required_yobi_fields.add("menu_components")
                 if not required_yobi_fields <= set(generated.yobi_used_source_fields):
-                    raise ValueError("PRESENTATION_YOBI_REQUIRED_SOURCE_FIELD_MISSING")
+                    item_errors[generated.menu_id] = (
+                        "PRESENTATION_YOBI_REQUIRED_SOURCE_FIELD_MISSING"
+                    )
+                    continue
                 required_source_fields = {"menu_title_ko", "localized_title"}
                 if source.get("source_description_ko"):
                     required_source_fields.add("source_description_ko")
@@ -827,7 +940,10 @@ class MenuPresentationGenerator:
                 if source.get("menu_components"):
                     required_source_fields.add("menu_components")
                 if not required_source_fields <= set(generated.used_source_fields):
-                    raise ValueError("PRESENTATION_REQUIRED_SOURCE_FIELD_MISSING")
+                    item_errors[generated.menu_id] = (
+                        "PRESENTATION_REQUIRED_SOURCE_FIELD_MISSING"
+                    )
+                    continue
                 generated.used_source_fields = sorted(set(generated.used_source_fields))
                 required_components = {
                     str(component.get("component_id"))
@@ -835,7 +951,10 @@ class MenuPresentationGenerator:
                     if isinstance(component, dict) and component.get("component_id")
                 }
                 if set(generated.covered_component_ids) != required_components:
-                    raise ValueError("PRESENTATION_COMPONENT_COVERAGE_INVALID")
+                    item_errors[generated.menu_id] = (
+                        "PRESENTATION_COMPONENT_COVERAGE_INVALID"
+                    )
+                    continue
                 component_mention_ids = [
                     mention.component_id for mention in generated.component_mentions
                 ]
@@ -843,7 +962,10 @@ class MenuPresentationGenerator:
                     len(component_mention_ids) != len(set(component_mention_ids))
                     or set(component_mention_ids) != required_components
                 ):
-                    raise ValueError("PRESENTATION_COMPONENT_MENTION_SET_INVALID")
+                    item_errors[generated.menu_id] = (
+                        "PRESENTATION_COMPONENT_MENTION_SET_INVALID"
+                    )
+                    continue
                 explanatory_copy = _normalized_text(
                     " ".join(
                         (
@@ -858,7 +980,10 @@ class MenuPresentationGenerator:
                     or _normalized_text(mention.mention_text) not in explanatory_copy
                     for mention in generated.component_mentions
                 ):
-                    raise ValueError("PRESENTATION_COMPONENT_MENTION_NOT_IN_COPY")
+                    item_errors[generated.menu_id] = (
+                        "PRESENTATION_COMPONENT_MENTION_NOT_IN_COPY"
+                    )
+                    continue
                 if target_language == "en":
                     component_by_id = {
                         str(component.get("component_id")): component
@@ -872,7 +997,10 @@ class MenuPresentationGenerator:
                         )
                         for mention in generated.component_mentions
                     ):
-                        raise ValueError("PRESENTATION_COMPONENT_MENTION_MEANING_INVALID")
+                        item_errors[generated.menu_id] = (
+                            "PRESENTATION_COMPONENT_MENTION_MEANING_INVALID"
+                        )
+                        continue
             if item_errors:
                 result.items = [
                     item for item in result.items if item.menu_id not in item_errors

@@ -32,6 +32,7 @@ from app.genai.contracts import (
 from app.genai.presentation_generator import MenuPresentationGenerator
 from app.services.menu_presentation import (
     MenuPresentationService,
+    deterministic_localized_source_description,
     deterministic_localized_subtitle,
 )
 
@@ -658,6 +659,27 @@ def test_presentation_accepts_spelled_quantity_when_value_is_unchanged() -> None
     assert len(repository.cache) == 1
 
 
+def test_presentation_accepts_one_sentence_review_summary() -> None:
+    payload = _generated_payload()
+    payload["items"][0]["review_summary"] = "Reviewers liked the chewy texture."
+    repository = PresentationRepository(
+        MerchantMenuPresentationPage(items=[_presentation()])
+    )
+    provider = PresentationProvider(output=json.dumps(payload))
+    service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        generator=MenuPresentationGenerator(Settings(), provider=provider),
+    )
+
+    page = service.list_presentations(
+        "session-1", "merchant-1", MerchantMenuPresentationRequest()
+    )
+
+    assert page.items[0].generation_model == "xai.grok-4.3"
+    assert page.items[0].review_summary == "Reviewers liked the chewy texture."
+
+
 def test_presentation_rejects_changed_quantities_in_yogiyo_translation() -> None:
     payload = _generated_payload()
     payload["items"][0].update(
@@ -728,6 +750,30 @@ def test_quantity_failure_isolated_to_one_menu_in_provider_batch() -> None:
     assert len(repository.cache) == 2
 
 
+def test_schema_failure_isolated_to_one_menu_in_provider_batch() -> None:
+    presentations = [_presentation(f"menu-{index}") for index in range(1, 4)]
+    payload = _generated_payload([item.menu.menu_id for item in presentations])
+    payload["items"][1]["review_summary"] = "One. Two. Three. Four."
+    repository = PresentationRepository(MerchantMenuPresentationPage(items=presentations))
+    provider = PresentationProvider(output=json.dumps(payload))
+    service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        generator=MenuPresentationGenerator(Settings(), provider=provider),
+    )
+
+    page = service.list_presentations(
+        "session-1", "merchant-1", MerchantMenuPresentationRequest()
+    )
+
+    assert [item.generation_model for item in page.items] == [
+        "xai.grok-4.3",
+        "DETERMINISTIC_GROUNDED_FALLBACK",
+        "xai.grok-4.3",
+    ]
+    assert len(repository.cache) == 2
+
+
 def test_menu_presentation_rate_limit_keeps_deterministic_copy_without_model_retry() -> None:
     repository = PresentationRepository(MerchantMenuPresentationPage(items=[_presentation()]))
     provider = PresentationProvider(rate_limit_primary=True)
@@ -760,6 +806,32 @@ def test_selected_menu_fallback_keeps_validated_target_language_yogiyo_copy() ->
     )
 
     assert presented["menu-1"].source_description == "Chewy rice cakes cooked to order."
+
+
+def test_deterministic_source_fallback_rejects_old_phonetic_localizations() -> None:
+    source = "매콤한 떡볶이와 불향가득 차돌박이를 정성껏 준비했습니다"
+
+    assert deterministic_localized_source_description(
+        "en",
+        source_ko=source,
+        candidates=[
+            "Maekomhan tteokbokki wa bulhyanggadeuk chadolbakireul "
+            "jeongseongkkeot junbihaetseupnida."
+        ],
+    ) == ""
+    assert deterministic_localized_source_description(
+        "ja",
+        source_ko=source,
+        candidates=[
+            "メコムハン トッポッキ オァ ブルヒャンガドゥク チャドルバクイルル "
+            "ジョンソンコッ ジュンビヘッスプニダ。"
+        ],
+    ) == ""
+    assert deterministic_localized_source_description(
+        "en",
+        source_ko=source,
+        candidates=["Spicy tteokbokki served with smoky beef brisket."],
+    ) == "Spicy tteokbokki served with smoky beef brisket."
 
 
 def test_invalid_grounding_contract_keeps_deterministic_copy_without_fallback() -> None:
@@ -1095,7 +1167,7 @@ def test_current_prompt_and_schema_logically_invalidate_legacy_cache_without_del
     )
 
     assert current_settings.menu_presentation_prompt_version == (
-        "yobi-menu-presentation-v10-review-isolation-quantity-safe"
+        "yobi-menu-presentation-v11-item-isolation-translation-safe"
     )
     assert current_settings.menu_presentation_schema_version == "6"
     assert provider.requested_ids == [["menu-1"]]

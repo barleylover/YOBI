@@ -6,6 +6,7 @@ from pathlib import Path
 from scripts.build_synthetic_enrichment_release import (
     _apply_sqlite,
     _load_sqlite_inputs,
+    _synthetic_family_id,
 )
 
 from app.db.sqlite_repository import SQLiteYobiRepository
@@ -69,6 +70,18 @@ def test_enrichment_is_reproducible_and_exact() -> None:
     assert len(first["reviews"]) == len(_menus()) * 6
     assert len(first["localizations"]) == len(_menus())
     assert sum(int(row["halal_fit"]) for row in first["menus"]) == (len(_menus()) + 1) // 3
+
+
+def test_synthetic_family_id_remains_distinct_at_oracle_column_limit() -> None:
+    previous = "family-" + "x" * 153
+
+    generated = _synthetic_family_id(previous, "release-v6", "a" * 64)
+
+    assert len(previous) == 160
+    assert len(generated) == 160
+    assert generated != previous
+    assert generated == _synthetic_family_id(previous, "release-v6", "a" * 64)
+    assert generated != _synthetic_family_id(previous, "release-v7", "a" * 64)
 
 
 def test_enrichment_guards_obvious_pork_and_animal_options() -> None:
@@ -321,4 +334,6 @@ def test_sqlite_release_apply_is_resumable_and_preserves_base_tables(tmp_path: P
         )
 
     assert active_after_restart == active_before_restart
+    assert active_before_restart != active_family_id
+    assert len(active_before_restart) <= 160
     assert active_enrichment == "release-resumable"
