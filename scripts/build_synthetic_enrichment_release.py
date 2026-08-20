@@ -220,6 +220,79 @@ def _oracle_merge_many(
     cursor.executemany(sql, rows)
 
 
+def _copy_active_menu_localizations_oracle(
+    cursor: oracledb.Cursor, *, release_id: str
+) -> None:
+    """Carry forward validated identity titles without copying runtime copy caches."""
+    cursor.execute(
+        """
+        MERGE INTO menu_localization target
+        USING (
+          SELECT :release_id release_id,localization.menu_id,
+                 localization.language_code,localization.display_name,
+                 localization.model_id,localization.prompt_version,
+                 localization.wiki_evidence_ids_json,localization.source_hash,
+                 localization.validation_status,localization.generated_at
+          FROM recommendation_runtime_state runtime_state
+          JOIN recommendation_release_family family
+            ON family.release_family_id=runtime_state.active_release_family_id
+          JOIN menu_localization localization
+            ON localization.release_id=family.synthetic_enrichment_release_id
+          JOIN synthetic_menu_profile target_profile
+            ON target_profile.release_id=:release_id
+           AND target_profile.menu_id=localization.menu_id
+          WHERE runtime_state.state_key='ACTIVE'
+            AND localization.validation_status='VALID'
+            AND localization.language_code IN ('en','ja')
+        ) source
+        ON (target.release_id=source.release_id
+            AND target.menu_id=source.menu_id
+            AND target.language_code=source.language_code)
+        WHEN NOT MATCHED THEN INSERT (
+          release_id,menu_id,language_code,display_name,model_id,prompt_version,
+          wiki_evidence_ids_json,source_hash,validation_status,generated_at
+        ) VALUES (
+          source.release_id,source.menu_id,source.language_code,source.display_name,
+          source.model_id,source.prompt_version,source.wiki_evidence_ids_json,
+          source.source_hash,source.validation_status,source.generated_at
+        )
+        """,
+        release_id=release_id,
+    )
+
+
+def _copy_active_menu_localizations_sqlite(
+    connection: sqlite3.Connection, *, release_id: str
+) -> None:
+    """SQLite equivalent of the release-to-release identity-title carry-forward."""
+    connection.execute(
+        """
+        INSERT INTO menu_localization(
+          release_id,menu_id,language_code,display_name,model_id,prompt_version,
+          wiki_evidence_ids_json,source_hash,validation_status,generated_at
+        )
+        SELECT ?,localization.menu_id,localization.language_code,
+               localization.display_name,localization.model_id,
+               localization.prompt_version,localization.wiki_evidence_ids_json,
+               localization.source_hash,localization.validation_status,
+               localization.generated_at
+        FROM recommendation_runtime_state runtime_state
+        JOIN recommendation_release_family family
+          ON family.release_family_id=runtime_state.active_release_family_id
+        JOIN menu_localization localization
+          ON localization.release_id=family.synthetic_enrichment_release_id
+        JOIN synthetic_menu_profile target_profile
+          ON target_profile.release_id=?
+         AND target_profile.menu_id=localization.menu_id
+        WHERE runtime_state.state_key='ACTIVE'
+          AND localization.validation_status='VALID'
+          AND localization.language_code IN ('en','ja')
+        ON CONFLICT(release_id,menu_id,language_code) DO NOTHING
+        """,
+        (release_id, release_id),
+    )
+
+
 def _oracle_clone_and_activate_family(
     connection: oracledb.Connection,
     *,
@@ -367,6 +440,7 @@ def _apply_oracle(
             ("menu_localization", "localizations"),
         ):
             _oracle_merge_many(cursor, table, rows[key])
+        _copy_active_menu_localizations_oracle(cursor, release_id=release_id)
         cursor.execute(
             """
             SELECT COUNT(*) FROM menu_localization
@@ -498,6 +572,7 @@ def _apply_sqlite(
             ("menu_localization", "localizations"),
         ):
             _upsert_many(connection, table, rows[key])
+        _copy_active_menu_localizations_sqlite(connection, release_id=release_id)
         eligible_count = len(rows["menus"])
         valid_localization_count = int(
             connection.execute(

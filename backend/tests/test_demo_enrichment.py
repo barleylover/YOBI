@@ -154,6 +154,35 @@ def test_sqlite_release_apply_is_resumable_and_preserves_base_tables(tmp_path: P
     }
 
     with sqlite3.connect(database_path) as connection:
+        active_family_id = str(
+            connection.execute(
+                "SELECT active_release_family_id FROM recommendation_runtime_state "
+                "WHERE state_key='ACTIVE'"
+            ).fetchone()[0]
+        )
+        connection.execute(
+            """
+            INSERT INTO synthetic_enrichment_release(
+              release_id,catalog_release_id,knowledge_release_id,seed_value,
+              generator_version,manifest_sha256,status,created_at
+            ) VALUES (?,?,?,?,?,?,?,?)
+            """,
+            (
+                "release-source",
+                catalog_release_id,
+                knowledge_release_id,
+                "source-seed",
+                "source-generator",
+                "b" * 64,
+                "ACTIVE",
+                "2026-08-19T00:00:00+00:00",
+            ),
+        )
+        connection.execute(
+            "UPDATE recommendation_release_family "
+            "SET synthetic_enrichment_release_id=? WHERE release_family_id=?",
+            ("release-source", active_family_id),
+        )
         connection.executemany(
             """
             INSERT INTO menu_localization(
@@ -163,7 +192,7 @@ def test_sqlite_release_apply_is_resumable_and_preserves_base_tables(tmp_path: P
             """,
             [
                 (
-                    "release-resumable",
+                    "release-source",
                     menu.menu_id,
                     language_code,
                     menu.name_ko,
@@ -196,6 +225,14 @@ def test_sqlite_release_apply_is_resumable_and_preserves_base_tables(tmp_path: P
                 "WHERE state_key='ACTIVE'"
             ).fetchone()[0]
         )
+        localization_count = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM menu_localization "
+                "WHERE release_id=? AND validation_status='VALID'",
+                ("release-resumable",),
+            ).fetchone()[0]
+        )
+        assert localization_count == len(menus) * 3
 
     SQLiteYobiRepository(database_path).initialize()
 
