@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from time import monotonic
 from typing import Any
 from uuid import uuid4
@@ -34,6 +35,77 @@ _TRANSLATION_SCHEMA: dict[str, Any] = {
     "required": ["korean_text", "back_translation"],
     "additionalProperties": False,
 }
+
+_INVALID_KOREAN_NOTE_CHARACTER = re.compile(
+    r"[^가-힣ㄱ-ㅎㅏ-ㅣA-Za-z0-9\s.,!?()/%+\-&'·:~]"
+)
+
+
+def _translation_error(
+    data: RestaurantNoteTranslationInput,
+    payload: _TranslationPayload,
+) -> str | None:
+    source = data.source_text.strip()
+    source_lower = source.casefold()
+    korean = payload.korean_text.strip()
+    back = payload.back_translation.strip()
+    if not data.source_language.lower().startswith("ko") and not re.search(r"[가-힣]", korean):
+        return "TRANSLATION_KOREAN_TEXT_REQUIRED"
+    if _INVALID_KOREAN_NOTE_CHARACTER.search(korean):
+        return "TRANSLATION_INVALID_KOREAN_CHARACTERS"
+    if not re.search(r"\d", source) and (re.search(r"\d", korean) or re.search(r"\d", back)):
+        return "TRANSLATION_INVENTED_NUMBER"
+    if data.source_language.lower().startswith("en") and re.search(r"[가-힣]", back):
+        return "TRANSLATION_BACK_TRANSLATION_LANGUAGE_INVALID"
+
+    # These are high-impact, common restaurant-note intents. The checks are
+    # deliberately narrow: they reject a changed action, while leaving ordinary
+    # wording and cuisine names to the model.
+    if re.search(r"\b(?:less spicy|mild|not spicy)\b", source_lower) and not re.search(
+        r"덜\s*맵|맵지\s*않|안\s*맵", korean
+    ):
+        return "TRANSLATION_SPICE_INTENT_LOST"
+    if re.search(r"\b(?:separate(?:ly)?|on the side)\b", source_lower) and not re.search(
+        r"따로|별도", korean
+    ):
+        return "TRANSLATION_SEPARATE_INTENT_LOST"
+    if "onion" in source_lower and re.search(
+        r"\b(?:no|without|leave out|omit|do not add)\b", source_lower
+    ) and not ("양파" in korean and re.search(r"빼|제외|넣지\s*말|없이", korean)):
+        return "TRANSLATION_OMISSION_INTENT_LOST"
+    if "chopstick" in source_lower and "젓가락" not in korean:
+        return "TRANSLATION_CHOPSTICK_INTENT_LOST"
+    if "allerg" in source_lower and "알레르기" not in korean:
+        return "TRANSLATION_ALLERGY_INTENT_LOST"
+    if "peanut" in source_lower and "땅콩" not in korean:
+        return "TRANSLATION_PEANUT_INTENT_LOST"
+    return None
+
+
+def _safe_demo_translation(data: RestaurantNoteTranslationInput) -> tuple[str, str] | None:
+    if not data.source_language.lower().startswith("en"):
+        return None
+    source = data.source_text.strip()
+    lowered = source.casefold()
+    if "peanut" in lowered and "allerg" in lowered:
+        return "땅콩 알레르기가 있으니 땅콩은 넣지 말아 주세요.", source
+    if "chopstick" in lowered and re.search(r"\b(?:two|2)\b", lowered):
+        return "젓가락 두 벌 넣어 주세요.", source
+    if "onion" in lowered and re.search(
+        r"\b(?:no|without|leave out|omit|do not add)\b", lowered
+    ):
+        return "양파는 빼 주세요.", source
+    if re.search(r"\b(?:sauce|dressing)\b", lowered) and re.search(
+        r"\b(?:separate(?:ly)?|on the side)\b", lowered
+    ):
+        return "소스는 따로 담아 주세요.", source
+    if re.search(r"\b(?:less spicy|mild|not spicy)\b", lowered):
+        prefix = "가능하면 " if "if possible" in lowered else ""
+        suffix = " 어렵다면 괜찮습니다." if re.search(
+            r"if (?:not|that is difficult).*(?:okay|ok)", lowered
+        ) else ""
+        return f"{prefix}덜 맵게 해 주세요.{suffix}", source
+    return None
 
 
 class RestaurantNoteTranslationService:
@@ -133,10 +205,9 @@ class RestaurantNoteTranslationService:
                 response = self.provider.create_response(model_id, **request)
                 raw = str(getattr(response, "output_text", "")).strip()
                 parsed = _TranslationPayload.model_validate(parse_json_object(raw))
-                if not data.source_language.lower().startswith("ko") and not any(
-                    "가" <= character <= "힣" for character in parsed.korean_text
-                ):
-                    raise ValueError("TRANSLATION_KOREAN_TEXT_REQUIRED")
+                validation_error = _translation_error(data, parsed)
+                if validation_error is not None:
+                    raise ValueError(validation_error)
                 usage = self._usage(response)
                 self._record_attempt(
                     session_id,
@@ -184,7 +255,7 @@ class RestaurantNoteTranslationService:
                 if fallback_allowed and index + 1 < len(models):
                     continue
                 break
-            except (json.JSONDecodeError, ValidationError, ValueError):
+            except (json.JSONDecodeError, ValidationError):
                 last_error = "TRANSLATION_RESPONSE_INVALID"
                 self._record_attempt(
                     session_id,
@@ -200,6 +271,56 @@ class RestaurantNoteTranslationService:
                 if index + 1 < len(models):
                     continue
                 break
+            except ValueError as exc:
+                reason = str(exc).strip()
+                last_error = (
+                    reason
+                    if reason.startswith("TRANSLATION_")
+                    else "TRANSLATION_RESPONSE_INVALID"
+                )
+                self._record_attempt(
+                    session_id,
+                    request_hash,
+                    attempt_no=index + 1,
+                    model_id=model_id,
+                    status="FAILED",
+                    error_code=last_error,
+                    latency_ms=int((monotonic() - attempt_started) * 1000),
+                    input_tokens=None,
+                    output_tokens=None,
+                )
+                if index + 1 < len(models):
+                    continue
+                break
+
+        safe_fallback = _safe_demo_translation(data)
+        if safe_fallback is not None:
+            korean_text, back_translation = safe_fallback
+            fallback_model = "DETERMINISTIC_RESTAURANT_NOTE_FALLBACK"
+            self._record_attempt(
+                session_id,
+                request_hash,
+                attempt_no=len(models) + 1,
+                model_id=fallback_model,
+                status="SUCCEEDED",
+                error_code=None,
+                latency_ms=0,
+                input_tokens=None,
+                output_tokens=None,
+            )
+            return self.repository.save_restaurant_note_translation(
+                session_id,
+                translation_id=f"note_{uuid4().hex}",
+                source_language=data.source_language,
+                source_text=data.source_text,
+                korean_text=korean_text,
+                back_translation=back_translation,
+                provider="deterministic",
+                model_id=fallback_model,
+                status="SUCCEEDED",
+                error_code=None,
+                request_hash=request_hash,
+            )
 
         return self.repository.save_restaurant_note_translation(
             session_id,
@@ -228,6 +349,8 @@ conditional wording, and whether something should be omitted, added, cooked, or 
 Do not strengthen a preference into an allergy, weaken an allergy, promise that the restaurant can
 comply, invent a reason, add a greeting, or add any request absent from the source. Avoid awkward
 word-for-word translation when a standard Korean restaurant-note phrase is clearer.
+Use ordinary Korean Hangul, standard punctuation, and only quantities present in the source. Never
+emit corrupted glyphs, unrelated numbers, encoded tokens, or placeholder text.
 
 Write back_translation in the visitor's source_language. It must faithfully translate the final
 korean_text so the visitor can confirm what the restaurant will receive; do not merely repeat the

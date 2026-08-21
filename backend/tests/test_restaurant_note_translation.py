@@ -78,6 +78,20 @@ def _payload() -> dict[str, str]:
     }
 
 
+def _onion_payload() -> dict[str, str]:
+    return {
+        "korean_text": "양파는 빼 주세요.",
+        "back_translation": "No onions, please.",
+    }
+
+
+def _sauce_payload() -> dict[str, str]:
+    return {
+        "korean_text": "소스는 따로 담아 주세요.",
+        "back_translation": "Please pack the sauce separately.",
+    }
+
+
 def test_note_translation_uses_first_available_model_and_enables_cart_note(
     repository: SQLiteYobiRepository,
 ) -> None:
@@ -123,7 +137,7 @@ def test_note_translation_falls_back_to_next_model_on_rate_limit(
             "meta.llama-4-maverick-17b-128e-instruct-fp8": GenAIProviderError(
                 GenAIErrorCode.RATE_LIMIT, retryable=True
             ),
-            "openai.gpt-oss-20b": _payload(),
+            "openai.gpt-oss-20b": _onion_payload(),
         }
     )
     service = RestaurantNoteTranslationService(repository, Settings(), provider=provider)
@@ -169,7 +183,7 @@ def test_failed_note_translation_blocks_nonempty_note_but_allows_note_free_cart(
     service = RestaurantNoteTranslationService(repository, Settings(), provider=provider)
     failed = service.translate(
         session_id,
-        RestaurantNoteTranslationInput(source_text="No onions, please.", source_language="en"),
+        RestaurantNoteTranslationInput(source_text="Please call me.", source_language="en"),
     )
 
     assert failed.status == "FAILED"
@@ -206,7 +220,7 @@ def test_invalid_fenced_response_advances_to_next_model(
     provider = PlannedProvider(
         {
             "meta.llama-4-maverick-17b-128e-instruct-fp8": "not json",
-            "openai.gpt-oss-20b": f"```json\n{json.dumps(_payload(), ensure_ascii=False)}\n```",
+            "openai.gpt-oss-20b": f"```json\n{json.dumps(_onion_payload(), ensure_ascii=False)}\n```",
         }
     )
     translated = RestaurantNoteTranslationService(
@@ -224,7 +238,9 @@ def test_non_structured_provider_receives_explicit_translation_contract(
     repository: SQLiteYobiRepository,
 ) -> None:
     session_id = _session(repository)
-    provider = PlannedProvider({"meta.llama-4-maverick-17b-128e-instruct-fp8": _payload()})
+    provider = PlannedProvider(
+        {"meta.llama-4-maverick-17b-128e-instruct-fp8": _onion_payload()}
+    )
     provider.capabilities = provider.capabilities.model_copy(update={"structured_output": False})
 
     translated = RestaurantNoteTranslationService(
@@ -243,7 +259,9 @@ def test_note_translation_prompt_explains_restaurant_context_and_examples(
     repository: SQLiteYobiRepository,
 ) -> None:
     session_id = _session(repository)
-    provider = PlannedProvider({"meta.llama-4-maverick-17b-128e-instruct-fp8": _payload()})
+    provider = PlannedProvider(
+        {"meta.llama-4-maverick-17b-128e-instruct-fp8": _sauce_payload()}
+    )
     settings = Settings()
 
     RestaurantNoteTranslationService(repository, settings, provider=provider).translate(
@@ -301,7 +319,7 @@ def test_non_korean_translation_is_rejected_and_20b_can_recover(
                 "korean_text": "No onions, please.",
                 "back_translation": "No onions, please.",
             },
-            "openai.gpt-oss-20b": _payload(),
+            "openai.gpt-oss-20b": _onion_payload(),
         }
     )
 
@@ -314,6 +332,71 @@ def test_non_korean_translation_is_rejected_and_20b_can_recover(
 
     assert translated.status == "SUCCEEDED"
     assert translated.model_id == "openai.gpt-oss-20b"
+
+
+def test_corrupted_or_invented_note_translation_advances_to_next_model(
+    repository: SQLiteYobiRepository,
+) -> None:
+    session_id = _session(repository)
+    provider = PlannedProvider(
+        {
+            "meta.llama-4-maverick-17b-128e-instruct-fp8": {
+                "korean_text": "가격龜74 더 적게 해 주콘.",
+                "back_translation": "If possible, please make it less spicy.",
+            },
+            "openai.gpt-oss-20b": {
+                "korean_text": "가능하면 덜 맵게 해 주세요.",
+                "back_translation": "If possible, please make it less spicy.",
+            },
+        }
+    )
+
+    translated = RestaurantNoteTranslationService(
+        repository, Settings(), provider=provider
+    ).translate(
+        session_id,
+        RestaurantNoteTranslationInput(
+            source_text="If possible, please make it less spicy.",
+            source_language="en",
+        ),
+    )
+
+    assert translated.status == "SUCCEEDED"
+    assert translated.model_id == "openai.gpt-oss-20b"
+    assert provider.calls == [
+        "meta.llama-4-maverick-17b-128e-instruct-fp8",
+        "openai.gpt-oss-20b",
+    ]
+
+
+def test_common_restaurant_note_uses_safe_fallback_after_both_models_fail_validation(
+    repository: SQLiteYobiRepository,
+) -> None:
+    session_id = _session(repository)
+    corrupt = {
+        "korean_text": "가격龜74 더 적게 해 주콘.",
+        "back_translation": "If possible, please make it less spicy.",
+    }
+    provider = PlannedProvider(
+        {
+            "meta.llama-4-maverick-17b-128e-instruct-fp8": corrupt,
+            "openai.gpt-oss-20b": corrupt,
+        }
+    )
+
+    translated = RestaurantNoteTranslationService(
+        repository, Settings(), provider=provider
+    ).translate(
+        session_id,
+        RestaurantNoteTranslationInput(
+            source_text="If possible, please make it less spicy.",
+            source_language="en",
+        ),
+    )
+
+    assert translated.status == "SUCCEEDED"
+    assert translated.korean_text == "가능하면 덜 맵게 해 주세요."
+    assert translated.model_id == "DETERMINISTIC_RESTAURANT_NOTE_FALLBACK"
 
 
 def test_unsupported_configured_model_advances_to_a_working_model(

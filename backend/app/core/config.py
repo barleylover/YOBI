@@ -92,7 +92,7 @@ class Settings(BaseSettings):
     menu_presentation_prompt_version: str = "yobi-menu-presentation-v17-partial-item-recovery"
     menu_presentation_schema_version: str = "6"
     option_localization_prompt_version: str = "yobi-option-localization-v8-control-token-fix"
-    restaurant_note_prompt_version: str = "yobi-restaurant-note-v2-order-context-examples"
+    restaurant_note_prompt_version: str = "yobi-restaurant-note-v3-validated-order-context"
     menu_presentation_wait_seconds: float = Field(default=10.0, ge=0.0, le=30.0)
     menu_presentation_poll_seconds: float = Field(default=0.25, ge=0.05, le=2.0)
     recommendation_raw_hits_per_value: int = Field(default=20, ge=4, le=100)
