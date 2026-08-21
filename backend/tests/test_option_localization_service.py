@@ -176,9 +176,7 @@ class OptionRepository:
                 update={
                     "display_name": group_names[group.option_group_id],
                     "items": [
-                        item.model_copy(
-                            update={"display_name": item_names[item.option_item_id]}
-                        )
+                        item.model_copy(update={"display_name": item_names[item.option_item_id]})
                         for item in group.items
                     ],
                 }
@@ -186,6 +184,20 @@ class OptionRepository:
         ]
         self.saved = True
         self.saved_prompt = prompt_version
+
+
+class BrokenOptionCacheRepository(OptionRepository):
+    def save_option_localizations(
+        self,
+        session_id: str,
+        menu_id: str,
+        group_names: dict[str, str],
+        item_names: dict[str, str],
+        model_id: str,
+        prompt_version: str,
+    ) -> None:
+        del session_id, menu_id, group_names, item_names, model_id, prompt_version
+        raise RuntimeError("OPTION_CACHE_WRITE_UNAVAILABLE")
 
 
 def test_generator_maps_ordered_strings_without_model_owned_ids() -> None:
@@ -349,6 +361,16 @@ def test_number_validation_accepts_natural_one_per_order_compression() -> None:
     )
 
 
+def test_option_control_validation_distinguishes_uncooked_from_cooked() -> None:
+    assert _option_translation_error("비조리", "Uncooked", "en") is None
+    assert (
+        _option_translation_error("비조리", "Cooked", "en")
+        == "OPTION_LOCALIZATION_CONTROL_MEANING_LOST"
+    )
+    assert _option_translation_error("맛 선택", "Flavor", "en") is None
+    assert _option_translation_error("선택 안함", "Skip", "en") is None
+
+
 def test_yogiyo_domain_terms_reject_literal_or_phonetic_mistranslations() -> None:
     assert (
         _option_translation_error("찜 + 사진 이벤트", "Steam + Photo Event", "en")
@@ -404,6 +426,159 @@ def test_selected_menu_options_generate_once_then_use_prompt_versioned_cache() -
     assert second == first
     assert len(provider.calls) == 1
     assert repository.saved_prompt == settings.option_localization_prompt_version
+
+
+def test_generator_returns_safe_partial_translation_for_one_unresolved_label() -> None:
+    provider = FallbackOptionProvider(
+        {
+            "openai.gpt-oss-20b": {
+                "groups": [
+                    {
+                        "display_name": "Drink add-ons",
+                        "item_display_names": ["Add Coca-Cola 355ml", "새콤달콤"],
+                    }
+                ]
+            },
+            "openai.gpt-oss-120b": {
+                "groups": [
+                    {
+                        "display_name": "Drink add-ons",
+                        "item_display_names": ["Add Coca-Cola 355ml", "새콤달콤"],
+                    }
+                ]
+            },
+        }
+    )
+
+    result = OptionLocalizationGenerator(Settings(), provider=provider).generate(
+        groups=[
+            {
+                "name_ko": "음료 추가선택",
+                "name_en": "Drink add-ons",
+                "items": [
+                    {
+                        "name_ko": "코카콜라 355ml 추가",
+                        "name_en": "Add Coca-Cola 355ml",
+                    },
+                    {"name_ko": "새콤달콤", "name_en": ""},
+                ],
+            }
+        ],
+        locale="English",
+    )
+
+    assert result.groups[0].display_name == "Drink add-ons"
+    assert result.groups[0].item_display_names == ["Add Coca-Cola 355ml", "새콤달콤"]
+    assert result.unresolved_paths == ["G0:I1"]
+    assert result.generation_model == "openai.gpt-oss-20b+PARTIAL_SAFE_FALLBACK"
+    assert [call["model"] for call in provider.calls] == [
+        "openai.gpt-oss-20b",
+        "openai.gpt-oss-120b",
+    ]
+
+
+def test_partial_translation_is_returned_but_not_cached() -> None:
+    repository = OptionRepository()
+    source_group = repository.groups[0]
+    repository.groups = [
+        source_group.model_copy(
+            update={
+                "items": [
+                    source_group.items[0],
+                    source_group.items[1].model_copy(
+                        update={
+                            "name_ko": "새콤달콤",
+                            "name_en": "",
+                            "display_name": "새콤달콤",
+                        }
+                    ),
+                ]
+            }
+        )
+    ]
+    provider = FallbackOptionProvider(
+        {
+            model: {
+                "groups": [
+                    {
+                        "display_name": "Drink add-ons",
+                        "item_display_names": ["Add Coca-Cola 355ml", "새콤달콤"],
+                    }
+                ]
+            }
+            for model in ("openai.gpt-oss-20b", "openai.gpt-oss-120b")
+        }
+    )
+    settings = Settings()
+    service = OptionLocalizationService(
+        repository,  # type: ignore[arg-type]
+        settings,
+        generator=OptionLocalizationGenerator(settings, provider=provider),
+    )
+
+    result = service.get_options("menu-1", "session-1")
+
+    assert result[0].display_name == "Drink add-ons"
+    assert result[0].items[0].display_name == "Add Coca-Cola 355ml"
+    assert result[0].items[1].display_name == "새콤달콤"
+    assert repository.saved is False
+
+
+def test_known_control_label_uses_server_safe_fallback_and_is_cached() -> None:
+    repository = OptionRepository()
+    provider = FallbackOptionProvider(
+        {
+            model: {
+                "groups": [
+                    {
+                        "display_name": "Drink add-ons",
+                        "item_display_names": ["Add Coca-Cola 355ml", "선택 안함"],
+                    }
+                ]
+            }
+            for model in ("openai.gpt-oss-20b", "openai.gpt-oss-120b")
+        }
+    )
+    settings = Settings()
+    service = OptionLocalizationService(
+        repository,  # type: ignore[arg-type]
+        settings,
+        generator=OptionLocalizationGenerator(settings, provider=provider),
+    )
+
+    result = service.get_options("menu-1", "session-1")
+
+    assert result[0].items[1].display_name == "None"
+    assert repository.saved is True
+
+
+def test_cache_write_failure_does_not_discard_generated_option_translation() -> None:
+    repository = BrokenOptionCacheRepository()
+    provider = OptionProvider(
+        {
+            "groups": [
+                {
+                    "display_name": "Drink add-ons",
+                    "item_display_names": ["Add Coca-Cola 355ml", "None"],
+                }
+            ]
+        }
+    )
+    settings = Settings()
+    service = OptionLocalizationService(
+        repository,  # type: ignore[arg-type]
+        settings,
+        generator=OptionLocalizationGenerator(settings, provider=provider),
+    )
+
+    result = service.get_options("menu-1", "session-1")
+
+    assert result[0].display_name == "Drink add-ons"
+    assert [item.display_name for item in result[0].items] == [
+        "Add Coca-Cola 355ml",
+        "None",
+    ]
+    assert repository.saved is False
 
 
 def test_missing_option_string_is_rejected_without_cache_write() -> None:
@@ -466,13 +641,14 @@ def test_concurrent_duplicate_option_requests_share_one_generation() -> None:
 
 
 def test_oracle_merge_never_updates_prompt_version_used_by_its_on_clause() -> None:
-    source = (ROOT / "backend" / "app" / "db" / "oracle_repository.py").read_text(
-        encoding="utf-8"
-    )
+    source = (ROOT / "backend" / "app" / "db" / "oracle_repository.py").read_text(encoding="utf-8")
     runtime_section = source.split("def save_option_localizations", maxsplit=1)[1].split(
         "def save_menu_runtime_localizations", maxsplit=1
     )[0]
 
     assert runtime_section.count("target.prompt_version=:prompt_version") == 2
     assert "UPDATE SET\n                      prompt_version=:prompt_version" not in runtime_section
-    assert "model_id=:model_id,\n                      prompt_version=:prompt_version" not in runtime_section
+    assert (
+        "model_id=:model_id,\n                      prompt_version=:prompt_version"
+        not in runtime_section
+    )

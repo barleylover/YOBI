@@ -463,16 +463,30 @@ class MenuPresentationService:
                         except Exception:
                             pass
                     continue
-                value, generation_model = generated_value
+                value, generation_model, fallback_fields = generated_value
+                effective_model = (
+                    f"{generation_model}+SAFE_FIELD_FALLBACK"
+                    if fallback_fields
+                    else generation_model
+                )
+                localized_subtitle = (
+                    value.localized_subtitle or item.localized_subtitle or item.localized_title
+                )
+                localized_source_description = (
+                    value.localized_source_description or item.source_description
+                )
+                yobi_short_explanation = value.yobi_short_explanation or item.yobi_short_explanation
+                yobi_long_explanation = value.yobi_long_explanation or item.yobi_long_explanation
+                review_summary = value.review_summary or item.review_summary
                 updated = item.model_copy(
                     update={
                         "localized_title": value.localized_title,
-                        "localized_subtitle": value.localized_subtitle,
-                        "source_description": value.localized_source_description,
-                        "yobi_short_explanation": value.yobi_short_explanation,
-                        "yobi_long_explanation": value.yobi_long_explanation,
-                        "review_summary": value.review_summary,
-                        "generation_model": generation_model,
+                        "localized_subtitle": localized_subtitle,
+                        "source_description": localized_source_description,
+                        "yobi_short_explanation": yobi_short_explanation,
+                        "yobi_long_explanation": yobi_long_explanation,
+                        "review_summary": review_summary,
+                        "generation_model": effective_model,
                         "personalization_applied": value.personalization_applied,
                         "evidence_map": {
                             **item.evidence_map,
@@ -487,7 +501,8 @@ class MenuPresentationService:
                                 mention.model_dump(mode="json")
                                 for mention in value.component_mentions
                             ],
-                            "localized_source_description": value.localized_source_description,
+                            "localized_source_description": localized_source_description,
+                            "safe_field_fallbacks": fallback_fields,
                         },
                     }
                 )
@@ -497,9 +512,9 @@ class MenuPresentationService:
                     self.repository.save_menu_runtime_localizations(
                         session_id,
                         item.menu.menu_id,
-                        value.localized_title,
-                        value.localized_source_description,
-                        generation_model,
+                        updated.localized_title,
+                        updated.source_description,
+                        effective_model,
                         self.settings.menu_presentation_prompt_version,
                     )
                 except Exception as exc:
@@ -571,7 +586,7 @@ class MenuPresentationService:
         on_provider_attempt: (
             Callable[[int, str, str, str | None, int, dict[str, int]], None] | None
         ),
-    ) -> tuple[dict[str, tuple[Any, str]], dict[str, str]]:
+    ) -> tuple[dict[str, tuple[Any, str, list[str]]], dict[str, str]]:
         """Generate one presentation batch without retrying grounding failures."""
 
         try:
@@ -582,7 +597,14 @@ class MenuPresentationService:
             )
             model = generated.generation_model or "UNKNOWN"
             return (
-                {value.menu_id: (value, model) for value in generated.items},
+                {
+                    value.menu_id: (
+                        value,
+                        model,
+                        generated.field_fallbacks.get(value.menu_id, []),
+                    )
+                    for value in generated.items
+                },
                 generated.item_errors,
             )
         except GenAIProviderError as exc:

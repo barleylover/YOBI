@@ -119,7 +119,10 @@ class OptionLocalizationService:
         payload = [
             {
                 "name_ko": group.name_ko,
-                "items": [{"name_ko": item.name_ko} for item in group.items],
+                "name_en": group.name_en,
+                "items": [
+                    {"name_ko": item.name_ko, "name_en": item.name_en} for item in group.items
+                ],
             }
             for group in groups
         ]
@@ -129,38 +132,6 @@ class OptionLocalizationService:
                 locale=locale,
                 on_provider_attempt=record_attempt,
             )
-            group_names = {
-                group.option_group_id: generated_group.display_name
-                for group, generated_group in zip(groups, generated.groups)
-            }
-            item_names = {
-                item.option_item_id: display_name
-                for group, generated_group in zip(groups, generated.groups)
-                for item, display_name in zip(
-                    group.items,
-                    generated_group.item_display_names,
-                )
-            }
-            model_id = generated.generation_model or self.settings.option_localization_model
-            self.repository.save_option_localizations(
-                session_id,
-                menu_id,
-                group_names,
-                item_names,
-                model_id,
-                self.settings.option_localization_prompt_version,
-            )
-            localized = self._apply_localizations(groups, group_names, item_names)
-            log_event(
-                self.logger,
-                event="option_localization_terminal",
-                status="SUCCEEDED",
-                menu_id_hash=self._hash_id(menu_id),
-                group_count=len(groups),
-                item_count=len(item_ids),
-                attempts=attempts,
-            )
-            return localized
         except Exception as exc:
             log_event(
                 self.logger,
@@ -174,6 +145,46 @@ class OptionLocalizationService:
                 or type(exc).__name__.upper(),
             )
             return groups
+
+        group_names = {
+            group.option_group_id: generated_group.display_name
+            for group, generated_group in zip(groups, generated.groups)
+        }
+        item_names = {
+            item.option_item_id: display_name
+            for group, generated_group in zip(groups, generated.groups)
+            for item, display_name in zip(
+                group.items,
+                generated_group.item_display_names,
+            )
+        }
+        localized = self._apply_localizations(groups, group_names, item_names)
+        model_id = generated.generation_model or self.settings.option_localization_model
+        cache_error: str | None = None
+        if not generated.unresolved_paths:
+            try:
+                self.repository.save_option_localizations(
+                    session_id,
+                    menu_id,
+                    group_names,
+                    item_names,
+                    model_id,
+                    self.settings.option_localization_prompt_version,
+                )
+            except Exception as exc:
+                cache_error = f"OPTION_LOCALIZATION_CACHE_{type(exc).__name__.upper()}"
+        log_event(
+            self.logger,
+            event="option_localization_terminal",
+            status="PARTIAL" if generated.unresolved_paths else "SUCCEEDED",
+            menu_id_hash=self._hash_id(menu_id),
+            group_count=len(groups),
+            item_count=len(item_ids),
+            attempts=attempts,
+            unresolved_paths=generated.unresolved_paths,
+            cache_error=cache_error,
+        )
+        return localized
 
     def _load_cached_options(
         self,
@@ -203,9 +214,7 @@ class OptionLocalizationService:
                 update={
                     "display_name": group_names[group.option_group_id],
                     "items": [
-                        item.model_copy(
-                            update={"display_name": item_names[item.option_item_id]}
-                        )
+                        item.model_copy(update={"display_name": item_names[item.option_item_id]})
                         for item in group.items
                     ],
                 }

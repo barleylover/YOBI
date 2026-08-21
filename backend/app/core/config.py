@@ -86,13 +86,9 @@ class Settings(BaseSettings):
     llm_max_tool_calls_per_response: int = Field(default=4, ge=1, le=14)
     tool_call_max_steps: int = Field(default=6, ge=1, le=12)
     recommendation_prompt_version: str = "yobi-structured-rag-v3-server-wiki-binding"
-    menu_presentation_prompt_version: str = (
-        "yobi-menu-presentation-v15-semantic-title-aliases"
-    )
+    menu_presentation_prompt_version: str = "yobi-menu-presentation-v16-minimal-safety-gates"
     menu_presentation_schema_version: str = "6"
-    option_localization_prompt_version: str = (
-        "yobi-option-localization-v5-yogiyo-domain-terms"
-    )
+    option_localization_prompt_version: str = "yobi-option-localization-v6-partial-safe-recovery"
     menu_presentation_wait_seconds: float = Field(default=10.0, ge=0.0, le=30.0)
     menu_presentation_poll_seconds: float = Field(default=0.25, ge=0.05, le=2.0)
     recommendation_raw_hits_per_value: int = Field(default=20, ge=4, le=100)

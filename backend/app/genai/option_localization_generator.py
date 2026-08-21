@@ -19,17 +19,18 @@ from app.genai.response_contract import parse_json_object
 
 
 class GeneratedOptionGroup(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     display_name: str = Field(min_length=1, max_length=300)
     item_display_names: list[str] = Field(max_length=500)
 
 
 class OptionLocalizationGeneration(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     _generation_model: str | None = PrivateAttr(default=None)
     _provider_metrics: dict[str, int] = PrivateAttr(default_factory=dict)
+    _unresolved_paths: list[str] = PrivateAttr(default_factory=list)
 
     groups: list[GeneratedOptionGroup] = Field(max_length=100)
 
@@ -40,6 +41,10 @@ class OptionLocalizationGeneration(BaseModel):
     @property
     def provider_metrics(self) -> dict[str, int]:
         return dict(self._provider_metrics)
+
+    @property
+    def unresolved_paths(self) -> list[str]:
+        return list(self._unresolved_paths)
 
 
 OPTION_LOCALIZATION_JSON_SCHEMA: dict[str, Any] = {
@@ -113,11 +118,7 @@ def _option_numbers_are_preserved(
     target_language: str,
 ) -> bool:
     expected = _number_tokens(source)
-    actual = (
-        _quantity_tokens(target, "en")
-        if target_language == "en"
-        else _number_tokens(target)
-    )
+    actual = _quantity_tokens(target, "en") if target_language == "en" else _number_tokens(target)
     if expected == actual:
         return True
 
@@ -158,6 +159,44 @@ def _option_translation_error(source: str, target: str, target_language: str) ->
             ):
                 return "OPTION_LOCALIZATION_SEMANTIC_ANCHOR_LOST"
     return None
+
+
+def _safe_catalog_translation(source: dict[str, Any], target_language: str) -> str | None:
+    if target_language != "en":
+        return None
+    source_ko = str(source.get("name_ko") or "")
+    candidate = str(source.get("name_en") or "").strip()
+    if not candidate or _option_translation_error(source_ko, candidate, target_language):
+        return None
+    return candidate
+
+
+_CONTROL_LABEL_FALLBACKS = {
+    "en": {
+        "선택안함": "None",
+        "미선택": "None",
+        "안함": "None",
+        "없음": "None",
+        "비조리": "Uncooked",
+        "조리": "Cooked",
+    },
+    "ja": {
+        "선택안함": "選択なし",
+        "미선택": "選択なし",
+        "안함": "なし",
+        "없음": "なし",
+        "비조리": "未調理",
+        "조리": "調理済み",
+    },
+}
+
+
+def _safe_control_label_translation(source: dict[str, Any], target_language: str) -> str | None:
+    source_ko = re.sub(r"\s+", "", str(source.get("name_ko") or ""))
+    candidate = _CONTROL_LABEL_FALLBACKS.get(target_language, {}).get(source_ko)
+    if candidate is None or _option_translation_error(source_ko, candidate, target_language):
+        return None
+    return candidate
 
 
 class OptionLocalizationGenerator:
@@ -237,6 +276,7 @@ class OptionLocalizationGenerator:
         ]
         contributing_models: list[str] = []
         combined_usage: dict[str, int] = {}
+        target_language = {"한국어": "ko", "日本語": "ja"}.get(locale, "en")
         for model_id in models:
             started = monotonic()
             if not self.provider.supports_model(model_id):
@@ -270,7 +310,6 @@ class OptionLocalizationGenerator:
                 )
                 if len(result.groups) != len(groups):
                     raise ValueError("OPTION_LOCALIZATION_GROUP_COUNT_INVALID")
-                target_language = {"한국어": "ko", "日本語": "ja"}.get(locale, "en")
                 validation_errors: list[str] = []
                 contributed = False
                 for group_index, (source_group, generated_group) in enumerate(
@@ -303,9 +342,7 @@ class OptionLocalizationGenerator:
                                 merged_item_names[group_index][item_index] = translated
                                 contributed = True
                         else:
-                            validation_errors.append(
-                                f"{item_error}:G{group_index}:I{item_index}"
-                            )
+                            validation_errors.append(f"{item_error}:G{group_index}:I{item_index}")
             except (json.JSONDecodeError, ValidationError, ValueError) as exc:
                 reason = str(exc).strip() or "OPTION_LOCALIZATION_RESPONSE_INVALID"
                 last_error = GenAIProviderError(
@@ -374,6 +411,54 @@ class OptionLocalizationGenerator:
             result._provider_metrics = combined_usage
             return result
 
+        # Preserve every safe label produced by either model. A single difficult
+        # label must not throw away the rest of a selected menu's translations.
+        # Unresolved labels remain uncached so the next request can retry them.
+        if contributing_models:
+            unresolved_paths: list[str] = []
+            used_server_fallback = False
+            resolved_groups: list[GeneratedOptionGroup] = []
+            for group_index, source_group in enumerate(groups):
+                group_name = merged_group_names[group_index]
+                if group_name is None:
+                    group_name = _safe_catalog_translation(source_group, target_language)
+                    used_server_fallback = used_server_fallback or group_name is not None
+                if group_name is None:
+                    group_name = _safe_control_label_translation(source_group, target_language)
+                    used_server_fallback = used_server_fallback or group_name is not None
+                if group_name is None:
+                    group_name = str(source_group.get("name_ko") or "")
+                    unresolved_paths.append(f"G{group_index}")
+                item_names: list[str] = []
+                for item_index, source_item in enumerate(source_group.get("items", [])):
+                    item_name = merged_item_names[group_index][item_index]
+                    if item_name is None:
+                        item_name = _safe_catalog_translation(source_item, target_language)
+                        used_server_fallback = used_server_fallback or item_name is not None
+                    if item_name is None:
+                        item_name = _safe_control_label_translation(source_item, target_language)
+                        used_server_fallback = used_server_fallback or item_name is not None
+                    if item_name is None:
+                        item_name = str(source_item.get("name_ko") or "")
+                        unresolved_paths.append(f"G{group_index}:I{item_index}")
+                    item_names.append(item_name)
+                resolved_groups.append(
+                    GeneratedOptionGroup(
+                        display_name=group_name,
+                        item_display_names=item_names,
+                    )
+                )
+            partial = OptionLocalizationGeneration(groups=resolved_groups)
+            model_parts = list(dict.fromkeys(contributing_models))
+            if used_server_fallback:
+                model_parts.append("SERVER_SAFE_FALLBACK")
+            if unresolved_paths:
+                model_parts.append("PARTIAL_SAFE_FALLBACK")
+            partial._generation_model = "+".join(model_parts)
+            partial._provider_metrics = combined_usage
+            partial._unresolved_paths = unresolved_paths
+            return partial
+
         raise last_error or GenAIProviderError(
             GenAIErrorCode.PROVIDER_UNAVAILABLE,
             retryable=False,
@@ -387,15 +472,19 @@ so never emit, invent, reorder, merge, or omit an option ID.
 
 Return the same number of groups in the same order. Within each group, return the same number of
 item_display_names in the same order. Translate for ordering accuracy, not creativity. Preserve
-every Arabic digit sequence exactly, including size, quantity, spice level, doneness, inclusion,
+every literal Arabic digit sequence exactly, including size, quantity, spice level, doneness, inclusion,
 removal, negation, and add-on meaning. Prefer natural menu wording over Korean phonetic spelling
 when the meaning is translatable. Brand names may remain brand names. Do not add prices because
-the server renders prices separately. Keep literal digits when practical; ordinary English number
-words are acceptable only when they preserve the same quantity and unit. Translate 우삼겹 as beef
+the server renders prices separately. Do not spell a source digit as a number word. Translate
+우삼겹 as beef
 short plate, 등심왕돈까스 as pork loin cutlet, 버팔로봉 as buffalo chicken drumettes, and Korean
 사이다 as soda or soft drink, never alcoholic cider. In Yogiyo event labels, 찜 means saving or
 favoriting the restaurant, never steaming food. Translate 핫봉 as hot chicken drumettes and 라구 as
-ragu. Do not return Markdown or commentary. Prompt version:
+ragu. "선택 안함" means "None"; "비조리" means "Uncooked" and must not be changed to "Cooked".
+A heading such as "맛 선택" may naturally be "Flavor"; it does not need the literal word
+"selection". Before returning, silently count the groups and every group's items, compare them to
+the input, and verify that every output position still describes the source label at that same
+position. Do not return Markdown, analysis, or commentary. Prompt version:
 {self.settings.option_localization_prompt_version}.
 """.strip()
 
