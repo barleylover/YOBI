@@ -643,4 +643,54 @@ describe("ChatPage structured recommendation contract", () => {
     await waitFor(() => expect(useSessionStore.getState().recommendationPhase).toBe("NO_RESULTS"));
     expect(screen.queryByTestId("order-flow")).not.toBeInTheDocument();
   });
+
+  it("restores a selected ranking menu from the live conversation projection", async () => {
+    prepareStore();
+    const rankedMenu: MenuSummary = {
+      ...menu,
+      menu_id: "ranked-menu-1",
+      merchant_id: "ranked-merchant-1",
+      name_en: "Ranking mock bibimbap",
+      name_ko: "랭킹 목업 비빔밥",
+    };
+    vi.spyOn(api, "getPreferenceCatalog").mockResolvedValue({
+      catalog,
+      etag: '"catalog-v2-test"',
+      notModified: false,
+    });
+    vi.spyOn(api, "getConversation").mockResolvedValue(conversation({
+      state_version: 4,
+      meal_need_state: { ...mealNeedState, selected_menu_id: rankedMenu.menu_id },
+      recommendation_criteria: criteria,
+      criteria_version: 1,
+      latest_recommendation: batch,
+      selected_menu: rankedMenu,
+    }));
+    const getOptions = vi.spyOn(api, "getOptions").mockResolvedValue([]);
+    vi.spyOn(api, "getCart").mockResolvedValue({
+      cart_id: "empty-ranked-cart",
+      version: 1,
+      items: [],
+      subtotal: 0,
+      delivery_fee: 0,
+      total_price: 0,
+      missing_slots: [],
+      dietary_warnings: [],
+      minimum_order_amount: 0,
+      minimum_order_shortfall: 0,
+      ready_to_checkout: false,
+      confirmed: false,
+    });
+
+    renderPage();
+
+    expect(await screen.findByTestId("selected-menu-message")).toHaveTextContent(
+      "Ranking mock bibimbap",
+    );
+    await waitFor(() => expect(getOptions).toHaveBeenCalledWith(
+      rankedMenu.menu_id,
+      session.session_id,
+      true,
+    ));
+  });
 });

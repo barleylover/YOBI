@@ -22,6 +22,7 @@ interface Props {
   addressRefId: string;
   dietaryFilters?: DietaryFiltersV2;
   cartRevision?: number;
+  precomputedOptionsOnly?: boolean;
   onClose: () => void;
   onOptionChange?: (
     menuId: string,
@@ -33,7 +34,16 @@ interface Props {
 
 type Phase = "options" | "note" | "more" | "browse" | "delivery" | "review" | "merchant-conflict";
 
-export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, cartRevision = 0, onClose, onOptionChange }: Props) {
+export function OrderFlowPanel({
+  sessionId,
+  menu,
+  addressRefId,
+  dietaryFilters,
+  cartRevision = 0,
+  precomputedOptionsOnly = false,
+  onClose,
+  onOptionChange,
+}: Props) {
   const navigate = useNavigate();
   const setCartQuantity = useSessionStore((state) => state.setCartQuantity);
   const sourceLanguage = useSessionStore((state) => state.profile?.preferred_language) ?? "English";
@@ -55,6 +65,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
   const [editingCartItemId, setEditingCartItemId] = useState<string | null>(null);
   const [noteTouched, setNoteTouched] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [loadingOptions, setLoadingOptions] = useState(false);
   const [error, setError] = useState("");
   const transitionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadingMoreMenusRef = useRef(false);
@@ -69,13 +80,14 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
     setEditingCartItemId(null);
     setNoteTouched(false);
     setError("");
-    Promise.all([
-      api.getOptions(activeMenu.menu_id, sessionId),
-      api.getCart(sessionId).catch(() => null),
-    ])
-      .then(([result, restoredCart]) => {
+    setLoadingOptions(true);
+    void (async () => {
+      try {
+        // Cart ownership is cheap and authoritative. Resolve it before option
+        // localization so a cross-merchant selection never sits behind a slow
+        // model-backed option request or renders an empty order builder.
+        const restoredCart = await api.getCart(sessionId).catch(() => null);
         if (!active) return;
-        setGroups(result);
         if (restoredCart?.items.length) {
           setCart(restoredCart);
           setCartQuantity(restoredCart.items.reduce((total, item) => total + item.quantity, 0));
@@ -83,16 +95,37 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
           const activeItemExists = restoredCart.items.some((item) => item.menu_id === activeMenu.menu_id);
           if (cartMerchantId && cartMerchantId !== activeMenu.merchant_id) {
             setPhase("merchant-conflict");
-          } else if (activeItemExists) {
+            return;
+          }
+
+          const result = await api.getOptions(
+            activeMenu.menu_id,
+            sessionId,
+            precomputedOptionsOnly,
+          );
+          if (!active) return;
+          setGroups(result);
+          if (activeItemExists) {
             setPhase(restoredCart.missing_slots.includes("delivery_preferences") ? "delivery" : "review");
           } else if (result.length === 0) {
             setPhase("note");
           }
-        } else if (result.length === 0) {
-          setPhase("note");
+        } else {
+          const result = await api.getOptions(
+            activeMenu.menu_id,
+            sessionId,
+            precomputedOptionsOnly,
+          );
+          if (!active) return;
+          setGroups(result);
+          if (result.length === 0) setPhase("note");
         }
-      })
-      .catch((cause) => { if (active) setError(actionableError(cause, journeyCopy.retry, language)); });
+      } catch (cause) {
+        if (active) setError(actionableError(cause, journeyCopy.retry, language));
+      } finally {
+        if (active) setLoadingOptions(false);
+      }
+    })();
     return () => {
       active = false;
       if (transitionTimer.current !== null) {
@@ -100,7 +133,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
         transitionTimer.current = null;
       }
     };
-  }, [activeMenu.menu_id, activeMenu.merchant_id, cartRevision, journeyCopy.retry, language, sessionId, setCartQuantity]);
+  }, [activeMenu.menu_id, activeMenu.merchant_id, cartRevision, journeyCopy.retry, language, precomputedOptionsOnly, sessionId, setCartQuantity]);
 
   useEffect(() => setActiveMenu(menu), [menu]);
 
@@ -144,10 +177,18 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
       }
       syncCart(preview);
       setEditingCartItemId(null);
-      setPhase(groups.length ? "options" : "note");
+      setLoadingOptions(true);
+      const result = await api.getOptions(
+        activeMenu.menu_id,
+        sessionId,
+        precomputedOptionsOnly,
+      );
+      setGroups(result);
+      setPhase(result.length ? "options" : "note");
     } catch (cause) {
       setError(actionableError(cause, journeyCopy.retry, language));
     } finally {
+      setLoadingOptions(false);
       setBusy(false);
     }
   }
@@ -485,6 +526,9 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
 
   return (
     <section className="v2-order-flow" aria-label={copy.orderBuilder} data-testid="order-flow">
+      {loadingOptions && phase === "options" && !currentGroup && (
+        <p className="v2-status" role="status">{journeyCopy.loading}</p>
+      )}
       {phase === "merchant-conflict" && cart && (
         <article className="v2-order-card" role="alert">
           <div className="v2-order-body">

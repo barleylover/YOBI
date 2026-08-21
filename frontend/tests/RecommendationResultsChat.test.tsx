@@ -69,6 +69,7 @@ const batch: RecommendationBatchV2 = {
     matched_criteria: [],
     wiki_passages: [],
     caution_codes: [],
+    halal_certified: true,
   })),
   unmatched_category_codes: [],
 };
@@ -98,6 +99,8 @@ describe("chat-style recommendation results", () => {
     expect(screen.getAllByText("YOBI:").length).toBeGreaterThan(0);
     expect(screen.getAllByText("YOGIYO:").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Minimum order ₩15,000").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Halal-friendly: yes").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Halal: yes")).not.toBeInTheDocument();
     expect(screen.queryByText("Legacy selection reason must stay hidden.")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /compare/i })).not.toBeInTheDocument();
     expect(document.querySelector(".rank-bar")).not.toBeInTheDocument();

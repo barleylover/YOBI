@@ -91,6 +91,7 @@ export function ChatPage() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewMessage, setPreviewMessage] = useState("");
   const [selectedMenu, setSelectedMenu] = useState<MenuSummary | null>(null);
+  const [precomputedOptionsOnly, setPrecomputedOptionsOnly] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);
   const [cartRevision, setCartRevision] = useState(0);
   const [wizardStartSection, setWizardStartSection] = useState<"core" | "conditions">("core");
@@ -150,15 +151,23 @@ export function ChatPage() {
     const selectedMenuId = conversation.meal_need_state.selected_menu_id;
     if (!selectedMenuId) {
       setSelectedMenu(null);
+      setPrecomputedOptionsOnly(false);
       return;
     }
     const fromV2Item = batch?.recommendations.find((item) => item.menu.menu_id === selectedMenuId);
     const fromV2 = fromV2Item
       ? { ...fromV2Item.menu, localized_title: fromV2Item.localized_title }
       : null;
+    const fromConversation = conversation.selected_menu?.menu_id === selectedMenuId
+      ? conversation.selected_menu
+      : null;
     const fromLegacy = batch ? null : findMenu(conversation.latest_snapshot?.cards, selectedMenuId);
-    setSelectedMenu(fromV2 ?? fromLegacy ?? null);
-    if (fromV2 || fromLegacy) setRecommendationPhase("ORDERING");
+    const restoredMenu = fromV2 ?? fromConversation ?? fromLegacy ?? null;
+    setSelectedMenu(restoredMenu);
+    if (restoredMenu) {
+      setPrecomputedOptionsOnly(Boolean(fromConversation && !fromV2));
+      setRecommendationPhase("ORDERING");
+    }
   }, [applyBatch, commitCriteria, setRecommendationPhase]);
 
   const refreshConversation = useCallback(async () => {
@@ -544,6 +553,7 @@ export function ChatPage() {
         snapshot_id: snapshotId,
         menu_id: recommendation.menu.menu_id,
       });
+      setPrecomputedOptionsOnly(false);
       setSelectedMenu({
         ...(result.selected_menu ?? recommendation.menu),
         localized_title: recommendation.localized_title,
@@ -566,6 +576,7 @@ export function ChatPage() {
         snapshot_id: snapshotId,
         menu_id: menu.menu_id,
       });
+      setPrecomputedOptionsOnly(true);
       setSelectedMenu(result.selected_menu ?? menu);
       setRecommendationPhase("ORDERING");
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -608,6 +619,7 @@ export function ChatPage() {
     setWizardStartSection("core");
     if (committedCriteria) setDraftCriteria(committedCriteria);
     setSelectedMenu(null);
+    setPrecomputedOptionsOnly(false);
     setRecommendationPhase("SELECTING");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -820,6 +832,7 @@ export function ChatPage() {
                   addressRefId={addressRefId}
                   dietaryFilters={(committedCriteria ?? draftCriteria).dietary_filters}
                   cartRevision={cartRevision}
+                  precomputedOptionsOnly={precomputedOptionsOnly}
                   onClose={() => { setSelectedMenu(null); setRecommendationPhase("RESULTS"); }}
                   onOptionChange={updateConversationOptions}
                 />

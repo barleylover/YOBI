@@ -49,6 +49,19 @@ def _menus() -> list[EnrichmentMenu]:
             "Fragrant grilled mushrooms",
             "와인 소스로 풍미를 더했습니다.",
         ),
+        EnrichmentMenu(
+            "m-korean-pork-alias",
+            "한돈 차슈 돈코츠 라멘",
+            ("NOODLES",),
+            "Tonkotsu ramen with chashu",
+        ),
+        EnrichmentMenu(
+            "m-hidden-cooking-alcohol",
+            "버섯 덮밥",
+            ("MUSHROOM", "RICE"),
+            "Mushroom rice bowl",
+            "청주와 맛술로 향을 냈습니다.",
+        ),
         EnrichmentMenu("m-veg-1", "산채 비빔밥", ("VEGETABLE", "RICE")),
         EnrichmentMenu("m-veg-2", "두부 샐러드", ("TOFU", "VEGETABLE")),
         EnrichmentMenu("m-veg-3", "버섯 국수", ("MUSHROOM", "NOODLES")),
@@ -110,6 +123,12 @@ def test_enrichment_guards_obvious_pork_and_animal_options() -> None:
     pepperoni = next(row for row in rows["menus"] if row["menu_id"] == "m-pepperoni")
     hidden_pork = next(row for row in rows["menus"] if row["menu_id"] == "m-hidden-pork")
     alcohol = next(row for row in rows["menus"] if row["menu_id"] == "m-alcohol")
+    korean_pork_alias = next(
+        row for row in rows["menus"] if row["menu_id"] == "m-korean-pork-alias"
+    )
+    hidden_cooking_alcohol = next(
+        row for row in rows["menus"] if row["menu_id"] == "m-hidden-cooking-alcohol"
+    )
     assert pork["halal_fit"] == 0
     assert pork["vegan_fit"] == 0
     assert cutlet["halal_fit"] == 0
@@ -119,12 +138,22 @@ def test_enrichment_guards_obvious_pork_and_animal_options() -> None:
     assert hidden_pork["halal_fit"] == 0
     assert hidden_pork["vegan_fit"] == 0
     assert alcohol["halal_fit"] == 0
+    assert korean_pork_alias["halal_fit"] == 0
+    assert hidden_cooking_alcohol["halal_fit"] == 0
     assert rows["options"][0]["vegan_conflict"] == 1
     halal_ids = {row["menu_id"] for row in rows["menus"] if row["halal_fit"]}
     assert halal_ids <= {
         menu.menu_id
         for menu in _menus()
-        if menu.menu_id not in {"m-pork", "m-cutlet", "m-pepperoni", "m-hidden-pork", "m-alcohol"}
+        if menu.menu_id not in {
+            "m-pork",
+            "m-cutlet",
+            "m-pepperoni",
+            "m-hidden-pork",
+            "m-alcohol",
+            "m-korean-pork-alias",
+            "m-hidden-cooking-alcohol",
+        }
     }
     assert halal_ids
 

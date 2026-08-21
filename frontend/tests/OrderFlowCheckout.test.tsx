@@ -164,7 +164,7 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
       addressSummary: "YOBI hotel",
       cartQuantity: 1,
     });
-    vi.spyOn(api, "getOptions").mockResolvedValue([]);
+    const getOptions = vi.spyOn(api, "getOptions").mockResolvedValue([]);
     const foreignCart: CartPreview = {
       ...cart,
       items: [{
@@ -202,11 +202,52 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "Your cart has items from another restaurant" })).toBeInTheDocument();
+    expect(getOptions).not.toHaveBeenCalled();
     expect(deleteCartItem).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Clear cart and continue" }));
     await waitFor(() => expect(deleteCartItem).toHaveBeenCalledWith(session.session_id, "foreign-cart-item"));
+    await waitFor(() => expect(getOptions).toHaveBeenCalledWith(menu.menu_id, session.session_id, false));
     expect(await screen.findByRole("heading", { name: "How should we say it?" })).toBeInTheDocument();
     expect(useSessionStore.getState().cartQuantity).toBe(0);
+  });
+
+  it("shows progress instead of an empty order builder while options are loading", async () => {
+    useSessionStore.setState({
+      profile,
+      session,
+      addressRefId: "address_checkout_test",
+      addressSummary: "YOBI hotel",
+      cartQuantity: 0,
+    });
+    let resolveOptions: (groups: []) => void = () => undefined;
+    vi.spyOn(api, "getOptions").mockReturnValue(new Promise<[]>(
+      (resolve) => { resolveOptions = resolve; },
+    ));
+    vi.spyOn(api, "getCart").mockResolvedValue({
+      ...cart,
+      items: [],
+      subtotal: 0,
+      delivery_fee: 0,
+      total_price: 0,
+      ready_to_checkout: false,
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <Routes><Route path="/chat" element={(
+          <OrderFlowPanel
+            sessionId={session.session_id}
+            menu={menu}
+            addressRefId="address_checkout_test"
+            onClose={() => undefined}
+          />
+        )} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Loading…");
+    resolveOptions([]);
+    expect(await screen.findByRole("heading", { name: "How should we say it?" })).toBeInTheDocument();
   });
 
   it("edits an existing cart line in place instead of adding a duplicate menu", async () => {
@@ -497,7 +538,7 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
       addressSummary: "YOBI hotel",
       cartQuantity: 0,
     });
-    vi.spyOn(api, "getOptions").mockResolvedValue([{
+    const getOptions = vi.spyOn(api, "getOptions").mockResolvedValue([{
       option_group_id: "group-spice",
       name_en: "Spice",
       name_ko: "맵기",
@@ -525,6 +566,7 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
             sessionId={session.session_id}
             menu={menu}
             addressRefId="address_checkout_test"
+            precomputedOptionsOnly
             onClose={() => undefined}
           />
         )} /></Routes>
@@ -532,6 +574,7 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "Localized spice level" })).toBeInTheDocument();
+    expect(getOptions).toHaveBeenCalledWith(menu.menu_id, session.session_id, true);
     expect(screen.getByRole("button", { name: /Localized mild/ })).toBeInTheDocument();
     expect(screen.queryByText("맵기")).not.toBeInTheDocument();
   });

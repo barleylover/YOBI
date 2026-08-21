@@ -621,6 +621,7 @@ export interface ConversationView {
   criteria_version?: number;
   latest_recommendation?: RecommendationBatchV2 | null;
   active_recommendation?: RecommendationBatchV2 | null;
+  selected_menu?: MenuSummary | null;
 }
 
 export interface AssistantTurn {

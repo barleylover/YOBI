@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from app.db.oracle_repository import OracleYobiRepository
 from app.db.sqlite_repository import SQLiteYobiRepository
-from app.dependencies import get_repository
+from app.dependencies import get_option_localization_service, get_repository
 from app.domain.concept_ranking import RANKING_POLICY_SHA256, RANKING_POLICY_VERSION
 from app.domain.dialogue import (
     ConversationEventInput,
@@ -1075,7 +1075,33 @@ def test_options_api_returns_v2_halal_and_vegan_state_contract(
     assert certified_items["oi_001_01_fishcake_remove"]["vegan_status"] == "CONFLICT"
 
     assert uncertified_response.status_code == 200
-    uncertified_items = [item for group in uncertified_response.json() for item in group["items"]]
+    uncertified_items = [
+        item for group in uncertified_response.json() for item in group["items"]
+    ]
     assert uncertified_items
     assert all(item["halal_certification_preserved"] is None for item in uncertified_items)
     assert all(item["halal_certification_preserved"] is not False for item in uncertified_items)
+
+
+def test_options_api_precomputed_mode_bypasses_runtime_model_localization(
+    repository: SQLiteYobiRepository,
+) -> None:
+    class UnexpectedRuntimeLocalization:
+        def get_options(self, menu_id: str, session_id: str | None) -> list[object]:
+            del menu_id, session_id
+            raise AssertionError("runtime option localization must not run")
+
+    app.dependency_overrides[get_repository] = lambda: repository
+    app.dependency_overrides[get_option_localization_service] = (
+        lambda: UnexpectedRuntimeLocalization()
+    )
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/v1/menus/menu_001_01/options?precomputed_only=true"
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()

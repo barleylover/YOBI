@@ -874,9 +874,7 @@ def get_conversation(
         get_structured_recommendation_service
     ),
 ) -> ConversationView:
-    session = repository.get_session(session_id)
-    if session is None:
-        raise _not_found("SESSION_NOT_FOUND")
+    session, profile = _resolve_session_profile(repository, session_id)
     criteria = repository.get_recommendation_criteria(session_id)
     latest_request = repository.get_latest_recommendation_request(session_id)
     active_request = repository.get_latest_recommendation_request(session_id, active_only=True)
@@ -888,6 +886,11 @@ def get_conversation(
     active_batch = (
         recommendation_service.get_request(session_id, active_request.request_id)
         if active_request is not None
+        else None
+    )
+    selected_menu = (
+        repository.get_menu(session.meal_need_state.selected_menu_id, profile)
+        if session.meal_need_state.selected_menu_id
         else None
     )
     return ConversationView(
@@ -905,6 +908,9 @@ def get_conversation(
         ),
         active_recommendation=(
             active_batch.model_dump(mode="json") if active_batch is not None else None
+        ),
+        selected_menu=(
+            selected_menu.model_dump(mode="json") if selected_menu is not None else None
         ),
     )
 
@@ -944,6 +950,7 @@ def post_conversation_event(
 def get_menu_options(
     menu_id: str,
     session_id: str | None = Query(default=None),
+    precomputed_only: bool = Query(default=False),
     repository: YobiRepository = Depends(get_repository),
     option_localization_service: OptionLocalizationService = Depends(
         get_option_localization_service
@@ -951,9 +958,19 @@ def get_menu_options(
 ) -> list[dict[str, Any]]:
     if session_id is not None:
         _require_session(repository, session_id)
+    # Discovery collections are explicitly deterministic mock views. Their
+    # option setup must not synchronously dispatch a fresh model call before a
+    # known cross-merchant cart conflict can be resolved. The repository still
+    # applies the active release's validated/precomputed localization for the
+    # session language; only runtime generation is skipped.
+    groups = (
+        repository.get_options(menu_id, session_id=session_id)
+        if precomputed_only
+        else option_localization_service.get_options(menu_id, session_id)
+    )
     return [
         group.model_dump(mode="json")
-        for group in option_localization_service.get_options(menu_id, session_id)
+        for group in groups
     ]
 
 

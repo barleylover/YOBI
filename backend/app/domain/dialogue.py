@@ -233,6 +233,10 @@ class ConversationView(BaseModel):
     criteria_version: int | None = None
     latest_recommendation: dict[str, Any] | None = None
     active_recommendation: dict[str, Any] | None = None
+    # The live selected menu is authoritative across reloads, including menus
+    # chosen from browse/ranking snapshots that are not members of the latest
+    # structured recommendation batch.
+    selected_menu: dict[str, Any] | None = None
 
 
 DialogueSource = Literal["rule", "llm_validated", "ui_event", "preset"]

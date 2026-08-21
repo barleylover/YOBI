@@ -392,9 +392,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify(event),
     }),
-  getOptions: (menuId: string, sessionId?: string) => request<OptionGroup[]>(
-    `/api/v1/menus/${menuId}/options${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`,
-  ),
+  getOptions: (menuId: string, sessionId?: string, precomputedOnly = false) => {
+    const params = new URLSearchParams();
+    if (sessionId) params.set("session_id", sessionId);
+    if (precomputedOnly) params.set("precomputed_only", "true");
+    const query = params.size > 0 ? `?${params.toString()}` : "";
+    return request<OptionGroup[]>(
+      `/api/v1/menus/${menuId}/options${query}`,
+      undefined,
+      { timeoutMs: 35_000 },
+    );
+  },
   getMerchantMenus: (sessionId: string, merchantId: string, excludedMenuIds: string[]) =>
     request<import("../types").MenuSummary[]>(
       `/api/v1/sessions/${sessionId}/merchants/${merchantId}/menus?exclude=${encodeURIComponent(excludedMenuIds.join(","))}`,
