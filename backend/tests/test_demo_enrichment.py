@@ -35,6 +35,20 @@ def _menus() -> list[EnrichmentMenu]:
             ("BAKED",),
             "One-bowl Pepperoni pizza",
         ),
+        EnrichmentMenu(
+            "m-hidden-pork",
+            "모둠국밥",
+            ("SOUP",),
+            "Mixed gukbap",
+            "엄선된 돼지 원육과 돈골 육수로 끓였습니다.",
+        ),
+        EnrichmentMenu(
+            "m-alcohol",
+            "향긋한 버섯구이",
+            ("MUSHROOM", "GRILLED"),
+            "Fragrant grilled mushrooms",
+            "와인 소스로 풍미를 더했습니다.",
+        ),
         EnrichmentMenu("m-veg-1", "산채 비빔밥", ("VEGETABLE", "RICE")),
         EnrichmentMenu("m-veg-2", "두부 샐러드", ("TOFU", "VEGETABLE")),
         EnrichmentMenu("m-veg-3", "버섯 국수", ("MUSHROOM", "NOODLES")),
@@ -94,20 +108,25 @@ def test_enrichment_guards_obvious_pork_and_animal_options() -> None:
     pork = next(row for row in rows["menus"] if row["menu_id"] == "m-pork")
     cutlet = next(row for row in rows["menus"] if row["menu_id"] == "m-cutlet")
     pepperoni = next(row for row in rows["menus"] if row["menu_id"] == "m-pepperoni")
+    hidden_pork = next(row for row in rows["menus"] if row["menu_id"] == "m-hidden-pork")
+    alcohol = next(row for row in rows["menus"] if row["menu_id"] == "m-alcohol")
     assert pork["halal_fit"] == 0
     assert pork["vegan_fit"] == 0
     assert cutlet["halal_fit"] == 0
     assert cutlet["vegan_fit"] == 0
     assert pepperoni["halal_fit"] == 0
     assert pepperoni["vegan_fit"] == 0
+    assert hidden_pork["halal_fit"] == 0
+    assert hidden_pork["vegan_fit"] == 0
+    assert alcohol["halal_fit"] == 0
     assert rows["options"][0]["vegan_conflict"] == 1
     halal_ids = {row["menu_id"] for row in rows["menus"] if row["halal_fit"]}
     assert halal_ids <= {
         menu.menu_id
         for menu in _menus()
-        if menu.menu_id not in {"m-pork", "m-cutlet", "m-pepperoni"}
+        if menu.menu_id not in {"m-pork", "m-cutlet", "m-pepperoni", "m-hidden-pork", "m-alcohol"}
     }
-    assert sum(int(row["vegan_fit"]) for row in rows["menus"] if row["menu_id"] in halal_ids) >= 3
+    assert halal_ids
 
 
 def test_production_size_coverage_counts_are_exact() -> None:
@@ -140,6 +159,7 @@ def test_sqlite_release_apply_is_resumable_and_preserves_base_tables(tmp_path: P
             )
         }
     assert {menu.menu_id for menu in menus} == eligible_ids
+    assert all(menu.description for menu in menus)
     rows = build_enrichment_rows(
         release_id="release-resumable",
         seed="stable-seed",

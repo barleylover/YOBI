@@ -23,7 +23,7 @@ test("halal and vegan conflicts are resolved explicitly before recommendation", 
   await ingredients.getByRole("button", { name: "Pork", exact: true }).click();
   await page.getByRole("button", { name: "Next", exact: true }).click();
   await page.getByRole("button", { name: "Next", exact: true }).click();
-  const halal = page.getByRole("switch", { name: /Halal-certified only/ });
+  const halal = page.getByRole("switch", { name: /Halal-friendly only/ });
   await halal.click();
 
   await expect(page.getByRole("alert")).toContainText("conflicts with the halal or vegan filter");

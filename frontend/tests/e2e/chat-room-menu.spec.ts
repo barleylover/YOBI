@@ -29,7 +29,7 @@ test("Korean conditions use three relative spice choices, two price handles and 
   await expect(page.getByRole("radio")).toHaveCount(3);
   await expect(page.getByRole("radio", { name: "기준과 비슷하게" })).toBeChecked();
   await expect(page.locator("[data-category='price_range_krw'] input[type='range']")).toHaveCount(2);
-  await expect(page.getByRole("switch", { name: /할랄 인증만/ })).toBeEnabled();
+  await expect(page.getByRole("switch", { name: /할랄 친화만/ })).toBeEnabled();
   await expect(page.getByRole("switch", { name: /비건 옵션만/ })).toBeEnabled();
   await expect(page.getByRole("textbox")).toHaveCount(0);
 });

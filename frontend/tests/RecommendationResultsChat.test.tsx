@@ -210,4 +210,29 @@ describe("chat-style recommendation results", () => {
     expect(screen.queryByRole("button", { name: "Try recommendation again" })).not.toBeInTheDocument();
     expect(screen.queryByText(/familiar spice baseline/i)).not.toBeInTheDocument();
   });
+
+  it("presents an underfilled strict match as a valid result instead of an LLM error", () => {
+    const underfilledBatch: RecommendationBatchV2 = {
+      ...batch,
+      status: "SEARCH_FALLBACK",
+      failure_code: "STRICT_MATCH_UNDERFILLED",
+      recommendations: [batch.recommendations[0]],
+    };
+
+    render(
+      <RecommendationResults
+        batch={underfilledBatch}
+        copy={getRecommendationCopy("English")}
+        v2={getRedesignCopy("English")}
+        timestamp="10:05"
+        language="English"
+        locale="en-US"
+        onChoose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByText("Picked for your preferences").length).toBeGreaterThan(0);
+    expect(screen.getByText("YOBI keeps every active choice unless you change it.")).toBeInTheDocument();
+    expect(screen.queryByText(/recommendation explanation could not be completed/i)).not.toBeInTheDocument();
+  });
 });

@@ -43,6 +43,11 @@ export function RecommendationResults({
   const [activeIndex, setActiveIndex] = useState(0);
   const [explanationMenuId, setExplanationMenuId] = useState<string | null>(null);
   const isFallback = batch.status === "SEARCH_FALLBACK";
+  const isUnderfilledStrictMatch = isFallback && batch.failure_code === "STRICT_MATCH_UNDERFILLED";
+  const fallbackTitle = isUnderfilledStrictMatch ? copy.resultsTitle : copy.searchFallbackTitle;
+  const fallbackDescription = isUnderfilledStrictMatch
+    ? copy.noHiddenRelaxation
+    : copy.searchFallbackDescription;
 
   useEffect(() => {
     setActiveIndex(0);
@@ -60,7 +65,7 @@ export function RecommendationResults({
       data-testid="recommendation-results-message"
     >
       <h2 id="recommendation-results-title" className="visually-hidden">
-        {isFallback ? copy.searchFallbackTitle : copy.resultsTitle}
+        {isFallback ? fallbackTitle : copy.resultsTitle}
       </h2>
       {isFallback && (
         <div className="v2-bot-message">
@@ -68,8 +73,8 @@ export function RecommendationResults({
           <div className="v2-bot-stack">
             <p className="v2-bot-name">{productCopy.assistantName}</p>
             <div className="v2-bubble">
-              <p>{copy.searchFallbackTitle}</p>
-              <p className="v2-bubble-sub">{copy.searchFallbackDescription}</p>
+              <p>{fallbackTitle}</p>
+              <p className="v2-bubble-sub">{fallbackDescription}</p>
             </div>
           </div>
         </div>

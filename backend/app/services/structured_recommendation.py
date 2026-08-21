@@ -48,6 +48,7 @@ from app.genai.recommendation_generator import (
 from app.services.demo_control import DemoControl
 from app.services.menu_presentation import (
     MenuPresentationService,
+    deterministic_localized_source_description,
     deterministic_localized_subtitle,
 )
 
@@ -408,6 +409,49 @@ class StructuredRecommendationService:
         )
         if dispatched.status is not RecommendationRequestStatus.DISPATCHED or dispatched.duplicate:
             return self._batch_from_record(dispatched)
+
+        # The selection contract deliberately requires exactly three items. When every active
+        # hard filter leaves only one or two grounded menus, do not call the model with an
+        # impossible schema or report a provider failure. Persist the complete strict-match set
+        # as a deterministic fallback while keeping dispatch_count at zero.
+        if len(evidence_pool) < 3:
+            fallback_json = self._search_fallback_payload(
+                criteria_record,
+                evidence_pool,
+                profile.preferred_language,
+                caution_code="STRICT_MATCH_UNDERFILLED",
+            )
+            fallback_snapshot = self._snapshot_for_result(
+                session=session,
+                request_id=request.request_id,
+                request_state_version=dispatched.state_version,
+                result_json=fallback_json,
+                evidence_pool=evidence_pool,
+            )
+            persistence_started = monotonic()
+            completed = self.repository.complete_recommendation_request(
+                session.session_id,
+                request.request_id,
+                RecommendationRequestStatus.SEARCH_FALLBACK,
+                result_json=fallback_json,
+                snapshot=fallback_snapshot,
+                failure_code="STRICT_MATCH_UNDERFILLED",
+            )
+            persistence_ms = int((monotonic() - persistence_started) * 1000)
+            self._log_terminal_timing(
+                session=session,
+                request=request,
+                record=completed,
+                criteria_ms=criteria_ms,
+                retrieval_ms=retrieval_ms,
+                retrieval_metrics=retrieval_metrics,
+                freeze_ms=freeze_ms,
+                provider_ms=0,
+                persistence_ms=persistence_ms,
+                started=started,
+                final_count=len(evidence_pool),
+            )
+            return self._batch_from_record(completed)
 
         display_locale, _display_language = _effective_display_language(profile.preferred_language)
         # Selection must be identical for equivalent criteria regardless of
@@ -1159,6 +1203,8 @@ class StructuredRecommendationService:
         criteria_record: RecommendationCriteriaRecord,
         evidence_pool: list[EvidencePoolItem],
         preferred_language: str,
+        *,
+        caution_code: str = "GENERATION_UNAVAILABLE",
     ) -> dict[str, Any]:
         locale, display_language = _effective_display_language(preferred_language)
         copy = localized_recommendation_fallback_copy(display_language)
@@ -1205,10 +1251,10 @@ class StructuredRecommendationService:
                     ),
                     "yobi_short_explanation": presentation_copy.short_explanation,
                     "yobi_long_explanation": presentation_copy.long_explanation,
-                    "source_description": (
-                        item.localized_source_description
-                        if locale != "ko" and item.localized_source_description
-                        else item.menu.description
+                    "source_description": deterministic_localized_source_description(
+                        locale,
+                        source_ko=item.menu.description,
+                        candidates=[item.localized_source_description],
                     ),
                     "review_summary": presentation_copy.review_summary,
                     "country_preference": item.country_preference,
@@ -1229,7 +1275,7 @@ class StructuredRecommendationService:
                     ],
                     "wiki_evidence_ids": [passage.evidence_id for passage in passages],
                     "wiki_passages": [passage.model_dump(mode="json") for passage in passages],
-                    "caution_codes": ["GENERATION_UNAVAILABLE"],
+                    "caution_codes": [caution_code],
                     "halal_certified": item.halal_certified,
                     "halal_scope_label": item.halal_scope_label,
                     "vegan_status": item.vegan_status,

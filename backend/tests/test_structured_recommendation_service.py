@@ -704,6 +704,41 @@ def test_empty_history_excluding_request_persists_canonical_exhausted_code() -> 
         assert provider.calls == []
 
 
+def test_underfilled_strict_match_skips_llm_and_keeps_source_language_safe() -> None:
+    repository = FakeRecommendationRepository(_criteria())
+    first = _pool_item("menu-a", score=0.90).model_copy(
+        update={
+            "menu": _menu("menu-a", score=0.90).model_copy(
+                update={"description": "엄선된 돼지 원육으로 끓였습니다."}
+            ),
+        }
+    )
+    second = _pool_item("menu-b", score=0.80).model_copy(
+        update={
+            "menu": _menu("menu-b", score=0.80).model_copy(
+                update={"description": "매콤한 떡볶이를 정성껏 준비했습니다."}
+            ),
+            "localized_source_description": "Spicy tteokbokki prepared with care.",
+        }
+    )
+    repository.evidence_pool = [first, second]
+    provider = FakeProvider(_recommended_output(["menu-a", "menu-b", "menu-c"]))
+    service = _service(repository, provider)
+
+    result = service.request_recommendation(_session(), _profile(), _request())
+
+    assert result.status == "SEARCH_FALLBACK"
+    assert result.failure_code == "STRICT_MATCH_UNDERFILLED"
+    assert [item.menu.menu_id for item in result.recommendations] == ["menu-a", "menu-b"]
+    assert result.recommendations[0].source_description == ""
+    assert result.recommendations[1].source_description == "Spicy tteokbokki prepared with care."
+    assert all(
+        item.caution_codes == ["STRICT_MATCH_UNDERFILLED"] for item in result.recommendations
+    )
+    assert provider.calls == []
+    assert repository.requests[result.request_id].dispatch_count == 0
+
+
 def test_model_can_select_and_reorder_three_from_the_frozen_shortlist() -> None:
     repository = FakeRecommendationRepository(_criteria())
     repository.evidence_pool = [

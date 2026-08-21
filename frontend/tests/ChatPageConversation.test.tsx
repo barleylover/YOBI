@@ -253,7 +253,7 @@ describe("ChatPage structured recommendation contract", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(screen.getByRole("radio", { name: "About the same" })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByRole("slider", { name: "Minimum price" })).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: /Halal-certified only/ })).toBeEnabled();
+    expect(screen.getByRole("switch", { name: /Halal-friendly only/ })).toBeEnabled();
     expect(screen.getByRole("switch", { name: /Vegan options only/ })).toBeEnabled();
     expect(screen.getByText("United States reference: Buffalo wings · spice 2/5")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Find my dish/ }));
@@ -400,7 +400,7 @@ describe("ChatPage structured recommendation contract", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Pork" })).toHaveAttribute("aria-pressed", "true"));
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    fireEvent.click(screen.getByRole("switch", { name: /Halal-certified only/ }));
+    fireEvent.click(screen.getByRole("switch", { name: /Halal-friendly only/ }));
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("conflicts with the halal or vegan filter"));
     expect(screen.getByRole("button", { name: /Find my dish/ })).toBeDisabled();

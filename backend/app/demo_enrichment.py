@@ -50,7 +50,7 @@ COUNTRY_CODES = (
     "TR",
     "NL",
 )
-GENERATOR_VERSION = "yobi-synthetic-enrichment-v6-safe-family-and-source-carry-forward"
+GENERATOR_VERSION = "yobi-synthetic-enrichment-v7-description-aware-halal"
 SOURCE_TYPE = "SYNTHETIC_DEMO"
 LANGUAGE_CODES: tuple[LanguageCode, ...] = ("ko", "en", "ja")
 
@@ -66,6 +66,9 @@ _PORK_TOKENS = (
     "SALAMI",
     "PROSCIUTTO",
     "MORTADELLA",
+    "PANCETTA",
+    "CHORIZO",
+    "LARD",
     "돼지",
     "삼겹",
     "제육",
@@ -84,6 +87,28 @@ _PORK_TOKENS = (
     "살라미",
     "프로슈토",
     "모르타델라",
+    "판체타",
+    "초리조",
+    "돈육",
+    "돈골",
+    "돈지",
+    "라드",
+)
+_HALAL_EXCLUSION_TOKENS = _PORK_TOKENS + (
+    "ALCOHOL",
+    "BEER",
+    "WINE",
+    "SOJU",
+    "LIQUOR",
+    "SAKE",
+    "맥주",
+    "소주",
+    "막걸리",
+    "술",
+    "주류",
+    "알코올",
+    "와인",
+    "사케",
 )
 _ANIMAL_TOKENS = _PORK_TOKENS + (
     "BEEF",
@@ -148,6 +173,7 @@ class EnrichmentMenu:
     name_ko: str
     feature_codes: tuple[str, ...] = ()
     name_en: str = ""
+    description: str = ""
 
 
 @dataclass(frozen=True)
@@ -206,7 +232,7 @@ def build_menu_profiles(
     eligible_for_vegan: list[str] = []
     basis_by_menu: dict[str, str] = {}
     for menu in menu_list:
-        basis = " ".join((menu.name_ko, menu.name_en, *menu.feature_codes))
+        basis = " ".join((menu.name_ko, menu.name_en, menu.description, *menu.feature_codes))
         basis_by_menu[menu.menu_id] = basis
         value = _number(seed, "menu", menu.menu_id)
         has_animal = _contains(basis, _ANIMAL_TOKENS)
@@ -238,12 +264,18 @@ def build_menu_profiles(
                 row["vegan_fit"] = 1
 
     # This is explicitly synthetic demo metadata, not a certification claim. Mark exactly the
-    # nearest whole-menu third as a fit and favor menus whose names/features are most plausibly
-    # pork-free: vegan/plant dishes first, then familiar fish/chicken candidates. Pork-token
-    # menus can never be promoted. The digest is only a stable tie-breaker.
+    # nearest whole-menu third as a fit and favor menus whose names, source descriptions, and
+    # features are most plausibly compatible: vegan/plant dishes first, then familiar
+    # fish/chicken candidates. Pork/alcohol-token menus can never be promoted. The digest is only
+    # a stable tie-breaker.
     target_halal_count = (len(rows) + 1) // 3
     eligible_halal = [
-        row for row in rows if not _contains(basis_by_menu[str(row["menu_id"])], _PORK_TOKENS)
+        row
+        for row in rows
+        if not _contains(
+            basis_by_menu[str(row["menu_id"])],
+            _HALAL_EXCLUSION_TOKENS,
+        )
     ]
     if len(eligible_halal) < target_halal_count:
         raise ValueError("SYNTHETIC_HALAL_ELIGIBLE_COVERAGE_LOW")
