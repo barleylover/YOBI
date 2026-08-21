@@ -29,7 +29,10 @@ from app.genai.contracts import (
     GenAIServingMode,
     ProviderCapabilities,
 )
-from app.genai.presentation_generator import MenuPresentationGenerator
+from app.genai.presentation_generator import (
+    MenuPresentationGenerator,
+    _english_title_coverage_is_sufficient,
+)
 from app.services.menu_presentation import (
     MenuPresentationService,
     deterministic_localized_source_description,
@@ -576,6 +579,17 @@ def test_presentation_rejects_generic_wiki_copy_that_drops_specific_title_terms(
     assert (
         _presentation_validation_reason(payload, presentation)
         == "PRESENTATION_MENU_TITLE_COVERAGE_INVALID"
+    )
+
+
+def test_title_coverage_accepts_grounded_natural_copy_without_exact_token_echo() -> None:
+    assert _english_title_coverage_is_sufficient(
+        "Italian Cheese Pizza (L)",
+        "A cheese pizza with a baked crust",
+    )
+    assert _english_title_coverage_is_sufficient(
+        "Original Shrimp Aglio Olio Pasta (Slightly Spicy)",
+        "Shrimp pasta with garlic, olive oil and a spicy finish",
     )
 
 
@@ -1205,7 +1219,7 @@ def test_current_prompt_and_schema_logically_invalidate_legacy_cache_without_del
     )
 
     assert current_settings.menu_presentation_prompt_version == (
-        "yobi-menu-presentation-v12-server-owned-provenance"
+        "yobi-menu-presentation-v13-semantic-title-coverage"
     )
     assert current_settings.menu_presentation_schema_version == "6"
     assert provider.requested_ids == [["menu-1"]]

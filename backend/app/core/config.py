@@ -87,11 +87,11 @@ class Settings(BaseSettings):
     tool_call_max_steps: int = Field(default=6, ge=1, le=12)
     recommendation_prompt_version: str = "yobi-structured-rag-v3-server-wiki-binding"
     menu_presentation_prompt_version: str = (
-        "yobi-menu-presentation-v12-server-owned-provenance"
+        "yobi-menu-presentation-v13-semantic-title-coverage"
     )
     menu_presentation_schema_version: str = "6"
     option_localization_prompt_version: str = (
-        "yobi-option-localization-v3-merged-validation"
+        "yobi-option-localization-v4-per-unit-number-semantics"
     )
     menu_presentation_wait_seconds: float = Field(default=10.0, ge=0.0, le=30.0)
     menu_presentation_poll_seconds: float = Field(default=0.25, ge=0.05, le=2.0)

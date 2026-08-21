@@ -85,12 +85,36 @@ with repository.pool.connection() as connection:
     request_columns = [str(value[0]).lower() for value in cursor.description]
     request = dict(zip(request_columns, request_row)) if request_row else None
 
+    cursor.execute(
+        """
+        SELECT status, error_code, attempt_count, updated_at
+        FROM menu_presentation_generation_lease
+        WHERE status='FAILED'
+          AND updated_at >= SYSTIMESTAMP - INTERVAL '30' MINUTE
+        ORDER BY updated_at DESC
+        FETCH FIRST 12 ROWS ONLY
+        """
+    )
+    lease_columns = [str(value[0]).lower() for value in cursor.description]
+    recent_failed_presentation_leases = [
+        dict(zip(lease_columns, row)) for row in cursor.fetchall()
+    ]
+
 def safe(value):
     if hasattr(value, "isoformat"):
         return value.isoformat()
     raise TypeError(type(value).__name__)
 
-print(json.dumps({"request": request, "attempts": attempts}, default=safe))
+print(
+    json.dumps(
+        {
+            "request": request,
+            "attempts": attempts,
+            "recent_failed_presentation_leases": recent_failed_presentation_leases,
+        },
+        default=safe,
+    )
+)
 PY
 
 sudo -n journalctl -u yobi-api \

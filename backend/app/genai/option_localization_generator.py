@@ -92,14 +92,37 @@ _ENGLISH_OPTION_SEMANTIC_RULES = (
 )
 
 
-def _option_translation_error(source: str, target: str, target_language: str) -> str | None:
-    expected_numbers = _number_tokens(source)
-    actual_numbers = (
+def _option_numbers_are_preserved(
+    source: str,
+    target: str,
+    target_language: str,
+) -> bool:
+    expected = _number_tokens(source)
+    actual = (
         _quantity_tokens(target, "en")
         if target_language == "en"
         else _number_tokens(target)
     )
-    if expected_numbers != actual_numbers:
+    if expected == actual:
+        return True
+
+    # Korean commerce labels commonly spell out both sides of a one-to-one
+    # relation ("1 order당 1 item"). Natural English compresses that safely to
+    # "one item per order". The word "per" carries the implicit denominator of
+    # one, so requiring the digit twice rejects an exact semantic translation.
+    # Keep this exception deliberately narrow: one repeated source quantity,
+    # one matching target quantity, and an explicit per-unit relation.
+    return (
+        target_language == "en"
+        and len(expected) == 2
+        and expected[0] == expected[1]
+        and actual == [expected[0]]
+        and re.search(r"(?i)\b(?:per|each|every)\b", target) is not None
+    )
+
+
+def _option_translation_error(source: str, target: str, target_language: str) -> str | None:
+    if not _option_numbers_are_preserved(source, target, target_language):
         return "OPTION_LOCALIZATION_NUMBER_MISMATCH"
     if target_language == "ko" and source != target:
         return "OPTION_LOCALIZATION_KOREAN_SOURCE_CHANGED"

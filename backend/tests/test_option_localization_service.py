@@ -15,7 +15,10 @@ from app.genai.contracts import (
     GenAIServingMode,
     ProviderCapabilities,
 )
-from app.genai.option_localization_generator import OptionLocalizationGenerator
+from app.genai.option_localization_generator import (
+    OptionLocalizationGenerator,
+    _option_translation_error,
+)
 from app.services.option_localization import OptionLocalizationService
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -325,6 +328,25 @@ def test_generator_accepts_spelled_number_with_preserved_quantity_unit() -> None
     )
 
     assert result.groups[0].item_display_names == ["Add one item of cola"]
+
+
+def test_number_validation_accepts_natural_one_per_order_compression() -> None:
+    assert (
+        _option_translation_error(
+            "주문 1건당 1개 제공",
+            "One item provided per order",
+            "en",
+        )
+        is None
+    )
+    assert (
+        _option_translation_error(
+            "주문 1건당 1개 제공",
+            "Two items provided per order",
+            "en",
+        )
+        == "OPTION_LOCALIZATION_NUMBER_MISMATCH"
+    )
 
 
 def test_selected_menu_options_generate_once_then_use_prompt_versioned_cache() -> None:

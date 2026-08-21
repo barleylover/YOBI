@@ -148,7 +148,13 @@ def _english_title_coverage_is_sufficient(title: str, explanation: str) -> bool:
     if not required:
         return True
     actual = _english_title_tokens(explanation)
-    minimum = max(1, (len(required) * 3 + 3) // 4)
+    # The server already renders the immutable localized title. Presentation
+    # prose must retain the core listing identity, but natural explanations may
+    # translate foreign culinary terms (aglio -> garlic) or omit a cuisine
+    # adjective (Italian cheese pizza -> cheese pizza). Requiring an exact 75%
+    # token echo rejected grounded copy without adding safety. Half coverage
+    # still rejects generic family prose that drops specific ingredients.
+    minimum = max(1, (len(required) + 1) // 2)
     return len(required & actual) >= minimum
 
 
