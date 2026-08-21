@@ -395,6 +395,19 @@ def _profile() -> Profile:
     )
 
 
+def test_server_owned_criteria_summary_is_clear_and_usable_in_korean() -> None:
+    repository = FakeRecommendationRepository(_criteria())
+
+    summary = StructuredRecommendationService._criteria_fallback_summary(
+        repository.criteria_record,
+        "한국어",
+    )
+
+    assert summary.startswith("선택한 식사 선호 조건:")
+    assert "한식" in summary
+    assert len(summary.strip()) >= 4
+
+
 def _menu(menu_id: str, *, score: float) -> MenuSummary:
     suffix = menu_id.rsplit("-", maxsplit=1)[-1].upper()
     return MenuSummary(

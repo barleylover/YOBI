@@ -29,11 +29,24 @@ class _FakeOCIClient:
         return SimpleNamespace(data=data)
 
 
+class _OneFastRequestFailureOCIClient(_FakeOCIClient):
+    def __init__(self, dimension: int) -> None:
+        super().__init__(dimension)
+        self.attempts = 0
+
+    def embed_text(self, details: object, *, retry_strategy: object) -> object:
+        self.attempts += 1
+        if self.attempts == 1:
+            raise oci.exceptions.RequestException("transient connection failure")
+        return super().embed_text(details, retry_strategy=retry_strategy)
+
+
 def _oci_settings() -> Settings:
     return Settings(
         oci_compartment_id="ocid1.compartment.oc1..test",
         oci_embed_model="cohere.embed-v4.0",
         oci_embed_dimension=1536,
+        llm_retry_base_seconds=0,
     )
 
 
@@ -71,6 +84,18 @@ def test_oci_embedding_reads_embed4_float_vectors_from_typed_response() -> None:
 
     assert len(vectors) == 1
     assert len(vectors[0]) == 1536
+
+
+def test_oci_embedding_retries_one_fast_request_transport_failure() -> None:
+    provider = OCIEmbeddingProvider(_oci_settings())
+    fake = _OneFastRequestFailureOCIClient(provider.dimension)
+    provider._client = fake
+
+    vectors = provider.embed(["menu"], "SEARCH_QUERY")
+
+    assert len(vectors) == 1
+    assert fake.attempts == 2
+    assert len(fake.calls) == 1
 
 
 def test_default_provider_remains_explicit_deterministic_fallback() -> None:

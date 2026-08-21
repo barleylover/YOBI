@@ -1152,7 +1152,9 @@ class StructuredRecommendationService:
             values.append(copy.halal_only)
         if record.criteria.dietary_filters.vegan:
             values.append(copy.vegan)
-        return "; ".join(values) or copy.criteria_default
+        if not values:
+            return copy.criteria_default
+        return f"{copy.criteria_default}: {'; '.join(values)}"
 
     def _generation_payload(self, item: EvidencePoolItem) -> dict[str, Any]:
         """Send only fields needed for bounded selection and evidence validation."""
