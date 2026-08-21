@@ -76,10 +76,13 @@ describe("Yogiyo handoff", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "Ready to order" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Back to menus" })).toHaveLength(2);
     expect(document.body.textContent).not.toMatch(/demo|mock|synthetic/i);
     fireEvent.click(screen.getByRole("button", { name: /Open in Yogiyo/ }));
     expect(await screen.findByRole("heading", { name: "Continue your order in Yogiyo" })).toBeInTheDocument();
     expect(screen.getByText("Review the basket, then continue to Yogiyo.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Back to menus" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Back to YOBI" })).toHaveLength(1);
     expect(createCheckout).not.toHaveBeenCalled();
     expect(paymentSuccess).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: /^Pay/ })).not.toBeInTheDocument();

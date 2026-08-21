@@ -75,7 +75,7 @@ export function HandoffPage() {
           <button
             type="button"
             className="v2-icon-button light"
-            aria-label={copy.back}
+            aria-label={v2.backToMenus}
             onClick={() => navigate(`/chat/${session.session_id}`)}
           >
             <img src="/figma/back-chevron-white.svg" alt="" width={9} height={16} />
