@@ -38,9 +38,9 @@ _ENGLISH_QUANTITY_WORDS = {
     "twelve": "12",
 }
 _ENGLISH_QUANTITY_UNIT_PATTERN = re.compile(
-    r"(?i)\b(" + "|".join(_ENGLISH_QUANTITY_WORDS) + r")\b(?=\s*(?:"
+    r"(?i)\b(" + "|".join(_ENGLISH_QUANTITY_WORDS) + r")\b(?=[\s-]*(?:"
     r"servings?|portions?|pieces?|items?|bottles?|cans?|cups?|packs?|sets?|"
-    r"ml|g|kg)\b)"
+    r"spices?|seasonings?|varieties?|types?|kinds?|ml|g|kg)\b)"
 )
 
 

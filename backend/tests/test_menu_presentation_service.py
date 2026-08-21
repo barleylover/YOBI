@@ -711,6 +711,45 @@ def test_presentation_accepts_spelled_quantity_when_value_is_unchanged() -> None
     assert len(repository.cache) == 1
 
 
+def test_presentation_accepts_spelled_spice_count_in_source_translation() -> None:
+    payload = _generated_payload()
+    payload["items"][0].update(
+        {
+            "localized_source_description": "Garlic coated in five-spice seasoning.",
+            "localized_subtitle": "Tteokbokki with five-spice garlic",
+            "yobi_short_explanation": (
+                "Tteokbokki keeps chewy rice cakes beside aromatic garlic. "
+                "The five-spice seasoning adds a layered savory aroma."
+            ),
+            "yobi_long_explanation": (
+                "Tteokbokki centers on chewy rice cakes in sauce. "
+                "This restaurant seasons fried garlic with five spices. "
+                "The garlic adds aroma and crisp texture. "
+                "The supplied Wiki explains the rice-cake format."
+            ),
+        }
+    )
+    repository = PresentationRepository(
+        MerchantMenuPresentationPage(
+            items=[_presentation(source_description="5가지 향신료를 입힌 마늘")]
+        )
+    )
+    provider = PresentationProvider(output=json.dumps(payload))
+    service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        generator=MenuPresentationGenerator(Settings(), provider=provider),
+    )
+
+    page = service.list_presentations(
+        "session-1", "merchant-1", MerchantMenuPresentationRequest()
+    )
+
+    assert page.items[0].generation_model == "xai.grok-4.3"
+    assert page.items[0].source_description == "Garlic coated in five-spice seasoning."
+    assert len(repository.cache) == 1
+
+
 def test_presentation_accepts_one_sentence_review_summary() -> None:
     payload = _generated_payload()
     payload["items"][0]["review_summary"] = "Reviewers liked the chewy texture."
@@ -1219,7 +1258,7 @@ def test_current_prompt_and_schema_logically_invalidate_legacy_cache_without_del
     )
 
     assert current_settings.menu_presentation_prompt_version == (
-        "yobi-menu-presentation-v13-semantic-title-coverage"
+        "yobi-menu-presentation-v14-spelled-description-quantities"
     )
     assert current_settings.menu_presentation_schema_version == "6"
     assert provider.requested_ids == [["menu-1"]]

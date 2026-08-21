@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     tool_call_max_steps: int = Field(default=6, ge=1, le=12)
     recommendation_prompt_version: str = "yobi-structured-rag-v3-server-wiki-binding"
     menu_presentation_prompt_version: str = (
-        "yobi-menu-presentation-v13-semantic-title-coverage"
+        "yobi-menu-presentation-v14-spelled-description-quantities"
     )
     menu_presentation_schema_version: str = "6"
     option_localization_prompt_version: str = (
