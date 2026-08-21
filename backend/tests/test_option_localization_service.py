@@ -19,7 +19,7 @@ from app.genai.option_localization_generator import (
     OptionLocalizationGenerator,
     _option_translation_error,
 )
-from app.services.option_localization import OptionLocalizationService
+from app.services.option_localization import OptionLocalizationService, project_demo_options
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -425,7 +425,126 @@ def test_selected_menu_options_generate_once_then_use_prompt_versioned_cache() -
     assert first[0].items[0].display_name == "Add Coca-Cola 355ml"
     assert second == first
     assert len(provider.calls) == 1
-    assert repository.saved_prompt == settings.option_localization_prompt_version
+    assert repository.saved_prompt == service._cache_prompt_version()
+
+
+def test_demo_projection_caps_groups_and_items_while_preserving_required_choices() -> None:
+    groups: list[OptionGroup] = []
+    for group_index in range(7):
+        items = [
+            OptionItem(
+                option_item_id=f"g{group_index}-item-{item_index}",
+                name_en="None" if item_index == 9 else f"Option {item_index}",
+                name_ko="선택 안함" if item_index == 9 else f"옵션 {item_index}",
+                display_name=None,
+                description="",
+                price_delta=0 if item_index in {0, 9} else item_index * 100,
+                available=True,
+            )
+            for item_index in range(10)
+        ]
+        groups.append(
+            OptionGroup(
+                option_group_id=f"group-{group_index}",
+                name_en=f"Group {group_index}",
+                name_ko=f"그룹 {group_index}",
+                description="",
+                required=group_index == 6,
+                min_select=1 if group_index == 6 else 0,
+                max_select=3,
+                items=items,
+            )
+        )
+
+    projected = project_demo_options(
+        groups,
+        group_limit=5,
+        items_per_group_limit=6,
+        total_item_limit=20,
+    )
+
+    assert len(projected) == 5
+    assert sum(len(group.items) for group in projected) == 20
+    assert all(len(group.items) <= 6 for group in projected)
+    assert projected[-1].option_group_id == "group-6"
+    assert all(any(item.name_ko == "선택 안함" for item in group.items) for group in projected)
+
+
+def test_demo_projection_may_exceed_item_cap_only_to_preserve_required_minimum() -> None:
+    source = _groups()[0]
+    required_items = [
+        source.items[0].model_copy(update={"option_item_id": f"required-{index}"})
+        for index in range(7)
+    ]
+    required_group = source.model_copy(
+        update={
+            "required": True,
+            "min_select": 7,
+            "max_select": 7,
+            "items": required_items,
+        }
+    )
+
+    projected = project_demo_options(
+        [required_group],
+        group_limit=5,
+        items_per_group_limit=6,
+        total_item_limit=5,
+    )
+
+    assert len(projected[0].items) == 7
+    assert projected[0].min_select == 7
+
+
+def test_server_catalog_fallback_recovers_even_when_models_contribute_no_label() -> None:
+    provider = FallbackOptionProvider(
+        {
+            model: {
+                "groups": [
+                    {
+                        "display_name": "음료 추가선택",
+                        "item_display_names": ["코카콜라 355ml 추가", "선택 안함"],
+                    }
+                ]
+            }
+            for model in ("openai.gpt-oss-20b", "openai.gpt-oss-120b")
+        }
+    )
+
+    result = OptionLocalizationGenerator(Settings(), provider=provider).generate(
+        groups=[
+            {
+                "name_ko": "음료 추가선택",
+                "name_en": "Drink add-ons",
+                "items": [
+                    {
+                        "name_ko": "코카콜라 355ml 추가",
+                        "name_en": "Add Coca-Cola 355ml",
+                    },
+                    {"name_ko": "선택 안함", "name_en": "None"},
+                ],
+            }
+        ],
+        locale="English",
+    )
+
+    assert result.groups[0].display_name == "Drink add-ons"
+    assert result.groups[0].item_display_names == ["Add Coca-Cola 355ml", "None"]
+    assert result.generation_model == "SERVER_SAFE_FALLBACK"
+    assert result.unresolved_paths == []
+
+
+def test_runtime_cache_repositories_accept_only_valid_demo_projection_subsets() -> None:
+    for repository_name in ("sqlite_repository.py", "oracle_repository.py"):
+        source = (ROOT / "backend" / "app" / "db" / repository_name).read_text(encoding="utf-8")
+        runtime_section = source.split("def save_option_localizations", maxsplit=1)[1].split(
+            "def save_menu_runtime_localizations", maxsplit=1
+        )[0]
+
+        assert runtime_section.count(".issubset(") == 2
+        assert "OPTION_LOCALIZATION_ITEM_GROUP_MISMATCH" in runtime_section
+        assert "not in group_names" in runtime_section
+        assert "not in item_names" in runtime_section
 
 
 def test_generator_returns_safe_partial_translation_for_one_unresolved_label() -> None:
@@ -581,7 +700,7 @@ def test_cache_write_failure_does_not_discard_generated_option_translation() -> 
     assert repository.saved is False
 
 
-def test_missing_option_string_is_rejected_without_cache_write() -> None:
+def test_missing_option_string_preserves_safe_partial_recovery_without_cache() -> None:
     repository = OptionRepository()
     provider = OptionProvider(
         {
@@ -602,7 +721,11 @@ def test_missing_option_string_is_rejected_without_cache_write() -> None:
 
     result = service.get_options("menu-1", "session-1")
 
-    assert result[0].display_name == "음료 추가선택"
+    assert result[0].display_name == "Drink add-ons"
+    assert [item.display_name for item in result[0].items] == [
+        "코카콜라 355ml 추가",
+        "None",
+    ]
     assert repository.saved is False
 
 

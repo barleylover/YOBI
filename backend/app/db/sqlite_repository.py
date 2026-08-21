@@ -7801,7 +7801,7 @@ class SQLiteYobiRepository:
             ).fetchall()
             item_rows = connection.execute(
                 """
-                SELECT item.option_item_id,item.name_en,item.name_ko
+                SELECT item.option_item_id,item.option_group_id,item.name_en,item.name_ko
                 FROM menu_option_item item
                 JOIN menu_option_group groups
                   ON groups.option_group_id=item.option_group_id
@@ -7809,13 +7809,23 @@ class SQLiteYobiRepository:
                 """,
                 (menu_id,),
             ).fetchall()
-            if {str(row["option_group_id"]) for row in group_rows} != set(group_names):
+            known_group_ids = {str(row["option_group_id"]) for row in group_rows}
+            known_item_ids = {str(row["option_item_id"]) for row in item_rows}
+            if not set(group_names).issubset(known_group_ids):
                 raise ValueError("OPTION_LOCALIZATION_GROUP_IDS_MISMATCH")
-            if {str(row["option_item_id"]) for row in item_rows} != set(item_names):
+            if not set(item_names).issubset(known_item_ids):
                 raise ValueError("OPTION_LOCALIZATION_ITEM_IDS_MISMATCH")
+            if any(
+                str(row["option_item_id"]) in item_names
+                and str(row["option_group_id"]) not in group_names
+                for row in item_rows
+            ):
+                raise ValueError("OPTION_LOCALIZATION_ITEM_GROUP_MISMATCH")
             release_id = str(context["synthetic_enrichment_release_id"])
             generated_at = _now()
             for row in group_rows:
+                if str(row["option_group_id"]) not in group_names:
+                    continue
                 source_hash = hashlib.sha256(
                     json.dumps(
                         [row["name_ko"], row["name_en"], language_code],
@@ -7846,6 +7856,8 @@ class SQLiteYobiRepository:
                     ),
                 )
             for row in item_rows:
+                if str(row["option_item_id"]) not in item_names:
+                    continue
                 source_hash = hashlib.sha256(
                     json.dumps(
                         [row["name_ko"], row["name_en"], language_code],

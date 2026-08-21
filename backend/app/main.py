@@ -82,7 +82,7 @@ from app.services.address_ocr import AddressCandidateTokenCodec, choose_address_
 from app.services.chat_service import ChatService
 from app.services.demo_control import DemoControl, FailureMode
 from app.services.menu_presentation import MenuPresentationService
-from app.services.option_localization import OptionLocalizationService
+from app.services.option_localization import OptionLocalizationService, project_demo_options
 from app.services.restaurant_note_translation import RestaurantNoteTranslationService
 from app.services.structured_recommendation import StructuredRecommendationService
 
@@ -387,6 +387,20 @@ def readyz(
             "option_localization_max_output_tokens": (
                 current_settings.option_localization_max_output_tokens
             ),
+            "menu_presentation_prompt_version": (
+                current_settings.menu_presentation_prompt_version
+            ),
+            "option_localization_prompt_version": (
+                current_settings.option_localization_prompt_version
+            ),
+            "restaurant_note_prompt_version": (
+                current_settings.restaurant_note_prompt_version
+            ),
+            "demo_option_limits": {
+                "groups": current_settings.demo_option_group_limit,
+                "items_per_group": current_settings.demo_option_items_per_group_limit,
+                "total_items": current_settings.demo_option_item_total_limit,
+            },
             "ranking_policy_version": db.get("ranking_policy_version"),
             "feature_count": db.get("feature_count", 0),
             "feature_manifest_sha256": db.get("feature_manifest_sha256"),
@@ -955,6 +969,7 @@ def get_menu_options(
     option_localization_service: OptionLocalizationService = Depends(
         get_option_localization_service
     ),
+    current_settings: Settings = Depends(get_settings),
 ) -> list[dict[str, Any]]:
     if session_id is not None:
         _require_session(repository, session_id)
@@ -963,11 +978,17 @@ def get_menu_options(
     # known cross-merchant cart conflict can be resolved. The repository still
     # applies the active release's validated/precomputed localization for the
     # session language; only runtime generation is skipped.
-    groups = (
-        repository.get_options(menu_id, session_id=session_id)
-        if precomputed_only
-        else option_localization_service.get_options(menu_id, session_id)
-    )
+    if precomputed_only:
+        groups = list(repository.get_options(menu_id, session_id=session_id))
+        if current_settings.demo_mode:
+            groups = project_demo_options(
+                groups,
+                group_limit=current_settings.demo_option_group_limit,
+                items_per_group_limit=current_settings.demo_option_items_per_group_limit,
+                total_item_limit=current_settings.demo_option_item_total_limit,
+            )
+    else:
+        groups = option_localization_service.get_options(menu_id, session_id)
     return [
         group.model_dump(mode="json")
         for group in groups

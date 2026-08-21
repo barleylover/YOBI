@@ -316,8 +316,6 @@ class OptionLocalizationGenerator:
                     zip(groups, result.groups)
                 ):
                     source_items = list(source_group.get("items", []))
-                    if len(generated_group.item_display_names) != len(source_items):
-                        raise ValueError("OPTION_LOCALIZATION_ITEM_COUNT_INVALID")
                     group_error = _option_translation_error(
                         str(source_group["name_ko"]),
                         generated_group.display_name,
@@ -329,6 +327,14 @@ class OptionLocalizationGenerator:
                             contributed = True
                     else:
                         validation_errors.append(f"{group_error}:G{group_index}")
+                    if len(generated_group.item_display_names) != len(source_items):
+                        # Positional mapping inside this group is unsafe, but a
+                        # malformed group must not discard valid group labels or
+                        # translations produced for the other groups.
+                        validation_errors.append(
+                            f"OPTION_LOCALIZATION_ITEM_COUNT_INVALID:G{group_index}"
+                        )
+                        continue
                     for item_index, (source_item, translated) in enumerate(
                         zip(source_items, generated_group.item_display_names)
                     ):
@@ -414,7 +420,7 @@ class OptionLocalizationGenerator:
         # Preserve every safe label produced by either model. A single difficult
         # label must not throw away the rest of a selected menu's translations.
         # Unresolved labels remain uncached so the next request can retry them.
-        if contributing_models:
+        if contributing_models or groups:
             unresolved_paths: list[str] = []
             used_server_fallback = False
             resolved_groups: list[GeneratedOptionGroup] = []
@@ -447,6 +453,14 @@ class OptionLocalizationGenerator:
                         display_name=group_name,
                         item_display_names=item_names,
                     )
+                )
+            # If neither model nor a trusted server source supplied any label,
+            # preserve the existing provider failure instead of disguising a
+            # completely untranslated batch as a generated result.
+            if not contributing_models and not used_server_fallback:
+                raise last_error or GenAIProviderError(
+                    GenAIErrorCode.PROVIDER_UNAVAILABLE,
+                    retryable=False,
                 )
             partial = OptionLocalizationGeneration(groups=resolved_groups)
             model_parts = list(dict.fromkeys(contributing_models))

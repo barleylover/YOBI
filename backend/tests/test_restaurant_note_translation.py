@@ -60,7 +60,9 @@ class PlannedProvider:
         if isinstance(result, BaseException):
             raise result
         return SimpleNamespace(
-            output_text=result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+            output_text=result
+            if isinstance(result, str)
+            else json.dumps(result, ensure_ascii=False)
         )
 
 
@@ -80,9 +82,7 @@ def test_note_translation_uses_first_available_model_and_enables_cart_note(
     repository: SQLiteYobiRepository,
 ) -> None:
     session_id = _session(repository)
-    provider = PlannedProvider(
-        {"meta.llama-4-maverick-17b-128e-instruct-fp8": _payload()}
-    )
+    provider = PlannedProvider({"meta.llama-4-maverick-17b-128e-instruct-fp8": _payload()})
     service = RestaurantNoteTranslationService(repository, Settings(), provider=provider)
 
     translated = service.translate(
@@ -224,11 +224,58 @@ def test_non_structured_provider_receives_explicit_translation_contract(
     repository: SQLiteYobiRepository,
 ) -> None:
     session_id = _session(repository)
-    provider = PlannedProvider(
-        {"meta.llama-4-maverick-17b-128e-instruct-fp8": _payload()}
+    provider = PlannedProvider({"meta.llama-4-maverick-17b-128e-instruct-fp8": _payload()})
+    provider.capabilities = provider.capabilities.model_copy(update={"structured_output": False})
+
+    translated = RestaurantNoteTranslationService(
+        repository, Settings(), provider=provider
+    ).translate(
+        session_id,
+        RestaurantNoteTranslationInput(source_text="No onions, please.", source_language="en"),
     )
-    provider.capabilities = provider.capabilities.model_copy(
-        update={"structured_output": False}
+
+    assert translated.status == "SUCCEEDED"
+    content = json.loads(provider.requests[0]["input"][0]["content"])
+    assert content["response_contract"] == _TRANSLATION_SCHEMA
+
+
+def test_note_translation_prompt_explains_restaurant_context_and_examples(
+    repository: SQLiteYobiRepository,
+) -> None:
+    session_id = _session(repository)
+    provider = PlannedProvider({"meta.llama-4-maverick-17b-128e-instruct-fp8": _payload()})
+    settings = Settings()
+
+    RestaurantNoteTranslationService(repository, settings, provider=provider).translate(
+        session_id,
+        RestaurantNoteTranslationInput(
+            source_text="Please pack the sauce separately.",
+            source_language="en",
+        ),
+    )
+
+    instructions = provider.requests[0]["instructions"]
+    content = json.loads(provider.requests[0]["input"][0]["content"])
+    assert "restaurant's kitchen or packing staff" in instructions
+    assert "It is not a restaurant review" in instructions
+    assert '"Please pack the sauce separately."' in instructions
+    assert '"양파는 빼 주세요."' in instructions
+    assert settings.restaurant_note_prompt_version in instructions
+    assert content["message_stage"] == "restaurant_order_preparation"
+    assert content["recipient"] == "restaurant kitchen or packing staff"
+
+
+def test_note_translation_ignores_harmless_extra_json_fields(
+    repository: SQLiteYobiRepository,
+) -> None:
+    session_id = _session(repository)
+    provider = PlannedProvider(
+        {
+            "meta.llama-4-maverick-17b-128e-instruct-fp8": {
+                **_payload(),
+                "confidence": 0.98,
+            }
+        }
     )
 
     translated = RestaurantNoteTranslationService(
@@ -236,13 +283,12 @@ def test_non_structured_provider_receives_explicit_translation_contract(
     ).translate(
         session_id,
         RestaurantNoteTranslationInput(
-            source_text="No onions, please.", source_language="en"
+            source_text="Please make it as mild as possible.",
+            source_language="en",
         ),
     )
 
     assert translated.status == "SUCCEEDED"
-    content = json.loads(provider.requests[0]["input"][0]["content"])
-    assert content["response_contract"] == _TRANSLATION_SCHEMA
 
 
 def test_non_korean_translation_is_rejected_and_20b_can_recover(
@@ -263,9 +309,7 @@ def test_non_korean_translation_is_rejected_and_20b_can_recover(
         repository, Settings(), provider=provider
     ).translate(
         session_id,
-        RestaurantNoteTranslationInput(
-            source_text="No onions, please.", source_language="en"
-        ),
+        RestaurantNoteTranslationInput(source_text="No onions, please.", source_language="en"),
     )
 
     assert translated.status == "SUCCEEDED"

@@ -17,7 +17,9 @@ from app.genai.response_contract import parse_json_object
 
 
 class _TranslationPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # Some raw-JSON models add harmless bookkeeping fields. Only these two
+    # user-visible strings are consumed and persisted.
+    model_config = ConfigDict(extra="ignore")
 
     korean_text: str = Field(min_length=1, max_length=500)
     back_translation: str = Field(min_length=1, max_length=500)
@@ -58,15 +60,14 @@ class RestaurantNoteTranslationService:
                 "session_id": session_id,
                 "source_language": data.source_language.strip().lower(),
                 "source_text": data.source_text.strip(),
+                "prompt_version": self.settings.restaurant_note_prompt_version,
             },
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
         )
         request_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-        cached = self.repository.get_restaurant_note_translation_by_hash(
-            session_id, request_hash
-        )
+        cached = self.repository.get_restaurant_note_translation_by_hash(session_id, request_hash)
         if cached is not None:
             return cached
 
@@ -93,17 +94,13 @@ class RestaurantNoteTranslationService:
         input_payload: dict[str, Any] = {
             "source_language": data.source_language,
             "source_text": data.source_text,
+            "message_stage": "restaurant_order_preparation",
+            "recipient": "restaurant kitchen or packing staff",
         }
         if not self.provider.capabilities.structured_output:
             input_payload["response_contract"] = _TRANSLATION_SCHEMA
         request: dict[str, Any] = {
-            "instructions": (
-                "Translate the visitor's restaurant note into natural, polite Korean. "
-                "Preserve names, quantities, negation, and requests exactly. Also translate "
-                "the Korean result back into the source language for confirmation. Return exactly "
-                "one JSON object with only korean_text and back_translation string fields. Do not "
-                "use Markdown, a code fence, Korean field names, commentary, or additional keys."
-            ),
+            "instructions": self._instructions(),
             "input": [
                 {
                     "role": "user",
@@ -136,9 +133,8 @@ class RestaurantNoteTranslationService:
                 response = self.provider.create_response(model_id, **request)
                 raw = str(getattr(response, "output_text", "")).strip()
                 parsed = _TranslationPayload.model_validate(parse_json_object(raw))
-                if (
-                    not data.source_language.lower().startswith("ko")
-                    and not any("가" <= character <= "힣" for character in parsed.korean_text)
+                if not data.source_language.lower().startswith("ko") and not any(
+                    "가" <= character <= "힣" for character in parsed.korean_text
                 ):
                     raise ValueError("TRANSLATION_KOREAN_TEXT_REQUIRED")
                 usage = self._usage(response)
@@ -218,6 +214,43 @@ class RestaurantNoteTranslationService:
             error_code=last_error,
             request_hash=request_hash,
         )
+
+    def _instructions(self) -> str:
+        return f"""
+You translate a short message written by a foreign visitor during the food-delivery ordering
+flow. The Korean message will be sent to the restaurant's kitchen or packing staff while they
+prepare and pack the order. It is not a restaurant review, chat reply, address, hotel-front-desk
+instruction, or courier delivery instruction.
+
+Write korean_text as concise, natural, polite Korean that restaurant staff can act on immediately.
+Preserve the customer's exact intent, food or ingredient names, quantities, allergies, negation,
+conditional wording, and whether something should be omitted, added, cooked, or packed separately.
+Do not strengthen a preference into an allergy, weaken an allergy, promise that the restaurant can
+comply, invent a reason, add a greeting, or add any request absent from the source. Avoid awkward
+word-for-word translation when a standard Korean restaurant-note phrase is clearer.
+
+Write back_translation in the visitor's source_language. It must faithfully translate the final
+korean_text so the visitor can confirm what the restaurant will receive; do not merely repeat the
+source if the Korean wording changed its nuance.
+
+Examples:
+- English: "Please leave out the onions." -> korean_text: "양파는 빼 주세요." ->
+  back_translation: "Please leave out the onions."
+- English: "Please pack the sauce separately." -> korean_text: "소스는 따로 담아 주세요." ->
+  back_translation: "Please pack the sauce separately."
+- English: "Please include two pairs of chopsticks." -> korean_text: "젓가락 두 벌 넣어 주세요." ->
+  back_translation: "Please include two pairs of chopsticks."
+- English: "If possible, make it less spicy. If not, that's okay." -> korean_text:
+  "가능하면 덜 맵게 해 주세요. 어렵다면 괜찮습니다." -> back_translation:
+  "If possible, please make it less spicy. If that is difficult, that's okay."
+- English: "I have a peanut allergy. Please do not add peanuts." -> korean_text:
+  "땅콩 알레르기가 있으니 땅콩은 넣지 말아 주세요." -> back_translation:
+  "I have a peanut allergy, so please do not add peanuts."
+
+Return one JSON object with korean_text and back_translation string fields. Do not use Markdown,
+a code fence, Korean field names, analysis, commentary, or a preamble. Prompt version:
+{self.settings.restaurant_note_prompt_version}.
+""".strip()
 
     def _record_attempt(
         self,

@@ -458,7 +458,7 @@ def test_presentation_translates_card_fields_without_option_localization() -> No
     assert len(repository.cache) == 1
 
 
-def test_presentation_rejects_option_localizations_from_card_model() -> None:
+def test_presentation_ignores_option_localizations_from_card_model() -> None:
     options = [
         OptionGroup(
             option_group_id="group-1",
@@ -511,9 +511,30 @@ def test_presentation_rejects_option_localizations_from_card_model() -> None:
 
     page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
 
-    assert page.items[0].generation_model == "DETERMINISTIC_GROUNDED_FALLBACK"
-    assert repository.cache == {}
+    assert page.items[0].generation_model == "xai.grok-4.3+SAFE_FIELD_FALLBACK"
+    assert len(repository.cache) == 1
+    assert page.items[0].evidence_map["safe_field_fallbacks"] == ["option_localizations"]
     assert repository.saved_option_localizations == []
+
+
+def test_presentation_canonicalizes_changed_title_without_discarding_grok_copy() -> None:
+    payload = _generated_payload()
+    payload["items"][0]["localized_title"] = "Tteokbokki!!!"
+    repository = PresentationRepository(MerchantMenuPresentationPage(items=[_presentation()]))
+    provider = PresentationProvider(output=json.dumps(payload))
+    service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        generator=MenuPresentationGenerator(Settings(), provider=provider),
+    )
+
+    page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
+
+    assert page.items[0].localized_title == "Tteokbokki"
+    assert page.items[0].yobi_short_explanation == payload["items"][0]["yobi_short_explanation"]
+    assert page.items[0].generation_model == "xai.grok-4.3+SAFE_FIELD_FALLBACK"
+    assert page.items[0].evidence_map["safe_field_fallbacks"] == ["localized_title"]
+    assert len(repository.cache) == 1
 
 
 def test_phonetic_yogiyo_description_uses_safe_field_fallback_and_caches_other_copy() -> None:
@@ -987,6 +1008,28 @@ def test_invalid_batch_is_not_retried_and_keeps_deterministic_copy() -> None:
     assert all(item.generation_model == "DETERMINISTIC_GROUNDED_FALLBACK" for item in page.items)
 
 
+def test_partial_batch_keeps_valid_grok_items_and_falls_back_only_missing_menu() -> None:
+    items = [_presentation(f"menu-{index}") for index in range(1, 4)]
+    payload = _generated_payload(["menu-1", "menu-2"])
+    payload["items"].append({**payload["items"][0], "menu_id": "unknown-menu"})
+    repository = PresentationRepository(MerchantMenuPresentationPage(items=items))
+    provider = PresentationProvider(output=json.dumps(payload))
+    service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        generator=MenuPresentationGenerator(Settings(), provider=provider),
+    )
+
+    page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
+
+    assert [item.generation_model for item in page.items] == [
+        "xai.grok-4.3",
+        "xai.grok-4.3",
+        "DETERMINISTIC_GROUNDED_FALLBACK",
+    ]
+    assert len(repository.cache) == 2
+
+
 def test_compound_presentation_missing_component_metadata_uses_safe_field_fallback() -> None:
     original = _presentation().model_copy(
         update={
@@ -1280,7 +1323,7 @@ def test_current_prompt_and_schema_logically_invalidate_legacy_cache_without_del
     )
 
     assert current_settings.menu_presentation_prompt_version == (
-        "yobi-menu-presentation-v16-minimal-safety-gates"
+        "yobi-menu-presentation-v17-partial-item-recovery"
     )
     assert current_settings.menu_presentation_schema_version == "6"
     assert provider.requested_ids == [["menu-1"]]
