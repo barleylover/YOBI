@@ -273,6 +273,8 @@ def _settings_errors(settings: Settings) -> list[str]:
         "STRUCTURED_MODEL": settings.structured_recommendation_model
         == "openai.gpt-oss-120b",
         "PRESENTATION_MODEL": settings.menu_presentation_model == "xai.grok-4.3",
+        "PRESENTATION_FALLBACK_MODEL": settings.oci_genai_fallback_model
+        == "openai.gpt-oss-120b",
         "OPTION_LOCALIZATION_CHAIN": settings.option_localization_model_chain
         == "openai.gpt-oss-20b,openai.gpt-oss-120b",
         "RESTAURANT_NOTE_CHAIN": settings.restaurant_note_model_chain
@@ -516,6 +518,14 @@ def _ready_errors(ready: dict[str, Any]) -> list[str]:
         "READY_STATUS": ready.get("status") == "ready",
         "MODEL": structured.get("model_id") == "openai.gpt-oss-120b",
         "PRESENTATION_MODEL": structured.get("presentation_model_id") == "xai.grok-4.3",
+        "PRESENTATION_FALLBACK_MODEL": structured.get(
+            "presentation_fallback_model_id"
+        )
+        == "openai.gpt-oss-120b",
+        "OUTPUT_LIMIT_RETRY_MULTIPLIER": structured.get(
+            "output_limit_retry_multiplier"
+        )
+        == 2,
         "OPTION_LOCALIZATION_MODEL": structured.get("option_localization_model_id")
         == "openai.gpt-oss-20b",
         "OPTION_LOCALIZATION_CHAIN": structured.get("option_localization_model_chain")
@@ -535,11 +545,19 @@ def _ready_errors(ready: dict[str, Any]) -> list[str]:
             "selection_max_output_tokens"
         )
         == 2048,
+        "SELECTION_RETRY_MAX_OUTPUT_TOKENS": structured.get(
+            "selection_retry_max_output_tokens"
+        )
+        == 4096,
         "MAX_OUTPUT_TOKENS": structured.get("max_output_tokens") == 16384,
         "PRESENTATION_MAX_OUTPUT_TOKENS": structured.get(
             "presentation_max_output_tokens"
         )
         == 4096,
+        "PRESENTATION_RETRY_MAX_OUTPUT_TOKENS": structured.get(
+            "presentation_retry_max_output_tokens"
+        )
+        == 8192,
         "OPTION_LOCALIZATION_MAX_OUTPUT_TOKENS": structured.get(
             "option_localization_max_output_tokens"
         )

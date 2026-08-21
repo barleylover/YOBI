@@ -12,6 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError,
 from app.core.config import Settings
 from app.genai.contracts import GenAIErrorCode, GenAIProvider, GenAIProviderError
 from app.genai.providers import choose_genai_provider
+from app.genai.response_limits import (
+    OUTPUT_LIMIT_REACHED_CODE,
+    expanded_output_limit,
+    output_limit_reached,
+)
 
 
 class RecommendationGenerationStatus(str, Enum):
@@ -656,6 +661,10 @@ class RecommendationGenerator:
             # JSON text but does not enforce `text.format` server-side.
             "response_contract": RECOMMENDATION_GENERATION_JSON_SCHEMA,
         }
+        base_output_limit = min(
+            self.settings.recommendation_selection_max_output_tokens,
+            capabilities.max_output_tokens,
+        )
         request: dict[str, Any] = {
             "instructions": instructions,
             "input": [
@@ -668,10 +677,7 @@ class RecommendationGenerator:
                     ),
                 }
             ],
-            "max_output_tokens": min(
-                self.settings.recommendation_selection_max_output_tokens,
-                capabilities.max_output_tokens,
-            ),
+            "max_output_tokens": base_output_limit,
         }
         if capabilities.structured_output:
             request["text"] = recommendation_generation_text_config()
@@ -679,6 +685,8 @@ class RecommendationGenerator:
         self._enforce_input_limit(request, request_metrics=request_metrics)
         response: Any | None = None
         selected_model = self.settings.structured_recommendation_model
+        selected_request_metrics = request_metrics
+        last_error: GenAIProviderError | None = None
         models = [selected_model]
         fallback_model = self.settings.oci_genai_fallback_model.strip()
         if (
@@ -690,62 +698,120 @@ class RecommendationGenerator:
         with self._request_slots:
             if before_provider_call is not None:
                 before_provider_call()
-            for attempt_no, model in enumerate(models, start=1):
-                attempt_started = monotonic()
-                try:
-                    response = self.provider.create_response(model, **request)
-                except GenAIProviderError as exc:
-                    latency_ms = int((monotonic() - attempt_started) * 1000)
-                    if on_provider_attempt is not None:
-                        on_provider_attempt(
-                            attempt_no,
-                            model,
-                            "FAILED",
-                            exc.code.value,
-                            latency_ms,
-                            exc.safe_metadata,
-                        )
-                    exc.safe_metadata = {**request_metrics, **exc.safe_metadata}
-                    if exc.code is GenAIErrorCode.RATE_LIMIT and attempt_no < len(models):
-                        continue
-                    raise
-                except Exception as exc:
-                    latency_ms = int((monotonic() - attempt_started) * 1000)
-                    if on_provider_attempt is not None:
-                        on_provider_attempt(
-                            attempt_no,
-                            model,
-                            "FAILED",
-                            GenAIErrorCode.PROVIDER_UNAVAILABLE.value,
-                            latency_ms,
-                            {},
-                        )
-                    raise GenAIProviderError(
-                        GenAIErrorCode.PROVIDER_UNAVAILABLE,
-                        retryable=False,
-                        cause=exc,
-                        safe_metadata=request_metrics,
-                    ) from exc
-                selected_model = model
-                latency_ms = int((monotonic() - attempt_started) * 1000)
-                if on_provider_attempt is not None:
-                    on_provider_attempt(
-                        attempt_no,
-                        model,
-                        "SUCCEEDED",
-                        None,
-                        latency_ms,
-                        self._response_usage_metrics(response),
+            provider_attempt_no = 0
+            for model_index, model in enumerate(models):
+                expanded_limit = expanded_output_limit(
+                    base_output_limit,
+                    capabilities.max_output_tokens,
+                )
+                output_limits = [base_output_limit]
+                if expanded_limit > base_output_limit:
+                    output_limits.append(expanded_limit)
+                for output_limit_index, output_limit in enumerate(output_limits):
+                    provider_attempt_no += 1
+                    attempt_started = monotonic()
+                    attempt_request = {**request, "max_output_tokens": output_limit}
+                    attempt_metrics = self._request_metrics(
+                        attempt_request,
+                        shortlist_count=len(evidence_pool),
                     )
-                break
+                    try:
+                        candidate_response = self.provider.create_response(
+                            model,
+                            **attempt_request,
+                        )
+                    except GenAIProviderError as exc:
+                        latency_ms = int((monotonic() - attempt_started) * 1000)
+                        safe_metadata = {**attempt_metrics, **exc.safe_metadata}
+                        if on_provider_attempt is not None:
+                            on_provider_attempt(
+                                provider_attempt_no,
+                                model,
+                                "FAILED",
+                                exc.code.value,
+                                latency_ms,
+                                safe_metadata,
+                            )
+                        exc.safe_metadata = safe_metadata
+                        last_error = exc
+                        if (
+                            exc.code is GenAIErrorCode.RATE_LIMIT
+                            and model_index + 1 < len(models)
+                        ):
+                            break
+                        raise
+                    except Exception as exc:
+                        latency_ms = int((monotonic() - attempt_started) * 1000)
+                        if on_provider_attempt is not None:
+                            on_provider_attempt(
+                                provider_attempt_no,
+                                model,
+                                "FAILED",
+                                GenAIErrorCode.PROVIDER_UNAVAILABLE.value,
+                                latency_ms,
+                                attempt_metrics,
+                            )
+                        raise GenAIProviderError(
+                            GenAIErrorCode.PROVIDER_UNAVAILABLE,
+                            retryable=False,
+                            cause=exc,
+                            safe_metadata=attempt_metrics,
+                        ) from exc
+
+                    usage_metrics = {
+                        **attempt_metrics,
+                        **self._response_usage_metrics(candidate_response),
+                    }
+                    if output_limit_reached(candidate_response):
+                        latency_ms = int((monotonic() - attempt_started) * 1000)
+                        if on_provider_attempt is not None:
+                            on_provider_attempt(
+                                provider_attempt_no,
+                                model,
+                                "FAILED",
+                                OUTPUT_LIMIT_REACHED_CODE,
+                                latency_ms,
+                                usage_metrics,
+                            )
+                        last_error = GenAIProviderError(
+                            GenAIErrorCode.CAPABILITY_LIMIT_EXCEEDED,
+                            retryable=output_limit_index + 1 < len(output_limits),
+                            safe_metadata=usage_metrics,
+                            safe_reason_code=OUTPUT_LIMIT_REACHED_CODE,
+                            safe_reason_stage="SELECTION_GENERATION",
+                        )
+                        if output_limit_index + 1 < len(output_limits):
+                            continue
+                        if model_index + 1 < len(models):
+                            break
+                        raise last_error
+
+                    response = candidate_response
+                    selected_model = model
+                    selected_request_metrics = attempt_metrics
+                    latency_ms = int((monotonic() - attempt_started) * 1000)
+                    if on_provider_attempt is not None:
+                        on_provider_attempt(
+                            provider_attempt_no,
+                            model,
+                            "SUCCEEDED",
+                            None,
+                            latency_ms,
+                            usage_metrics,
+                        )
+                    break
+                if response is not None:
+                    break
         if response is None:
+            if last_error is not None:
+                raise last_error
             raise GenAIProviderError(
                 GenAIErrorCode.PROVIDER_UNAVAILABLE,
                 retryable=False,
                 safe_metadata=request_metrics,
             )
         provider_metrics = {
-            **request_metrics,
+            **selected_request_metrics,
             **self._response_usage_metrics(response),
         }
         raw = str(getattr(response, "output_text", "")).strip()

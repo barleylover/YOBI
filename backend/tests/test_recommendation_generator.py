@@ -120,6 +120,34 @@ class UsageProvider(FakeProvider):
         )
 
 
+class TruncatedThenSuccessProvider(FakeProvider):
+    def create_response(self, model: str, **kwargs: Any) -> Any:
+        self.calls.append({"model": model, **kwargs})
+        if len(self.calls) == 1:
+            return SimpleNamespace(
+                status="incomplete",
+                incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+                output_text='{"menu_ids":',
+                usage=SimpleNamespace(input_tokens=1_000, output_tokens=2_048),
+            )
+        return SimpleNamespace(
+            status="completed",
+            incomplete_details=None,
+            output_text=json.dumps(self.output),
+            usage=SimpleNamespace(input_tokens=1_000, output_tokens=300),
+        )
+
+
+class AlwaysTruncatedProvider(FakeProvider):
+    def create_response(self, model: str, **kwargs: Any) -> Any:
+        self.calls.append({"model": model, **kwargs})
+        return SimpleNamespace(
+            status="incomplete",
+            incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+            output_text='{"menu_ids":',
+        )
+
+
 def _criteria() -> dict[str, Any]:
     return {
         "cuisine_origins": ["KOREAN"],
@@ -346,6 +374,47 @@ def test_generator_records_actual_usage_and_request_size_without_exposing_it_to_
     assert result.provider_metrics["request_utf8_bytes"] > 0
     assert result.provider_metrics["requested_max_output_tokens"] == 2048
     assert "provider_metrics" not in result.model_dump()
+
+
+def test_selection_retries_explicit_output_truncation_once_with_double_limit() -> None:
+    provider = TruncatedThenSuccessProvider(
+        {"menu_ids": ["dish-a", "dish-b", "dish-c"]}
+    )
+    attempts: list[tuple[int, str, str, str | None, dict[str, int]]] = []
+
+    result = RecommendationGenerator(Settings(), provider=provider).generate(
+        criteria=_criteria(),
+        soft_profile_context={},
+        evidence_pool=_pool_three(),
+        locale="English",
+        on_provider_attempt=lambda attempt_no, model, status, error, _latency, usage: (
+            attempts.append((attempt_no, model, status, error, usage))
+        ),
+    )
+
+    assert [call["max_output_tokens"] for call in provider.calls] == [2_048, 4_096]
+    assert [attempt[2:4] for attempt in attempts] == [
+        ("FAILED", "OUTPUT_TRUNCATED_MAX_OUTPUT_TOKENS"),
+        ("SUCCEEDED", None),
+    ]
+    assert result.provider_metrics["requested_max_output_tokens"] == 4_096
+    assert result.provider_metrics["output_tokens"] == 300
+
+
+def test_selection_stops_after_one_expanded_output_retry() -> None:
+    provider = AlwaysTruncatedProvider({})
+
+    with pytest.raises(GenAIProviderError) as caught:
+        RecommendationGenerator(Settings(), provider=provider).generate(
+            criteria=_criteria(),
+            soft_profile_context={},
+            evidence_pool=_pool_three(),
+            locale="English",
+        )
+
+    assert caught.value.code is GenAIErrorCode.CAPABILITY_LIMIT_EXCEEDED
+    assert caught.value.safe_reason_code == "OUTPUT_TRUNCATED_MAX_OUTPUT_TOKENS"
+    assert [call["max_output_tokens"] for call in provider.calls] == [2_048, 4_096]
 
 
 @pytest.mark.parametrize(

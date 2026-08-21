@@ -78,6 +78,7 @@ from app.domain.structured_recommendation import (
 )
 from app.genai.providers import genai_configuration_errors
 from app.genai.recommendation_generator import GROUNDING_DIAGNOSTICS_VERSION
+from app.genai.response_limits import OUTPUT_LIMIT_RETRY_MULTIPLIER
 from app.services.address_ocr import AddressCandidateTokenCodec, choose_address_ocr
 from app.services.chat_service import ChatService
 from app.services.demo_control import DemoControl, FailureMode
@@ -365,6 +366,8 @@ def readyz(
             "grounding_diagnostics_version": GROUNDING_DIAGNOSTICS_VERSION,
             "model_id": current_settings.structured_recommendation_model,
             "presentation_model_id": current_settings.menu_presentation_model,
+            "presentation_fallback_model_id": current_settings.oci_genai_fallback_model,
+            "output_limit_retry_multiplier": OUTPUT_LIMIT_RETRY_MULTIPLIER,
             "option_localization_model_id": current_settings.option_localization_model,
             "option_localization_model_chain": [
                 model.strip()
@@ -383,9 +386,19 @@ def readyz(
             "selection_max_output_tokens": (
                 current_settings.recommendation_selection_max_output_tokens
             ),
+            "selection_retry_max_output_tokens": min(
+                current_settings.recommendation_selection_max_output_tokens
+                * OUTPUT_LIMIT_RETRY_MULTIPLIER,
+                current_settings.oci_genai_max_output_tokens,
+            ),
             "max_output_tokens": current_settings.structured_recommendation_max_output_tokens,
             "presentation_max_output_tokens": (
                 current_settings.menu_presentation_max_output_tokens
+            ),
+            "presentation_retry_max_output_tokens": min(
+                current_settings.menu_presentation_max_output_tokens
+                * OUTPUT_LIMIT_RETRY_MULTIPLIER,
+                current_settings.oci_genai_max_output_tokens,
             ),
             "option_localization_max_output_tokens": (
                 current_settings.option_localization_max_output_tokens
@@ -416,6 +429,8 @@ def readyz(
                 and current_settings.structured_recommendation_model
                 == "openai.gpt-oss-120b"
                 and current_settings.menu_presentation_model == "xai.grok-4.3"
+                and current_settings.oci_genai_fallback_model
+                == "openai.gpt-oss-120b"
                 and current_settings.option_localization_model == "openai.gpt-oss-20b"
                 and current_settings.option_localization_model_chain
                 == "openai.gpt-oss-20b,openai.gpt-oss-120b"
@@ -430,6 +445,7 @@ def readyz(
                 and current_settings.recommendation_selection_max_output_tokens == 2048
                 and current_settings.structured_recommendation_max_output_tokens == 16384
                 and current_settings.menu_presentation_max_output_tokens == 4096
+                and current_settings.oci_genai_max_output_tokens >= 8192
                 and current_settings.option_localization_max_output_tokens == 16384
                 and db.get("recommendation_ready") is True
             ),

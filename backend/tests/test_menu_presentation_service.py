@@ -211,6 +211,42 @@ class SplitOnBatchProvider(PresentationProvider):
         return SimpleNamespace(output_text=json.dumps(_generated_payload(menu_ids)))
 
 
+class TruncatingPresentationProvider(PresentationProvider):
+    def __init__(self, *, grok_truncations: int) -> None:
+        super().__init__()
+        self.grok_truncations = grok_truncations
+        self.grok_calls = 0
+
+    def create_response(self, model: str, **kwargs: Any) -> Any:
+        self.calls.append(model)
+        self.requests.append(kwargs)
+        request_payload = json.loads(str(kwargs["input"][0]["content"]))
+        menu_ids = [str(item["menu_id"]) for item in request_payload["menus"]]
+        self.requested_ids.append(menu_ids)
+        if model == "xai.grok-4.3":
+            self.grok_calls += 1
+            if self.grok_calls <= self.grok_truncations:
+                return SimpleNamespace(
+                    status="incomplete",
+                    incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+                    output_text='{"items":',
+                    usage=SimpleNamespace(input_tokens=1_000, output_tokens=4_096),
+                )
+        return SimpleNamespace(
+            status="completed",
+            incomplete_details=None,
+            output_text=json.dumps(_generated_payload(menu_ids)),
+            usage=SimpleNamespace(input_tokens=1_000, output_tokens=1_500),
+        )
+
+
+class AlwaysRateLimitedPresentationProvider(PresentationProvider):
+    def create_response(self, model: str, **kwargs: Any) -> Any:
+        self.calls.append(model)
+        self.requests.append(kwargs)
+        raise GenAIProviderError(GenAIErrorCode.RATE_LIMIT, retryable=True)
+
+
 def _menu() -> MenuSummary:
     return MenuSummary(
         menu_id="menu-1",
@@ -428,6 +464,49 @@ def test_presentation_request_uses_compact_model_owned_schema_and_output_cap() -
     }
     input_payload = json.loads(request["input"][0]["content"])
     assert "evidence_type" not in input_payload["menus"][0]["wiki_passages"][0]
+
+
+def test_presentation_retries_explicit_output_truncation_once_with_double_limit() -> None:
+    provider = TruncatingPresentationProvider(grok_truncations=1)
+    attempts: list[tuple[str, str | None, dict[str, int]]] = []
+
+    result = MenuPresentationGenerator(Settings(), provider=provider).generate(
+        items=[MenuPresentationService._generation_payload(_presentation())],
+        locale="English",
+        on_provider_attempt=lambda _attempt, _model, status, error, _latency, usage: (
+            attempts.append((status, error, usage))
+        ),
+    )
+
+    assert provider.calls == ["xai.grok-4.3", "xai.grok-4.3"]
+    assert [request["max_output_tokens"] for request in provider.requests] == [4_096, 8_192]
+    assert [attempt[:2] for attempt in attempts] == [
+        ("FAILED", "OUTPUT_TRUNCATED_MAX_OUTPUT_TOKENS"),
+        ("SUCCEEDED", None),
+    ]
+    assert result.generation_model == "xai.grok-4.3"
+    assert result.provider_metrics["requested_max_output_tokens"] == 8_192
+
+
+def test_presentation_uses_gpt_oss_after_grok_exhausts_truncation_retry() -> None:
+    provider = TruncatingPresentationProvider(grok_truncations=2)
+
+    result = MenuPresentationGenerator(Settings(), provider=provider).generate(
+        items=[MenuPresentationService._generation_payload(_presentation())],
+        locale="English",
+    )
+
+    assert provider.calls == [
+        "xai.grok-4.3",
+        "xai.grok-4.3",
+        "openai.gpt-oss-120b",
+    ]
+    assert [request["max_output_tokens"] for request in provider.requests] == [
+        4_096,
+        8_192,
+        4_096,
+    ]
+    assert result.generation_model == "openai.gpt-oss-120b"
 
 
 def test_presentation_translates_card_fields_without_option_localization() -> None:
@@ -932,7 +1011,7 @@ def test_sentence_count_variation_does_not_reject_a_menu() -> None:
     assert len(repository.cache) == 3
 
 
-def test_menu_presentation_rate_limit_keeps_deterministic_copy_without_model_retry() -> None:
+def test_menu_presentation_rate_limit_falls_back_to_gpt_oss_and_caches_copy() -> None:
     repository = PresentationRepository(MerchantMenuPresentationPage(items=[_presentation()]))
     provider = PresentationProvider(rate_limit_primary=True)
     service = MenuPresentationService(
@@ -943,8 +1022,25 @@ def test_menu_presentation_rate_limit_keeps_deterministic_copy_without_model_ret
 
     page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
 
-    assert provider.calls == ["xai.grok-4.3"]
+    assert provider.calls == ["xai.grok-4.3", "openai.gpt-oss-120b"]
+    assert page.items[0].generation_model == "openai.gpt-oss-120b"
+    assert len(repository.cache) == 1
+
+
+def test_menu_presentation_uses_deterministic_copy_after_both_models_rate_limit() -> None:
+    repository = PresentationRepository(MerchantMenuPresentationPage(items=[_presentation()]))
+    provider = AlwaysRateLimitedPresentationProvider()
+    service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        generator=MenuPresentationGenerator(Settings(), provider=provider),
+    )
+
+    page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
+
+    assert provider.calls == ["xai.grok-4.3", "openai.gpt-oss-120b"]
     assert page.items[0].generation_model == "DETERMINISTIC_GROUNDED_FALLBACK"
+    assert repository.cache == {}
 
 
 def test_selected_menu_fallback_keeps_validated_target_language_yogiyo_copy() -> None:
@@ -1001,7 +1097,7 @@ def test_deterministic_source_fallback_rejects_old_phonetic_localizations() -> N
     )
 
 
-def test_invalid_grounding_contract_keeps_deterministic_copy_without_fallback() -> None:
+def test_invalid_grounding_contract_tries_fallback_then_keeps_deterministic_copy() -> None:
     original = _presentation()
     repository = PresentationRepository(MerchantMenuPresentationPage(items=[original]))
     provider = PresentationProvider(output='{"items": []}')
@@ -1013,7 +1109,7 @@ def test_invalid_grounding_contract_keeps_deterministic_copy_without_fallback() 
 
     page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
 
-    assert provider.calls == ["xai.grok-4.3"]
+    assert provider.calls == ["xai.grok-4.3", "openai.gpt-oss-120b"]
     assert page.items[0].model_dump(mode="json") == original.model_copy(
         update={
             "localized_title": "Tteokbokki",
@@ -1024,7 +1120,7 @@ def test_invalid_grounding_contract_keeps_deterministic_copy_without_fallback() 
     assert repository.cache == {}
 
 
-def test_invalid_batch_is_not_retried_and_keeps_deterministic_copy() -> None:
+def test_invalid_batch_tries_fallback_without_splitting_and_keeps_deterministic_copy() -> None:
     items = [_presentation(f"menu-{index}") for index in range(1, 4)]
     repository = PresentationRepository(MerchantMenuPresentationPage(items=items))
     provider = SplitOnBatchProvider()
@@ -1036,7 +1132,10 @@ def test_invalid_batch_is_not_retried_and_keeps_deterministic_copy() -> None:
 
     page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
 
-    assert provider.requested_ids == [["menu-1", "menu-2", "menu-3"]]
+    assert provider.requested_ids == [
+        ["menu-1", "menu-2", "menu-3"],
+        ["menu-1", "menu-2", "menu-3"],
+    ]
     assert repository.cache == {}
     assert all(item.generation_model == "DETERMINISTIC_GROUNDED_FALLBACK" for item in page.items)
 

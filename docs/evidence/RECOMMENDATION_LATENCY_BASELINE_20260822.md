@@ -48,8 +48,11 @@ the same model and all ranking inputs instead of replacing selection with determ
 - Grok still generates localized subtitle, YOGIYO translation, short and long YOBI explanations,
   review summary, personalization use, and compound-component mentions. Immutable title,
   provenance arrays, and empty option-localization arrays are no longer model output.
-- Selection output is capped at 2,048 tokens and presentation at 4,096 tokens. The observed maxima
-  before this change were 1,585 and 2,487 tokens respectively.
+- Selection normally uses a 2,048-token output cap and presentation normally uses 4,096. Only an
+  explicit Responses API `max_output_tokens` truncation signal triggers one same-model retry at
+  4,096 or 8,192 respectively. Grok presentation provider or unusable batch-contract failure then
+  falls through to GPT-OSS-120B before the existing grounded deterministic copy. The observed
+  maxima before the compact-contract change were 1,585 and 2,487 tokens respectively.
 - Browser completion polling changed from 1.2/2.5 seconds to 0.8/1.5 seconds, reducing the maximum
   post-completion visibility delay while retaining backoff for long-running requests.
 - Terminal logs now expose separate `selection_ms` and `presentation_ms` in addition to aggregate

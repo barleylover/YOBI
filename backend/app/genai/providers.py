@@ -173,6 +173,8 @@ def genai_configuration_errors(settings: Settings) -> list[str]:
         errors.append("PRIMARY_MODEL_MISSING")
     if not settings.structured_recommendation_model.strip():
         errors.append("STRUCTURED_MODEL_MISSING")
+    if not settings.oci_genai_fallback_model.strip():
+        errors.append("FALLBACK_MODEL_MISSING")
     if not provider.configured:
         errors.append("PROVIDER_NOT_CONFIGURED")
     if not provider.supports_model(settings.oci_genai_model):
@@ -187,6 +189,11 @@ def genai_configuration_errors(settings: Settings) -> list[str]:
         and not provider.supports_model(settings.menu_presentation_model)
     ):
         errors.append("PRESENTATION_MODEL_UNAVAILABLE")
+    if (
+        settings.oci_genai_fallback_model.strip()
+        and not provider.supports_model(settings.oci_genai_fallback_model)
+    ):
+        errors.append("FALLBACK_MODEL_UNAVAILABLE")
     if (
         settings.option_localization_model.strip()
         and not provider.supports_model(settings.option_localization_model)

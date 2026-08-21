@@ -13,6 +13,11 @@ from app.core.config import Settings
 from app.genai.contracts import GenAIErrorCode, GenAIProvider, GenAIProviderError
 from app.genai.providers import choose_genai_provider
 from app.genai.response_contract import parse_json_object
+from app.genai.response_limits import (
+    OUTPUT_LIMIT_REACHED_CODE,
+    expanded_output_limit,
+    output_limit_reached,
+)
 
 _ENGLISH_QUANTITY_WORDS = {
     "zero": "0",
@@ -494,12 +499,19 @@ class MenuPresentationGenerator:
             raise ValueError("PRESENTATION_BATCH_SIZE_INVALID")
         primary = self.settings.menu_presentation_model.strip()
         models = [primary]
+        fallback = self.settings.oci_genai_fallback_model.strip()
+        if fallback and fallback != primary:
+            models.append(fallback)
         if not self.provider.configured or not primary or not self.provider.supports_model(primary):
             raise GenAIProviderError(GenAIErrorCode.PROVIDER_UNAVAILABLE, retryable=False)
 
         input_payload: dict[str, Any] = {"menus": items}
         if not self.provider.capabilities.structured_output:
             input_payload["response_contract"] = MENU_PRESENTATION_JSON_SCHEMA
+        base_output_limit = min(
+            self.settings.menu_presentation_max_output_tokens,
+            self.provider.capabilities.max_output_tokens,
+        )
         request: dict[str, Any] = {
             "instructions": self._instructions(locale),
             "input": [
@@ -512,10 +524,7 @@ class MenuPresentationGenerator:
                     ),
                 }
             ],
-            "max_output_tokens": min(
-                self.settings.menu_presentation_max_output_tokens,
-                self.provider.capabilities.max_output_tokens,
-            ),
+            "max_output_tokens": base_output_limit,
         }
         if self.provider.capabilities.structured_output:
             request["text"] = {
@@ -532,28 +541,114 @@ class MenuPresentationGenerator:
         selected_model = primary
         selected_attempt_no = 0
         selected_started = monotonic()
-        for attempt_no, model_id in enumerate(models, start=1):
-            started = monotonic()
-            try:
-                response = self.provider.create_response(model_id, **request)
-            except GenAIProviderError as exc:
+        selected_usage: dict[str, int] = {}
+        last_error: GenAIProviderError | None = None
+        provider_attempt_no = 0
+        for model_id in models:
+            if not self.provider.supports_model(model_id):
+                provider_attempt_no += 1
+                last_error = GenAIProviderError(
+                    GenAIErrorCode.PROVIDER_UNAVAILABLE,
+                    retryable=True,
+                )
                 if on_provider_attempt is not None:
                     on_provider_attempt(
-                        attempt_no,
+                        provider_attempt_no,
                         model_id,
                         "FAILED",
-                        exc.code.value,
-                        int((monotonic() - started) * 1000),
-                        exc.safe_metadata,
+                        last_error.code.value,
+                        0,
+                        {},
                     )
-                if exc.code is GenAIErrorCode.RATE_LIMIT and attempt_no < len(models):
-                    continue
-                raise
-            selected_model = model_id
-            selected_attempt_no = attempt_no
-            selected_started = started
-            break
+                continue
+            expanded_limit = expanded_output_limit(
+                base_output_limit,
+                self.provider.capabilities.max_output_tokens,
+            )
+            output_limits = [base_output_limit]
+            if expanded_limit > base_output_limit:
+                output_limits.append(expanded_limit)
+            for output_limit_index, output_limit in enumerate(output_limits):
+                provider_attempt_no += 1
+                started = monotonic()
+                attempt_request = {**request, "max_output_tokens": output_limit}
+                try:
+                    candidate_response = self.provider.create_response(
+                        model_id,
+                        **attempt_request,
+                    )
+                except GenAIProviderError as exc:
+                    last_error = exc
+                    if on_provider_attempt is not None:
+                        on_provider_attempt(
+                            provider_attempt_no,
+                            model_id,
+                            "FAILED",
+                            exc.code.value,
+                            int((monotonic() - started) * 1000),
+                            {
+                                "requested_max_output_tokens": output_limit,
+                                **exc.safe_metadata,
+                            },
+                        )
+                    break
+                usage = {
+                    "requested_max_output_tokens": output_limit,
+                    **self._usage(candidate_response),
+                }
+                if output_limit_reached(candidate_response):
+                    if on_provider_attempt is not None:
+                        on_provider_attempt(
+                            provider_attempt_no,
+                            model_id,
+                            "FAILED",
+                            OUTPUT_LIMIT_REACHED_CODE,
+                            int((monotonic() - started) * 1000),
+                            usage,
+                        )
+                    last_error = GenAIProviderError(
+                        GenAIErrorCode.CAPABILITY_LIMIT_EXCEEDED,
+                        retryable=output_limit_index + 1 < len(output_limits),
+                        safe_metadata=usage,
+                        safe_reason_code=OUTPUT_LIMIT_REACHED_CODE,
+                        safe_reason_stage="PRESENTATION_GENERATION",
+                    )
+                    if output_limit_index + 1 < len(output_limits):
+                        continue
+                    break
+                try:
+                    self._preflight_response(candidate_response, expected)
+                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+                    reason_code = self._validation_reason(exc)
+                    if on_provider_attempt is not None:
+                        on_provider_attempt(
+                            provider_attempt_no,
+                            model_id,
+                            "FAILED",
+                            f"{GenAIErrorCode.GROUNDING_REJECTED.value}:{reason_code}",
+                            int((monotonic() - started) * 1000),
+                            usage,
+                        )
+                    last_error = GenAIProviderError(
+                        GenAIErrorCode.GROUNDING_REJECTED,
+                        retryable=False,
+                        cause=exc,
+                        safe_metadata=usage,
+                        safe_reason_code=reason_code,
+                        safe_reason_stage="PRESENTATION_VALIDATION",
+                    )
+                    break
+                response = candidate_response
+                selected_model = model_id
+                selected_attempt_no = provider_attempt_no
+                selected_started = started
+                selected_usage = usage
+                break
+            if response is not None:
+                break
         if response is None:
+            if last_error is not None:
+                raise last_error
             raise GenAIProviderError(GenAIErrorCode.PROVIDER_UNAVAILABLE, retryable=False)
         try:
             raw_result = parse_json_object(str(getattr(response, "output_text", "")))
@@ -779,7 +874,7 @@ class MenuPresentationGenerator:
                     "FAILED",
                     f"{GenAIErrorCode.GROUNDING_REJECTED.value}:{reason_code}",
                     int((monotonic() - selected_started) * 1000),
-                    self._usage(response),
+                    selected_usage,
                 )
             raise GenAIProviderError(
                 GenAIErrorCode.GROUNDING_REJECTED,
@@ -795,10 +890,10 @@ class MenuPresentationGenerator:
                 "SUCCEEDED",
                 None,
                 int((monotonic() - selected_started) * 1000),
-                self._usage(response),
+                selected_usage,
             )
         result._generation_model = selected_model
-        result._provider_metrics = self._usage(response)
+        result._provider_metrics = selected_usage
         return result
 
     @staticmethod
@@ -821,6 +916,40 @@ class MenuPresentationGenerator:
         if re.fullmatch(r"[A-Z][A-Z0-9_]{2,99}", value):
             return value
         return "PRESENTATION_VALIDATION_FAILED"
+
+    @staticmethod
+    def _preflight_response(response: Any, expected: dict[str, dict[str, Any]]) -> None:
+        """Require at least one parseable requested row before accepting a model."""
+
+        raw_result = parse_json_object(str(getattr(response, "output_text", "")))
+        raw_items = raw_result.get("items")
+        if not isinstance(raw_items, list) or not 1 <= len(raw_items) <= 12:
+            raise ValueError("PRESENTATION_SCHEMA_INVALID")
+        seen: set[str] = set()
+        first_error: ValidationError | None = None
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
+                continue
+            menu_id = str(raw_item.get("menu_id") or "")
+            if menu_id not in expected or menu_id in seen:
+                continue
+            normalized_item = dict(raw_item)
+            normalized_item.setdefault(
+                "localized_title",
+                str(expected[menu_id]["localized_title"]),
+            )
+            try:
+                GeneratedMenuPresentation.model_validate(normalized_item)
+            except ValidationError as exc:
+                if first_error is None:
+                    first_error = exc
+                continue
+            seen.add(menu_id)
+        if seen:
+            return
+        if first_error is not None:
+            raise first_error
+        raise ValueError("PRESENTATION_MENU_MISSING")
 
     def _instructions(self, locale: str) -> str:
         return f"""
