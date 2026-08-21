@@ -144,7 +144,10 @@ def _english_title_coverage_is_sufficient(title: str, explanation: str) -> bool:
 _OPTION_CONTROL_RULES = (
     (re.compile(r"추가"), re.compile(r"(?i)add|extra|additional"), re.compile(r"追加")),
     (
-        re.compile(r"제외|빼"),
+        # `곱빼기` means a large/double serving. A bare `빼` substring rule
+        # misclassified it as the verb "remove" and rejected correct model
+        # translations such as "Large serving".
+        re.compile(r"제외|(?<!곱)빼"),
         re.compile(r"(?i)remove|exclude|without|no\s"),
         re.compile(r"除外|抜き|なし"),
     ),

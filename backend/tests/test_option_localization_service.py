@@ -369,6 +369,11 @@ def test_option_control_validation_distinguishes_uncooked_from_cooked() -> None:
     )
     assert _option_translation_error("맛 선택", "Flavor", "en") is None
     assert _option_translation_error("선택 안함", "Skip", "en") is None
+    assert _option_translation_error("곱빼기", "Large serving", "en") is None
+    assert (
+        _option_translation_error("양파 빼기", "With onions", "en")
+        == "OPTION_LOCALIZATION_CONTROL_MEANING_LOST"
+    )
 
 
 def test_yogiyo_domain_terms_reject_literal_or_phonetic_mistranslations() -> None:

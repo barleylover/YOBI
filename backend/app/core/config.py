@@ -91,7 +91,7 @@ class Settings(BaseSettings):
     recommendation_prompt_version: str = "yobi-structured-rag-v3-server-wiki-binding"
     menu_presentation_prompt_version: str = "yobi-menu-presentation-v17-partial-item-recovery"
     menu_presentation_schema_version: str = "6"
-    option_localization_prompt_version: str = "yobi-option-localization-v7-demo-bounded-recovery"
+    option_localization_prompt_version: str = "yobi-option-localization-v8-control-token-fix"
     restaurant_note_prompt_version: str = "yobi-restaurant-note-v2-order-context-examples"
     menu_presentation_wait_seconds: float = Field(default=10.0, ge=0.0, le=30.0)
     menu_presentation_poll_seconds: float = Field(default=0.25, ge=0.05, le=2.0)
