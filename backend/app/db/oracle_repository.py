@@ -7584,8 +7584,12 @@ class OracleYobiRepository:
                 """
                 SELECT p.dietary_rules_json, p.allergy_severity,
                        p.religion_selection, p.country_code,p.preferred_language,
-                       s.meal_need_state_json
+                       s.meal_need_state_json,
+                       family.synthetic_enrichment_release_id AS active_synthetic_enrichment_release_id
                 FROM chat_session s JOIN user_profile p ON p.profile_id=s.profile_id
+                JOIN recommendation_runtime_state state ON state.state_key='ACTIVE'
+                JOIN recommendation_release_family family
+                  ON family.release_family_id=state.active_release_family_id
                 WHERE s.session_id=:id
                 """,
                 id=session_id,
@@ -7895,7 +7899,11 @@ class OracleYobiRepository:
             cart_menu_localizations: dict[str, str] = {}
             cart_option_localizations: dict[str, str] = {}
             synthetic_release_id = (
-                str(structured_criteria_row[4] or "") if structured_criteria_row is not None else ""
+                str(structured_criteria_row[4] or "")
+                if structured_criteria_row is not None
+                else str(profile_row.get("active_synthetic_enrichment_release_id") or "")
+                if profile_row is not None
+                else ""
             )
             if synthetic_release_id and profile_row is not None:
                 requested_locale = normalize_preference_locale(
@@ -7925,6 +7933,30 @@ class OracleYobiRepository:
                 cart_option_localizations = {
                     str(item["option_item_id"]): str(item["display_name"]) for item in _rows(cursor)
                 }
+                # Runtime option localization is what the visitor actually saw in
+                # the selected-menu flow. Prefer its newest version over legacy
+                # catalog rows for cart, review, and handoff responses.
+                cursor.execute(
+                    """
+                    SELECT option_item_id,display_name FROM (
+                      SELECT option_item_id,display_name,
+                             ROW_NUMBER() OVER (
+                               PARTITION BY option_item_id
+                               ORDER BY generated_at DESC,prompt_version DESC
+                             ) AS localization_rank
+                      FROM runtime_option_item_localization
+                      WHERE release_id=:release_id AND language_code=:language_code
+                    ) WHERE localization_rank=1
+                    """,
+                    release_id=synthetic_release_id,
+                    language_code=language_code,
+                )
+                cart_option_localizations.update(
+                    {
+                        str(item["option_item_id"]): str(item["display_name"])
+                        for item in _rows(cursor)
+                    }
+                )
         items = [
             CartLine(
                 cart_item_id=row["cart_item_id"],
