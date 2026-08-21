@@ -589,7 +589,11 @@ def test_title_coverage_accepts_grounded_natural_copy_without_exact_token_echo()
     )
     assert _english_title_coverage_is_sufficient(
         "Original Shrimp Aglio Olio Pasta (Slightly Spicy)",
-        "Shrimp pasta with garlic, olive oil and a spicy finish",
+        "Shrimp pasta with garlic, olive oil and mild heat",
+    )
+    assert not _english_title_coverage_is_sufficient(
+        "Original Shrimp Aglio Olio Pasta (Slightly Spicy)",
+        "An Italian pasta served with a classic sauce",
     )
 
 
@@ -1258,7 +1262,7 @@ def test_current_prompt_and_schema_logically_invalidate_legacy_cache_without_del
     )
 
     assert current_settings.menu_presentation_prompt_version == (
-        "yobi-menu-presentation-v14-spelled-description-quantities"
+        "yobi-menu-presentation-v15-semantic-title-aliases"
     )
     assert current_settings.menu_presentation_schema_version == "6"
     assert provider.requested_ids == [["menu-1"]]

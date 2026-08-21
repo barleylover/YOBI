@@ -116,6 +116,13 @@ _ENGLISH_DESCRIPTION_STOPWORDS = _ENGLISH_TITLE_STOPWORDS | {
     "tasty",
 }
 
+_ENGLISH_TITLE_TOKEN_ALIASES: dict[str, set[str]] = {
+    "aglio": {"garlic"},
+    "olio": {"oil", "olive"},
+    "slightly": {"gentle", "light", "mild"},
+    "spicy": {"chili", "chilli", "heat", "hot", "spice"},
+}
+
 _REVIEW_SIGNAL_PATTERN = re.compile(
     r"(?i)(?:\breview(?:er|ers|s)?\b|\bdiner(?:s)?\b|\bcustomer(?:s)?\b|"
     r"\brating(?:s)?\b|\bfeedback\b|\bstrong marks\b|\bpositive comments\b|"
@@ -155,7 +162,12 @@ def _english_title_coverage_is_sufficient(title: str, explanation: str) -> bool:
     # token echo rejected grounded copy without adding safety. Half coverage
     # still rejects generic family prose that drops specific ingredients.
     minimum = max(1, (len(required) + 1) // 2)
-    return len(required & actual) >= minimum
+    matched = sum(
+        token in actual
+        or bool(_ENGLISH_TITLE_TOKEN_ALIASES.get(token, set()) & actual)
+        for token in required
+    )
+    return matched >= minimum
 
 
 def _english_source_reflection_is_sufficient(source: str, explanation: str) -> bool:
