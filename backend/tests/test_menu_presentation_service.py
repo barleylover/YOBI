@@ -30,6 +30,7 @@ from app.genai.contracts import (
     ProviderCapabilities,
 )
 from app.genai.presentation_generator import (
+    MENU_PRESENTATION_JSON_SCHEMA,
     MenuPresentationGenerator,
     _english_title_coverage_is_sufficient,
 )
@@ -177,6 +178,7 @@ class PresentationProvider:
         self.delay_seconds = delay_seconds
         self.calls: list[str] = []
         self.requested_ids: list[list[str]] = []
+        self.requests: list[dict[str, Any]] = []
 
     def supports_model(self, model: str) -> bool:
         return model in {"xai.grok-4.3", "openai.gpt-oss-120b"}
@@ -186,6 +188,7 @@ class PresentationProvider:
 
     def create_response(self, model: str, **kwargs: Any) -> Any:
         self.calls.append(model)
+        self.requests.append(kwargs)
         if self.rate_limit_primary and model == "xai.grok-4.3":
             raise GenAIProviderError(GenAIErrorCode.RATE_LIMIT, retryable=True)
         if self.delay_seconds:
@@ -395,6 +398,36 @@ def test_menu_presentation_uses_grok_once_and_caches_structured_copy() -> None:
     )
     assert second.items == page.items
     assert provider.calls == ["xai.grok-4.3"]
+
+
+def test_presentation_request_uses_compact_model_owned_schema_and_output_cap() -> None:
+    provider = PresentationProvider()
+    generator = MenuPresentationGenerator(Settings(), provider=provider)
+
+    generator.generate(
+        items=[MenuPresentationService._generation_payload(_presentation())],
+        locale="English",
+    )
+
+    request = provider.requests[0]
+    assert request["max_output_tokens"] == 4096
+    assert request["text"]["format"]["schema"] == MENU_PRESENTATION_JSON_SCHEMA
+    properties = MENU_PRESENTATION_JSON_SCHEMA["properties"]["items"]["items"][
+        "properties"
+    ]
+    assert set(properties) == {
+        "menu_id",
+        "localized_subtitle",
+        "localized_source_description",
+        "yobi_short_explanation",
+        "yobi_long_explanation",
+        "review_summary",
+        "personalization_applied",
+        "covered_component_ids",
+        "component_mentions",
+    }
+    input_payload = json.loads(request["input"][0]["content"])
+    assert "evidence_type" not in input_payload["menus"][0]["wiki_passages"][0]
 
 
 def test_presentation_translates_card_fields_without_option_localization() -> None:
@@ -1323,9 +1356,9 @@ def test_current_prompt_and_schema_logically_invalidate_legacy_cache_without_del
     )
 
     assert current_settings.menu_presentation_prompt_version == (
-        "yobi-menu-presentation-v17-partial-item-recovery"
+        "yobi-menu-presentation-v18-compact-output"
     )
-    assert current_settings.menu_presentation_schema_version == "6"
+    assert current_settings.menu_presentation_schema_version == "7"
     assert provider.requested_ids == [["menu-1"]]
     assert page.items[0].generation_model == "xai.grok-4.3"
     assert len(repository.cache) == 2

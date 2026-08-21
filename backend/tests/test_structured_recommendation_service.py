@@ -1202,12 +1202,11 @@ def test_generation_soft_profile_context_excludes_sensitive_legacy_fields() -> N
         "menu_facts",
     }.isdisjoint(compact_item)
     criterion_payload = compact_item["criterion_evidence"]
-    assert all(
-        "content" not in reference
-        for category in criterion_payload.values()
-        for value in category.values()
-        for reference in value["evidence"]
-    )
+    assert criterion_payload == {
+        "cuisine_origins": ["KOREAN"],
+        "flavors": ["SPICY"],
+    }
+    assert set(compact_item["wiki_passages"][0]) == {"content"}
 
 
 def test_stale_dispatched_request_becomes_unknown_without_redispatch() -> None:

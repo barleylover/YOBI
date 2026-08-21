@@ -615,14 +615,43 @@ class MenuPresentationService:
 
     @staticmethod
     def _generation_payload(item: MerchantMenuPresentation) -> dict[str, Any]:
+        def compact_evidence(rows: Any) -> list[dict[str, Any]]:
+            if not isinstance(rows, list):
+                return []
+            allowed = (
+                "evidence_id",
+                "content",
+                "component_id",
+                "component_name_ko",
+                "component_name_en",
+                "membership_role",
+            )
+            return [
+                {key: row[key] for key in allowed if row.get(key) not in (None, "")}
+                for row in rows
+                if isinstance(row, dict)
+            ]
+
+        def compact_reviews(rows: Any) -> list[dict[str, Any]]:
+            if not isinstance(rows, list):
+                return []
+            allowed = ("review_id", "topic", "rating", "review_text")
+            return [
+                {key: row[key] for key in allowed if row.get(key) not in (None, "")}
+                for row in rows
+                if isinstance(row, dict)
+            ]
+
         return {
             "menu_id": item.menu.menu_id,
             "menu_title_ko": item.menu.name_ko,
             "localized_title": item.localized_title,
             "source_description_ko": item.menu.description,
-            "wiki_passages": item.evidence_map.get("wiki_passages", []),
-            "menu_facts": item.evidence_map.get("menu_facts", []),
-            "synthetic_reviews": item.evidence_map.get("synthetic_reviews", []),
+            "wiki_passages": compact_evidence(item.evidence_map.get("wiki_passages", [])),
+            "menu_facts": compact_evidence(item.evidence_map.get("menu_facts", [])),
+            "synthetic_reviews": compact_reviews(
+                item.evidence_map.get("synthetic_reviews", [])
+            ),
             "country_preference": item.country_preference,
             "menu_components": item.evidence_map.get("menu_components", []),
         }

@@ -282,6 +282,12 @@ def _settings_errors(settings: Settings) -> list[str]:
         ),
         "MAX_OUTPUT_TOKENS": settings.structured_recommendation_max_output_tokens
         == 16384,
+        "SELECTION_MAX_OUTPUT_TOKENS": (
+            settings.recommendation_selection_max_output_tokens == 2048
+        ),
+        "PRESENTATION_MAX_OUTPUT_TOKENS": (
+            settings.menu_presentation_max_output_tokens == 4096
+        ),
         "CANDIDATE_LIMIT": settings.recommendation_candidate_limit == 100,
         "SHORTLIST_LIMIT": settings.recommendation_llm_shortlist_limit == 15,
         "PASSAGES_PER_MENU": settings.recommendation_llm_passages_per_menu == 2,
@@ -463,6 +469,7 @@ def run_predeploy(release_family_id: str, settings: Settings) -> dict[str, Any]:
                 shortlist,
                 presentations,
                 max_wiki_passages=settings.recommendation_llm_passages_per_menu,
+                criteria_summary="Selected meal preferences",
             )
             menu_ids, merchant_ids = _selected_ids(result_payload)
             if len(menu_ids) != 3 or len(set(menu_ids)) != 3:
@@ -524,11 +531,15 @@ def _ready_errors(ready: dict[str, Any]) -> list[str]:
         "CANDIDATE_LIMIT": structured.get("candidate_limit") == 100,
         "SHORTLIST_LIMIT": structured.get("shortlist_limit") == 15,
         "PASSAGES_PER_MENU": structured.get("passages_per_menu") == 2,
+        "SELECTION_MAX_OUTPUT_TOKENS": structured.get(
+            "selection_max_output_tokens"
+        )
+        == 2048,
         "MAX_OUTPUT_TOKENS": structured.get("max_output_tokens") == 16384,
         "PRESENTATION_MAX_OUTPUT_TOKENS": structured.get(
             "presentation_max_output_tokens"
         )
-        == 16384,
+        == 4096,
         "OPTION_LOCALIZATION_MAX_OUTPUT_TOKENS": structured.get(
             "option_localization_max_output_tokens"
         )

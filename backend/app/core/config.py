@@ -39,8 +39,9 @@ class Settings(BaseSettings):
     option_localization_model_chain: str = (
         "openai.gpt-oss-20b,openai.gpt-oss-120b"
     )
+    recommendation_selection_max_output_tokens: int = Field(default=2048, ge=256)
     structured_recommendation_max_output_tokens: int = Field(default=16384, ge=64)
-    menu_presentation_max_output_tokens: int = Field(default=16384, ge=256)
+    menu_presentation_max_output_tokens: int = Field(default=4096, ge=256)
     option_localization_max_output_tokens: int = Field(default=16384, ge=256)
     demo_option_group_limit: int = Field(default=5, ge=1, le=20)
     demo_option_items_per_group_limit: int = Field(default=6, ge=1, le=50)
@@ -88,9 +89,9 @@ class Settings(BaseSettings):
     llm_max_tools_per_request: int = Field(default=4, ge=1, le=14)
     llm_max_tool_calls_per_response: int = Field(default=4, ge=1, le=14)
     tool_call_max_steps: int = Field(default=6, ge=1, le=12)
-    recommendation_prompt_version: str = "yobi-structured-rag-v3-server-wiki-binding"
-    menu_presentation_prompt_version: str = "yobi-menu-presentation-v17-partial-item-recovery"
-    menu_presentation_schema_version: str = "6"
+    recommendation_prompt_version: str = "yobi-structured-rag-v4-compact-id-selection"
+    menu_presentation_prompt_version: str = "yobi-menu-presentation-v18-compact-output"
+    menu_presentation_schema_version: str = "7"
     option_localization_prompt_version: str = "yobi-option-localization-v8-control-token-fix"
     restaurant_note_prompt_version: str = "yobi-restaurant-note-v3-validated-order-context"
     menu_presentation_wait_seconds: float = Field(default=10.0, ge=0.0, le=30.0)

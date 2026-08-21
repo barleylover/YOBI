@@ -401,31 +401,17 @@ MENU_PRESENTATION_JSON_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
                 "required": [
                     "menu_id",
-                    "localized_title",
                     "localized_subtitle",
                     "localized_source_description",
                     "yobi_short_explanation",
                     "yobi_long_explanation",
                     "review_summary",
-                    "used_evidence_ids",
-                    "used_source_fields",
-                    "yobi_used_evidence_ids",
-                    "review_used_ids",
-                    "yobi_used_source_fields",
-                    "review_used_source_fields",
                     "personalization_applied",
                     "covered_component_ids",
                     "component_mentions",
-                    "option_group_localizations",
-                    "option_item_localizations",
                 ],
                 "properties": {
                     "menu_id": {"type": "string", "minLength": 1, "maxLength": 160},
-                    "localized_title": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 300,
-                    },
                     "localized_subtitle": {
                         "type": "string",
                         "minLength": 1,
@@ -450,38 +436,6 @@ MENU_PRESENTATION_JSON_SCHEMA: dict[str, Any] = {
                         "minLength": 1,
                         "maxLength": 1500,
                     },
-                    "used_evidence_ids": {
-                        "type": "array",
-                        "maxItems": 40,
-                        "items": {"type": "string"},
-                    },
-                    "used_source_fields": {
-                        "type": "array",
-                        "minItems": 1,
-                        "maxItems": 20,
-                        "items": {"type": "string"},
-                    },
-                    "yobi_used_evidence_ids": {
-                        "type": "array",
-                        "maxItems": 40,
-                        "items": {"type": "string"},
-                    },
-                    "review_used_ids": {
-                        "type": "array",
-                        "maxItems": 40,
-                        "items": {"type": "string"},
-                    },
-                    "yobi_used_source_fields": {
-                        "type": "array",
-                        "minItems": 1,
-                        "maxItems": 20,
-                        "items": {"type": "string"},
-                    },
-                    "review_used_source_fields": {
-                        "type": "array",
-                        "maxItems": 20,
-                        "items": {"type": "string"},
-                    },
                     "personalization_applied": {"type": "boolean"},
                     "covered_component_ids": {
                         "type": "array",
@@ -500,40 +454,6 @@ MENU_PRESENTATION_JSON_SCHEMA: dict[str, Any] = {
                                 "mention_text": {
                                     "type": "string",
                                     "minLength": 2,
-                                    "maxLength": 300,
-                                },
-                            },
-                        },
-                    },
-                    "option_group_localizations": {
-                        "type": "array",
-                        "maxItems": 100,
-                        "items": {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "required": ["object_id", "display_name"],
-                            "properties": {
-                                "object_id": {"type": "string", "minLength": 1},
-                                "display_name": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "maxLength": 300,
-                                },
-                            },
-                        },
-                    },
-                    "option_item_localizations": {
-                        "type": "array",
-                        "maxItems": 500,
-                        "items": {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "required": ["object_id", "display_name"],
-                            "properties": {
-                                "object_id": {"type": "string", "minLength": 1},
-                                "display_name": {
-                                    "type": "string",
-                                    "minLength": 1,
                                     "maxLength": 300,
                                 },
                             },
@@ -601,7 +521,7 @@ class MenuPresentationGenerator:
             request["text"] = {
                 "format": {
                     "type": "json_schema",
-                    "name": "yobi_grounded_menu_presentation_v6",
+                    "name": "yobi_grounded_menu_presentation_v7",
                     "schema": MENU_PRESENTATION_JSON_SCHEMA,
                     "strict": True,
                 }
@@ -654,7 +574,18 @@ class MenuPresentationGenerator:
                 if menu_id not in expected or menu_id in generated_by_id:
                     continue
                 try:
-                    generated_by_id[menu_id] = GeneratedMenuPresentation.model_validate(raw_item)
+                    # The localized title is immutable server data and no
+                    # longer needs to consume model input/output tokens. Keep
+                    # accepting legacy responses that echo it so in-flight
+                    # requests retain the existing drift diagnostic.
+                    normalized_item = dict(raw_item)
+                    normalized_item.setdefault(
+                        "localized_title",
+                        str(expected[menu_id]["localized_title"]),
+                    )
+                    generated_by_id[menu_id] = GeneratedMenuPresentation.model_validate(
+                        normalized_item
+                    )
                     item_errors.pop(menu_id, None)
                 except ValidationError as exc:
                     item_errors.setdefault(menu_id, self._validation_reason(exc))
@@ -905,7 +836,6 @@ Ground every user-visible sentence in this priority order:
    recipe, ingredients, certification, popularity, availability, or preparation.
 
 Field rules:
-- Copy localized_title exactly, character for character.
 - localized_subtitle is one concise phrase that helps a foreign visitor understand this exact
   listing. It may equal the title when no supported clarification is available.
 - localized_source_description is a faithful, natural translation of source_description_ko, not a
@@ -921,19 +851,18 @@ Field rules:
 - For a compound listing, explain each supplied menu_component without transferring one
   component's ingredient, temperature, texture, or cooking method to another. Return its supplied
   component_id once in covered_component_ids and copy a matching visible phrase into
-  component_mentions. These arrays are bookkeeping; the server will canonicalize them.
-- option_group_localizations and option_item_localizations must both be empty arrays.
-- Evidence/source arrays may contain only IDs and source-field names present in the input. The
-  server owns and canonicalizes this bookkeeping.
+  component_mentions. These two arrays are the only bookkeeping the model returns.
+- Do not return localized_title, evidence/source arrays, or option-localization arrays. The server
+  owns the title and provenance, and a separate translator owns menu options.
 
 Country and language may guide familiar wording, but never force a country mention, stereotype a
 nationality, or invent an analogy. Do not invent ingredients, taste, cooking method, certification,
 dietary safety, popularity, orders, restaurant practice, or availability. Do not expose internal
 IDs in prose. Do not emit Markdown, analysis, or a preamble.
 
-Before returning, silently verify: all menu IDs are present once; every localized_title is copied;
-YOBI fields contain no review language; YOGIYO digits/units/Latin tokens are unchanged; no Korean
-Hangul remains in English or Japanese output; Japanese prose uses natural Japanese script.
+Before returning, silently verify: all menu IDs are present once; YOBI fields contain no review
+language; YOGIYO digits/units/Latin tokens are unchanged; no Korean Hangul remains in English or
+Japanese output; Japanese prose uses natural Japanese script.
 Prompt version:
 {self.settings.menu_presentation_prompt_version}.
 """.strip()

@@ -314,7 +314,10 @@ export function ChatPage() {
       setError(recommendationCopy.failedDescription);
       return;
     }
-    const pollDelayMs = pollCountRef.current < 8 ? 1_200 : 2_500;
+    // Recommendation completion is dominated by the provider call. Poll a
+    // little more closely so a finished batch is not hidden for up to 2.5 s,
+    // then back off to a still-bounded cadence for long-running requests.
+    const pollDelayMs = pollCountRef.current < 10 ? 800 : 1_500;
     const timer = window.setTimeout(() => {
       pollCountRef.current += 1;
       void recoverRecommendation(pendingRecommendation);

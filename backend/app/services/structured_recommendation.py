@@ -100,13 +100,10 @@ def compact_generation_payload(
             for value in category.values():
                 if not isinstance(value, dict):
                     continue
-                references = value.get("evidence", [])
-                if isinstance(references, list):
-                    value["evidence"] = [
-                        {key: field for key, field in reference.items() if key != "content"}
-                        for reference in references
-                        if isinstance(reference, dict)
-                    ]
+                # The category/value mapping plus evidence_ids is sufficient
+                # for selection. Full evidence reference objects are repeated
+                # metadata; the server retains and validates the originals.
+                value.pop("evidence", None)
     return payload
 
 
@@ -460,6 +457,8 @@ class StructuredRecommendationService:
         provider_started = monotonic()
         provider_metrics: dict[str, int] = {}
         provider_attempt_sequence = 0
+        selection_ms = 0
+        presentation_ms = 0
 
         def mark_provider_call() -> None:
             called = self.repository.mark_recommendation_provider_called(
@@ -502,34 +501,50 @@ class StructuredRecommendationService:
                 raise RuntimeError("DEMO_FORCED_RECOMMENDATION_FALLBACK")
             if not self.settings.recommendation_llm_selection_enabled:
                 raise RuntimeError("RECOMMENDATION_LLM_SELECTION_DISABLED")
-            generated = self.generator.generate(
-                criteria=criteria_record.criteria.model_dump(mode="json"),
-                soft_profile_context=soft_profile_context,
-                evidence_pool=pool_payload,
-                # Selection has no user-facing prose. Keep this prompt byte-for-byte
-                # stable across visitor languages; localization happens only after
-                # the three selected menu IDs pass grounding validation.
-                locale="English",
-                before_provider_call=mark_provider_call,
-                on_provider_attempt=lambda *args: record_provider_attempt("SELECTION", *args),
-            )
+            selection_started = monotonic()
+            try:
+                generated = self.generator.generate(
+                    criteria=criteria_record.criteria.model_dump(mode="json"),
+                    soft_profile_context=soft_profile_context,
+                    evidence_pool=pool_payload,
+                    # Selection has no user-facing prose. Keep this prompt byte-for-byte
+                    # stable across visitor languages; localization happens only after
+                    # the three selected menu IDs pass grounding validation.
+                    locale="English",
+                    before_provider_call=mark_provider_call,
+                    on_provider_attempt=lambda *args: record_provider_attempt(
+                        "SELECTION", *args
+                    ),
+                )
+            finally:
+                selection_ms = int((monotonic() - selection_started) * 1000)
             provider_metrics = generated.provider_metrics
             if generated.status is RecommendationGenerationStatus.NO_MATCH:
                 raise ValueError("GENERATOR_NO_MATCH_NOT_AUTHORIZED")
             selected_pool = {item.menu.menu_id: item for item in evidence_pool}
             selected_evidence = [selected_pool[item.menu_id] for item in generated.recommendations]
-            presentations = self.presentation_service.present_selected(
-                selected_evidence,
-                session_id=session.session_id,
-                language_code=display_locale,
-                country_code=profile.country_code or "ZZ",
-                on_provider_attempt=lambda *args: record_provider_attempt("PRESENTATION", *args),
-            )
+            presentation_started = monotonic()
+            try:
+                presentations = self.presentation_service.present_selected(
+                    selected_evidence,
+                    session_id=session.session_id,
+                    language_code=display_locale,
+                    country_code=profile.country_code or "ZZ",
+                    on_provider_attempt=lambda *args: record_provider_attempt(
+                        "PRESENTATION", *args
+                    ),
+                )
+            finally:
+                presentation_ms = int((monotonic() - presentation_started) * 1000)
             result_json = self._validated_result_payload(
                 generated,
                 evidence_pool,
                 presentations,
                 max_wiki_passages=self.settings.recommendation_llm_passages_per_menu,
+                criteria_summary=self._criteria_fallback_summary(
+                    criteria_record,
+                    profile.preferred_language,
+                ),
             )
             status = RecommendationRequestStatus.COMPLETED
             snapshot = self._snapshot_for_result(
@@ -614,6 +629,8 @@ class StructuredRecommendationService:
             persistence_ms=persistence_ms,
             started=started,
             final_count=len((completed.result_json or {}).get("recommendations", [])),
+            selection_ms=selection_ms,
+            presentation_ms=presentation_ms,
         )
         return self._live_batch(completed)
 
@@ -719,6 +736,8 @@ class StructuredRecommendationService:
         persistence_ms: int,
         started: float,
         final_count: int,
+        selection_ms: int = 0,
+        presentation_ms: int = 0,
     ) -> None:
         fields: dict[str, Any] = {
             "event": "structured_recommendation_terminal",
@@ -730,6 +749,8 @@ class StructuredRecommendationService:
             "retrieval_total_ms": retrieval_ms,
             "freeze_ms": freeze_ms,
             "provider_ms": provider_ms,
+            "selection_ms": selection_ms,
+            "presentation_ms": presentation_ms,
             "persistence_ms": persistence_ms,
             "total_ms": int((monotonic() - started) * 1000),
             "final_count": final_count,
@@ -1148,6 +1169,7 @@ class StructuredRecommendationService:
         presentations: dict[str, Any],
         *,
         max_wiki_passages: int,
+        criteria_summary: str,
     ) -> dict[str, Any]:
         pool_by_id = {item.menu.menu_id: item for item in evidence_pool}
         recommendations: list[dict[str, Any]] = []
@@ -1192,7 +1214,7 @@ class StructuredRecommendationService:
             )
         return {
             "status": "RECOMMENDED",
-            "criteria_summary": generated.criteria_summary,
+            "criteria_summary": criteria_summary,
             "recommendations": recommendations,
             "unmatched_category_codes": generated.unmatched_category_codes,
         }

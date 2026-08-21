@@ -206,6 +206,10 @@ def genai_configuration_errors(settings: Settings) -> list[str]:
         errors.append("FUNCTION_CALLING_UNSUPPORTED")
     if settings.llm_max_input_tokens > capabilities.max_input_tokens:
         errors.append("INPUT_LIMIT_INCOMPATIBLE")
+    if settings.recommendation_selection_max_output_tokens > capabilities.max_output_tokens:
+        errors.append("SELECTION_OUTPUT_LIMIT_INCOMPATIBLE")
+    if settings.structured_recommendation_max_output_tokens > capabilities.max_output_tokens:
+        errors.append("STRUCTURED_OUTPUT_LIMIT_INCOMPATIBLE")
     if settings.llm_max_output_tokens > capabilities.max_output_tokens:
         errors.append("OUTPUT_LIMIT_INCOMPATIBLE")
     if settings.menu_presentation_max_output_tokens > capabilities.max_output_tokens:
