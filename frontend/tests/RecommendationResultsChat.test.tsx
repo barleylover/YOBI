@@ -8,7 +8,7 @@ import type { MenuSummary, RecommendationBatchV2 } from "../src/types";
 const menu: MenuSummary = {
   menu_id: "menu_chat_1",
   merchant_id: "merchant_chat_1",
-  merchant_name: "YOBI Kitchen",
+  merchant_name: "하루비어-동국대점",
   name_en: "Gimbap",
   name_ko: "김밥",
   localized_title: "Gimbap",
@@ -95,6 +95,8 @@ describe("chat-style recommendation results", () => {
     );
 
     expect(screen.getAllByText("Gimbap").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Haru Beer - Dongguk Univ. Branch").length).toBeGreaterThan(0);
+    expect(screen.queryByText("하루비어-동국대점")).not.toBeInTheDocument();
     expect(screen.getByText("Seasoned rice and fillings rolled in seaweed")).toBeInTheDocument();
     expect(screen.getAllByText("YOBI:").length).toBeGreaterThan(0);
     expect(screen.getAllByText("YOGIYO:").length).toBeGreaterThan(0);

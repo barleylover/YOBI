@@ -296,9 +296,9 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
         ...cart.items[0],
         options: [{
           option_item_id: "item-mild",
-          name_en: "Mild",
+          name_en: "순한맛",
           name_ko: "순한맛",
-          display_name: "Mild",
+          display_name: "순한맛",
           price_delta: 0,
         }],
       }],
@@ -334,7 +334,9 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
       </MemoryRouter>,
     );
 
-    await screen.findByTestId("cart-review");
+    const initialReview = await screen.findByTestId("cart-review");
+    expect(initialReview).toHaveTextContent("Mild");
+    expect(initialReview).not.toHaveTextContent("순한맛");
     fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[1]);
     expect(await screen.findByRole("heading", { name: "Spice" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Hot/ }));

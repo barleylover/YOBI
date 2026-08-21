@@ -9,7 +9,7 @@ import type {
 } from "../types";
 import { EvidenceBadge } from "./EvidenceBadge";
 import { useI18n } from "../lib/i18n";
-import { menuName } from "../lib/locale";
+import { menuName, merchantName } from "../lib/locale";
 import { PresetCollectionCard } from "./PresetCollectionCard";
 
 interface Props {
@@ -498,7 +498,7 @@ export function RichCard({ card, onChooseMenu, onQuickReply, disabled = false }:
             <article key={merchant.merchant_id} className={index === 0 ? "recommended" : ""}>
               {index === 0 && <span className="recommend-ribbon">{journeyCopy.bestFit}</span>}
               <Store size={18} aria-hidden="true" />
-              <h4>{merchant.merchant_name}</h4>
+              <h4>{merchantName(merchant.merchant_name, language)}</h4>
               <strong>₩{merchant.price.toLocaleString()}</strong>
               <dl>
                 <div><dt>{copy.delivery}</dt><dd>{merchant.eta} · ₩{merchant.delivery_fee.toLocaleString()}</dd></div>

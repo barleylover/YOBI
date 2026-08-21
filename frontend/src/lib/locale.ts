@@ -83,6 +83,50 @@ export function menuName(
   return menu.name_en || menu.name_ko;
 }
 
+const DEMO_ROAD_ADDRESSES: Record<string, string> = {
+  "서울특별시 중구 을지로 21": "21 Eulji-ro, Jung-gu, Seoul",
+  "서울특별시 중구 데모로 21": "21 Demo-ro, Jung-gu, Seoul",
+};
+
+const DEMO_MERCHANT_NAMES: Record<string, string> = {
+  "하루비어-동국대점": "Haru Beer - Dongguk Univ. Branch",
+  "피자마루-약수점": "Pizza Maru - Yaksu Branch",
+  "파스타입니다-종로점": "Pasta Imnida - Jongno Branch",
+  "미친피자-본점": "Crazy Pizza - Main Branch",
+  "국밥생각-충정로점": "Gukbap Saenggak - Chungjeongno Branch",
+};
+
+const HANGUL_INITIALS = ["g", "kk", "n", "d", "tt", "r", "m", "b", "pp", "s", "ss", "", "j", "jj", "ch", "k", "t", "p", "h"];
+const HANGUL_VOWELS = ["a", "ae", "ya", "yae", "eo", "e", "yeo", "ye", "o", "wa", "wae", "oe", "yo", "u", "wo", "we", "wi", "yu", "eu", "ui", "i"];
+const HANGUL_FINALS = ["", "k", "k", "ks", "n", "n", "nh", "t", "l", "lk", "lm", "lb", "ls", "lt", "lp", "lh", "m", "p", "ps", "t", "t", "ng", "t", "t", "k", "t", "p", "h"];
+
+function romanizeHangul(value: string) {
+  const romanized = Array.from(value, (character) => {
+    const code = character.charCodeAt(0) - 0xac00;
+    if (code < 0 || code > 11171) return character;
+    const initial = Math.floor(code / 588);
+    const vowel = Math.floor((code % 588) / 28);
+    const final = code % 28;
+    return `${HANGUL_INITIALS[initial]}${HANGUL_VOWELS[vowel]}${HANGUL_FINALS[final]}`;
+  }).join("");
+  return romanized.replace(/(^|[\s·-])([a-z])/g, (_, prefix: string, letter: string) => `${prefix}${letter.toUpperCase()}`);
+}
+
+export function merchantName(name: string, language: string) {
+  if (asEffectiveLanguage(language) === "한국어" || !/[가-힣]/.test(name)) return name;
+  const knownName = DEMO_MERCHANT_NAMES[name];
+  if (knownName) return knownName;
+  return romanizeHangul(name)
+    .replace(/-/g, " - ")
+    .replace(/\s-\sBonjeom$/i, " - Main Branch")
+    .replace(/\s-\s([^\s]+)jeom$/i, " - $1 Branch");
+}
+
+export function demoRoadAddress(address: string, language: string) {
+  if (asEffectiveLanguage(language) === "한국어") return address;
+  return DEMO_ROAD_ADDRESSES[address] ?? address;
+}
+
 export function formatMinuteRange(minimum: number, maximum: number, locale: string) {
   const formatter = new Intl.NumberFormat(locale, {
     style: "unit",

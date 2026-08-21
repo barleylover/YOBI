@@ -12,7 +12,7 @@ import type {
   RestaurantNoteTranslation,
 } from "../types";
 import { useI18n } from "../lib/i18n";
-import { asSupportedLanguage, menuName } from "../lib/locale";
+import { asSupportedLanguage, menuName, merchantName } from "../lib/locale";
 import { getRecommendationCopy } from "../lib/recommendationI18n";
 import { getRedesignCopy } from "../lib/redesignI18n";
 
@@ -215,6 +215,10 @@ export function OrderFlowPanel({
 
   const currentGroup = groups[groupIndex];
   const selectedOptionIds = useMemo(() => Object.values(selections).flat(), [selections]);
+  const localizedOptionNames = useMemo(() => new Map(groups.flatMap((group) => group.items.map((option) => [
+    option.option_item_id,
+    option.display_name || (language === "한국어" ? option.name_ko : option.name_en),
+  ]))), [groups, language]);
   const selectedDelta = useMemo(() => groups.reduce((total, group) => {
     const optionIds = new Set(selections[group.option_group_id] ?? []);
     return total + group.items.reduce(
@@ -702,7 +706,7 @@ export function OrderFlowPanel({
         <article className="v2-order-card">
           <div className="v2-order-body">
             <div className="v2-order-heading">
-              <h3>{copy.moreFrom} · {activeMenu.merchant_name}</h3>
+              <h3>{copy.moreFrom} · {merchantName(activeMenu.merchant_name, language)}</h3>
               <p>{copy.swipeMore}</p>
             </div>
             <div
@@ -724,7 +728,7 @@ export function OrderFlowPanel({
                         {item.localized_subtitle && item.localized_subtitle !== item.localized_title && (
                           <small className="v2-card-subtitle">{item.localized_subtitle}</small>
                         )}
-                        <p>{item.menu.merchant_name}</p>
+                        <p>{merchantName(item.menu.merchant_name, language)}</p>
                         {Boolean(item.menu.minimum_order_amount) && (
                           <small>{minimumOrderLabel} {won(item.menu.minimum_order_amount!)}</small>
                         )}
@@ -799,7 +803,7 @@ export function OrderFlowPanel({
                   <div className="v2-cart-line" key={item.cart_item_id}>
                     <div className="copy">
                       <strong>{displayedItemName}</strong>
-                      <small>{item.options.map((option) => option.display_name || (language === "한국어" ? option.name_ko : option.name_en)).join(" · ") || journeyCopy.included}</small>
+                      <small>{item.options.map((option) => localizedOptionNames.get(option.option_item_id) || option.display_name || (language === "한국어" ? option.name_ko : option.name_en)).join(" · ") || journeyCopy.included}</small>
                     </div>
                     <div className="controls">
                       <div className="v2-stepper" aria-label={`${journeyCopy.quantity}: ${displayedItemName}`}>

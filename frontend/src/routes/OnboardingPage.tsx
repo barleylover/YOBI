@@ -2,7 +2,7 @@ import { ChangeEvent, FormEvent, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { actionableError, api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
-import { asSupportedLanguage, countryCode } from "../lib/locale";
+import { asSupportedLanguage, countryCode, demoRoadAddress } from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
 import { getRedesignCopy } from "../lib/redesignI18n";
 import { useSessionStore } from "../stores/session";
@@ -124,7 +124,7 @@ export function OnboardingPage() {
     setError("");
     try {
       const result = await api.confirmAddress(createdContext.session.session_id, candidate);
-      finish(result.address_ref_id, `${candidate.hotel_name} · ${candidate.road_address}`, createdContext.session);
+      finish(result.address_ref_id, `${candidate.hotel_name} · ${demoRoadAddress(candidate.road_address, language)}`, createdContext.session);
     } catch (cause) {
       setError(actionableError(cause, selectionCopy.confirmError, language));
     } finally {
@@ -285,7 +285,7 @@ export function OnboardingPage() {
                 >
                   <div>
                     <strong>{candidate.hotel_name}</strong>
-                    <small>{candidate.road_address}</small>
+                    <small>{demoRoadAddress(candidate.road_address, language)}</small>
                   </div>
                   {selected
                     ? <img className="check" src="/figma/check-circle.svg" alt="" />

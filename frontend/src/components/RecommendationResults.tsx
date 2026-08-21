@@ -5,7 +5,7 @@ import type {
 } from "../types";
 import type { RecommendationCopy } from "../lib/recommendationI18n";
 import type { RedesignCopy } from "../lib/redesignI18n";
-import { asEffectiveLanguage, asSupportedLanguage, formatMinuteRange, menuName } from "../lib/locale";
+import { asEffectiveLanguage, asSupportedLanguage, formatMinuteRange, menuName, merchantName } from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
 import { carouselIndexFromOffset } from "../lib/carouselScroll";
 import { BottomSheet } from "./BottomSheet";
@@ -119,7 +119,7 @@ export function RecommendationResults({
                         {item.localized_subtitle && item.localized_subtitle !== item.localized_title && (
                           <small className="v2-card-subtitle">{item.localized_subtitle}</small>
                         )}
-                        <p>{item.menu.merchant_name}</p>
+                        <p>{merchantName(item.menu.merchant_name, language)}</p>
                       </div>
                       <strong>₩{item.menu.price.toLocaleString(locale)}</strong>
                     </div>
@@ -187,7 +187,7 @@ export function RecommendationResults({
           <div className="v2-explanation-sheet">
             <header>
               <h2 id="explanation-sheet-title">{v2.additionalExplanation}</h2>
-              <p>{explanationItem.localized_title || explanationItem.title || menuName(explanationItem.menu, language)} · {explanationItem.menu.merchant_name}</p>
+              <p>{explanationItem.localized_title || explanationItem.title || menuName(explanationItem.menu, language)} · {merchantName(explanationItem.menu.merchant_name, language)}</p>
               {explanationItem.localized_subtitle && explanationItem.localized_subtitle !== explanationItem.localized_title && (
                 <small className="v2-explanation-subtitle">{explanationItem.localized_subtitle}</small>
               )}
