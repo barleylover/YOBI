@@ -89,6 +89,21 @@ _ENGLISH_OPTION_SEMANTIC_RULES = (
         re.compile(r"(?i)\b(?:soda|soft drink|sprite)\b"),
         re.compile(r"(?i)\bcider\b"),
     ),
+    (
+        re.compile(r"찜.*(?:사진|이벤트|[Ee]벤트)|(?:사진|이벤트|[Ee]벤트).*찜"),
+        re.compile(r"(?i)\b(?:favou?rite|save|heart)\b"),
+        re.compile(r"(?i)\bsteam(?:ed|ing)?\b"),
+    ),
+    (
+        re.compile(r"핫봉"),
+        re.compile(r"(?i)\b(?:chicken|drumettes?|wings?)\b"),
+        re.compile(r"(?i)\b(?:bons?|buns?)\b"),
+    ),
+    (
+        re.compile(r"라구"),
+        re.compile(r"(?i)\bragu\b"),
+        re.compile(r"(?i)\brago\b"),
+    ),
 )
 
 
@@ -378,7 +393,9 @@ when the meaning is translatable. Brand names may remain brand names. Do not add
 the server renders prices separately. Keep literal digits when practical; ordinary English number
 words are acceptable only when they preserve the same quantity and unit. Translate 우삼겹 as beef
 short plate, 등심왕돈까스 as pork loin cutlet, 버팔로봉 as buffalo chicken drumettes, and Korean
-사이다 as soda or soft drink, never alcoholic cider. Do not return Markdown or commentary. Prompt version:
+사이다 as soda or soft drink, never alcoholic cider. In Yogiyo event labels, 찜 means saving or
+favoriting the restaurant, never steaming food. Translate 핫봉 as hot chicken drumettes and 라구 as
+ragu. Do not return Markdown or commentary. Prompt version:
 {self.settings.option_localization_prompt_version}.
 """.strip()
 

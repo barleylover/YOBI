@@ -349,6 +349,34 @@ def test_number_validation_accepts_natural_one_per_order_compression() -> None:
     )
 
 
+def test_yogiyo_domain_terms_reject_literal_or_phonetic_mistranslations() -> None:
+    assert (
+        _option_translation_error("찜 + 사진 이벤트", "Steam + Photo Event", "en")
+        == "OPTION_LOCALIZATION_SEMANTIC_ANCHOR_LOST"
+    )
+    assert _option_translation_error("찜 + 사진 이벤트", "Favorite + Photo Event", "en") is None
+    assert (
+        _option_translation_error("[찜 + 사진] 핫봉 3P", "[Favorite + Photo] Hot Bon 3p", "en")
+        == "OPTION_LOCALIZATION_SEMANTIC_ANCHOR_LOST"
+    )
+    assert (
+        _option_translation_error(
+            "[찜 + 사진] 핫봉 3P",
+            "[Favorite + Photo] Hot Chicken Drumettes 3p",
+            "en",
+        )
+        is None
+    )
+    assert (
+        _option_translation_error("매콤라구파스타 1인분", "Spicy Rago Pasta 1 serving", "en")
+        == "OPTION_LOCALIZATION_SEMANTIC_ANCHOR_LOST"
+    )
+    assert (
+        _option_translation_error("매콤라구파스타 1인분", "Spicy Ragu Pasta 1 serving", "en")
+        is None
+    )
+
+
 def test_selected_menu_options_generate_once_then_use_prompt_versioned_cache() -> None:
     repository = OptionRepository()
     provider = OptionProvider(

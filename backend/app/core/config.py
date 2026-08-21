@@ -91,7 +91,7 @@ class Settings(BaseSettings):
     )
     menu_presentation_schema_version: str = "6"
     option_localization_prompt_version: str = (
-        "yobi-option-localization-v4-per-unit-number-semantics"
+        "yobi-option-localization-v5-yogiyo-domain-terms"
     )
     menu_presentation_wait_seconds: float = Field(default=10.0, ge=0.0, le=30.0)
     menu_presentation_poll_seconds: float = Field(default=0.25, ge=0.05, le=2.0)
