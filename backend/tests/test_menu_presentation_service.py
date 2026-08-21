@@ -620,6 +620,44 @@ def test_presentation_rejects_review_ids_or_sources_claimed_for_yobi_copy() -> N
     )
 
 
+def test_presentation_canonicalizes_missing_model_provenance_metadata() -> None:
+    payload = _generated_payload()
+    payload["items"][0]["used_source_fields"] = ["localized_title"]
+    payload["items"][0]["yobi_used_source_fields"] = ["localized_title"]
+    payload["items"][0]["review_used_source_fields"] = []
+    repository = PresentationRepository(
+        MerchantMenuPresentationPage(items=[_presentation()])
+    )
+    provider = PresentationProvider(output=json.dumps(payload))
+    service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        generator=MenuPresentationGenerator(Settings(), provider=provider),
+    )
+
+    page = service.list_presentations(
+        "session-1", "merchant-1", MerchantMenuPresentationRequest()
+    )
+
+    assert page.items[0].generation_model == "xai.grok-4.3"
+    assert page.items[0].evidence_map["yobi_used_source_fields"] == [
+        "localized_title",
+        "menu_title_ko",
+        "source_description_ko",
+        "wiki_passages",
+    ]
+    assert page.items[0].evidence_map["review_used_source_fields"] == [
+        "synthetic_reviews"
+    ]
+    assert page.items[0].evidence_map["used_source_fields"] == [
+        "localized_title",
+        "menu_title_ko",
+        "source_description_ko",
+        "synthetic_reviews",
+        "wiki_passages",
+    ]
+
+
 def test_presentation_accepts_spelled_quantity_when_value_is_unchanged() -> None:
     payload = _generated_payload()
     payload["items"][0].update(
@@ -1167,7 +1205,7 @@ def test_current_prompt_and_schema_logically_invalidate_legacy_cache_without_del
     )
 
     assert current_settings.menu_presentation_prompt_version == (
-        "yobi-menu-presentation-v11-item-isolation-translation-safe"
+        "yobi-menu-presentation-v12-server-owned-provenance"
     )
     assert current_settings.menu_presentation_schema_version == "6"
     assert provider.requested_ids == [["menu-1"]]

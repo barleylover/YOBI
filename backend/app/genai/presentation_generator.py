@@ -850,7 +850,6 @@ class MenuPresentationGenerator:
                     for item in source.get("synthetic_reviews", [])
                     if isinstance(item, dict) and item.get("review_id")
                 }
-                allowed_evidence = allowed_yobi_evidence | allowed_review_evidence
                 if not set(generated.yobi_used_evidence_ids) <= allowed_yobi_evidence:
                     item_errors[generated.menu_id] = (
                         "PRESENTATION_YOBI_EVIDENCE_SCOPE_INVALID"
@@ -866,11 +865,10 @@ class MenuPresentationGenerator:
                         "PRESENTATION_REVIEW_EVIDENCE_MISSING"
                     )
                     continue
-                generated.used_evidence_ids = [
-                    evidence_id
-                    for evidence_id in generated.used_evidence_ids
-                    if evidence_id in allowed_evidence
-                ]
+                generated.used_evidence_ids = sorted(
+                    set(generated.yobi_used_evidence_ids)
+                    | set(generated.review_used_ids)
+                )
                 allowed_fields = {
                     "menu_title_ko",
                     "localized_title",
@@ -909,7 +907,7 @@ class MenuPresentationGenerator:
                 expected_review_fields = {"synthetic_reviews"} if source.get(
                     "synthetic_reviews"
                 ) else set()
-                if set(generated.review_used_source_fields) != expected_review_fields:
+                if not set(generated.review_used_source_fields) <= expected_review_fields:
                     item_errors[generated.menu_id] = (
                         "PRESENTATION_REVIEW_SOURCE_SCOPE_INVALID"
                     )
@@ -923,11 +921,6 @@ class MenuPresentationGenerator:
                     required_yobi_fields.add("country_preference")
                 if source.get("menu_components"):
                     required_yobi_fields.add("menu_components")
-                if not required_yobi_fields <= set(generated.yobi_used_source_fields):
-                    item_errors[generated.menu_id] = (
-                        "PRESENTATION_YOBI_REQUIRED_SOURCE_FIELD_MISSING"
-                    )
-                    continue
                 required_source_fields = {"menu_title_ko", "localized_title"}
                 if source.get("source_description_ko"):
                     required_source_fields.add("source_description_ko")
@@ -939,12 +932,14 @@ class MenuPresentationGenerator:
                     required_source_fields.add("country_preference")
                 if source.get("menu_components"):
                     required_source_fields.add("menu_components")
-                if not required_source_fields <= set(generated.used_source_fields):
-                    item_errors[generated.menu_id] = (
-                        "PRESENTATION_REQUIRED_SOURCE_FIELD_MISSING"
-                    )
-                    continue
-                generated.used_source_fields = sorted(set(generated.used_source_fields))
+                # These arrays are provenance metadata, not creative output. The
+                # server knows which supplied fields the accepted copy was required
+                # to reflect and owns the canonical record. Keep rejecting forbidden
+                # review leakage above, but do not discard otherwise grounded copy
+                # because a model omitted a bookkeeping string.
+                generated.yobi_used_source_fields = sorted(required_yobi_fields)
+                generated.review_used_source_fields = sorted(expected_review_fields)
+                generated.used_source_fields = sorted(required_source_fields)
                 required_components = {
                     str(component.get("component_id"))
                     for component in source.get("menu_components", [])
@@ -1114,10 +1109,11 @@ use Wiki or restaurant-description evidence to invent review sentiment.
 Country and language may guide familiar wording or a clearly grounded analogy, but never force a
 country mention, stereotype a nationality, or invent a similar food. Set personalization_applied
 true only when the country cue materially changed wording. Cite only supplied evidence/review IDs.
-used_evidence_ids is the union of evidence used across the output, and used_source_fields is the
-union of source fields used across the output. menu_title_ko, localized_title, every non-empty
-source_description_ko, supplied wiki_passages, and supplied synthetic_reviews are required source
-fields because the output must reflect the exact listing and keep review copy isolated.
+used_evidence_ids is the union of evidence used across the output. Source-field arrays are
+bookkeeping hints which the server canonicalizes after validating the actual copy; never place
+synthetic_reviews in yobi_used_source_fields. The actual output must still reflect menu_title_ko,
+localized_title, every non-empty source_description_ko, supplied wiki_passages, and supplied
+synthetic_reviews while keeping review copy isolated.
 Do not leave Korean Hangul in English or Japanese output. Japanese prose must use natural Japanese
 script. Do not expose internal IDs in prose, emit Markdown, or add a preamble. Prompt version:
 {self.settings.menu_presentation_prompt_version}.

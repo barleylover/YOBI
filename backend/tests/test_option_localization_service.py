@@ -257,6 +257,76 @@ def test_generator_falls_back_from_20b_to_120b() -> None:
     ]
 
 
+def test_generator_merges_complementary_valid_labels_across_model_chain() -> None:
+    provider = FallbackOptionProvider(
+        {
+            "openai.gpt-oss-20b": {
+                "groups": [
+                    {
+                        "display_name": "Drink options",
+                        "item_display_names": ["Add cola", "Soda"],
+                    }
+                ]
+            },
+            "openai.gpt-oss-120b": {
+                "groups": [
+                    {
+                        "display_name": "Drink options",
+                        "item_display_names": ["Add 1 cola", "Cider"],
+                    }
+                ]
+            },
+        }
+    )
+    attempts: list[tuple[str, str, str | None]] = []
+
+    result = OptionLocalizationGenerator(Settings(), provider=provider).generate(
+        groups=[
+            {
+                "name_ko": "음료 선택",
+                "items": [
+                    {"name_ko": "콜라 1개 추가"},
+                    {"name_ko": "사이다"},
+                ],
+            }
+        ],
+        locale="English",
+        on_provider_attempt=lambda model, status, error, _latency, _usage: attempts.append(
+            (model, status, error)
+        ),
+    )
+
+    assert result.groups[0].item_display_names == ["Add 1 cola", "Soda"]
+    assert result.generation_model == "openai.gpt-oss-20b+openai.gpt-oss-120b"
+    assert [attempt[1] for attempt in attempts] == ["FAILED", "SUCCEEDED"]
+    assert attempts[0][2] == "OPTION_LOCALIZATION_NUMBER_MISMATCH:G0:I0"
+
+
+def test_generator_accepts_spelled_number_with_preserved_quantity_unit() -> None:
+    provider = OptionProvider(
+        {
+            "groups": [
+                {
+                    "display_name": "Drink options",
+                    "item_display_names": ["Add one item of cola"],
+                }
+            ]
+        }
+    )
+
+    result = OptionLocalizationGenerator(Settings(), provider=provider).generate(
+        groups=[
+            {
+                "name_ko": "음료 선택",
+                "items": [{"name_ko": "콜라 1개 추가"}],
+            }
+        ],
+        locale="English",
+    )
+
+    assert result.groups[0].item_display_names == ["Add one item of cola"]
+
+
 def test_selected_menu_options_generate_once_then_use_prompt_versioned_cache() -> None:
     repository = OptionRepository()
     provider = OptionProvider(

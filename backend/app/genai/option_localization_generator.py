@@ -12,6 +12,7 @@ from app.genai.contracts import GenAIErrorCode, GenAIProvider, GenAIProviderErro
 from app.genai.presentation_generator import (
     _number_tokens,
     _option_control_meaning_preserved,
+    _quantity_tokens,
 )
 from app.genai.providers import choose_genai_provider
 from app.genai.response_contract import parse_json_object
@@ -73,6 +74,52 @@ OPTION_LOCALIZATION_JSON_SCHEMA: dict[str, Any] = {
         }
     },
 }
+
+
+_ENGLISH_OPTION_SEMANTIC_RULES = (
+    (re.compile(r"우삼겹"), re.compile(r"(?i)\bbeef\b"), re.compile(r"(?i)\bpork\b")),
+    (re.compile(r"등심.*돈[까가]스|돈[까가]스.*등심"), re.compile(r"(?i)\bpork\b"), None),
+    (
+        re.compile(r"버팔로봉"),
+        re.compile(r"(?i)\b(?:chicken|drumettes?|wings?)\b"),
+        re.compile(r"(?i)\bbuns?\b"),
+    ),
+    (
+        re.compile(r"사이다"),
+        re.compile(r"(?i)\b(?:soda|soft drink|sprite)\b"),
+        re.compile(r"(?i)\bcider\b"),
+    ),
+)
+
+
+def _option_translation_error(source: str, target: str, target_language: str) -> str | None:
+    expected_numbers = _number_tokens(source)
+    actual_numbers = (
+        _quantity_tokens(target, "en")
+        if target_language == "en"
+        else _number_tokens(target)
+    )
+    if expected_numbers != actual_numbers:
+        return "OPTION_LOCALIZATION_NUMBER_MISMATCH"
+    if target_language == "ko" and source != target:
+        return "OPTION_LOCALIZATION_KOREAN_SOURCE_CHANGED"
+    if target_language != "ko" and re.search(r"[가-힣]", target):
+        return "OPTION_LOCALIZATION_HANGUL_REMAINS"
+    if target_language != "ko" and not _option_control_meaning_preserved(
+        source,
+        target,
+        target_language,
+    ):
+        return "OPTION_LOCALIZATION_CONTROL_MEANING_LOST"
+    if target_language == "en":
+        for source_pattern, required_pattern, forbidden_pattern in _ENGLISH_OPTION_SEMANTIC_RULES:
+            if not source_pattern.search(source):
+                continue
+            if not required_pattern.search(target) or (
+                forbidden_pattern is not None and forbidden_pattern.search(target)
+            ):
+                return "OPTION_LOCALIZATION_SEMANTIC_ANCHOR_LOST"
+    return None
 
 
 class OptionLocalizationGenerator:
@@ -146,6 +193,12 @@ class OptionLocalizationGenerator:
             }
 
         last_error: GenAIProviderError | None = None
+        merged_group_names: list[str | None] = [None] * len(groups)
+        merged_item_names: list[list[str | None]] = [
+            [None] * len(group.get("items", [])) for group in groups
+        ]
+        contributing_models: list[str] = []
+        combined_usage: dict[str, int] = {}
         for model_id in models:
             started = monotonic()
             if not self.provider.supports_model(model_id):
@@ -171,6 +224,8 @@ class OptionLocalizationGenerator:
                 continue
 
             usage = self._usage(response)
+            for key, value in usage.items():
+                combined_usage[key] = combined_usage.get(key, 0) + value
             try:
                 result = OptionLocalizationGeneration.model_validate(
                     parse_json_object(str(getattr(response, "output_text", "")))
@@ -178,33 +233,41 @@ class OptionLocalizationGenerator:
                 if len(result.groups) != len(groups):
                     raise ValueError("OPTION_LOCALIZATION_GROUP_COUNT_INVALID")
                 target_language = {"한국어": "ko", "日本語": "ja"}.get(locale, "en")
-                for source_group, generated_group in zip(groups, result.groups):
+                validation_errors: list[str] = []
+                contributed = False
+                for group_index, (source_group, generated_group) in enumerate(
+                    zip(groups, result.groups)
+                ):
                     source_items = list(source_group.get("items", []))
                     if len(generated_group.item_display_names) != len(source_items):
                         raise ValueError("OPTION_LOCALIZATION_ITEM_COUNT_INVALID")
-                    pairs = [
-                        (str(source_group["name_ko"]), generated_group.display_name),
-                        *[
-                            (str(source_item["name_ko"]), translated)
-                            for source_item, translated in zip(
-                                source_items,
-                                generated_group.item_display_names,
-                            )
-                        ],
-                    ]
-                    for source_text, translated_text in pairs:
-                        if _number_tokens(source_text) != _number_tokens(translated_text):
-                            raise ValueError("OPTION_LOCALIZATION_NUMBER_MISMATCH")
-                        if target_language == "ko" and source_text != translated_text:
-                            raise ValueError("OPTION_LOCALIZATION_KOREAN_SOURCE_CHANGED")
-                        if target_language != "ko" and re.search(r"[가-힣]", translated_text):
-                            raise ValueError("OPTION_LOCALIZATION_HANGUL_REMAINS")
-                        if target_language != "ko" and not _option_control_meaning_preserved(
-                            source_text,
-                            translated_text,
+                    group_error = _option_translation_error(
+                        str(source_group["name_ko"]),
+                        generated_group.display_name,
+                        target_language,
+                    )
+                    if group_error is None:
+                        if merged_group_names[group_index] is None:
+                            merged_group_names[group_index] = generated_group.display_name
+                            contributed = True
+                    else:
+                        validation_errors.append(f"{group_error}:G{group_index}")
+                    for item_index, (source_item, translated) in enumerate(
+                        zip(source_items, generated_group.item_display_names)
+                    ):
+                        item_error = _option_translation_error(
+                            str(source_item["name_ko"]),
+                            translated,
                             target_language,
-                        ):
-                            raise ValueError("OPTION_LOCALIZATION_CONTROL_MEANING_LOST")
+                        )
+                        if item_error is None:
+                            if merged_item_names[group_index][item_index] is None:
+                                merged_item_names[group_index][item_index] = translated
+                                contributed = True
+                        else:
+                            validation_errors.append(
+                                f"{item_error}:G{group_index}:I{item_index}"
+                            )
             except (json.JSONDecodeError, ValidationError, ValueError) as exc:
                 reason = str(exc).strip() or "OPTION_LOCALIZATION_RESPONSE_INVALID"
                 last_error = GenAIProviderError(
@@ -224,6 +287,43 @@ class OptionLocalizationGenerator:
                     )
                 continue
 
+            if contributed:
+                contributing_models.append(model_id)
+            complete = all(value is not None for value in merged_group_names) and all(
+                value is not None for names in merged_item_names for value in names
+            )
+            if not complete:
+                reason = (
+                    validation_errors[0]
+                    if validation_errors
+                    else "OPTION_LOCALIZATION_RESPONSE_INCOMPLETE"
+                )
+                last_error = GenAIProviderError(
+                    GenAIErrorCode.GROUNDING_REJECTED,
+                    retryable=False,
+                    safe_reason_code=reason[:120],
+                    safe_reason_stage="OPTION_LOCALIZATION_VALIDATION",
+                )
+                if on_provider_attempt is not None:
+                    on_provider_attempt(
+                        model_id,
+                        "FAILED",
+                        reason[:120],
+                        int((monotonic() - started) * 1000),
+                        usage,
+                    )
+                continue
+
+            result = OptionLocalizationGeneration(
+                groups=[
+                    GeneratedOptionGroup(
+                        display_name=str(merged_group_names[group_index]),
+                        item_display_names=[str(value) for value in merged_item_names[group_index]],
+                    )
+                    for group_index in range(len(groups))
+                ]
+            )
+
             if on_provider_attempt is not None:
                 on_provider_attempt(
                     model_id,
@@ -232,8 +332,8 @@ class OptionLocalizationGenerator:
                     int((monotonic() - started) * 1000),
                     usage,
                 )
-            result._generation_model = model_id
-            result._provider_metrics = usage
+            result._generation_model = "+".join(dict.fromkeys(contributing_models))
+            result._provider_metrics = combined_usage
             return result
 
         raise last_error or GenAIProviderError(
@@ -252,7 +352,10 @@ item_display_names in the same order. Translate for ordering accuracy, not creat
 every Arabic digit sequence exactly, including size, quantity, spice level, doneness, inclusion,
 removal, negation, and add-on meaning. Prefer natural menu wording over Korean phonetic spelling
 when the meaning is translatable. Brand names may remain brand names. Do not add prices because
-the server renders prices separately. Do not return Markdown or commentary. Prompt version:
+the server renders prices separately. Keep literal digits when practical; ordinary English number
+words are acceptable only when they preserve the same quantity and unit. Translate 우삼겹 as beef
+short plate, 등심왕돈까스 as pork loin cutlet, 버팔로봉 as buffalo chicken drumettes, and Korean
+사이다 as soda or soft drink, never alcoholic cider. Do not return Markdown or commentary. Prompt version:
 {self.settings.option_localization_prompt_version}.
 """.strip()
 
