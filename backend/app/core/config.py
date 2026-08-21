@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     oci_genai_max_concurrent_requests_per_model: int = Field(default=1, ge=1, le=8)
     oci_genai_min_interval_seconds: float = Field(default=2.0, ge=0.0, le=30.0)
     oci_genai_rate_limit_cooldown_seconds: float = Field(
-        default=65.0, ge=1.0, le=300.0
+        default=30.0, ge=1.0, le=300.0
     )
     # Explicit provider contract profile. These are the request envelope that the
     # configured OCI model/endpoint is expected to support, not advertised model

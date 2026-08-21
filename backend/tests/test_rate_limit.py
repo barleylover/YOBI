@@ -38,6 +38,10 @@ def test_retry_delay_without_header_is_between_65_and_70_seconds() -> None:
     assert calls == [(65.0, 70.0)]
 
 
+def test_retry_delay_without_header_uses_runtime_default() -> None:
+    assert retry_delay_seconds(_rate_limit(), default_seconds=30.0) == 30.0
+
+
 def test_smoke_retry_is_bounded_to_two_retries() -> None:
     attempts = 0
     sleeps: list[float] = []

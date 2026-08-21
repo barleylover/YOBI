@@ -307,9 +307,16 @@ class AgentLoop:
                     if exc.code is GenAIErrorCode.RATE_LIMIT:
                         cause = exc.cause
                         cooldown = (
-                            retry_delay_seconds(cause)
+                            retry_delay_seconds(
+                                cause,
+                                default_seconds=(
+                                    self.settings.oci_genai_rate_limit_cooldown_seconds
+                                ),
+                            )
                             if isinstance(cause, RateLimitError)
-                            else 65.0
+                            else (
+                                self.settings.oci_genai_rate_limit_cooldown_seconds
+                            )
                         )
                         self._cooldown_until[model] = monotonic() + cooldown
                         rate_limited.append(model)

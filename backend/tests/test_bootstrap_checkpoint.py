@@ -130,11 +130,23 @@ def test_runtime_environment_can_resume_and_upgrade_release_policy(
 
 def test_retry_policy_matches_settings_and_runtime_restore() -> None:
     assert bootstrap.Settings.model_fields["llm_max_retries"].default == 0
+    assert (
+        bootstrap.Settings.model_fields[
+            "oci_genai_rate_limit_cooldown_seconds"
+        ].default
+        == 30.0
+    )
     assert "quote('0')" in inspect.getsource(bootstrap.write_env)
+    assert "quote('30')" in inspect.getsource(bootstrap.write_env)
     assert '"LLM_MAX_RETRIES": "0"' in inspect.getsource(bootstrap.main)
+    assert (
+        '"OCI_GENAI_RATE_LIMIT_COOLDOWN_SECONDS": "30"'
+        in inspect.getsource(bootstrap.main)
+    )
     restore = (ROOT / "deploy" / "restore_runtime_env.sh").read_text(encoding="utf-8")
     assert "LLM_MAX_RETRIES=\"0\"" in restore
     assert "LLM_MAX_RETRIES=\"1\"" not in restore
+    assert 'OCI_GENAI_RATE_LIMIT_COOLDOWN_SECONDS="30"' in restore
     assert bootstrap.Settings.model_fields["embedding_provider"].default == "deterministic"
     assert "quote('oci')" in inspect.getsource(bootstrap.write_env)
     assert 'EMBEDDING_PROVIDER="oci"' in restore

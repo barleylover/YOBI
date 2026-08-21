@@ -91,7 +91,7 @@ emit_runtime_env() {
   printf 'OCI_GENAI_ADMISSION_CONTROL_ENABLED="true"\n'
   printf 'OCI_GENAI_MAX_CONCURRENT_REQUESTS_PER_MODEL="1"\n'
   printf 'OCI_GENAI_MIN_INTERVAL_SECONDS="2"\n'
-  printf 'OCI_GENAI_RATE_LIMIT_COOLDOWN_SECONDS="65"\n'
+  printf 'OCI_GENAI_RATE_LIMIT_COOLDOWN_SECONDS="30"\n'
   printf 'RESTAURANT_NOTE_MODEL="meta.llama-4-maverick-17b-128e-instruct-fp8"\n'
   printf '%s\n' \
     'RESTAURANT_NOTE_MODEL_CHAIN="meta.llama-4-maverick-17b-128e-instruct-fp8,openai.gpt-oss-20b"'
