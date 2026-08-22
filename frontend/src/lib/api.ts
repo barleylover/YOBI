@@ -28,7 +28,11 @@ interface RequestOptions {
   signal?: AbortSignal;
 }
 
-async function request<T>(path: string, init?: RequestInit, options: RequestOptions = {}): Promise<T> {
+async function fetchWithTimeout(
+  path: string,
+  init?: RequestInit,
+  options: RequestOptions = {},
+): Promise<Response> {
   const controller = new AbortController();
   const timeoutMs = options.timeoutMs ?? 15_000;
   let timedOut = false;
@@ -41,17 +45,10 @@ async function request<T>(path: string, init?: RequestInit, options: RequestOpti
   }, timeoutMs);
 
   try {
-    const response = await fetch(path, {
+    return await fetch(path, {
       ...init,
       signal: controller.signal,
-      headers: { "Content-Type": "application/json", ...init?.headers },
     });
-    if (!response.ok) {
-      const payload = await response.json().catch(() => ({ detail: { code: "REQUEST_FAILED" } }));
-      throw new Error(payload.detail?.code ?? `HTTP_${response.status}`);
-    }
-    if (response.status === 204) return undefined as T;
-    return response.json() as Promise<T>;
   } catch (cause) {
     if (controller.signal.aborted || (cause instanceof DOMException && cause.name === "AbortError")) {
       throw new Error(timedOut ? "REQUEST_TIMEOUT" : "REQUEST_ABORTED");
@@ -61,6 +58,30 @@ async function request<T>(path: string, init?: RequestInit, options: RequestOpti
     window.clearTimeout(timeout);
     options.signal?.removeEventListener("abort", relayAbort);
   }
+}
+
+async function responseErrorCode(response: Response, fallback: string) {
+  const payload = await response.json().catch(() => null) as unknown;
+  if (payload && typeof payload === "object") {
+    const detail = (payload as { detail?: unknown }).detail;
+    if (detail && typeof detail === "object") {
+      const code = (detail as { code?: unknown }).code;
+      if (typeof code === "string" && code) return code;
+    }
+  }
+  return fallback;
+}
+
+async function request<T>(path: string, init?: RequestInit, options: RequestOptions = {}): Promise<T> {
+  const response = await fetchWithTimeout(path, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...init?.headers },
+  }, options);
+  if (!response.ok) {
+    throw new Error(await responseErrorCode(response, `HTTP_${response.status}`));
+  }
+  if (response.status === 204) return undefined as T;
+  return response.json() as Promise<T>;
 }
 
 function clientRequestId(prefix: string) {
@@ -307,16 +328,16 @@ export const api = {
   ) => {
     const headers: Record<string, string> = {};
     if (cached?.etag) headers["If-None-Match"] = cached.etag;
-    const response = await fetch(
+    const response = await fetchWithTimeout(
       `/api/v1/recommendation/preferences/catalog?locale=${encodeURIComponent(locale)}`,
       { headers },
+      { timeoutMs: 8_000 },
     );
     if (response.status === 304 && cached) {
       return { catalog: cached.catalog, etag: cached.etag, notModified: true };
     }
     if (!response.ok) {
-      const payload = await response.json().catch(() => ({ detail: { code: "PREFERENCE_CATALOG_NOT_AVAILABLE" } }));
-      throw new Error(payload.detail?.code ?? `HTTP_${response.status}`);
+      throw new Error(await responseErrorCode(response, "PREFERENCE_CATALOG_NOT_AVAILABLE"));
     }
     const catalog = await response.json() as PreferenceCatalog;
     return {
@@ -454,13 +475,12 @@ export const api = {
   uploadAddress: async (sessionId: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
-    const response = await fetch(`/api/v1/sessions/${sessionId}/address/attachments`, {
+    const response = await fetchWithTimeout(`/api/v1/sessions/${sessionId}/address/attachments`, {
       method: "POST",
       body: form,
-    });
+    }, { timeoutMs: 30_000 });
     if (!response.ok) {
-      const payload = await response.json().catch(() => ({ detail: { code: "ADDRESS_UPLOAD_FAILED" } }));
-      throw new Error(payload.detail?.code ?? "ADDRESS_UPLOAD_FAILED");
+      throw new Error(await responseErrorCode(response, "ADDRESS_UPLOAD_FAILED"));
     }
     return response.json() as Promise<{
       candidates: AddressCandidate[];

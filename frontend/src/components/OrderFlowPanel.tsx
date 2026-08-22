@@ -8,13 +8,19 @@ import type {
   MenuSummary,
   MerchantMenuPresentation,
   OptionGroup,
-  OptionItem,
   RestaurantNoteTranslation,
 } from "../types";
 import { useI18n } from "../lib/i18n";
 import { asSupportedLanguage, menuName, merchantName } from "../lib/locale";
 import { getRecommendationCopy } from "../lib/recommendationI18n";
 import { getRedesignCopy } from "../lib/redesignI18n";
+import {
+  optionDietaryConflicts,
+  optionGroupHasNoneChoice,
+  planDefaultOptionSelections,
+  selectedOptionsPriceDelta,
+  toggledOptionSelection,
+} from "../lib/orderFlow";
 
 interface Props {
   sessionId: string;
@@ -219,13 +225,10 @@ export function OrderFlowPanel({
     option.option_item_id,
     option.display_name || (language === "한국어" ? option.name_ko : option.name_en),
   ]))), [groups, language]);
-  const selectedDelta = useMemo(() => groups.reduce((total, group) => {
-    const optionIds = new Set(selections[group.option_group_id] ?? []);
-    return total + group.items.reduce(
-      (subtotal, option) => subtotal + (optionIds.has(option.option_item_id) ? option.price_delta : 0),
-      0,
-    );
-  }, 0), [groups, selections]);
+  const selectedDelta = useMemo(
+    () => selectedOptionsPriceDelta(groups, selections),
+    [groups, selections],
+  );
 
   function advanceFromGroup() {
     if (transitionTimer.current !== null) clearTimeout(transitionTimer.current);
@@ -236,33 +239,12 @@ export function OrderFlowPanel({
     }, 160);
   }
 
-  function sourceHasNoneOption(group: OptionGroup) {
-    return group.items.some((option) => {
-      const value = `${option.name_ko} ${option.name_en} ${option.display_name ?? ""}`
-        .replace(/\s+/g, "")
-        .toLowerCase();
-      return ["선택안함", "미선택", "none", "nooption", "選択しない", "なし"]
-        .some((token) => value.includes(token));
-    });
-  }
-
-  function optionConflicts(option: OptionItem) {
-    const breaksHalal = Boolean(dietaryFilters?.halal_certified_only && option.halal_certification_preserved === false);
-    const breaksVegan = Boolean(dietaryFilters?.vegan && option.vegan_status === "CONFLICT");
-    const needsVeganCheck = Boolean(dietaryFilters?.vegan && option.vegan_status === "POSSIBLE_WITH_CHECKS");
-    return { breaksHalal, breaksVegan, needsVeganCheck };
-  }
-
   async function selectOption(group: OptionGroup, optionId: string) {
     setBusy(true);
     setError("");
     try {
       const current = selections[group.option_group_id] ?? [];
-      const next = group.max_select > 1
-        ? current.includes(optionId)
-          ? current.filter((value) => value !== optionId)
-          : current.length < group.max_select ? [...current, optionId] : current
-        : [optionId];
+      const next = toggledOptionSelection(group, current, optionId);
       await onOptionChange?.(activeMenu.menu_id, group.option_group_id, next, false);
       setSelections((value) => ({ ...value, [group.option_group_id]: next }));
       if (group.max_select === 1) advanceFromGroup();
@@ -301,28 +283,25 @@ export function OrderFlowPanel({
     setBusy(true);
     setError("");
     try {
-      const next: Record<string, string[]> = { ...selections };
-      for (let index = groupIndex; index < groups.length; index += 1) {
-        const group = groups[index];
-        if (next[group.option_group_id] !== undefined) continue;
-        if (group.min_select === 0) {
-          await onOptionChange?.(activeMenu.menu_id, group.option_group_id, [], false);
-          next[group.option_group_id] = [];
-          continue;
-        }
-        const safeOptions = group.items.filter((option) => {
-          if (!option.available) return false;
-          const { breaksHalal, breaksVegan } = optionConflicts(option);
-          return !breaksHalal && !breaksVegan;
-        });
-        const optionIds = safeOptions
-          .slice(0, Math.max(1, group.min_select))
-          .map((option) => option.option_item_id);
-        if (optionIds.length < group.min_select) continue;
-        await onOptionChange?.(activeMenu.menu_id, group.option_group_id, optionIds, false);
-        next[group.option_group_id] = optionIds;
+      const plan = planDefaultOptionSelections(
+        groups,
+        selections,
+        groupIndex,
+        dietaryFilters,
+      );
+      if (plan.missingRequiredGroup) {
+        setError(v2.requiredTapOne);
+        return;
       }
-      setSelections(next);
+      for (const update of plan.updates) {
+        await onOptionChange?.(
+          activeMenu.menu_id,
+          update.optionGroupId,
+          update.optionItemIds,
+          false,
+        );
+      }
+      setSelections(plan.selections);
       setPhase("note");
     } catch (cause) {
       setError(actionableError(cause, journeyCopy.retry, language));
@@ -374,7 +353,10 @@ export function OrderFlowPanel({
     setError("");
     try {
       const preview = editingCartItemId
-        ? await api.updateCartItem(sessionId, editingCartItemId, { option_item_ids: selectedOptionIds })
+        ? await api.updateCartItem(sessionId, editingCartItemId, {
+            option_item_ids: selectedOptionIds,
+            user_note: "",
+          })
         : await api.addCartItem(
             sessionId,
             activeMenu.menu_id,
@@ -569,7 +551,7 @@ export function OrderFlowPanel({
                 <h3>{currentGroup.display_name || (language === "한국어" ? currentGroup.name_ko : currentGroup.name_en)}</h3>
                 <p>{currentGroup.min_select === 0 ? v2.optionalTap : v2.requiredTapOne}</p>
               </div>
-              {currentGroup.min_select === 0 && !sourceHasNoneOption(currentGroup) && (
+              {currentGroup.min_select === 0 && !optionGroupHasNoneChoice(currentGroup) && (
                 <div className="v2-option-shell">
                   <button
                     type="button"
@@ -585,7 +567,10 @@ export function OrderFlowPanel({
                 </div>
               )}
               {currentGroup.items.map((option) => {
-                const { breaksHalal, breaksVegan, needsVeganCheck } = optionConflicts(option);
+                const { breaksHalal, breaksVegan, needsVeganCheck } = optionDietaryConflicts(
+                  option,
+                  dietaryFilters,
+                );
                 const selected = (selections[currentGroup.option_group_id] ?? []).includes(option.option_item_id);
                 return (
                   <div key={option.option_item_id} className="v2-option-shell">

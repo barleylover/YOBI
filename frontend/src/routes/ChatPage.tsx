@@ -11,6 +11,7 @@ import { useI18n } from "../lib/i18n";
 import { asSupportedLanguage, menuName } from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
 import { getRedesignCopy } from "../lib/redesignI18n";
+import { findMenuProjection, recommendationCriteriaEqual } from "../lib/recommendationState";
 import {
   getCatalogChangedCopy,
   getRecommendationConflictCopy,
@@ -33,30 +34,6 @@ function createId(prefix: string) {
   const value = globalThis.crypto?.randomUUID?.()
     ?? `${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`;
   return `${prefix}-${value}`;
-}
-
-function findMenu(value: unknown, menuId: string): MenuSummary | null {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const match = findMenu(item, menuId);
-      if (match) return match;
-    }
-    return null;
-  }
-  if (!value || typeof value !== "object") return null;
-  const item = value as Record<string, unknown>;
-  if (item.menu_id === menuId && typeof item.merchant_id === "string" && typeof item.name_en === "string") {
-    return item as unknown as MenuSummary;
-  }
-  for (const nested of Object.values(item)) {
-    const match = findMenu(nested, menuId);
-    if (match) return match;
-  }
-  return null;
-}
-
-function sameCriteria(left: unknown, right: unknown) {
-  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 export function ChatPage() {
@@ -161,7 +138,9 @@ export function ChatPage() {
     const fromConversation = conversation.selected_menu?.menu_id === selectedMenuId
       ? conversation.selected_menu
       : null;
-    const fromLegacy = batch ? null : findMenu(conversation.latest_snapshot?.cards, selectedMenuId);
+    const fromLegacy = batch
+      ? null
+      : findMenuProjection(conversation.latest_snapshot?.cards, selectedMenuId);
     const restoredMenu = fromV2 ?? fromConversation ?? fromLegacy ?? null;
     setSelectedMenu(restoredMenu);
     if (restoredMenu) {
@@ -493,7 +472,10 @@ export function ChatPage() {
           && ["PREFERENCE_CATALOG_CHANGED", "PREFERENCE_CATALOG_VERSION_CONFLICT"].includes(cause.message)
         ) throw cause;
         const conversation = await api.getConversation(sessionId);
-        if (!conversation.recommendation_criteria || !sameCriteria(conversation.recommendation_criteria, draftCriteria)) throw cause;
+        if (
+          !conversation.recommendation_criteria
+          || !recommendationCriteriaEqual(conversation.recommendation_criteria, draftCriteria)
+        ) throw cause;
         committed = {
           session_id: sessionId,
           criteria: conversation.recommendation_criteria,

@@ -17,6 +17,7 @@ from app.genai.response_limits import (
     expanded_output_limit,
     output_limit_reached,
 )
+from app.genai.usage import response_usage_metrics
 
 
 class RecommendationGenerationStatus(str, Enum):
@@ -760,7 +761,7 @@ class RecommendationGenerator:
 
                     usage_metrics = {
                         **attempt_metrics,
-                        **self._response_usage_metrics(candidate_response),
+                        **response_usage_metrics(candidate_response, include_details=True),
                     }
                     if output_limit_reached(candidate_response):
                         latency_ms = int((monotonic() - attempt_started) * 1000)
@@ -812,7 +813,7 @@ class RecommendationGenerator:
             )
         provider_metrics = {
             **selected_request_metrics,
-            **self._response_usage_metrics(response),
+            **response_usage_metrics(response, include_details=True),
         }
         raw = str(getattr(response, "output_text", "")).strip()
         if not raw:
@@ -1141,45 +1142,6 @@ class RecommendationGenerator:
             "shortlist_count": shortlist_count,
             "requested_max_output_tokens": int(request.get("max_output_tokens") or 0),
         }
-
-    @staticmethod
-    def _response_usage_metrics(response: Any) -> dict[str, int]:
-        usage = getattr(response, "usage", None)
-        if usage is None:
-            return {}
-
-        def value(source: Any, key: str) -> int | None:
-            raw = source.get(key) if isinstance(source, dict) else getattr(source, key, None)
-            if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
-                return None
-            return raw
-
-        metrics: dict[str, int] = {}
-        for source_key, target_key in (
-            ("input_tokens", "input_tokens"),
-            ("output_tokens", "output_tokens"),
-            ("total_tokens", "total_tokens"),
-        ):
-            measured = value(usage, source_key)
-            if measured is not None:
-                metrics[target_key] = measured
-        input_details = (
-            usage.get("input_tokens_details")
-            if isinstance(usage, dict)
-            else getattr(usage, "input_tokens_details", None)
-        )
-        output_details = (
-            usage.get("output_tokens_details")
-            if isinstance(usage, dict)
-            else getattr(usage, "output_tokens_details", None)
-        )
-        cached = value(input_details, "cached_tokens")
-        reasoning = value(output_details, "reasoning_tokens")
-        if cached is not None:
-            metrics["cached_input_tokens"] = cached
-        if reasoning is not None:
-            metrics["reasoning_tokens"] = reasoning
-        return metrics
 
     def _enforce_input_limit(
         self,

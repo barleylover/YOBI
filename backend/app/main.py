@@ -29,6 +29,12 @@ from fastapi.responses import StreamingResponse
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field, model_validator
 
+from app.api.errors import (
+    not_found as _not_found,
+)
+from app.api.errors import (
+    structured_recommendation_http_error as _structured_recommendation_http_error,
+)
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging, log_event, safe_session_hash
 from app.db.demo_address import DEMO_ADDRESS_PLACE_ID
@@ -261,10 +267,6 @@ class DemoResetRequest(BaseModel):
     session_id: str
 
 
-def _not_found(code: str) -> HTTPException:
-    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": code})
-
-
 def _require_session(repository: YobiRepository, session_id: str) -> Session:
     session = repository.get_session(session_id)
     if session is None:
@@ -461,7 +463,7 @@ def create_profile(
         return repository.create_profile(data)
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"code": str(exc)},
         ) from exc
 
@@ -484,7 +486,7 @@ def update_profile(
         profile = repository.update_profile(profile_id, data)
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"code": str(exc)},
         ) from exc
     if profile is None:
@@ -532,56 +534,6 @@ def _resolve_session_profile(
     if not profile:
         raise _not_found("PROFILE_NOT_FOUND")
     return session, profile
-
-
-def _structured_recommendation_http_error(exc: Exception) -> HTTPException:
-    code = str(exc).strip("'") or type(exc).__name__.upper()
-    if code in {
-        "CHAT_STATE_VERSION_CONFLICT",
-        "CRITERIA_REQUEST_ID_REUSED",
-        "RECOMMENDATION_REQUEST_ID_REUSED",
-        "RECOMMENDATION_COMPLETION_PAYLOAD_CHANGED",
-        "RECOMMENDATION_DISPATCH_PAYLOAD_CHANGED",
-    }:
-        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": code})
-    if code in {"PREFERENCE_CATALOG_CHANGED", "PREFERENCE_CATALOG_VERSION_CONFLICT"}:
-        return HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "PREFERENCE_CATALOG_CHANGED"},
-        )
-    if code in {
-        "SESSION_NOT_FOUND",
-        "PROFILE_NOT_FOUND",
-        "RECOMMENDATION_CRITERIA_NOT_FOUND",
-        "RECOMMENDATION_CRITERIA_VERSION_NOT_FOUND",
-        "RECOMMENDATION_REQUEST_NOT_FOUND",
-    }:
-        return _not_found(code)
-    if code in {
-        "RECOMMENDATION_CRITERIA_EMPTY",
-        "HALAL_PORK_CRITERIA_CONFLICT",
-        "VEGAN_ANIMAL_INGREDIENT_CRITERIA_CONFLICT",
-        "INVALID_RECOMMENDATION_REQUEST_HASH",
-        "HALAL_CERTIFICATION_UNAVAILABLE",
-        "VEGAN_EVIDENCE_UNAVAILABLE",
-        "SPICE_LEVEL_UNAVAILABLE",
-        "RECOMMENDATION_COMPARISON_NOT_AVAILABLE",
-        "RECOMMENDATION_COMPARISON_REQUIRES_TWO_MENUS",
-        "RECOMMENDATION_SNAPSHOT_REQUEST_MISMATCH",
-    }:
-        return HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": code},
-        )
-    if code in {"RECOMMENDATION_RELEASE_NOT_READY"}:
-        return HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": code},
-        )
-    return HTTPException(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        detail={"code": "RECOMMENDATION_FAILED"},
-    )
 
 
 @app.get("/api/v1/recommendation/preferences/catalog")
@@ -975,7 +927,7 @@ def post_conversation_event(
         raise
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"code": str(exc)},
         ) from exc
 
@@ -1103,7 +1055,7 @@ def _validate_image(
             image.verify()
     except (UnidentifiedImageError, OSError) as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"code": "IMAGE_DECODE_FAILED"},
         ) from exc
 
@@ -1326,7 +1278,7 @@ def add_cart_item(
     _require_session(repository, session_id)
     if idempotency_key is not None and not 8 <= len(idempotency_key) <= 100:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"code": "INVALID_IDEMPOTENCY_KEY"},
         )
     try:

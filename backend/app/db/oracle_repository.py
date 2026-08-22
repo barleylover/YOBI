@@ -23,8 +23,22 @@ from app.db.concept_query import (
 from app.db.demo_address import demo_address_status
 from app.db.message_ordering import order_conversation_messages
 from app.db.oracle_pool import OraclePool
+from app.db.runtime_contract import (
+    EXPECTED_MAPPED_MENUS,
+    EXPECTED_MERCHANT_INGREDIENTS,
+    EXPECTED_OPTION_EFFECTS,
+    EXPECTED_ORIGIN_DECLARATIONS,
+    EXPECTED_RUNTIME_COUNTS,
+    EXTERNAL_CATALOG_COUNT_TABLES,
+    RECOMMENDATION_CANDIDATE_CAP,
+    RECOMMENDATION_PASSAGE_LIMIT,
+)
+from app.db.runtime_contract import (
+    runtime_counts_compatible as _runtime_counts_compatible,
+)
 from app.db.seed_data import CATALOG_VERSION
 from app.domain.address import normalize_address_text
+from app.domain.cart_validation import deterministic_korean_order_note, structured_v3_cart_error
 from app.domain.concept_ranking import (
     RANKING_POLICY_VERSION,
     ConceptRankCandidate,
@@ -53,6 +67,7 @@ from app.domain.knowledge import (
     KnowledgeSourceKind,
     SourceScope,
 )
+from app.domain.localization import localization_ids_complete
 from app.domain.models import (
     AddressCandidate,
     AssistantTurn,
@@ -112,6 +127,7 @@ from app.domain.structured_recommendation import (
     RecommendationRequestInput,
     RecommendationRequestRecord,
     RecommendationRequestStatus,
+    price_matches_bands,
 )
 from app.knowledge.catalog_seed import KNOWLEDGE_CATALOG_VERSION, KNOWLEDGE_RELEASE_ID
 from app.knowledge.passage_ranking import rank_component_wiki_passages
@@ -137,15 +153,6 @@ from app.rag.embeddings import (
     rank_hybrid_chunks_rrf,
 )
 from app.rag.providers import choose_embedding_provider
-
-# The demo corpus is intentionally bounded at 600 menus. Keep every hard-filtered
-# candidate until the structured-preference reranker has applied its 25% share.
-RECOMMENDATION_CANDIDATE_CAP = 600
-RECOMMENDATION_PASSAGE_LIMIT = 3
-EXPECTED_MAPPED_MENUS = 600
-EXPECTED_ORIGIN_DECLARATIONS = 13
-EXPECTED_MERCHANT_INGREDIENTS = 120
-EXPECTED_OPTION_EFFECTS = 4
 
 
 def _oracle_required_text(value: str) -> str:
@@ -175,51 +182,6 @@ def _synthetic_review_query_binds(parameters: dict[str, Any]) -> dict[str, Any]:
         for key, value in parameters.items()
         if key == "synthetic_release_id" or key.startswith("synthetic_menu_")
     }
-
-
-EXPECTED_RUNTIME_COUNTS = {
-    "service_area": 3,
-    "menu_category": 100,
-    "merchant": 60,
-    "menu": 600,
-    "menu_knowledge": 600,
-    "menu_option_group": 1202,
-    "menu_option_item": 2405,
-    "review_snippet": 2400,
-    "evidence": 1200,
-    "address_place": 20,
-    "ingredient": 48,
-    "menu_ingredient": 565,
-    "allergen": 8,
-    "menu_allergen": 48,
-    "dietary_attribute": 15,
-    "menu_dietary_attribute": 1217,
-    "option_dietary_conflict": 1,
-}
-EXTERNAL_CATALOG_COUNT_TABLES = (
-    "catalog_source_payload",
-    "menu",
-    "menu_option_group",
-    "menu_option_item",
-    "menu_source_detail",
-    "menu_source_section",
-    "menu_source_section_item",
-    "merchant",
-    "merchant_source_detail",
-    "option_group_source_detail",
-    "source_option",
-)
-UPGRADE_RETAINED_RUNTIME_COUNT_KEYS = frozenset(
-    {"allergen", "dietary_attribute", "ingredient", "menu_allergen"}
-)
-
-
-def _runtime_counts_compatible(counts: dict[str, int]) -> bool:
-    return set(counts) == set(EXPECTED_RUNTIME_COUNTS) and all(
-        actual >= expected if key in UPGRADE_RETAINED_RUNTIME_COUNT_KEYS else actual == expected
-        for key, expected in EXPECTED_RUNTIME_COUNTS.items()
-        for actual in (counts[key],)
-    )
 
 
 def _now() -> datetime:
@@ -2886,24 +2848,6 @@ class OracleYobiRepository:
         )
 
     @staticmethod
-    def _price_matches_v2(price: int, selected_bands: list[str]) -> bool:
-        if not selected_bands:
-            return True
-        return any(
-            (
-                code == "UNDER_10000"
-                and price < 10_000
-                or code == "FROM_10000_TO_19999"
-                and 10_000 <= price < 20_000
-                or code == "FROM_20000_TO_29999"
-                and 20_000 <= price < 30_000
-                or code == "OVER_30000"
-                and price >= 30_000
-            )
-            for code in selected_bands
-        )
-
-    @staticmethod
     def _valid_halal_certifications_in_connection(
         connection: oracledb.Connection,
         *,
@@ -3156,7 +3100,7 @@ class OracleYobiRepository:
                 )
                 or (
                     criteria.schema_version == "2"
-                    and cls._price_matches_v2(int(row["price"]), criteria.price_bands)
+                    and price_matches_bands(int(row["price"]), criteria.price_bands)
                 )
             )
         ]
@@ -6788,7 +6732,7 @@ class OracleYobiRepository:
             menu_id,
             prompt_version,
         )
-        return set(localized_groups) == set(group_ids) and set(localized_items) == set(item_ids)
+        return localization_ids_complete(localized_groups, localized_items, group_ids, item_ids)
 
     def load_option_localizations(
         self,
@@ -7533,18 +7477,6 @@ class OracleYobiRepository:
             )
         return self.get_cart(session_id)
 
-    @staticmethod
-    def _translate_note(note: str) -> str:
-        lowered = note.lower()
-        translations = []
-        if "mild" in lowered or "not spicy" in lowered:
-            translations.append("최대한 맵지 않게 부탁드립니다.")
-        if "front desk" in lowered:
-            translations.append("호텔 프런트에 맡겨 주세요.")
-        if "no cutlery" in lowered or "no disposable" in lowered:
-            translations.append("일회용 수저와 포크는 필요 없습니다.")
-        return " ".join(translations) or "요청사항을 확인해 주세요."
-
     def get_cart(self, session_id: str) -> CartPreview:
         with self.pool.connection() as connection:
             cursor = connection.cursor()
@@ -7825,7 +7757,7 @@ class OracleYobiRepository:
                         menu_id=menu_id,
                     )
                     current_menu = cursor.fetchone()
-                    if not self._price_matches_v2(
+                    if not price_matches_bands(
                         int(current_menu[0]) if current_menu else -1,
                         structured_criteria.price_bands,
                     ):
@@ -8041,7 +7973,7 @@ class OracleYobiRepository:
                     address=preference.address_ref_id,
                     cart=cart_id,
                 )
-            korean = self._translate_note(preference.user_note)
+            korean = deterministic_korean_order_note(preference.user_note)
             stored_user_note = _oracle_required_text(preference.user_note)
             cursor.execute(
                 """
@@ -8233,27 +8165,16 @@ class OracleYobiRepository:
                 synthetic_profile = cursor.fetchone()
                 if synthetic_profile is None:
                     raise ValueError("CART_MENU_NO_LONGER_ELIGIBLE")
-                price_range = structured_criteria.price_range_krw
-                if (
-                    price_range is None
-                    or not price_range.min <= int(menu["price"]) <= price_range.max
-                ):
-                    raise ValueError("CART_MENU_NO_LONGER_ELIGIBLE")
-                spice_level = int(synthetic_profile[0])
-                spice_matches = (
-                    spice_level < country_spice_baseline
-                    if structured_criteria.spice_preference == "LESS"
-                    else spice_level > country_spice_baseline
-                    if structured_criteria.spice_preference == "MORE"
-                    else spice_level == country_spice_baseline
+                criteria_error = structured_v3_cart_error(
+                    structured_criteria,
+                    price=int(menu["price"]),
+                    spice_level=int(synthetic_profile[0]),
+                    country_spice_baseline=country_spice_baseline,
+                    halal_fit=bool(synthetic_profile[1]),
+                    vegan_fit=bool(synthetic_profile[2]),
                 )
-                if not spice_matches:
-                    raise ValueError("CART_MENU_NO_LONGER_ELIGIBLE")
-                if (
-                    structured_criteria.dietary_filters.halal_certified_only
-                    and not synthetic_profile[1]
-                ) or (structured_criteria.dietary_filters.vegan and not synthetic_profile[2]):
-                    raise ValueError("CART_DIETARY_CONFLICT")
+                if criteria_error is not None:
+                    raise ValueError(criteria_error)
             elif structured_criteria is not None:
                 if (
                     menu["spice_level"] is not None

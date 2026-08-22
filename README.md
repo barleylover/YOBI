@@ -20,11 +20,15 @@ checkout and order APIs remain backend-only release integrity checks.
 
 The repository contains the original mobile ordering MVP plus a structured
 recommendation runtime. Users choose meal preferences before recommendation. In the
-2026-08-16 worktree contract the server applies objective eligibility, reviewed
-concept support, deterministic scoring and diversity, then freezes the final menu
-order. One bounded generation request may explain only those frozen menus; it cannot
-select, replace, or reorder them. Semantic faithfulness of generated prose remains a
-model-quality evaluation boundary.
+current worktree contract the server applies objective eligibility, reviewed concept
+support, deterministic retrieval, scoring, and diversity to freeze a bounded shortlist
+of at most 15 menus. When the provider path is available, the selection model returns
+exactly three menu IDs from that shortlist; the server then revalidates shortlist
+membership, hard constraints, diversity, and evidence ownership before presentation
+and persistence. Provider or contract failure uses a deterministic selection from the
+same frozen shortlist. A persisted request ledger makes same-request replay return the
+canonical result without another dispatch. Semantic faithfulness of generated prose
+remains a model-quality evaluation boundary.
 The Wiki keeps objective facts structured while using prose passages for subjective
 food descriptions. Reviews remain display-only synthetic data with recommendation
 and safety weight `0`.
@@ -68,6 +72,8 @@ do not support a percentile claim. See the
 quality boundary. Git source alone is never deployment evidence.
 The [structured-recommendation plan](docs/STRUCTURED_RECOMMENDATION_IMPLEMENTATION_PLAN.md)
 is the current product and implementation authority,
+[codebase refactor plan](docs/CODEBASE_REFACTOR_PLAN_20260822.md) records the current
+cross-stack audit, completed seams, verification evidence, and staged decomposition,
 [implementation status](docs/IMPLEMENTATION_STATUS.md) summarizes what is connected,
 and the [test report](docs/TEST_REPORT.md) records the exact local, Oracle/OCI,
 rollback, and public evidence. The
@@ -96,10 +102,11 @@ port without stopping the existing process and prints the actual URLs.
 
 The local launcher explicitly uses a deterministic SQLite demo database, fixture
 address extraction, deterministic embeddings, and no OCI credentials. The structured
-flow therefore exercises its labelled deterministic server-ranked fallback locally. The normal
-provider-authored explanation path is a separate OCI gate; local startup does not
-reproduce that external call, but final menu IDs/order remain server-owned in both
-paths. See the
+flow therefore exercises its labelled deterministic fallback locally. The provider
+selection and presentation path is a separate OCI gate; local startup does not
+reproduce those external calls. In every path, candidate eligibility and the shortlist
+remain server-owned, and generated menu IDs must pass the server contract before they
+can be persisted. See the
 [demo runbook](docs/DEMO_RUNBOOK.md) for the exact new-UI walkthrough and
 focused regression checklist.
 
@@ -144,6 +151,11 @@ source contracts. `make evaluate`, `make prewarm`, and `make smoke` still exerci
 retained v1 ranking/chat/cache paths; they are useful regression checks but do not, by
 themselves, approve the structured v2 recommendation path. The historical v1 chatbot
 acceptance suite can also be run directly from `backend/`:
+
+`make build` also enforces a 300 KiB uncompressed limit for the initial JavaScript
+entry and every individual JavaScript chunk. Override the byte limits only for an
+explicitly reviewed release with `YOBI_ENTRY_JS_BUDGET_BYTES` or
+`YOBI_JS_CHUNK_BUDGET_BYTES`.
 
 ```bash
 ../.venv/bin/python -m evaluation.run_chatbot_acceptance

@@ -16,6 +16,7 @@ from app.genai.presentation_generator import (
 )
 from app.genai.providers import choose_genai_provider
 from app.genai.response_contract import parse_json_object
+from app.genai.usage import response_usage_metrics
 
 
 class GeneratedOptionGroup(BaseModel):
@@ -301,7 +302,7 @@ class OptionLocalizationGenerator:
                     )
                 continue
 
-            usage = self._usage(response)
+            usage = response_usage_metrics(response)
             for key, value in usage.items():
                 combined_usage[key] = combined_usage.get(key, 0) + value
             try:
@@ -501,15 +502,3 @@ the input, and verify that every output position still describes the source labe
 position. Do not return Markdown, analysis, or commentary. Prompt version:
 {self.settings.option_localization_prompt_version}.
 """.strip()
-
-    @staticmethod
-    def _usage(response: Any) -> dict[str, int]:
-        usage = getattr(response, "usage", None)
-        if usage is None:
-            return {}
-        result: dict[str, int] = {}
-        for key in ("input_tokens", "output_tokens"):
-            value = usage.get(key) if isinstance(usage, dict) else getattr(usage, key, None)
-            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-                result[key] = value
-        return result

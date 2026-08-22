@@ -69,7 +69,13 @@ wait_for_url() {
 
 trap cleanup EXIT INT TERM
 
-[[ -x "$PROJECT_ROOT/.venv/bin/uvicorn" ]] || fail "Python dependencies are missing. Run 'make setup' first."
+if [[ -x "$PROJECT_ROOT/.venv/bin/uvicorn" ]]; then
+  YOBI_PYTHON_VENV="$PROJECT_ROOT/.venv"
+elif [[ -x "$PROJECT_ROOT/backend/.venv/bin/uvicorn" ]]; then
+  YOBI_PYTHON_VENV="$PROJECT_ROOT/backend/.venv"
+else
+  fail "Python dependencies are missing. Run 'make setup' first."
+fi
 [[ -f "$PROJECT_ROOT/frontend/node_modules/vite/bin/vite.js" ]] || fail "Frontend dependencies are missing. Run 'make setup' first."
 
 NODE_BIN="$(command -v node || true)"
@@ -109,7 +115,7 @@ DEMO_FALLBACK_ENABLED=true \
 ADDRESS_OCR_PROVIDER=fixture \
 OCI_GENAI_API_KEY= \
 OCI_COMPARTMENT_ID= \
-"$PROJECT_ROOT/.venv/bin/uvicorn" app.main:app --app-dir backend --host 127.0.0.1 --port "$BACKEND_PORT" \
+"$YOBI_PYTHON_VENV/bin/uvicorn" app.main:app --app-dir backend --host 127.0.0.1 --port "$BACKEND_PORT" \
   > "$BACKEND_LOG" 2>&1 &
 BACKEND_PID=$!
 printf '%s\n' "$BACKEND_PID" > "$BACKEND_PID_FILE"

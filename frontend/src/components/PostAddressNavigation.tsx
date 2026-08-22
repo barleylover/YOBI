@@ -202,7 +202,15 @@ export function PostAddressNavigation({ sessionId, language, locale, disabled = 
 
           {view === "feature" && (
             <div className="feature-view">
-              <img className="feature-hero" src="/yobi-gimbap-feature-hero.png" alt={copy.featureTitle} />
+              <img
+                className="feature-hero"
+                src="/yobi-gimbap-feature-hero.png"
+                alt={copy.featureTitle}
+                width={1536}
+                height={1024}
+                loading="lazy"
+                decoding="async"
+              />
               <div className="feature-intro"><h3>{copy.featureTitle}</h3><p>{copy.featureDescription}</p></div>
               {loading && <p className="collection-state" role="status">{copy.loading}</p>}
               {error && <p className="collection-state error" role="alert">{error}</p>}

@@ -15,6 +15,7 @@ from app.domain.models import RestaurantNoteTranslation, RestaurantNoteTranslati
 from app.genai.contracts import GenAIErrorCode, GenAIProvider, GenAIProviderError
 from app.genai.providers import choose_genai_provider
 from app.genai.response_contract import parse_json_object
+from app.genai.usage import response_usage_metrics
 
 
 class _TranslationPayload(BaseModel):
@@ -208,7 +209,7 @@ class RestaurantNoteTranslationService:
                 validation_error = _translation_error(data, parsed)
                 if validation_error is not None:
                     raise ValueError(validation_error)
-                usage = self._usage(response)
+                usage = response_usage_metrics(response)
                 self._record_attempt(
                     session_id,
                     request_hash,
@@ -403,15 +404,3 @@ a code fence, Korean field names, analysis, commentary, or a preamble. Prompt ve
             input_tokens=input_tokens,
             output_tokens=output_tokens,
         )
-
-    @staticmethod
-    def _usage(response: Any) -> dict[str, int]:
-        usage = getattr(response, "usage", None)
-        if usage is None:
-            return {}
-        result: dict[str, int] = {}
-        for key in ("input_tokens", "output_tokens"):
-            value = usage.get(key) if isinstance(usage, dict) else getattr(usage, key, None)
-            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-                result[key] = value
-        return result

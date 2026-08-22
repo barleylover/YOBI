@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 from time import monotonic
@@ -46,6 +47,7 @@ from app.genai.recommendation_generator import (
     RecommendationGenerator,
 )
 from app.services.demo_control import DemoControl
+from app.services.keyed_lock import KeyedLockRegistry
 from app.services.menu_presentation import (
     MenuPresentationService,
     deterministic_localized_source_description,
@@ -126,11 +128,25 @@ class StructuredRecommendationService:
         self.presentation_service = presentation_service or MenuPresentationService(
             repository, settings
         )
-        self._preference_selection_metrics: dict[str, dict[str, float | int]] = {}
-        self._comparison_locks: dict[str, Lock] = {}
-        self._request_locks: dict[str, Lock] = {}
+        self._preference_selection_metrics: OrderedDict[
+            str, dict[str, float | int]
+        ] = OrderedDict()
+        self._comparison_locks = KeyedLockRegistry()
+        self._request_locks = KeyedLockRegistry()
         self._request_registry_lock = Lock()
         self._active_request_keys: set[str] = set()
+
+    def _remember_preference_selection_metric(
+        self,
+        session_id: str,
+        metric: dict[str, float | int],
+    ) -> None:
+        """Bound abandoned preview metrics so the process cannot grow per session forever."""
+
+        self._preference_selection_metrics[session_id] = metric
+        self._preference_selection_metrics.move_to_end(session_id)
+        while len(self._preference_selection_metrics) > 2_048:
+            self._preference_selection_metrics.popitem(last=False)
 
     def commit_criteria(
         self,
@@ -194,10 +210,13 @@ class StructuredRecommendationService:
                 else ("add" if selected_option_count > previous_count else "no_change")
             )
         )
-        self._preference_selection_metrics[session.session_id] = {
-            "started": float(previous["started"]) if previous else monotonic(),
-            "last_option_count": selected_option_count,
-        }
+        self._remember_preference_selection_metric(
+            session.session_id,
+            {
+                "started": float(previous["started"]) if previous else monotonic(),
+                "last_option_count": selected_option_count,
+            },
+        )
         log_event(
             logging.getLogger("yobi"),
             event="recommendation_preference_preview",
@@ -280,9 +299,8 @@ class StructuredRecommendationService:
         """
 
         lock_key = self._request_lock_key(session.session_id, request.request_id)
-        lock = self._request_locks.setdefault(lock_key, Lock())
         try:
-            with lock:
+            with self._request_locks.hold(lock_key):
                 try:
                     return self._process_reserved_recommendation(session, profile, request)
                 except Exception as exc:
@@ -294,8 +312,6 @@ class StructuredRecommendationService:
         finally:
             with self._request_registry_lock:
                 self._active_request_keys.discard(lock_key)
-                if self._request_locks.get(lock_key) is lock:
-                    self._request_locks.pop(lock_key, None)
 
     @staticmethod
     def _request_lock_key(session_id: str, request_id: str) -> str:
@@ -869,8 +885,7 @@ class StructuredRecommendationService:
         request: RecommendationComparisonRequest,
     ) -> RecommendationComparisonV2:
         lock_key = f"{session.session_id}:{request.request_id}"
-        lock = self._comparison_locks.setdefault(lock_key, Lock())
-        with lock:
+        with self._comparison_locks.hold(lock_key):
             return self._compare_recommendations_locked(session, profile, request)
 
     def _compare_recommendations_locked(

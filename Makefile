@@ -1,8 +1,9 @@
 PYTHON ?= python3
 PNPM ?= pnpm
 VENV ?= $(if $(wildcard .venv/bin/python),.venv,backend/.venv)
+MYPY_CACHE_DIR ?= .mypy_cache/yobi-python-3.12
 
-.PHONY: setup dev test build e2e evaluate db-bootstrap db-migrate db-seed deploy smoke prewarm demo-reset
+.PHONY: setup dev test test-backend test-frontend build e2e evaluate db-bootstrap db-migrate db-seed deploy smoke prewarm demo-reset
 
 setup:
 	$(PYTHON) -m venv .venv
@@ -12,10 +13,14 @@ setup:
 dev:
 	./scripts/run_local_demo.sh
 
-test:
+test: test-backend test-frontend
+
+test-backend:
 	$(VENV)/bin/ruff check backend scripts
-	$(VENV)/bin/mypy --python-version 3.12 backend/app backend/evaluation scripts
+	$(VENV)/bin/mypy --cache-dir $(MYPY_CACHE_DIR) --python-version 3.12 backend/app backend/evaluation scripts
 	$(VENV)/bin/pytest backend/tests
+
+test-frontend:
 	cd frontend && $(PNPM) lint && $(PNPM) test
 
 build:
@@ -26,26 +31,26 @@ e2e:
 	cd frontend && $(PNPM) test:e2e
 
 evaluate:
-	PYTHONPATH=backend .venv/bin/python backend/evaluation/run_evaluation.py
-	PYTHONPATH=backend .venv/bin/python backend/evaluation/run_chatbot_acceptance.py
+	PYTHONPATH=backend $(VENV)/bin/python backend/evaluation/run_evaluation.py
+	PYTHONPATH=backend $(VENV)/bin/python backend/evaluation/run_chatbot_acceptance.py
 
 db-bootstrap:
-	.venv/bin/python scripts/bootstrap_db.py
+	$(VENV)/bin/python scripts/bootstrap_db.py
 
 db-migrate:
-	.venv/bin/python scripts/migrate.py
+	$(VENV)/bin/python scripts/migrate.py
 
 db-seed:
-	.venv/bin/python scripts/seed_demo.py --upsert
+	$(VENV)/bin/python scripts/seed_demo.py --upsert
 
 deploy:
 	./deploy/deploy.sh
 
 smoke:
-	.venv/bin/python scripts/smoke_test.py
+	$(VENV)/bin/python scripts/smoke_test.py
 
 prewarm:
-	.venv/bin/python scripts/prewarm.py
+	$(VENV)/bin/python scripts/prewarm.py
 
 demo-reset:
-	.venv/bin/python scripts/demo_reset.py
+	$(VENV)/bin/python scripts/demo_reset.py

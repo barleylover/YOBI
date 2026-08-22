@@ -18,6 +18,7 @@ from app.genai.response_limits import (
     expanded_output_limit,
     output_limit_reached,
 )
+from app.genai.usage import response_usage_metrics
 
 _ENGLISH_QUANTITY_WORDS = {
     "zero": "0",
@@ -594,7 +595,7 @@ class MenuPresentationGenerator:
                     break
                 usage = {
                     "requested_max_output_tokens": output_limit,
-                    **self._usage(candidate_response),
+                    **response_usage_metrics(candidate_response),
                 }
                 if output_limit_reached(candidate_response):
                     if on_provider_attempt is not None:
@@ -995,15 +996,3 @@ Japanese output; Japanese prose uses natural Japanese script.
 Prompt version:
 {self.settings.menu_presentation_prompt_version}.
 """.strip()
-
-    @staticmethod
-    def _usage(response: Any) -> dict[str, int]:
-        usage = getattr(response, "usage", None)
-        if usage is None:
-            return {}
-        result: dict[str, int] = {}
-        for key in ("input_tokens", "output_tokens"):
-            value = usage.get(key) if isinstance(usage, dict) else getattr(usage, key, None)
-            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-                result[key] = value
-        return result

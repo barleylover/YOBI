@@ -26,7 +26,10 @@ const state: MealNeedState = {
 };
 
 describe("versioned mutation API", () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 
   it("posts a typed, versioned and idempotent menu-selection event", async () => {
     const result: ConversationEventResult = {
@@ -92,6 +95,22 @@ describe("versioned mutation API", () => {
         headers: { "If-None-Match": '"catalog-v2"' },
       }),
     );
+  });
+
+  it("bounds preference catalog requests with the shared timeout contract", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn((_path: string, init?: RequestInit) => new Promise<Response>(
+      (_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("aborted", "AbortError"));
+        }, { once: true });
+      },
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const expectation = expect(api.getPreferenceCatalog("en")).rejects.toThrow("REQUEST_TIMEOUT");
+    await vi.advanceTimersByTimeAsync(8_000);
+    await expectation;
   });
 
   it("commits catalog-bound criteria and creates a versioned recommendation request", async () => {
