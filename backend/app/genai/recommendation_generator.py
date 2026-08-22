@@ -12,6 +12,12 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError,
 from app.core.config import Settings
 from app.genai.contracts import GenAIErrorCode, GenAIProvider, GenAIProviderError
 from app.genai.providers import choose_genai_provider
+from app.genai.response_limits import (
+    OUTPUT_LIMIT_REACHED_CODE,
+    expanded_output_limit,
+    output_limit_reached,
+)
+from app.genai.usage import response_usage_metrics
 
 
 class RecommendationGenerationStatus(str, Enum):
@@ -252,72 +258,15 @@ class GeneratedRecommendationComparison(BaseModel):
 RECOMMENDATION_GENERATION_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "status": {"type": "string", "enum": ["RECOMMENDED"]},
-        "criteria_summary": {"type": "string", "minLength": 1, "maxLength": 1000},
-        "recommendations": {
+        "menu_ids": {
             "type": "array",
             "minItems": 3,
             "maxItems": 3,
-            "items": {
-                "type": "object",
-                "properties": {
-                    "rank": {"type": "integer", "minimum": 1, "maximum": 3},
-                    "menu_id": {"type": "string", "minLength": 1, "maxLength": 160},
-                    "matched_criteria": {
-                        "type": "array",
-                        "maxItems": 20,
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "category_code": {"type": "string"},
-                                "selected_value_codes": {
-                                    "type": "array",
-                                    "minItems": 1,
-                                    "maxItems": 20,
-                                    "items": {"type": "string"},
-                                },
-                                "evidence_ids": {
-                                    "type": "array",
-                                    "minItems": 1,
-                                    "maxItems": 20,
-                                    "items": {"type": "string"},
-                                },
-                            },
-                            "required": [
-                                "category_code",
-                                "selected_value_codes",
-                                "evidence_ids",
-                            ],
-                            "additionalProperties": False,
-                        },
-                    },
-                    "caution_codes": {
-                        "type": "array",
-                        "maxItems": 20,
-                        "items": {"type": "string"},
-                    },
-                },
-                "required": [
-                    "rank",
-                    "menu_id",
-                    "matched_criteria",
-                    "caution_codes",
-                ],
-                "additionalProperties": False,
-            },
-        },
-        "unmatched_category_codes": {
-            "type": "array",
-            "maxItems": 0,
-            "items": {"type": "string"},
+            "uniqueItems": True,
+            "items": {"type": "string", "minLength": 1, "maxLength": 160},
         },
     },
-    "required": [
-        "status",
-        "criteria_summary",
-        "recommendations",
-        "unmatched_category_codes",
-    ],
+    "required": ["menu_ids"],
     "additionalProperties": False,
 }
 
@@ -366,8 +315,8 @@ def recommendation_generation_text_config() -> dict[str, Any]:
     return {
         "format": {
             "type": "json_schema",
-            "name": "yobi_structured_recommendation_v2",
-            "description": "Grounded selection of three menus from a server-validated shortlist.",
+            "name": "yobi_structured_recommendation_v4",
+            "description": "Ordered IDs for three menus from a server-validated shortlist.",
             "schema": RECOMMENDATION_GENERATION_JSON_SCHEMA,
             "strict": True,
         }
@@ -704,13 +653,19 @@ class RecommendationGenerator:
         payload = {
             "criteria": criteria,
             "soft_profile_context": soft_profile_context,
-            "evidence_pool": evidence_pool,
+            "evidence_pool": [
+                self._selection_model_payload(item) for item in evidence_pool
+            ],
             "final_recommendation_count": 3,
             # Native structured output is an explicit provider capability flag. The
             # response contract must still be present when an OCI endpoint accepts
             # JSON text but does not enforce `text.format` server-side.
             "response_contract": RECOMMENDATION_GENERATION_JSON_SCHEMA,
         }
+        base_output_limit = min(
+            self.settings.recommendation_selection_max_output_tokens,
+            capabilities.max_output_tokens,
+        )
         request: dict[str, Any] = {
             "instructions": instructions,
             "input": [
@@ -723,10 +678,7 @@ class RecommendationGenerator:
                     ),
                 }
             ],
-            "max_output_tokens": min(
-                self.settings.structured_recommendation_max_output_tokens,
-                capabilities.max_output_tokens,
-            ),
+            "max_output_tokens": base_output_limit,
         }
         if capabilities.structured_output:
             request["text"] = recommendation_generation_text_config()
@@ -734,6 +686,8 @@ class RecommendationGenerator:
         self._enforce_input_limit(request, request_metrics=request_metrics)
         response: Any | None = None
         selected_model = self.settings.structured_recommendation_model
+        selected_request_metrics = request_metrics
+        last_error: GenAIProviderError | None = None
         models = [selected_model]
         fallback_model = self.settings.oci_genai_fallback_model.strip()
         if (
@@ -745,63 +699,121 @@ class RecommendationGenerator:
         with self._request_slots:
             if before_provider_call is not None:
                 before_provider_call()
-            for attempt_no, model in enumerate(models, start=1):
-                attempt_started = monotonic()
-                try:
-                    response = self.provider.create_response(model, **request)
-                except GenAIProviderError as exc:
-                    latency_ms = int((monotonic() - attempt_started) * 1000)
-                    if on_provider_attempt is not None:
-                        on_provider_attempt(
-                            attempt_no,
-                            model,
-                            "FAILED",
-                            exc.code.value,
-                            latency_ms,
-                            exc.safe_metadata,
-                        )
-                    exc.safe_metadata = {**request_metrics, **exc.safe_metadata}
-                    if exc.code is GenAIErrorCode.RATE_LIMIT and attempt_no < len(models):
-                        continue
-                    raise
-                except Exception as exc:
-                    latency_ms = int((monotonic() - attempt_started) * 1000)
-                    if on_provider_attempt is not None:
-                        on_provider_attempt(
-                            attempt_no,
-                            model,
-                            "FAILED",
-                            GenAIErrorCode.PROVIDER_UNAVAILABLE.value,
-                            latency_ms,
-                            {},
-                        )
-                    raise GenAIProviderError(
-                        GenAIErrorCode.PROVIDER_UNAVAILABLE,
-                        retryable=False,
-                        cause=exc,
-                        safe_metadata=request_metrics,
-                    ) from exc
-                selected_model = model
-                latency_ms = int((monotonic() - attempt_started) * 1000)
-                if on_provider_attempt is not None:
-                    on_provider_attempt(
-                        attempt_no,
-                        model,
-                        "SUCCEEDED",
-                        None,
-                        latency_ms,
-                        self._response_usage_metrics(response),
+            provider_attempt_no = 0
+            for model_index, model in enumerate(models):
+                expanded_limit = expanded_output_limit(
+                    base_output_limit,
+                    capabilities.max_output_tokens,
+                )
+                output_limits = [base_output_limit]
+                if expanded_limit > base_output_limit:
+                    output_limits.append(expanded_limit)
+                for output_limit_index, output_limit in enumerate(output_limits):
+                    provider_attempt_no += 1
+                    attempt_started = monotonic()
+                    attempt_request = {**request, "max_output_tokens": output_limit}
+                    attempt_metrics = self._request_metrics(
+                        attempt_request,
+                        shortlist_count=len(evidence_pool),
                     )
-                break
+                    try:
+                        candidate_response = self.provider.create_response(
+                            model,
+                            **attempt_request,
+                        )
+                    except GenAIProviderError as exc:
+                        latency_ms = int((monotonic() - attempt_started) * 1000)
+                        safe_metadata = {**attempt_metrics, **exc.safe_metadata}
+                        if on_provider_attempt is not None:
+                            on_provider_attempt(
+                                provider_attempt_no,
+                                model,
+                                "FAILED",
+                                exc.code.value,
+                                latency_ms,
+                                safe_metadata,
+                            )
+                        exc.safe_metadata = safe_metadata
+                        last_error = exc
+                        if (
+                            exc.code is GenAIErrorCode.RATE_LIMIT
+                            and model_index + 1 < len(models)
+                        ):
+                            break
+                        raise
+                    except Exception as exc:
+                        latency_ms = int((monotonic() - attempt_started) * 1000)
+                        if on_provider_attempt is not None:
+                            on_provider_attempt(
+                                provider_attempt_no,
+                                model,
+                                "FAILED",
+                                GenAIErrorCode.PROVIDER_UNAVAILABLE.value,
+                                latency_ms,
+                                attempt_metrics,
+                            )
+                        raise GenAIProviderError(
+                            GenAIErrorCode.PROVIDER_UNAVAILABLE,
+                            retryable=False,
+                            cause=exc,
+                            safe_metadata=attempt_metrics,
+                        ) from exc
+
+                    usage_metrics = {
+                        **attempt_metrics,
+                        **response_usage_metrics(candidate_response, include_details=True),
+                    }
+                    if output_limit_reached(candidate_response):
+                        latency_ms = int((monotonic() - attempt_started) * 1000)
+                        if on_provider_attempt is not None:
+                            on_provider_attempt(
+                                provider_attempt_no,
+                                model,
+                                "FAILED",
+                                OUTPUT_LIMIT_REACHED_CODE,
+                                latency_ms,
+                                usage_metrics,
+                            )
+                        last_error = GenAIProviderError(
+                            GenAIErrorCode.CAPABILITY_LIMIT_EXCEEDED,
+                            retryable=output_limit_index + 1 < len(output_limits),
+                            safe_metadata=usage_metrics,
+                            safe_reason_code=OUTPUT_LIMIT_REACHED_CODE,
+                            safe_reason_stage="SELECTION_GENERATION",
+                        )
+                        if output_limit_index + 1 < len(output_limits):
+                            continue
+                        if model_index + 1 < len(models):
+                            break
+                        raise last_error
+
+                    response = candidate_response
+                    selected_model = model
+                    selected_request_metrics = attempt_metrics
+                    latency_ms = int((monotonic() - attempt_started) * 1000)
+                    if on_provider_attempt is not None:
+                        on_provider_attempt(
+                            provider_attempt_no,
+                            model,
+                            "SUCCEEDED",
+                            None,
+                            latency_ms,
+                            usage_metrics,
+                        )
+                    break
+                if response is not None:
+                    break
         if response is None:
+            if last_error is not None:
+                raise last_error
             raise GenAIProviderError(
                 GenAIErrorCode.PROVIDER_UNAVAILABLE,
                 retryable=False,
                 safe_metadata=request_metrics,
             )
         provider_metrics = {
-            **request_metrics,
-            **self._response_usage_metrics(response),
+            **selected_request_metrics,
+            **response_usage_metrics(response, include_details=True),
         }
         raw = str(getattr(response, "output_text", "")).strip()
         if not raw:
@@ -818,6 +830,11 @@ class RecommendationGenerator:
                 cause=exc,
                 safe_metadata=provider_metrics,
             ) from exc
+        parsed = self._canonicalize_compact_selection(
+            parsed,
+            criteria=criteria,
+            evidence_pool=evidence_pool,
+        )
         try:
             result = RecommendationGenerationV2.model_validate(parsed)
         except ValidationError as exc:
@@ -842,10 +859,52 @@ class RecommendationGenerator:
         return validated
 
     @staticmethod
+    def _selection_model_payload(item: dict[str, Any]) -> dict[str, Any]:
+        """Remove server-only evidence bookkeeping from the model's view."""
+
+        payload = dict(item)
+        criterion_evidence = item.get("criterion_evidence", {})
+        payload["criterion_evidence"] = (
+            {
+                str(category_code): [str(value_code) for value_code in values]
+                for category_code, values in criterion_evidence.items()
+                if isinstance(values, dict)
+            }
+            if isinstance(criterion_evidence, dict)
+            else {}
+        )
+        wiki_passages = item.get("wiki_passages", [])
+        allowed_wiki_fields = (
+            "content",
+            "component_name_ko",
+            "component_name_en",
+            "membership_role",
+        )
+        payload["wiki_passages"] = [
+            {
+                key: passage[key]
+                for key in allowed_wiki_fields
+                if passage.get(key) not in (None, "")
+            }
+            for passage in wiki_passages
+            if isinstance(passage, dict)
+        ]
+        return payload
+
+    @staticmethod
     def _schema_rejection_reason(
         parsed: Any,
     ) -> RecommendationGroundingRejectionCode:
         if not isinstance(parsed, dict):
+            return RecommendationGroundingRejectionCode.RESPONSE_SCHEMA_INVALID
+        menu_ids = parsed.get("menu_ids")
+        if menu_ids is not None:
+            if not isinstance(menu_ids, list) or len(menu_ids) != 3:
+                return RecommendationGroundingRejectionCode.RECOMMENDATION_COUNT_INVALID
+            if all(isinstance(menu_id, str) for menu_id in menu_ids) and len(
+                set(menu_ids)
+            ) != len(menu_ids):
+                return RecommendationGroundingRejectionCode.DUPLICATE_MENU_ID
             return RecommendationGroundingRejectionCode.RESPONSE_SCHEMA_INVALID
         if parsed.get("status") == RecommendationGenerationStatus.NO_MATCH.value:
             return RecommendationGroundingRejectionCode.MODEL_RETURNED_NO_MATCH
@@ -867,6 +926,104 @@ class RecommendationGenerator:
             if ranks != [1, 2, 3]:
                 return RecommendationGroundingRejectionCode.RANK_ORDER_INVALID
         return RecommendationGroundingRejectionCode.RESPONSE_SCHEMA_INVALID
+
+    @staticmethod
+    def _canonicalize_compact_selection(
+        parsed: Any,
+        *,
+        criteria: dict[str, Any],
+        evidence_pool: list[dict[str, Any]],
+    ) -> Any:
+        """Hydrate the minimal model response with server-owned evidence metadata.
+
+        The model only decides which three shortlist IDs to order. Criterion
+        matches, evidence IDs, status, cautions, and the criteria summary are
+        deterministic server data. Legacy full responses remain accepted so
+        in-flight requests and stored diagnostic fixtures keep their original
+        validation behavior.
+        """
+
+        if not isinstance(parsed, dict) or "menu_ids" not in parsed:
+            return parsed
+        if set(parsed) != {"menu_ids"}:
+            return parsed
+        menu_ids = parsed.get("menu_ids")
+        if (
+            not isinstance(menu_ids, list)
+            or len(menu_ids) != 3
+            or any(
+                not isinstance(menu_id, str) or not 1 <= len(menu_id) <= 160
+                for menu_id in menu_ids
+            )
+        ):
+            return parsed
+
+        pool_by_menu = {str(item.get("menu_id") or ""): item for item in evidence_pool}
+        active_categories = {
+            category_code: [str(value) for value in criteria.get(category_code, [])]
+            for category_code in _SUBJECTIVE_CRITERIA_FIELDS
+            if criteria.get(category_code)
+        }
+        recommendations: list[dict[str, Any]] = []
+        for rank, menu_id in enumerate(menu_ids, start=1):
+            pool_item = pool_by_menu.get(menu_id, {})
+            criterion_evidence = pool_item.get("criterion_evidence", {})
+            if not isinstance(criterion_evidence, dict):
+                criterion_evidence = {}
+            matched_criteria: list[dict[str, Any]] = []
+            for category_code, selected_codes in active_categories.items():
+                category_evidence = criterion_evidence.get(category_code, {})
+                if not isinstance(category_evidence, dict):
+                    continue
+                matched_codes: list[str] = []
+                evidence_ids: list[str] = []
+                for selected_code in selected_codes:
+                    value_evidence = category_evidence.get(selected_code, {})
+                    if not isinstance(value_evidence, dict):
+                        continue
+                    raw_ids = value_evidence.get("evidence_ids", [])
+                    if not isinstance(raw_ids, list):
+                        raw_ids = []
+                    ids = [
+                        str(evidence_id)
+                        for evidence_id in raw_ids
+                        if str(evidence_id).strip()
+                    ]
+                    if not ids:
+                        references = value_evidence.get("evidence", [])
+                        if isinstance(references, list):
+                            ids = [
+                                str(reference.get("evidence_id"))
+                                for reference in references
+                                if isinstance(reference, dict)
+                                and str(reference.get("evidence_id") or "").strip()
+                            ]
+                    if not ids:
+                        continue
+                    matched_codes.append(selected_code)
+                    evidence_ids.extend(ids)
+                if matched_codes and evidence_ids:
+                    matched_criteria.append(
+                        {
+                            "category_code": category_code,
+                            "selected_value_codes": list(dict.fromkeys(matched_codes)),
+                            "evidence_ids": list(dict.fromkeys(evidence_ids)),
+                        }
+                    )
+            recommendations.append(
+                {
+                    "rank": rank,
+                    "menu_id": menu_id,
+                    "matched_criteria": matched_criteria,
+                    "caution_codes": [],
+                }
+            )
+        return {
+            "status": "RECOMMENDED",
+            "criteria_summary": "Selected meal preferences",
+            "recommendations": recommendations,
+            "unmatched_category_codes": [],
+        }
 
     @staticmethod
     def _schema_rejection_detail(exc: ValidationError) -> str | None:
@@ -986,45 +1143,6 @@ class RecommendationGenerator:
             "requested_max_output_tokens": int(request.get("max_output_tokens") or 0),
         }
 
-    @staticmethod
-    def _response_usage_metrics(response: Any) -> dict[str, int]:
-        usage = getattr(response, "usage", None)
-        if usage is None:
-            return {}
-
-        def value(source: Any, key: str) -> int | None:
-            raw = source.get(key) if isinstance(source, dict) else getattr(source, key, None)
-            if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
-                return None
-            return raw
-
-        metrics: dict[str, int] = {}
-        for source_key, target_key in (
-            ("input_tokens", "input_tokens"),
-            ("output_tokens", "output_tokens"),
-            ("total_tokens", "total_tokens"),
-        ):
-            measured = value(usage, source_key)
-            if measured is not None:
-                metrics[target_key] = measured
-        input_details = (
-            usage.get("input_tokens_details")
-            if isinstance(usage, dict)
-            else getattr(usage, "input_tokens_details", None)
-        )
-        output_details = (
-            usage.get("output_tokens_details")
-            if isinstance(usage, dict)
-            else getattr(usage, "output_tokens_details", None)
-        )
-        cached = value(input_details, "cached_tokens")
-        reasoning = value(output_details, "reasoning_tokens")
-        if cached is not None:
-            metrics["cached_input_tokens"] = cached
-        if reasoning is not None:
-            metrics["reasoning_tokens"] = reasoning
-        return metrics
-
     def _enforce_input_limit(
         self,
         request: dict[str, Any],
@@ -1055,31 +1173,31 @@ class RecommendationGenerator:
     def _instructions(self, locale: str) -> str:
         return f"""
 You are YOBI's grounded menu recommendation model.
-Return exactly one JSON object matching the provided schema. This call performs SELECTION only:
-do not write titles, explanations, review summaries, subtitles, or any other presentation copy.
-Return the JSON immediately without analysis or preamble. The locale is {locale}, but nationality
-and language must never change the selected menu IDs or their order.
+Return exactly one compact JSON object matching the provided schema: menu_ids only. This call
+performs SELECTION only. Do not echo ranks, evidence, criteria, cautions, titles, explanations,
+review summaries, subtitles, or any other metadata. Return the JSON immediately without analysis
+or preamble. The locale is {locale}, but nationality and language must never change the selected
+menu IDs or their order.
 
 The server has already applied objective eligibility for delivery area, current availability,
 price bands, maximum spice, explicit halal certification scope, and confirmed vegan conflicts.
 Never weaken or revisit those decisions. Every final menu_id must be copied from evidence_pool.
 
 The evidence_pool is a server-validated shortlist, not the final order. Select and order exactly
-three unique menu_id values from it, with contiguous ranks 1, 2, and 3. Prefer three different
+three unique menu_id values from it. Array position is rank: best first. Prefer three different
 merchants whenever the shortlist contains at least three merchants. You may not output any menu
 outside the shortlist. Values inside one category mean OR and categories mean AND; every selected
-menu must cite valid evidence for every selected category.
+menu must have a supported value in criterion_evidence for every selected category.
 
-For every matched category, cite only evidence IDs attached to that menu and selected value. The
-server binds Wiki evidence and later creates presentation copy in a separate cache-aside stage.
-Do not invent ingredients, prices, availability, certifications, restaurants, options, or cultural
-facts. Use neither country_preference nor soft_profile_context to add, remove, or rerank a menu.
-Allergy and allergen guidance is outside this recommendation product. Do not make allergy-safety,
-allergen-absence, or cross-contact claims even if incidental Wiki prose mentions uncertainty.
+The server reconstructs and validates criterion matches, evidence IDs, hard constraints, rank,
+status, cautions, and summary after your choice. The server binds Wiki evidence and later creates
+presentation copy in a separate cache-aside stage. Do not invent ingredients, prices,
+availability, certifications, restaurants, options, or cultural facts. Use neither
+country_preference nor soft_profile_context to add, remove, or rerank a menu. Allergy and allergen
+guidance is outside this recommendation product.
 
-Always return status RECOMMENDED. NO_MATCH is a server decision made before this call. Do not ask
-questions, call tools, request more data, or emit Markdown fences. Set unmatched_category_codes to
-exactly []. This request only selects from the bounded shortlist. Prompt profile:
+NO_MATCH is a server decision made before this call. Do not ask questions, call tools, request more
+data, or emit Markdown fences. This request only selects from the bounded shortlist. Prompt profile:
 {self.settings.recommendation_prompt_version}.
 """.strip()
 

@@ -11,6 +11,7 @@ from openai import RateLimitError
 def retry_delay_seconds(
     error: RateLimitError,
     *,
+    default_seconds: float | None = None,
     uniform: Callable[[float, float], float] = random.uniform,
 ) -> float:
     """Return a safe retry delay without exposing the response body."""
@@ -31,6 +32,8 @@ def retry_delay_seconds(
                 parsed = -1.0
         if parsed >= 0:
             return parsed + uniform(1.0, 3.0)
+    if default_seconds is not None:
+        return max(0.0, default_seconds)
     return uniform(65.0, 70.0)
 
 

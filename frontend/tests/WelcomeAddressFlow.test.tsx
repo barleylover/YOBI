@@ -167,10 +167,11 @@ describe("welcome and address flow", () => {
 
   it("creates a neutral profile and confirms a searched address without user-facing boundary labels", async () => {
     resetStore();
+    const koreanAddressCandidate = { ...candidate, road_address: "서울특별시 중구 을지로 21" };
     const createProfile = vi.spyOn(api, "createProfile").mockResolvedValue(profile);
     vi.spyOn(api, "createSession").mockResolvedValue(session);
     vi.spyOn(api, "resolveAddress").mockResolvedValue({
-      candidates: [candidate],
+      candidates: [koreanAddressCandidate],
       low_confidence: false,
       notice: "Internal fixture notice",
     });
@@ -199,9 +200,12 @@ describe("welcome and address flow", () => {
     })));
     expect(screen.queryByText("Internal fixture notice")).not.toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/demo|mock|synthetic/i);
+    expect(screen.getByText("21 Eulji-ro, Jung-gu, Seoul")).toBeInTheDocument();
+    expect(screen.queryByText("서울특별시 중구 을지로 21")).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "Continue with this address" }));
     expect(await screen.findByText("Chat route")).toBeInTheDocument();
     expect(useSessionStore.getState().addressRefId).toBe("address_ref_1");
+    expect(useSessionStore.getState().addressSummary).toBe("YOBI Myeongdong Hotel · 21 Eulji-ro, Jung-gu, Seoul");
   });
 
   it("resolves the sample booking image through the same address confirmation flow", async () => {

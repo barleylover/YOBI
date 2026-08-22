@@ -253,7 +253,7 @@ describe("ChatPage structured recommendation contract", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(screen.getByRole("radio", { name: "About the same" })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByRole("slider", { name: "Minimum price" })).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: /Halal-certified only/ })).toBeEnabled();
+    expect(screen.getByRole("switch", { name: /Halal-friendly only/ })).toBeEnabled();
     expect(screen.getByRole("switch", { name: /Vegan options only/ })).toBeEnabled();
     expect(screen.getByText("United States reference: Buffalo wings · spice 2/5")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Find my dish/ }));
@@ -400,7 +400,7 @@ describe("ChatPage structured recommendation contract", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Pork" })).toHaveAttribute("aria-pressed", "true"));
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    fireEvent.click(screen.getByRole("switch", { name: /Halal-certified only/ }));
+    fireEvent.click(screen.getByRole("switch", { name: /Halal-friendly only/ }));
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("conflicts with the halal or vegan filter"));
     expect(screen.getByRole("button", { name: /Find my dish/ })).toBeDisabled();
@@ -527,6 +527,84 @@ describe("ChatPage structured recommendation contract", () => {
     expect(screen.queryByRole("button", { name: "Choose this menu" })).not.toBeInTheDocument();
   });
 
+  it("hydrates option events from the live conversation version, not the older recommendation snapshot", async () => {
+    prepareStore();
+    vi.spyOn(api, "getPreferenceCatalog").mockResolvedValue({
+      catalog,
+      etag: '"catalog-v2-test"',
+      notModified: false,
+    });
+    vi.spyOn(api, "getConversation").mockResolvedValue(conversation({
+      state_version: 10,
+      meal_need_state: { ...mealNeedState, selected_menu_id: menu.menu_id },
+      recommendation_criteria: criteria,
+      criteria_version: 1,
+      latest_recommendation: batch,
+    }));
+    vi.spyOn(api, "getOptions").mockResolvedValue([{
+      option_group_id: "group-size",
+      name_en: "Size",
+      name_ko: "크기",
+      display_name: "Size",
+      description: "Choose one",
+      required: true,
+      min_select: 1,
+      max_select: 1,
+      items: [{
+        option_item_id: "item-regular",
+        name_en: "Regular",
+        name_ko: "보통",
+        display_name: "Regular",
+        description: "Regular size",
+        price_delta: 0,
+        available: true,
+        conflicting_rules: [],
+      }],
+    }]);
+    vi.spyOn(api, "getCart").mockResolvedValue({
+      cart_id: "cart-empty",
+      version: 1,
+      items: [],
+      subtotal: 0,
+      delivery_fee: 0,
+      total_price: 0,
+      missing_slots: [],
+      dietary_warnings: [],
+      minimum_order_amount: 0,
+      minimum_order_shortfall: 0,
+      ready_to_checkout: false,
+      confirmed: false,
+    });
+    const postEvent = vi.spyOn(api, "postConversationEvent").mockResolvedValue({
+      event_id: "event-option-live-version",
+      event_type: "UPDATE_OPTIONS",
+      state_version: 11,
+      state: {
+        ...mealNeedState,
+        selected_menu_id: menu.menu_id,
+        option_selections: { "group-size": ["item-regular"] },
+      },
+      selected_menu_id: menu.menu_id,
+      selected_merchant_id: menu.merchant_id,
+      selected_menu: menu,
+      duplicate: false,
+    });
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: /Regular/ }));
+
+    await waitFor(() => expect(postEvent).toHaveBeenCalledWith(
+      session.session_id,
+      expect.objectContaining({
+        event_type: "UPDATE_OPTIONS",
+        expected_state_version: 10,
+        menu_id: menu.menu_id,
+        option_group_id: "group-size",
+        option_item_ids: ["item-regular"],
+      }),
+    ));
+  });
+
   it("does not revive a stale v2 selection from the legacy snapshot", async () => {
     prepareStore();
     vi.spyOn(api, "getPreferenceCatalog").mockResolvedValue({ catalog, etag: '"catalog-v2-test"', notModified: false });
@@ -564,5 +642,55 @@ describe("ChatPage structured recommendation contract", () => {
 
     await waitFor(() => expect(useSessionStore.getState().recommendationPhase).toBe("NO_RESULTS"));
     expect(screen.queryByTestId("order-flow")).not.toBeInTheDocument();
+  });
+
+  it("restores a selected ranking menu from the live conversation projection", async () => {
+    prepareStore();
+    const rankedMenu: MenuSummary = {
+      ...menu,
+      menu_id: "ranked-menu-1",
+      merchant_id: "ranked-merchant-1",
+      name_en: "Ranking mock bibimbap",
+      name_ko: "랭킹 목업 비빔밥",
+    };
+    vi.spyOn(api, "getPreferenceCatalog").mockResolvedValue({
+      catalog,
+      etag: '"catalog-v2-test"',
+      notModified: false,
+    });
+    vi.spyOn(api, "getConversation").mockResolvedValue(conversation({
+      state_version: 4,
+      meal_need_state: { ...mealNeedState, selected_menu_id: rankedMenu.menu_id },
+      recommendation_criteria: criteria,
+      criteria_version: 1,
+      latest_recommendation: batch,
+      selected_menu: rankedMenu,
+    }));
+    const getOptions = vi.spyOn(api, "getOptions").mockResolvedValue([]);
+    vi.spyOn(api, "getCart").mockResolvedValue({
+      cart_id: "empty-ranked-cart",
+      version: 1,
+      items: [],
+      subtotal: 0,
+      delivery_fee: 0,
+      total_price: 0,
+      missing_slots: [],
+      dietary_warnings: [],
+      minimum_order_amount: 0,
+      minimum_order_shortfall: 0,
+      ready_to_checkout: false,
+      confirmed: false,
+    });
+
+    renderPage();
+
+    expect(await screen.findByTestId("selected-menu-message")).toHaveTextContent(
+      "Ranking mock bibimbap",
+    );
+    await waitFor(() => expect(getOptions).toHaveBeenCalledWith(
+      rankedMenu.menu_id,
+      session.session_id,
+      true,
+    ));
   });
 });

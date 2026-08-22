@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { actionableError, api } from "../lib/api";
 import { getDynamicCopy } from "../lib/i18n";
-import { asSupportedLanguage, formatMinuteRange, menuName } from "../lib/locale";
+import { asSupportedLanguage, formatMinuteRange, menuName, merchantName } from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
 import { getRedesignCopy } from "../lib/redesignI18n";
 import type {
@@ -42,6 +42,7 @@ export function ChannelMenu({ sessionId, language, locale, disabled = false, onC
     : sort === "order_count"
       ? copy.orders
       : copy.koreanPopularity;
+  const minimumOrderLabel = language === "한국어" ? "최소 주문" : language === "日本語" ? "最低注文" : "Minimum order";
 
   useEffect(() => {
     if (view !== "rankings") return;
@@ -137,7 +138,7 @@ export function ChannelMenu({ sessionId, language, locale, disabled = false, onC
                     <span className="rank">{entry.position}</span>
                     <div>
                       <strong>{menuName(entry.menu, language)}</strong>
-                      <small>{entry.menu.merchant_name}</small>
+                      <small>{merchantName(entry.menu.merchant_name, language)}{entry.menu.minimum_order_amount ? ` · ${minimumOrderLabel} ₩${entry.menu.minimum_order_amount.toLocaleString(locale)}` : ""}</small>
                       <p>{entry.menu.cultural_description || entry.menu.description || dynamicCopy.catalogDescription}</p>
                       <em>{language === "English" ? entry.metric_label : localizedMetricLabel}: {entry.metric_value.toLocaleString(locale)}</em>
                     </div>
@@ -177,7 +178,7 @@ export function ChannelMenu({ sessionId, language, locale, disabled = false, onC
                   <article key={entry.menu.menu_id}>
                     <span className="dish-tag">{entry.dish_name}</span>
                     <strong>{menuName(entry.menu, language)}</strong>
-                    <small>{entry.menu.merchant_name}</small>
+                    <small>{merchantName(entry.menu.merchant_name, language)}{entry.menu.minimum_order_amount ? ` · ${minimumOrderLabel} ₩${entry.menu.minimum_order_amount.toLocaleString(locale)}` : ""}</small>
                     <p>{entry.description || entry.menu.cultural_description || entry.menu.description || dynamicCopy.catalogDescription}</p>
                     <div className="meta">
                       <strong>₩{entry.menu.price.toLocaleString(locale)}</strong>

@@ -29,6 +29,12 @@ from fastapi.responses import StreamingResponse
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field, model_validator
 
+from app.api.errors import (
+    not_found as _not_found,
+)
+from app.api.errors import (
+    structured_recommendation_http_error as _structured_recommendation_http_error,
+)
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging, log_event, safe_session_hash
 from app.db.demo_address import DEMO_ADDRESS_PLACE_ID
@@ -78,11 +84,12 @@ from app.domain.structured_recommendation import (
 )
 from app.genai.providers import genai_configuration_errors
 from app.genai.recommendation_generator import GROUNDING_DIAGNOSTICS_VERSION
+from app.genai.response_limits import OUTPUT_LIMIT_RETRY_MULTIPLIER
 from app.services.address_ocr import AddressCandidateTokenCodec, choose_address_ocr
 from app.services.chat_service import ChatService
 from app.services.demo_control import DemoControl, FailureMode
 from app.services.menu_presentation import MenuPresentationService
-from app.services.option_localization import OptionLocalizationService
+from app.services.option_localization import OptionLocalizationService, project_demo_options
 from app.services.restaurant_note_translation import RestaurantNoteTranslationService
 from app.services.structured_recommendation import StructuredRecommendationService
 
@@ -260,10 +267,6 @@ class DemoResetRequest(BaseModel):
     session_id: str
 
 
-def _not_found(code: str) -> HTTPException:
-    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": code})
-
-
 def _require_session(repository: YobiRepository, session_id: str) -> Session:
     session = repository.get_session(session_id)
     if session is None:
@@ -365,6 +368,8 @@ def readyz(
             "grounding_diagnostics_version": GROUNDING_DIAGNOSTICS_VERSION,
             "model_id": current_settings.structured_recommendation_model,
             "presentation_model_id": current_settings.menu_presentation_model,
+            "presentation_fallback_model_id": current_settings.oci_genai_fallback_model,
+            "output_limit_retry_multiplier": OUTPUT_LIMIT_RETRY_MULTIPLIER,
             "option_localization_model_id": current_settings.option_localization_model,
             "option_localization_model_chain": [
                 model.strip()
@@ -380,13 +385,40 @@ def readyz(
             "candidate_limit": current_settings.recommendation_candidate_limit,
             "shortlist_limit": current_settings.recommendation_llm_shortlist_limit,
             "passages_per_menu": current_settings.recommendation_llm_passages_per_menu,
+            "selection_max_output_tokens": (
+                current_settings.recommendation_selection_max_output_tokens
+            ),
+            "selection_retry_max_output_tokens": min(
+                current_settings.recommendation_selection_max_output_tokens
+                * OUTPUT_LIMIT_RETRY_MULTIPLIER,
+                current_settings.oci_genai_max_output_tokens,
+            ),
             "max_output_tokens": current_settings.structured_recommendation_max_output_tokens,
             "presentation_max_output_tokens": (
                 current_settings.menu_presentation_max_output_tokens
             ),
+            "presentation_retry_max_output_tokens": min(
+                current_settings.menu_presentation_max_output_tokens
+                * OUTPUT_LIMIT_RETRY_MULTIPLIER,
+                current_settings.oci_genai_max_output_tokens,
+            ),
             "option_localization_max_output_tokens": (
                 current_settings.option_localization_max_output_tokens
             ),
+            "menu_presentation_prompt_version": (
+                current_settings.menu_presentation_prompt_version
+            ),
+            "option_localization_prompt_version": (
+                current_settings.option_localization_prompt_version
+            ),
+            "restaurant_note_prompt_version": (
+                current_settings.restaurant_note_prompt_version
+            ),
+            "demo_option_limits": {
+                "groups": current_settings.demo_option_group_limit,
+                "items_per_group": current_settings.demo_option_items_per_group_limit,
+                "total_items": current_settings.demo_option_item_total_limit,
+            },
             "ranking_policy_version": db.get("ranking_policy_version"),
             "feature_count": db.get("feature_count", 0),
             "feature_manifest_sha256": db.get("feature_manifest_sha256"),
@@ -399,6 +431,8 @@ def readyz(
                 and current_settings.structured_recommendation_model
                 == "openai.gpt-oss-120b"
                 and current_settings.menu_presentation_model == "xai.grok-4.3"
+                and current_settings.oci_genai_fallback_model
+                == "openai.gpt-oss-120b"
                 and current_settings.option_localization_model == "openai.gpt-oss-20b"
                 and current_settings.option_localization_model_chain
                 == "openai.gpt-oss-20b,openai.gpt-oss-120b"
@@ -410,8 +444,10 @@ def readyz(
                     "openai.gpt-oss-20b"
                 )
                 and current_settings.recommendation_llm_passages_per_menu == 2
+                and current_settings.recommendation_selection_max_output_tokens == 2048
                 and current_settings.structured_recommendation_max_output_tokens == 16384
-                and current_settings.menu_presentation_max_output_tokens == 16384
+                and current_settings.menu_presentation_max_output_tokens == 4096
+                and current_settings.oci_genai_max_output_tokens >= 8192
                 and current_settings.option_localization_max_output_tokens == 16384
                 and db.get("recommendation_ready") is True
             ),
@@ -427,7 +463,7 @@ def create_profile(
         return repository.create_profile(data)
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"code": str(exc)},
         ) from exc
 
@@ -450,7 +486,7 @@ def update_profile(
         profile = repository.update_profile(profile_id, data)
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"code": str(exc)},
         ) from exc
     if profile is None:
@@ -498,56 +534,6 @@ def _resolve_session_profile(
     if not profile:
         raise _not_found("PROFILE_NOT_FOUND")
     return session, profile
-
-
-def _structured_recommendation_http_error(exc: Exception) -> HTTPException:
-    code = str(exc).strip("'") or type(exc).__name__.upper()
-    if code in {
-        "CHAT_STATE_VERSION_CONFLICT",
-        "CRITERIA_REQUEST_ID_REUSED",
-        "RECOMMENDATION_REQUEST_ID_REUSED",
-        "RECOMMENDATION_COMPLETION_PAYLOAD_CHANGED",
-        "RECOMMENDATION_DISPATCH_PAYLOAD_CHANGED",
-    }:
-        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": code})
-    if code in {"PREFERENCE_CATALOG_CHANGED", "PREFERENCE_CATALOG_VERSION_CONFLICT"}:
-        return HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "PREFERENCE_CATALOG_CHANGED"},
-        )
-    if code in {
-        "SESSION_NOT_FOUND",
-        "PROFILE_NOT_FOUND",
-        "RECOMMENDATION_CRITERIA_NOT_FOUND",
-        "RECOMMENDATION_CRITERIA_VERSION_NOT_FOUND",
-        "RECOMMENDATION_REQUEST_NOT_FOUND",
-    }:
-        return _not_found(code)
-    if code in {
-        "RECOMMENDATION_CRITERIA_EMPTY",
-        "HALAL_PORK_CRITERIA_CONFLICT",
-        "VEGAN_ANIMAL_INGREDIENT_CRITERIA_CONFLICT",
-        "INVALID_RECOMMENDATION_REQUEST_HASH",
-        "HALAL_CERTIFICATION_UNAVAILABLE",
-        "VEGAN_EVIDENCE_UNAVAILABLE",
-        "SPICE_LEVEL_UNAVAILABLE",
-        "RECOMMENDATION_COMPARISON_NOT_AVAILABLE",
-        "RECOMMENDATION_COMPARISON_REQUIRES_TWO_MENUS",
-        "RECOMMENDATION_SNAPSHOT_REQUEST_MISMATCH",
-    }:
-        return HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": code},
-        )
-    if code in {"RECOMMENDATION_RELEASE_NOT_READY"}:
-        return HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": code},
-        )
-    return HTTPException(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        detail={"code": "RECOMMENDATION_FAILED"},
-    )
 
 
 @app.get("/api/v1/recommendation/preferences/catalog")
@@ -874,9 +860,7 @@ def get_conversation(
         get_structured_recommendation_service
     ),
 ) -> ConversationView:
-    session = repository.get_session(session_id)
-    if session is None:
-        raise _not_found("SESSION_NOT_FOUND")
+    session, profile = _resolve_session_profile(repository, session_id)
     criteria = repository.get_recommendation_criteria(session_id)
     latest_request = repository.get_latest_recommendation_request(session_id)
     active_request = repository.get_latest_recommendation_request(session_id, active_only=True)
@@ -888,6 +872,11 @@ def get_conversation(
     active_batch = (
         recommendation_service.get_request(session_id, active_request.request_id)
         if active_request is not None
+        else None
+    )
+    selected_menu = (
+        repository.get_menu(session.meal_need_state.selected_menu_id, profile)
+        if session.meal_need_state.selected_menu_id
         else None
     )
     return ConversationView(
@@ -905,6 +894,9 @@ def get_conversation(
         ),
         active_recommendation=(
             active_batch.model_dump(mode="json") if active_batch is not None else None
+        ),
+        selected_menu=(
+            selected_menu.model_dump(mode="json") if selected_menu is not None else None
         ),
     )
 
@@ -935,7 +927,7 @@ def post_conversation_event(
         raise
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"code": str(exc)},
         ) from exc
 
@@ -944,16 +936,34 @@ def post_conversation_event(
 def get_menu_options(
     menu_id: str,
     session_id: str | None = Query(default=None),
+    precomputed_only: bool = Query(default=False),
     repository: YobiRepository = Depends(get_repository),
     option_localization_service: OptionLocalizationService = Depends(
         get_option_localization_service
     ),
+    current_settings: Settings = Depends(get_settings),
 ) -> list[dict[str, Any]]:
     if session_id is not None:
         _require_session(repository, session_id)
+    # Discovery collections are explicitly deterministic mock views. Their
+    # option setup must not synchronously dispatch a fresh model call before a
+    # known cross-merchant cart conflict can be resolved. The repository still
+    # applies the active release's validated/precomputed localization for the
+    # session language; only runtime generation is skipped.
+    if precomputed_only:
+        groups = list(repository.get_options(menu_id, session_id=session_id))
+        if current_settings.demo_mode:
+            groups = project_demo_options(
+                groups,
+                group_limit=current_settings.demo_option_group_limit,
+                items_per_group_limit=current_settings.demo_option_items_per_group_limit,
+                total_item_limit=current_settings.demo_option_item_total_limit,
+            )
+    else:
+        groups = option_localization_service.get_options(menu_id, session_id)
     return [
         group.model_dump(mode="json")
-        for group in option_localization_service.get_options(menu_id, session_id)
+        for group in groups
     ]
 
 
@@ -1045,7 +1055,7 @@ def _validate_image(
             image.verify()
     except (UnidentifiedImageError, OSError) as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"code": "IMAGE_DECODE_FAILED"},
         ) from exc
 
@@ -1268,7 +1278,7 @@ def add_cart_item(
     _require_session(repository, session_id)
     if idempotency_key is not None and not 8 <= len(idempotency_key) <= 100:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"code": "INVALID_IDEMPOTENCY_KEY"},
         )
     try:

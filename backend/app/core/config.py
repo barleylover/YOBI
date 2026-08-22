@@ -39,9 +39,13 @@ class Settings(BaseSettings):
     option_localization_model_chain: str = (
         "openai.gpt-oss-20b,openai.gpt-oss-120b"
     )
+    recommendation_selection_max_output_tokens: int = Field(default=2048, ge=256)
     structured_recommendation_max_output_tokens: int = Field(default=16384, ge=64)
-    menu_presentation_max_output_tokens: int = Field(default=16384, ge=256)
+    menu_presentation_max_output_tokens: int = Field(default=4096, ge=256)
     option_localization_max_output_tokens: int = Field(default=16384, ge=256)
+    demo_option_group_limit: int = Field(default=5, ge=1, le=20)
+    demo_option_items_per_group_limit: int = Field(default=6, ge=1, le=50)
+    demo_option_item_total_limit: int = Field(default=20, ge=1, le=200)
     structured_recommendation_max_concurrent_requests: int = Field(default=2, ge=1, le=8)
     genai_provider: Literal["oci"] = "oci"
     oci_genai_serving_mode: Literal["on_demand", "dedicated"] = "on_demand"
@@ -53,7 +57,7 @@ class Settings(BaseSettings):
     oci_genai_max_concurrent_requests_per_model: int = Field(default=1, ge=1, le=8)
     oci_genai_min_interval_seconds: float = Field(default=2.0, ge=0.0, le=30.0)
     oci_genai_rate_limit_cooldown_seconds: float = Field(
-        default=65.0, ge=1.0, le=300.0
+        default=30.0, ge=1.0, le=300.0
     )
     # Explicit provider contract profile. These are the request envelope that the
     # configured OCI model/endpoint is expected to support, not advertised model
@@ -85,10 +89,11 @@ class Settings(BaseSettings):
     llm_max_tools_per_request: int = Field(default=4, ge=1, le=14)
     llm_max_tool_calls_per_response: int = Field(default=4, ge=1, le=14)
     tool_call_max_steps: int = Field(default=6, ge=1, le=12)
-    recommendation_prompt_version: str = "yobi-structured-rag-v3-server-wiki-binding"
-    menu_presentation_prompt_version: str = "yobi-menu-presentation-v8-strict-grounding"
-    menu_presentation_schema_version: str = "5"
-    option_localization_prompt_version: str = "yobi-option-localization-v2-gptoss-chain"
+    recommendation_prompt_version: str = "yobi-structured-rag-v4-compact-id-selection"
+    menu_presentation_prompt_version: str = "yobi-menu-presentation-v18-compact-output"
+    menu_presentation_schema_version: str = "7"
+    option_localization_prompt_version: str = "yobi-option-localization-v8-control-token-fix"
+    restaurant_note_prompt_version: str = "yobi-restaurant-note-v3-validated-order-context"
     menu_presentation_wait_seconds: float = Field(default=10.0, ge=0.0, le=30.0)
     menu_presentation_poll_seconds: float = Field(default=0.25, ge=0.05, le=2.0)
     recommendation_raw_hits_per_value: int = Field(default=20, ge=4, le=100)

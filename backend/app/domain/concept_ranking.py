@@ -7,6 +7,13 @@ from dataclasses import dataclass
 from typing import Any
 
 RANKING_POLICY_VERSION = "yobi-hybrid-rank-v2"
+RANKING_SCORE_WEIGHTS = {
+    "explicit": 0.35,
+    "minimum_category_support": 0.20,
+    "semantic": 0.25,
+    "direct_evidence_ratio": 0.15,
+    "review_prior": 0.05,
+}
 RANKING_POLICY: dict[str, Any] = {
     "version": RANKING_POLICY_VERSION,
     "candidate_generation": {
@@ -26,13 +33,7 @@ RANKING_POLICY: dict[str, Any] = {
         "minimum_category_support": "minimum(max_supported_strength_per_selected_category)",
         "direct_evidence_ratio": "direct_supported_categories/selected_categories",
         "review_prior": "bayesian_shrinkage_to_neutral_quality_prior",
-        "weights": {
-            "explicit": 0.35,
-            "minimum_category_support": 0.20,
-            "semantic": 0.25,
-            "direct_evidence_ratio": 0.15,
-            "review_prior": 0.05,
-        },
+        "weights": dict(RANKING_SCORE_WEIGHTS),
         "constraints": {
             "explicit_plus_minimum_at_least": 0.55,
             "semantic_at_most": 0.25,
@@ -182,11 +183,11 @@ def rank_concept_candidates(
         # Hybrid v2 always applies the same auditable release policy.
         _ = has_soft_profile
         score = (
-            0.35 * explicit_score
-            + 0.20 * minimum
-            + 0.25 * semantic_score
-            + 0.15 * direct_ratio
-            + 0.05 * review_prior
+            RANKING_SCORE_WEIGHTS["explicit"] * explicit_score
+            + RANKING_SCORE_WEIGHTS["minimum_category_support"] * minimum
+            + RANKING_SCORE_WEIGHTS["semantic"] * semantic_score
+            + RANKING_SCORE_WEIGHTS["direct_evidence_ratio"] * direct_ratio
+            + RANKING_SCORE_WEIGHTS["review_prior"] * review_prior
         )
         scored.append(
             (

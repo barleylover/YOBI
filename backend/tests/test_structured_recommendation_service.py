@@ -395,6 +395,19 @@ def _profile() -> Profile:
     )
 
 
+def test_server_owned_criteria_summary_is_clear_and_usable_in_korean() -> None:
+    repository = FakeRecommendationRepository(_criteria())
+
+    summary = StructuredRecommendationService._criteria_fallback_summary(
+        repository.criteria_record,
+        "한국어",
+    )
+
+    assert summary.startswith("선택한 식사 선호 조건:")
+    assert "한식" in summary
+    assert len(summary.strip()) >= 4
+
+
 def _menu(menu_id: str, *, score: float) -> MenuSummary:
     suffix = menu_id.rsplit("-", maxsplit=1)[-1].upper()
     return MenuSummary(
@@ -702,6 +715,41 @@ def test_empty_history_excluding_request_persists_canonical_exhausted_code() -> 
         assert result.failure_code == "EXHAUSTED"
         assert repository.requests[request.request_id].failure_code == "EXHAUSTED"
         assert provider.calls == []
+
+
+def test_underfilled_strict_match_skips_llm_and_keeps_source_language_safe() -> None:
+    repository = FakeRecommendationRepository(_criteria())
+    first = _pool_item("menu-a", score=0.90).model_copy(
+        update={
+            "menu": _menu("menu-a", score=0.90).model_copy(
+                update={"description": "엄선된 돼지 원육으로 끓였습니다."}
+            ),
+        }
+    )
+    second = _pool_item("menu-b", score=0.80).model_copy(
+        update={
+            "menu": _menu("menu-b", score=0.80).model_copy(
+                update={"description": "매콤한 떡볶이를 정성껏 준비했습니다."}
+            ),
+            "localized_source_description": "Spicy tteokbokki prepared with care.",
+        }
+    )
+    repository.evidence_pool = [first, second]
+    provider = FakeProvider(_recommended_output(["menu-a", "menu-b", "menu-c"]))
+    service = _service(repository, provider)
+
+    result = service.request_recommendation(_session(), _profile(), _request())
+
+    assert result.status == "SEARCH_FALLBACK"
+    assert result.failure_code == "STRICT_MATCH_UNDERFILLED"
+    assert [item.menu.menu_id for item in result.recommendations] == ["menu-a", "menu-b"]
+    assert result.recommendations[0].source_description == ""
+    assert result.recommendations[1].source_description == "Spicy tteokbokki prepared with care."
+    assert all(
+        item.caution_codes == ["STRICT_MATCH_UNDERFILLED"] for item in result.recommendations
+    )
+    assert provider.calls == []
+    assert repository.requests[result.request_id].dispatch_count == 0
 
 
 def test_model_can_select_and_reorder_three_from_the_frozen_shortlist() -> None:
@@ -1167,12 +1215,11 @@ def test_generation_soft_profile_context_excludes_sensitive_legacy_fields() -> N
         "menu_facts",
     }.isdisjoint(compact_item)
     criterion_payload = compact_item["criterion_evidence"]
-    assert all(
-        "content" not in reference
-        for category in criterion_payload.values()
-        for value in category.values()
-        for reference in value["evidence"]
-    )
+    assert criterion_payload == {
+        "cuisine_origins": ["KOREAN"],
+        "flavors": ["SPICY"],
+    }
+    assert set(compact_item["wiki_passages"][0]) == {"content"}
 
 
 def test_stale_dispatched_request_becomes_unknown_without_redispatch() -> None:

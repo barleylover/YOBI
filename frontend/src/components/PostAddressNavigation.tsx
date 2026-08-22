@@ -11,7 +11,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { actionableError, api } from "../lib/api";
 import { getDynamicCopy } from "../lib/i18n";
-import { asSupportedLanguage, formatMinuteRange, menuName } from "../lib/locale";
+import { asSupportedLanguage, formatMinuteRange, menuName, merchantName } from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
 import {
   carouselDeltaForArrow,
@@ -185,7 +185,7 @@ export function PostAddressNavigation({ sessionId, language, locale, disabled = 
                       <span className="ranking-position">{entry.position}</span>
                       <div className="ranking-menu-copy">
                         <strong>{menuName(entry.menu, language)}</strong>
-                        <small>{entry.menu.merchant_name}</small>
+                        <small>{merchantName(entry.menu.merchant_name, language)}</small>
                         <p>{entry.menu.cultural_description || entry.menu.description || dynamicCopy.catalogDescription}</p>
                         <span>{language === "English" ? entry.metric_label : localizedMetricLabel}: {entry.metric_value.toLocaleString(locale)}</span>
                       </div>
@@ -202,7 +202,15 @@ export function PostAddressNavigation({ sessionId, language, locale, disabled = 
 
           {view === "feature" && (
             <div className="feature-view">
-              <img className="feature-hero" src="/yobi-gimbap-feature-hero.png" alt={copy.featureTitle} />
+              <img
+                className="feature-hero"
+                src="/yobi-gimbap-feature-hero.png"
+                alt={copy.featureTitle}
+                width={1536}
+                height={1024}
+                loading="lazy"
+                decoding="async"
+              />
               <div className="feature-intro"><h3>{copy.featureTitle}</h3><p>{copy.featureDescription}</p></div>
               {loading && <p className="collection-state" role="status">{copy.loading}</p>}
               {error && <p className="collection-state error" role="alert">{error}</p>}
@@ -236,7 +244,7 @@ export function PostAddressNavigation({ sessionId, language, locale, disabled = 
                       <article className="feature-menu-card" key={entry.menu.menu_id}>
                         <div className="feature-dish-tag"><Flame size={15} /> {entry.dish_name}</div>
                         <h3>{menuName(entry.menu, language)}</h3>
-                        <small>{entry.menu.merchant_name}</small>
+                        <small>{merchantName(entry.menu.merchant_name, language)}</small>
                         <p>{entry.description || entry.menu.cultural_description || entry.menu.description || dynamicCopy.catalogDescription}</p>
                         <div><strong>₩{entry.menu.price.toLocaleString(locale)}</strong><span>{formatMinuteRange(entry.menu.eta_min, entry.menu.eta_max, locale)} · ₩{entry.menu.delivery_fee.toLocaleString(locale)} {recommendationCopy.deliveryFee}</span></div>
                         <button type="button" className="primary-button full" disabled={disabled || !feature?.snapshot_id} onClick={() => void choose(entry.menu, feature!.snapshot_id)}>{copy.selectMenu}</button>

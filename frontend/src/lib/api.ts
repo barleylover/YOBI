@@ -28,7 +28,11 @@ interface RequestOptions {
   signal?: AbortSignal;
 }
 
-async function request<T>(path: string, init?: RequestInit, options: RequestOptions = {}): Promise<T> {
+async function fetchWithTimeout(
+  path: string,
+  init?: RequestInit,
+  options: RequestOptions = {},
+): Promise<Response> {
   const controller = new AbortController();
   const timeoutMs = options.timeoutMs ?? 15_000;
   let timedOut = false;
@@ -41,17 +45,10 @@ async function request<T>(path: string, init?: RequestInit, options: RequestOpti
   }, timeoutMs);
 
   try {
-    const response = await fetch(path, {
+    return await fetch(path, {
       ...init,
       signal: controller.signal,
-      headers: { "Content-Type": "application/json", ...init?.headers },
     });
-    if (!response.ok) {
-      const payload = await response.json().catch(() => ({ detail: { code: "REQUEST_FAILED" } }));
-      throw new Error(payload.detail?.code ?? `HTTP_${response.status}`);
-    }
-    if (response.status === 204) return undefined as T;
-    return response.json() as Promise<T>;
   } catch (cause) {
     if (controller.signal.aborted || (cause instanceof DOMException && cause.name === "AbortError")) {
       throw new Error(timedOut ? "REQUEST_TIMEOUT" : "REQUEST_ABORTED");
@@ -61,6 +58,30 @@ async function request<T>(path: string, init?: RequestInit, options: RequestOpti
     window.clearTimeout(timeout);
     options.signal?.removeEventListener("abort", relayAbort);
   }
+}
+
+async function responseErrorCode(response: Response, fallback: string) {
+  const payload = await response.json().catch(() => null) as unknown;
+  if (payload && typeof payload === "object") {
+    const detail = (payload as { detail?: unknown }).detail;
+    if (detail && typeof detail === "object") {
+      const code = (detail as { code?: unknown }).code;
+      if (typeof code === "string" && code) return code;
+    }
+  }
+  return fallback;
+}
+
+async function request<T>(path: string, init?: RequestInit, options: RequestOptions = {}): Promise<T> {
+  const response = await fetchWithTimeout(path, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...init?.headers },
+  }, options);
+  if (!response.ok) {
+    throw new Error(await responseErrorCode(response, `HTTP_${response.status}`));
+  }
+  if (response.status === 204) return undefined as T;
+  return response.json() as Promise<T>;
 }
 
 function clientRequestId(prefix: string) {
@@ -307,16 +328,16 @@ export const api = {
   ) => {
     const headers: Record<string, string> = {};
     if (cached?.etag) headers["If-None-Match"] = cached.etag;
-    const response = await fetch(
+    const response = await fetchWithTimeout(
       `/api/v1/recommendation/preferences/catalog?locale=${encodeURIComponent(locale)}`,
       { headers },
+      { timeoutMs: 8_000 },
     );
     if (response.status === 304 && cached) {
       return { catalog: cached.catalog, etag: cached.etag, notModified: true };
     }
     if (!response.ok) {
-      const payload = await response.json().catch(() => ({ detail: { code: "PREFERENCE_CATALOG_NOT_AVAILABLE" } }));
-      throw new Error(payload.detail?.code ?? `HTTP_${response.status}`);
+      throw new Error(await responseErrorCode(response, "PREFERENCE_CATALOG_NOT_AVAILABLE"));
     }
     const catalog = await response.json() as PreferenceCatalog;
     return {
@@ -392,9 +413,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify(event),
     }),
-  getOptions: (menuId: string, sessionId?: string) => request<OptionGroup[]>(
-    `/api/v1/menus/${menuId}/options${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`,
-  ),
+  getOptions: (menuId: string, sessionId?: string, precomputedOnly = false) => {
+    const params = new URLSearchParams();
+    if (sessionId) params.set("session_id", sessionId);
+    if (precomputedOnly) params.set("precomputed_only", "true");
+    const query = params.size > 0 ? `?${params.toString()}` : "";
+    return request<OptionGroup[]>(
+      `/api/v1/menus/${menuId}/options${query}`,
+      undefined,
+      { timeoutMs: 35_000 },
+    );
+  },
   getMerchantMenus: (sessionId: string, merchantId: string, excludedMenuIds: string[]) =>
     request<import("../types").MenuSummary[]>(
       `/api/v1/sessions/${sessionId}/merchants/${merchantId}/menus?exclude=${encodeURIComponent(excludedMenuIds.join(","))}`,
@@ -446,13 +475,12 @@ export const api = {
   uploadAddress: async (sessionId: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
-    const response = await fetch(`/api/v1/sessions/${sessionId}/address/attachments`, {
+    const response = await fetchWithTimeout(`/api/v1/sessions/${sessionId}/address/attachments`, {
       method: "POST",
       body: form,
-    });
+    }, { timeoutMs: 30_000 });
     if (!response.ok) {
-      const payload = await response.json().catch(() => ({ detail: { code: "ADDRESS_UPLOAD_FAILED" } }));
-      throw new Error(payload.detail?.code ?? "ADDRESS_UPLOAD_FAILED");
+      throw new Error(await responseErrorCode(response, "ADDRESS_UPLOAD_FAILED"));
     }
     return response.json() as Promise<{
       candidates: AddressCandidate[];
@@ -504,10 +532,19 @@ export const api = {
     request<CartPreview>(`/api/v1/sessions/${sessionId}/cart/confirm`, {
       method: "POST",
     }),
-  updateCartItem: (sessionId: string, cartItemId: string, quantity: number) =>
+  updateCartItem: (
+    sessionId: string,
+    cartItemId: string,
+    update: number | {
+      quantity?: number;
+      option_item_ids?: string[];
+      user_note?: string;
+      note_translation_id?: string;
+    },
+  ) =>
     request<CartPreview>(`/api/v1/sessions/${sessionId}/cart/items/${cartItemId}`, {
       method: "PATCH",
-      body: JSON.stringify({ quantity }),
+      body: JSON.stringify(typeof update === "number" ? { quantity: update } : update),
     }),
   deleteCartItem: (sessionId: string, cartItemId: string) =>
     request<CartPreview>(`/api/v1/sessions/${sessionId}/cart/items/${cartItemId}`, {

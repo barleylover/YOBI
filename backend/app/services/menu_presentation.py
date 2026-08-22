@@ -18,7 +18,10 @@ from app.domain.models import (
 from app.domain.recommendation_copy import deterministic_presentation_copy
 from app.domain.structured_recommendation import EvidencePoolItem
 from app.genai.contracts import GenAIProviderError
-from app.genai.presentation_generator import MenuPresentationGenerator
+from app.genai.presentation_generator import (
+    MenuPresentationGenerator,
+    source_translation_is_safe,
+)
 
 
 def _sha(value: str) -> str:
@@ -49,6 +52,27 @@ def deterministic_localized_title(
         if value and not any("가" <= character <= "힣" for character in value):
             return value
     return "韓国料理メニュー" if language_code == "ja" else "Korean menu"
+
+
+def deterministic_localized_source_description(
+    language_code: str,
+    *,
+    source_ko: str,
+    candidates: list[str | None],
+) -> str:
+    """Return source copy only when it is already valid for the requested language.
+
+    The deterministic path must never expose Korean source prose in an English/Japanese UI,
+    but it should preserve a validated repository localization when generation is unavailable.
+    """
+
+    if language_code == "ko":
+        return source_ko.strip()
+    for candidate in candidates:
+        value = str(candidate or "").strip()
+        if source_translation_is_safe(source_ko, value, language_code):
+            return value
+    return ""
 
 
 def deterministic_localized_subtitle(
@@ -157,8 +181,10 @@ class MenuPresentationService:
                                 localized_title=fallback_title,
                                 components=list(evidence_map.get("menu_components", [])),
                             ),
-                            "source_description": (
-                                item.menu.description if language_code == "ko" else ""
+                            "source_description": deterministic_localized_source_description(
+                                language_code,
+                                source_ko=item.menu.description,
+                                candidates=[item.source_description],
                             ),
                             "evidence_map": evidence_map,
                         }
@@ -248,7 +274,11 @@ class MenuPresentationService:
                 item.menu.name_en,
             ],
         )
-        source_description = item.menu.description if language_code == "ko" else ""
+        source_description = deterministic_localized_source_description(
+            language_code,
+            source_ko=item.menu.description,
+            candidates=[item.localized_source_description],
+        )
         wiki_passages = [passage.model_dump(mode="json") for passage in item.wiki_passages]
         menu_facts = [fact.model_dump(mode="json") for fact in item.menu_facts]
         reviews = list(item.synthetic_reviews)
@@ -433,27 +463,46 @@ class MenuPresentationService:
                         except Exception:
                             pass
                     continue
-                value, generation_model = generated_value
+                value, generation_model, fallback_fields = generated_value
+                effective_model = (
+                    f"{generation_model}+SAFE_FIELD_FALLBACK"
+                    if fallback_fields
+                    else generation_model
+                )
+                localized_subtitle = (
+                    value.localized_subtitle or item.localized_subtitle or item.localized_title
+                )
+                localized_source_description = (
+                    value.localized_source_description or item.source_description
+                )
+                yobi_short_explanation = value.yobi_short_explanation or item.yobi_short_explanation
+                yobi_long_explanation = value.yobi_long_explanation or item.yobi_long_explanation
+                review_summary = value.review_summary or item.review_summary
                 updated = item.model_copy(
                     update={
                         "localized_title": value.localized_title,
-                        "localized_subtitle": value.localized_subtitle,
-                        "source_description": value.localized_source_description,
-                        "yobi_short_explanation": value.yobi_short_explanation,
-                        "yobi_long_explanation": value.yobi_long_explanation,
-                        "review_summary": value.review_summary,
-                        "generation_model": generation_model,
+                        "localized_subtitle": localized_subtitle,
+                        "source_description": localized_source_description,
+                        "yobi_short_explanation": yobi_short_explanation,
+                        "yobi_long_explanation": yobi_long_explanation,
+                        "review_summary": review_summary,
+                        "generation_model": effective_model,
                         "personalization_applied": value.personalization_applied,
                         "evidence_map": {
                             **item.evidence_map,
                             "used_evidence_ids": value.used_evidence_ids,
                             "used_source_fields": value.used_source_fields,
+                            "yobi_used_evidence_ids": value.yobi_used_evidence_ids,
+                            "review_used_ids": value.review_used_ids,
+                            "yobi_used_source_fields": value.yobi_used_source_fields,
+                            "review_used_source_fields": value.review_used_source_fields,
                             "covered_component_ids": value.covered_component_ids,
                             "component_mentions": [
                                 mention.model_dump(mode="json")
                                 for mention in value.component_mentions
                             ],
-                            "localized_source_description": value.localized_source_description,
+                            "localized_source_description": localized_source_description,
+                            "safe_field_fallbacks": fallback_fields,
                         },
                     }
                 )
@@ -463,9 +512,9 @@ class MenuPresentationService:
                     self.repository.save_menu_runtime_localizations(
                         session_id,
                         item.menu.menu_id,
-                        value.localized_title,
-                        value.localized_source_description,
-                        generation_model,
+                        updated.localized_title,
+                        updated.source_description,
+                        effective_model,
                         self.settings.menu_presentation_prompt_version,
                     )
                 except Exception as exc:
@@ -537,7 +586,7 @@ class MenuPresentationService:
         on_provider_attempt: (
             Callable[[int, str, str, str | None, int, dict[str, int]], None] | None
         ),
-    ) -> tuple[dict[str, tuple[Any, str]], dict[str, str]]:
+    ) -> tuple[dict[str, tuple[Any, str, list[str]]], dict[str, str]]:
         """Generate one presentation batch without retrying grounding failures."""
 
         try:
@@ -547,7 +596,17 @@ class MenuPresentationService:
                 on_provider_attempt=on_provider_attempt,
             )
             model = generated.generation_model or "UNKNOWN"
-            return ({value.menu_id: (value, model) for value in generated.items}, {})
+            return (
+                {
+                    value.menu_id: (
+                        value,
+                        model,
+                        generated.field_fallbacks.get(value.menu_id, []),
+                    )
+                    for value in generated.items
+                },
+                generated.item_errors,
+            )
         except GenAIProviderError as exc:
             error_code = exc.safe_reason_code or exc.code.value
         except Exception as exc:
@@ -556,14 +615,43 @@ class MenuPresentationService:
 
     @staticmethod
     def _generation_payload(item: MerchantMenuPresentation) -> dict[str, Any]:
+        def compact_evidence(rows: Any) -> list[dict[str, Any]]:
+            if not isinstance(rows, list):
+                return []
+            allowed = (
+                "evidence_id",
+                "content",
+                "component_id",
+                "component_name_ko",
+                "component_name_en",
+                "membership_role",
+            )
+            return [
+                {key: row[key] for key in allowed if row.get(key) not in (None, "")}
+                for row in rows
+                if isinstance(row, dict)
+            ]
+
+        def compact_reviews(rows: Any) -> list[dict[str, Any]]:
+            if not isinstance(rows, list):
+                return []
+            allowed = ("review_id", "topic", "rating", "review_text")
+            return [
+                {key: row[key] for key in allowed if row.get(key) not in (None, "")}
+                for row in rows
+                if isinstance(row, dict)
+            ]
+
         return {
             "menu_id": item.menu.menu_id,
             "menu_title_ko": item.menu.name_ko,
             "localized_title": item.localized_title,
             "source_description_ko": item.menu.description,
-            "wiki_passages": item.evidence_map.get("wiki_passages", []),
-            "menu_facts": item.evidence_map.get("menu_facts", []),
-            "synthetic_reviews": item.evidence_map.get("synthetic_reviews", []),
+            "wiki_passages": compact_evidence(item.evidence_map.get("wiki_passages", [])),
+            "menu_facts": compact_evidence(item.evidence_map.get("menu_facts", [])),
+            "synthetic_reviews": compact_reviews(
+                item.evidence_map.get("synthetic_reviews", [])
+            ),
             "country_preference": item.country_preference,
             "menu_components": item.evidence_map.get("menu_components", []),
         }

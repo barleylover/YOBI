@@ -79,6 +79,8 @@ def test_runtime_environment_can_resume_and_upgrade_release_policy(
         'RESTAURANT_NOTE_MODEL_CHAIN="meta.llama-4-maverick-17b-128e-instruct-fp8,'
         'openai.gpt-oss-20b"' in persisted
     )
+    assert 'RECOMMENDATION_SELECTION_MAX_OUTPUT_TOKENS="2048"' in persisted
+    assert 'MENU_PRESENTATION_MAX_OUTPUT_TOKENS="4096"' in persisted
     assert 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="16384"' in persisted
     assert 'STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS="2"' in persisted
     assert 'RECOMMENDATION_CANDIDATE_LIMIT="100"' in persisted
@@ -106,6 +108,7 @@ def test_runtime_environment_can_resume_and_upgrade_release_policy(
         "OPTION_LOCALIZATION_MODEL_CHAIN",
         "RESTAURANT_NOTE_MODEL",
         "RESTAURANT_NOTE_MODEL_CHAIN",
+        "RECOMMENDATION_SELECTION_MAX_OUTPUT_TOKENS",
         "MENU_PRESENTATION_MAX_OUTPUT_TOKENS",
         "OPTION_LOCALIZATION_MAX_OUTPUT_TOKENS",
         "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS",
@@ -130,11 +133,23 @@ def test_runtime_environment_can_resume_and_upgrade_release_policy(
 
 def test_retry_policy_matches_settings_and_runtime_restore() -> None:
     assert bootstrap.Settings.model_fields["llm_max_retries"].default == 0
+    assert (
+        bootstrap.Settings.model_fields[
+            "oci_genai_rate_limit_cooldown_seconds"
+        ].default
+        == 30.0
+    )
     assert "quote('0')" in inspect.getsource(bootstrap.write_env)
+    assert "quote('30')" in inspect.getsource(bootstrap.write_env)
     assert '"LLM_MAX_RETRIES": "0"' in inspect.getsource(bootstrap.main)
+    assert (
+        '"OCI_GENAI_RATE_LIMIT_COOLDOWN_SECONDS": "30"'
+        in inspect.getsource(bootstrap.main)
+    )
     restore = (ROOT / "deploy" / "restore_runtime_env.sh").read_text(encoding="utf-8")
     assert "LLM_MAX_RETRIES=\"0\"" in restore
     assert "LLM_MAX_RETRIES=\"1\"" not in restore
+    assert 'OCI_GENAI_RATE_LIMIT_COOLDOWN_SECONDS="30"' in restore
     assert bootstrap.Settings.model_fields["embedding_provider"].default == "deterministic"
     assert "quote('oci')" in inspect.getsource(bootstrap.write_env)
     assert 'EMBEDDING_PROVIDER="oci"' in restore
@@ -147,6 +162,12 @@ def test_retry_policy_matches_settings_and_runtime_restore() -> None:
     assert (
         bootstrap.Settings.model_fields["structured_recommendation_model"].default
         == "openai.gpt-oss-120b"
+    )
+    assert (
+        bootstrap.Settings.model_fields[
+            "recommendation_selection_max_output_tokens"
+        ].default
+        == 2048
     )
     assert (
         bootstrap.Settings.model_fields[
@@ -163,6 +184,8 @@ def test_retry_policy_matches_settings_and_runtime_restore() -> None:
     write_source = inspect.getsource(bootstrap.write_env)
     main_source = inspect.getsource(bootstrap.main)
     assert "STRUCTURED_RECOMMENDATION_MODEL={quote('openai.gpt-oss-120b')}" in write_source
+    assert "RECOMMENDATION_SELECTION_MAX_OUTPUT_TOKENS={quote('2048')}" in write_source
+    assert "MENU_PRESENTATION_MAX_OUTPUT_TOKENS={quote('4096')}" in write_source
     assert "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS={quote('16384')}" in write_source
     assert "STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS={quote('2')}" in write_source
     assert '"STRUCTURED_RECOMMENDATION_MODEL": "openai.gpt-oss-120b"' in main_source
@@ -183,7 +206,8 @@ def test_retry_policy_matches_settings_and_runtime_restore() -> None:
         'RESTAURANT_NOTE_MODEL_CHAIN="meta.llama-4-maverick-17b-128e-instruct-fp8,'
         'openai.gpt-oss-20b"' in restore
     )
-    assert 'MENU_PRESENTATION_MAX_OUTPUT_TOKENS="16384"' in restore
+    assert 'RECOMMENDATION_SELECTION_MAX_OUTPUT_TOKENS="2048"' in restore
+    assert 'MENU_PRESENTATION_MAX_OUTPUT_TOKENS="4096"' in restore
     assert 'OPTION_LOCALIZATION_MAX_OUTPUT_TOKENS="16384"' in restore
     assert 'STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS="16384"' in restore
     assert 'STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS="2"' in restore
@@ -210,6 +234,7 @@ def test_split_model_release_envelope_is_persisted() -> None:
         "MENU_PRESENTATION_MODEL",
         "OPTION_LOCALIZATION_MODEL",
         "OPTION_LOCALIZATION_MODEL_CHAIN",
+        "RECOMMENDATION_SELECTION_MAX_OUTPUT_TOKENS",
         "MENU_PRESENTATION_MAX_OUTPUT_TOKENS",
         "OPTION_LOCALIZATION_MAX_OUTPUT_TOKENS",
         "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS",
@@ -283,6 +308,7 @@ def test_runtime_environment_load_disables_interpolation_and_execution(
             "OCI_EMBED_AUTH",
             "OCI_COMPARTMENT_ID",
             "STRUCTURED_RECOMMENDATION_MODEL",
+            "RECOMMENDATION_SELECTION_MAX_OUTPUT_TOKENS",
             "STRUCTURED_RECOMMENDATION_MAX_OUTPUT_TOKENS",
             "STRUCTURED_RECOMMENDATION_MAX_CONCURRENT_REQUESTS",
             "RECOMMENDATION_CANDIDATE_LIMIT",

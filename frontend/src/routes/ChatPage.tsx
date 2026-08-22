@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { ChannelMenu } from "../components/ChannelMenu";
+import { CartSheet } from "../components/CartSheet";
 import { OrderFlowPanel } from "../components/OrderFlowPanel";
 import { PreferenceWizard } from "../components/PreferenceWizard";
 import { PreparingScreen } from "../components/PreparingScreen";
@@ -10,6 +11,7 @@ import { useI18n } from "../lib/i18n";
 import { asSupportedLanguage, menuName } from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
 import { getRedesignCopy } from "../lib/redesignI18n";
+import { findMenuProjection, recommendationCriteriaEqual } from "../lib/recommendationState";
 import {
   getCatalogChangedCopy,
   getRecommendationConflictCopy,
@@ -32,30 +34,6 @@ function createId(prefix: string) {
   const value = globalThis.crypto?.randomUUID?.()
     ?? `${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`;
   return `${prefix}-${value}`;
-}
-
-function findMenu(value: unknown, menuId: string): MenuSummary | null {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const match = findMenu(item, menuId);
-      if (match) return match;
-    }
-    return null;
-  }
-  if (!value || typeof value !== "object") return null;
-  const item = value as Record<string, unknown>;
-  if (item.menu_id === menuId && typeof item.merchant_id === "string" && typeof item.name_en === "string") {
-    return item as unknown as MenuSummary;
-  }
-  for (const nested of Object.values(item)) {
-    const match = findMenu(nested, menuId);
-    if (match) return match;
-  }
-  return null;
-}
-
-function sameCriteria(left: unknown, right: unknown) {
-  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 export function ChatPage() {
@@ -90,6 +68,9 @@ export function ChatPage() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewMessage, setPreviewMessage] = useState("");
   const [selectedMenu, setSelectedMenu] = useState<MenuSummary | null>(null);
+  const [precomputedOptionsOnly, setPrecomputedOptionsOnly] = useState(false);
+  const [cartOpen, setCartOpen] = useState(false);
+  const [cartRevision, setCartRevision] = useState(0);
   const [wizardStartSection, setWizardStartSection] = useState<"core" | "conditions">("core");
   const [pollRevision, setPollRevision] = useState(0);
   const stateVersionRef = useRef(session?.state_version ?? 0);
@@ -136,24 +117,36 @@ export function ChatPage() {
   }, [setLatestRecommendation, setPendingRecommendation, setRecommendationPhase]);
 
   const applyConversation = useCallback((conversation: ConversationView) => {
-    stateVersionRef.current = conversation.state_version;
     if (conversation.recommendation_criteria && conversation.criteria_version) {
       commitCriteria(conversation.recommendation_criteria, conversation.criteria_version);
     }
     const batch = conversation.active_recommendation ?? conversation.latest_recommendation;
     if (batch) applyBatch(batch);
+    // Recommendation snapshots are immutable and can predate later menu/option events.
+    // The live conversation version is the final concurrency authority after hydration.
+    stateVersionRef.current = conversation.state_version;
     const selectedMenuId = conversation.meal_need_state.selected_menu_id;
     if (!selectedMenuId) {
       setSelectedMenu(null);
+      setPrecomputedOptionsOnly(false);
       return;
     }
     const fromV2Item = batch?.recommendations.find((item) => item.menu.menu_id === selectedMenuId);
     const fromV2 = fromV2Item
       ? { ...fromV2Item.menu, localized_title: fromV2Item.localized_title }
       : null;
-    const fromLegacy = batch ? null : findMenu(conversation.latest_snapshot?.cards, selectedMenuId);
-    setSelectedMenu(fromV2 ?? fromLegacy ?? null);
-    if (fromV2 || fromLegacy) setRecommendationPhase("ORDERING");
+    const fromConversation = conversation.selected_menu?.menu_id === selectedMenuId
+      ? conversation.selected_menu
+      : null;
+    const fromLegacy = batch
+      ? null
+      : findMenuProjection(conversation.latest_snapshot?.cards, selectedMenuId);
+    const restoredMenu = fromV2 ?? fromConversation ?? fromLegacy ?? null;
+    setSelectedMenu(restoredMenu);
+    if (restoredMenu) {
+      setPrecomputedOptionsOnly(Boolean(fromConversation && !fromV2));
+      setRecommendationPhase("ORDERING");
+    }
   }, [applyBatch, commitCriteria, setRecommendationPhase]);
 
   const refreshConversation = useCallback(async () => {
@@ -217,13 +210,6 @@ export function ChatPage() {
       setPollRevision((revision) => revision + 1);
     }
   }, [applyBatch, applyConversation, latestRecommendation?.phase, sessionId, setRecommendationPhase]);
-
-  const retryPendingRecommendation = useCallback(async (request: RecommendationRequestV2) => {
-    pollCountRef.current = 0;
-    pollStartedAtRef.current = Date.now();
-    setRecommendationPhase("RETRIEVING");
-    await recoverRecommendation(request);
-  }, [recoverRecommendation, setRecommendationPhase]);
 
   const checkCriteriaPreview = useCallback(async (
     criteria: typeof draftCriteria,
@@ -307,7 +293,10 @@ export function ChatPage() {
       setError(recommendationCopy.failedDescription);
       return;
     }
-    const pollDelayMs = pollCountRef.current < 8 ? 1_200 : 2_500;
+    // Recommendation completion is dominated by the provider call. Poll a
+    // little more closely so a finished batch is not hidden for up to 2.5 s,
+    // then back off to a still-bounded cadence for long-running requests.
+    const pollDelayMs = pollCountRef.current < 10 ? 800 : 1_500;
     const timer = window.setTimeout(() => {
       pollCountRef.current += 1;
       void recoverRecommendation(pendingRecommendation);
@@ -483,7 +472,10 @@ export function ChatPage() {
           && ["PREFERENCE_CATALOG_CHANGED", "PREFERENCE_CATALOG_VERSION_CONFLICT"].includes(cause.message)
         ) throw cause;
         const conversation = await api.getConversation(sessionId);
-        if (!conversation.recommendation_criteria || !sameCriteria(conversation.recommendation_criteria, draftCriteria)) throw cause;
+        if (
+          !conversation.recommendation_criteria
+          || !recommendationCriteriaEqual(conversation.recommendation_criteria, draftCriteria)
+        ) throw cause;
         committed = {
           session_id: sessionId,
           criteria: conversation.recommendation_criteria,
@@ -546,6 +538,7 @@ export function ChatPage() {
         snapshot_id: snapshotId,
         menu_id: recommendation.menu.menu_id,
       });
+      setPrecomputedOptionsOnly(false);
       setSelectedMenu({
         ...(result.selected_menu ?? recommendation.menu),
         localized_title: recommendation.localized_title,
@@ -568,6 +561,7 @@ export function ChatPage() {
         snapshot_id: snapshotId,
         menu_id: menu.menu_id,
       });
+      setPrecomputedOptionsOnly(true);
       setSelectedMenu(result.selected_menu ?? menu);
       setRecommendationPhase("ORDERING");
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -610,6 +604,7 @@ export function ChatPage() {
     setWizardStartSection("core");
     if (committedCriteria) setDraftCriteria(committedCriteria);
     setSelectedMenu(null);
+    setPrecomputedOptionsOnly(false);
     setRecommendationPhase("SELECTING");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -619,7 +614,7 @@ export function ChatPage() {
   }
 
   function openCart() {
-    document.querySelector<HTMLElement>("[data-testid='order-flow']")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setCartOpen(true);
   }
 
   function cancelRecommendation() {
@@ -730,7 +725,6 @@ export function ChatPage() {
           className="v2-cart-button"
           aria-label={language === "English" ? `${journeyCopy.openCart}, ${cartQuantity} items` : `${journeyCopy.openCart}, ${journeyCopy.quantity} ${cartQuantity}`}
           onClick={openCart}
-          disabled={!selectedMenu}
         >
           <span className="cart-box" aria-hidden="true" />
           {cartQuantity > 0 && <span className="cart-badge">{cartQuantity}</span>}
@@ -780,7 +774,6 @@ export function ChatPage() {
             readOnly={recommendationPhase === "ORDERING"}
             timestamp={messageTime}
             onChoose={(item) => void chooseMenu(item)}
-            onRetry={() => void requestAnother("RETRY")}
           />
         )}
 
@@ -823,6 +816,8 @@ export function ChatPage() {
                   menu={selectedMenu}
                   addressRefId={addressRefId}
                   dietaryFilters={(committedCriteria ?? draftCriteria).dietary_filters}
+                  cartRevision={cartRevision}
+                  precomputedOptionsOnly={precomputedOptionsOnly}
                   onClose={() => { setSelectedMenu(null); setRecommendationPhase("RESULTS"); }}
                   onOptionChange={updateConversationOptions}
                 />
@@ -846,16 +841,6 @@ export function ChatPage() {
         )}
         {(recommendationPhase === "NO_RESULTS" || recommendationPhase === "ERROR") && (
           <>
-            {recommendationPhase === "ERROR" && (
-              <button
-                type="button"
-                className="v2-quick-reply"
-                onClick={() => pendingRecommendation ? void retryPendingRecommendation(pendingRecommendation) : void requestAnother("RETRY")}
-                disabled={busy}
-              >
-                {recommendationCopy.tryAgain}
-              </button>
-            )}
             <button type="button" className="v2-quick-reply" onClick={editCriteria} disabled={busy}>
               {recommendationCopy.editCriteria}
             </button>
@@ -863,13 +848,26 @@ export function ChatPage() {
         )}
       </div>
 
+      <CartSheet
+        sessionId={sessionId}
+        open={cartOpen}
+        language={language}
+        locale={locale}
+        onClose={() => setCartOpen(false)}
+        onCartChange={() => setCartRevision((value) => value + 1)}
+        onContinue={selectedMenu ? () => {
+          setCartOpen(false);
+          document.querySelector<HTMLElement>("[data-testid='order-flow']")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        } : undefined}
+      />
+
       <ChannelMenu
         sessionId={sessionId}
         language={language}
         locale={locale}
         disabled={busy}
         onChoose={chooseCollectionMenu}
-        onEditProfile={editProfile}
+        onEditProfile={editCriteria}
       />
     </main>
   );

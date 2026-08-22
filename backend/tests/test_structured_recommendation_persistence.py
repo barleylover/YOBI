@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from app.db.oracle_repository import OracleYobiRepository
 from app.db.sqlite_repository import SQLiteYobiRepository
-from app.dependencies import get_repository
+from app.dependencies import get_option_localization_service, get_repository
 from app.domain.concept_ranking import RANKING_POLICY_SHA256, RANKING_POLICY_VERSION
 from app.domain.dialogue import (
     ConversationEventInput,
@@ -157,9 +157,7 @@ def test_preference_catalog_etag_replays_support_manifest(repository) -> None:  
         "temperatures": "additional",
         "price_bands": "exact",
     }
-    assert {
-        category["code"]: category["group"] for category in payload["categories"]
-    } == {
+    assert {category["code"]: category["group"] for category in payload["categories"]} == {
         code: group
         for code, group in expected_groups.items()
         if any(category["code"] == code for category in payload["categories"])
@@ -289,9 +287,7 @@ def test_rankings_and_featured_collections_honor_criteria_and_snapshot_selection
                 for collection in rankings.values()
                 for item in collection.items
             )
-            assert len(
-                {collection.items[0].menu.menu_id for collection in rankings.values()}
-            ) == 3
+            assert len({collection.items[0].menu.menu_id for collection in rankings.values()}) == 3
             snapshot_id = first.snapshot_id
             assert "demo" in first.demo_basis.lower()
         else:
@@ -513,9 +509,7 @@ def test_criteria_and_request_ledger_state_and_idempotency(
     assert completed.ranking_trace_json["grounding_rejection_code"] == (
         "CATEGORY_EVIDENCE_NOT_OWNED"
     )
-    assert completed.ranking_trace_json["grounding_rejection_stage"] == (
-        "EVIDENCE_GROUNDING"
-    )
+    assert completed.ranking_trace_json["grounding_rejection_stage"] == ("EVIDENCE_GROUNDING")
     assert completed.ranking_trace_json["grounding_rejection_detail"] == (
         "matched_criteria.0.evidence_ids:value_error"
     )
@@ -731,9 +725,7 @@ def test_live_projection_keeps_current_price_but_removes_unavailable_menu(
     assert len(pool) >= 2
     repriced, unavailable = pool[:2]
     with repository._connection() as connection:
-        connection.execute(
-            "UPDATE menu SET price=40000 WHERE menu_id=?", (repriced.menu_id,)
-        )
+        connection.execute("UPDATE menu SET price=40000 WHERE menu_id=?", (repriced.menu_id,))
         connection.execute(
             "UPDATE menu SET availability='UNAVAILABLE' WHERE menu_id=?",
             (unavailable.menu_id,),
@@ -749,6 +741,125 @@ def test_live_projection_keeps_current_price_but_removes_unavailable_menu(
 
     assert states[repriced.menu_id].menu.price == 40_000
     assert unavailable.menu_id not in states
+
+
+def test_v3_synthetic_halal_candidates_survive_live_revalidation(
+    repository: SQLiteYobiRepository,
+) -> None:
+    profile = _profile(repository)
+    session = repository.create_session(profile.profile_id)
+    family = repository.get_active_recommendation_release_family()
+    assert family is not None
+    release_id = "synthetic-live-halal-regression-v1"
+    generated_at = datetime.now(timezone.utc).isoformat()
+    with repository._connection() as connection:
+        menu_rows = connection.execute(
+            """
+            SELECT DISTINCT menu.menu_id
+            FROM recommendation_runtime_state state
+            JOIN recommendation_release_family family
+              ON family.release_family_id=state.active_release_family_id
+            JOIN menu_concept_map mapping
+              ON mapping.release_id=family.knowledge_release_id
+             AND mapping.mapping_status='MAPPED' AND mapping.confidence_band='high'
+            JOIN menu ON menu.menu_id=mapping.menu_id
+            WHERE state.state_key='ACTIVE' AND menu.availability='AVAILABLE'
+            ORDER BY menu.menu_id LIMIT 2
+            """
+        ).fetchall()
+        assert len(menu_rows) == 2
+        halal_menu_id, non_halal_menu_id = (str(row["menu_id"]) for row in menu_rows)
+        connection.execute(
+            """
+            INSERT INTO synthetic_enrichment_release(
+              release_id,catalog_release_id,knowledge_release_id,seed_value,
+              generator_version,manifest_sha256,status,created_at,activated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                release_id,
+                family.catalog_release_id,
+                family.knowledge_release_id,
+                "regression-seed",
+                "regression-generator",
+                "a" * 64,
+                "ACTIVE",
+                generated_at,
+                generated_at,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO synthetic_country_profile(
+              release_id,country_code,spice_baseline,affinity_score,affinity_json
+            ) VALUES (?,?,?,?,?)
+            """,
+            (release_id, "US", 3, 0.5, "{}"),
+        )
+        connection.executemany(
+            """
+            INSERT INTO synthetic_menu_profile(
+              release_id,menu_id,spice_level,halal_fit,vegan_fit,
+              source_type,generator_version,seed_hash
+            ) VALUES (?,?,?,?,?,?,?,?)
+            """,
+            [
+                (
+                    release_id,
+                    halal_menu_id,
+                    3,
+                    1,
+                    0,
+                    "SYNTHETIC_DEMO",
+                    "regression-generator",
+                    "b" * 64,
+                ),
+                (
+                    release_id,
+                    non_halal_menu_id,
+                    3,
+                    0,
+                    0,
+                    "SYNTHETIC_DEMO",
+                    "regression-generator",
+                    "c" * 64,
+                ),
+            ],
+        )
+        connection.execute(
+            """
+            UPDATE recommendation_release_family
+            SET synthetic_enrichment_release_id=?
+            WHERE release_family_id=?
+            """,
+            (release_id, family.release_family_id),
+        )
+    criteria = RecommendationCriteriaV2.model_validate(
+        {
+            "schema_version": "3",
+            "price_range_krw": {"min": 0, "max": 100_000},
+            "spice_preference": "SIMILAR",
+            "spice_reference_country": "US",
+            "dietary_filters": {"halal_certified_only": True},
+        }
+    )
+    eligibility_as_of = datetime.now(timezone.utc)
+    states = repository.get_live_recommendation_menu_states(
+        session.session_id,
+        criteria,
+        family.release_family_id,
+        [halal_menu_id, non_halal_menu_id],
+        at=eligibility_as_of,
+    )
+
+    assert set(states) == {halal_menu_id}
+    assert states[halal_menu_id].halal_certified is True
+    assert {state.halal_scope_label for state in states.values()} == {
+        "Synthetic halal-friendly profile"
+    }
+    _commit(repository, session.session_id, criteria)
+    rankings = repository.list_food_rankings(session.session_id, "review_count", 20)
+    assert [item.menu.menu_id for item in rankings.items] == [halal_menu_id]
 
 
 def test_snapshot_completion_revalidates_filters_increments_once_and_hides_audit(
@@ -964,7 +1075,33 @@ def test_options_api_returns_v2_halal_and_vegan_state_contract(
     assert certified_items["oi_001_01_fishcake_remove"]["vegan_status"] == "CONFLICT"
 
     assert uncertified_response.status_code == 200
-    uncertified_items = [item for group in uncertified_response.json() for item in group["items"]]
+    uncertified_items = [
+        item for group in uncertified_response.json() for item in group["items"]
+    ]
     assert uncertified_items
     assert all(item["halal_certification_preserved"] is None for item in uncertified_items)
     assert all(item["halal_certification_preserved"] is not False for item in uncertified_items)
+
+
+def test_options_api_precomputed_mode_bypasses_runtime_model_localization(
+    repository: SQLiteYobiRepository,
+) -> None:
+    class UnexpectedRuntimeLocalization:
+        def get_options(self, menu_id: str, session_id: str | None) -> list[object]:
+            del menu_id, session_id
+            raise AssertionError("runtime option localization must not run")
+
+    app.dependency_overrides[get_repository] = lambda: repository
+    app.dependency_overrides[get_option_localization_service] = (
+        lambda: UnexpectedRuntimeLocalization()
+    )
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/v1/menus/menu_001_01/options?precomputed_only=true"
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()

@@ -64,9 +64,31 @@ VeganEvidenceStatus = Literal[
     "UNKNOWN",
 ]
 
+_PRICE_BAND_BOUNDS: dict[str, tuple[int | None, int | None]] = {
+    "UNDER_10000": (None, 10_000),
+    "FROM_10000_TO_19999": (10_000, 20_000),
+    "FROM_20000_TO_29999": (20_000, 30_000),
+    "OVER_30000": (30_000, None),
+}
+
 
 def _normalized_codes(values: list[str]) -> list[str]:
     return list(dict.fromkeys(value.strip().upper() for value in values if value.strip()))
+
+
+def price_matches_bands(price: int, selected_bands: list[str]) -> bool:
+    """Apply the schema-v2 price-band contract identically in every repository."""
+
+    if not selected_bands:
+        return True
+    for code in selected_bands:
+        bounds = _PRICE_BAND_BOUNDS.get(code)
+        if bounds is None:
+            continue
+        lower, upper = bounds
+        if (lower is None or price >= lower) and (upper is None or price < upper):
+            return True
+    return False
 
 
 class DietaryFiltersV2(BaseModel):
@@ -158,6 +180,7 @@ class RecommendationCriteriaV2(BaseModel):
             self.subjective_groups()
             or self.price_bands
             or self.price_range_krw is not None
+            or self.max_spice_level < 5
             or self.dietary_filters.halal_certified_only
             or self.dietary_filters.vegan
         )

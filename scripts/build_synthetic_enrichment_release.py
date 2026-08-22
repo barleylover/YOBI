@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sqlite3
 import sys
@@ -26,6 +27,7 @@ from app.demo_enrichment import (
     manifest_sha256,
     validate_enrichment_rows,
 )
+from app.genai.presentation_generator import source_translation_is_safe
 from protected_base_fingerprint import (
     oracle_base_fingerprint,
     protected_base_fingerprint,
@@ -49,7 +51,7 @@ def _load_sqlite_inputs(path: Path) -> tuple[str, str, list[EnrichmentMenu], lis
             raise RuntimeError("ACTIVE_RECOMMENDATION_FAMILY_REQUIRED")
         menu_rows = connection.execute(
             """
-            SELECT menu.menu_id,menu.name_ko,
+            SELECT menu.menu_id,menu.name_en,menu.name_ko,menu.description,
                    COALESCE(group_concat(feature.option_code,' '),'') AS feature_codes
             FROM menu_wiki_eligibility eligibility
             JOIN menu ON menu.menu_id=eligibility.menu_id
@@ -58,7 +60,7 @@ def _load_sqlite_inputs(path: Path) -> tuple[str, str, list[EnrichmentMenu], lis
              AND feature.menu_id=eligibility.menu_id
              AND feature.support_status='SUPPORTED'
             WHERE eligibility.knowledge_release_id=?
-            GROUP BY menu.menu_id,menu.name_ko
+            GROUP BY menu.menu_id,menu.name_en,menu.name_ko,menu.description
             ORDER BY menu.menu_id
             """,
             (str(active["knowledge_release_id"]),),
@@ -77,6 +79,8 @@ def _load_sqlite_inputs(path: Path) -> tuple[str, str, list[EnrichmentMenu], lis
                 menu_id=str(row["menu_id"]),
                 name_ko=str(row["name_ko"]),
                 feature_codes=tuple(str(row["feature_codes"] or "").split()),
+                name_en=str(row["name_en"] or ""),
+                description=str(row["description"] or ""),
             )
             for row in menu_rows
         ]
@@ -100,6 +104,21 @@ def _oracle_credentials(settings: Settings) -> tuple[str, str, str]:
     return settings.db_username, password, dsn
 
 
+def _synthetic_family_id(previous_family_id: str, release_id: str, manifest: str) -> str:
+    """Create a distinct bounded family ID even when the previous ID is already 160 chars."""
+
+    digest = hashlib.sha256(
+        f"{previous_family_id}\0{release_id}\0{manifest}".encode()
+    ).hexdigest()[:16]
+    suffix = f"-syn-{digest}"
+    return f"{previous_family_id[: 160 - len(suffix)]}{suffix}"
+
+
+def _database_text(value: Any) -> str:
+    reader = getattr(value, "read", None)
+    return str(reader() if callable(reader) else value or "")
+
+
 def _load_oracle_inputs(
     settings: Settings,
 ) -> tuple[str, str, list[EnrichmentMenu], list[EnrichmentOption]]:
@@ -121,7 +140,7 @@ def _load_oracle_inputs(
         catalog_release_id, knowledge_release_id = map(str, active)
         cursor.execute(
             """
-            SELECT menu.menu_id,menu.name_ko,
+            SELECT menu.menu_id,menu.name_en,menu.name_ko,menu.description,
                    LISTAGG(feature.option_code,' ') WITHIN GROUP (ORDER BY feature.option_code)
             FROM menu_wiki_eligibility eligibility
             JOIN menu ON menu.menu_id=eligibility.menu_id
@@ -130,14 +149,20 @@ def _load_oracle_inputs(
              AND feature.menu_id=eligibility.menu_id
              AND feature.support_status='SUPPORTED'
             WHERE eligibility.knowledge_release_id=:knowledge_release_id
-            GROUP BY menu.menu_id,menu.name_ko
+            GROUP BY menu.menu_id,menu.name_en,menu.name_ko,menu.description
             ORDER BY menu.menu_id
             """,
             knowledge_release_id=knowledge_release_id,
         )
         menus = [
-            EnrichmentMenu(str(menu_id), str(name_ko), tuple(str(features or "").split()))
-            for menu_id, name_ko, features in cursor.fetchall()
+            EnrichmentMenu(
+                str(menu_id),
+                str(name_ko),
+                tuple(str(features or "").split()),
+                str(name_en or ""),
+                _database_text(description),
+            )
+            for menu_id, name_en, name_ko, description, features in cursor.fetchall()
         ]
         menu_ids = {menu.menu_id for menu in menus}
         cursor.execute(
@@ -196,6 +221,11 @@ _ORACLE_PRIMARY_KEYS = {
     "synthetic_menu_country_preference": ("release_id", "menu_id", "country_code"),
     "synthetic_review_snippet": ("review_id",),
     "menu_localization": ("release_id", "menu_id", "language_code"),
+    "menu_source_description_localization": (
+        "release_id",
+        "menu_id",
+        "language_code",
+    ),
 }
 
 
@@ -223,7 +253,12 @@ def _oracle_merge_many(
 def _copy_active_menu_localizations_oracle(
     cursor: oracledb.Cursor, *, release_id: str
 ) -> None:
-    """Carry forward validated identity titles without copying runtime copy caches."""
+    """Carry forward validated titles and same-catalog source translations.
+
+    Presentation prose caches remain release-local. Restaurant-description translations are
+    immutable-source localizations, so the newest validated value from the same catalog can be
+    reused safely when a later presentation call is unavailable or rejects one menu.
+    """
     cursor.execute(
         """
         MERGE INTO menu_localization target
@@ -259,12 +294,74 @@ def _copy_active_menu_localizations_oracle(
         """,
         release_id=release_id,
     )
+    cursor.execute(
+        """
+        SELECT localization.menu_id,localization.language_code,
+               localization.description_text,localization.model_id,
+               localization.prompt_version,localization.source_hash,
+               localization.validation_status,localization.generated_at,
+               menu.description
+        FROM recommendation_runtime_state runtime_state
+        JOIN recommendation_release_family active_family
+          ON active_family.release_family_id=runtime_state.active_release_family_id
+        JOIN synthetic_menu_profile target_profile
+          ON target_profile.release_id=:release_id
+        JOIN menu ON menu.menu_id=target_profile.menu_id
+        JOIN synthetic_enrichment_release source_release
+          ON source_release.catalog_release_id=active_family.catalog_release_id
+         AND source_release.status IN ('READY','ACTIVE','RETIRED')
+         AND source_release.release_id<>:release_id
+        JOIN menu_source_description_localization localization
+          ON localization.release_id=source_release.release_id
+         AND localization.menu_id=target_profile.menu_id
+        WHERE runtime_state.state_key='ACTIVE'
+          AND localization.validation_status='VALID'
+          AND localization.language_code IN ('en','ja')
+        ORDER BY localization.menu_id,localization.language_code,
+                 localization.generated_at DESC NULLS LAST,
+                 localization.release_id DESC
+        """,
+        release_id=release_id,
+    )
+    source_rows: list[dict[str, Any]] = []
+    accepted_keys: set[tuple[str, str]] = set()
+    for row in cursor.fetchall():
+        menu_id = str(row[0])
+        language_code = str(row[1])
+        key = (menu_id, language_code)
+        if key in accepted_keys:
+            continue
+        description_text = _database_text(row[2])
+        source_description = _database_text(row[8])
+        if not source_translation_is_safe(
+            source_description, description_text, language_code
+        ):
+            continue
+        source_rows.append(
+            {
+                "release_id": release_id,
+                "menu_id": menu_id,
+                "language_code": language_code,
+                "description_text": description_text,
+                "model_id": str(row[3]),
+                "prompt_version": str(row[4]),
+                "source_hash": str(row[5]),
+                "validation_status": str(row[6]),
+                "generated_at": row[7],
+            }
+        )
+        accepted_keys.add(key)
+    _oracle_merge_many(
+        cursor,
+        "menu_source_description_localization",
+        source_rows,
+    )
 
 
 def _copy_active_menu_localizations_sqlite(
     connection: sqlite3.Connection, *, release_id: str
 ) -> None:
-    """SQLite equivalent of the release-to-release identity-title carry-forward."""
+    """SQLite equivalent of the release-to-release localization carry-forward."""
     connection.execute(
         """
         INSERT INTO menu_localization(
@@ -291,6 +388,62 @@ def _copy_active_menu_localizations_sqlite(
         """,
         (release_id, release_id),
     )
+    candidates = connection.execute(
+        """
+        SELECT localization.menu_id,localization.language_code,
+               localization.description_text,localization.model_id,
+               localization.prompt_version,localization.source_hash,
+               localization.validation_status,localization.generated_at,
+               menu.description
+        FROM recommendation_runtime_state runtime_state
+        JOIN recommendation_release_family active_family
+          ON active_family.release_family_id=runtime_state.active_release_family_id
+        JOIN synthetic_menu_profile target_profile
+          ON target_profile.release_id=?
+        JOIN menu ON menu.menu_id=target_profile.menu_id
+        JOIN synthetic_enrichment_release source_release
+          ON source_release.catalog_release_id=active_family.catalog_release_id
+         AND source_release.status IN ('READY','ACTIVE','RETIRED')
+         AND source_release.release_id<>?
+        JOIN menu_source_description_localization localization
+          ON localization.release_id=source_release.release_id
+         AND localization.menu_id=target_profile.menu_id
+        WHERE runtime_state.state_key='ACTIVE'
+          AND localization.validation_status='VALID'
+          AND localization.language_code IN ('en','ja')
+        ORDER BY localization.menu_id,localization.language_code,
+                 localization.generated_at DESC,localization.release_id DESC
+        """,
+        (release_id, release_id),
+    ).fetchall()
+    source_rows: list[dict[str, Any]] = []
+    accepted_keys: set[tuple[str, str]] = set()
+    for row in candidates:
+        menu_id = str(row[0])
+        language_code = str(row[1])
+        key = (menu_id, language_code)
+        if key in accepted_keys:
+            continue
+        description_text = str(row[2])
+        if not source_translation_is_safe(
+            str(row[8] or ""), description_text, language_code
+        ):
+            continue
+        source_rows.append(
+            {
+                "release_id": release_id,
+                "menu_id": menu_id,
+                "language_code": language_code,
+                "description_text": description_text,
+                "model_id": str(row[3]),
+                "prompt_version": str(row[4]),
+                "source_hash": str(row[5]),
+                "validation_status": str(row[6]),
+                "generated_at": str(row[7]),
+            }
+        )
+        accepted_keys.add(key)
+    _upsert_many(connection, "menu_source_description_localization", source_rows)
 
 
 def _oracle_clone_and_activate_family(
@@ -325,7 +478,7 @@ def _oracle_clone_and_activate_family(
     if payload.get("synthetic_enrichment_release_id") == release_id:
         family_id = previous_family_id
     else:
-        family_id = f"{previous_family_id}-syn-{manifest[:12]}"[:160]
+        family_id = _synthetic_family_id(previous_family_id, release_id, manifest)
         payload.update(
             release_family_id=family_id,
             synthetic_enrichment_release_id=release_id,
@@ -618,7 +771,9 @@ def _apply_sqlite(
             active_family_id = (
                 str(family["release_family_id"])
                 if family["synthetic_enrichment_release_id"] == release_id
-                else f"{family['release_family_id']!s}-syn-{manifest[:12]}"[:160]
+                else _synthetic_family_id(
+                    str(family["release_family_id"]), release_id, manifest
+                )
             )
             family_payload = {column: family[column] for column in family_columns}
             family_payload.update(

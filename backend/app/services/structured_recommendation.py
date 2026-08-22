@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 from time import monotonic
@@ -46,8 +47,10 @@ from app.genai.recommendation_generator import (
     RecommendationGenerator,
 )
 from app.services.demo_control import DemoControl
+from app.services.keyed_lock import KeyedLockRegistry
 from app.services.menu_presentation import (
     MenuPresentationService,
+    deterministic_localized_source_description,
     deterministic_localized_subtitle,
 )
 
@@ -99,13 +102,10 @@ def compact_generation_payload(
             for value in category.values():
                 if not isinstance(value, dict):
                     continue
-                references = value.get("evidence", [])
-                if isinstance(references, list):
-                    value["evidence"] = [
-                        {key: field for key, field in reference.items() if key != "content"}
-                        for reference in references
-                        if isinstance(reference, dict)
-                    ]
+                # The category/value mapping plus evidence_ids is sufficient
+                # for selection. Full evidence reference objects are repeated
+                # metadata; the server retains and validates the originals.
+                value.pop("evidence", None)
     return payload
 
 
@@ -128,11 +128,25 @@ class StructuredRecommendationService:
         self.presentation_service = presentation_service or MenuPresentationService(
             repository, settings
         )
-        self._preference_selection_metrics: dict[str, dict[str, float | int]] = {}
-        self._comparison_locks: dict[str, Lock] = {}
-        self._request_locks: dict[str, Lock] = {}
+        self._preference_selection_metrics: OrderedDict[
+            str, dict[str, float | int]
+        ] = OrderedDict()
+        self._comparison_locks = KeyedLockRegistry()
+        self._request_locks = KeyedLockRegistry()
         self._request_registry_lock = Lock()
         self._active_request_keys: set[str] = set()
+
+    def _remember_preference_selection_metric(
+        self,
+        session_id: str,
+        metric: dict[str, float | int],
+    ) -> None:
+        """Bound abandoned preview metrics so the process cannot grow per session forever."""
+
+        self._preference_selection_metrics[session_id] = metric
+        self._preference_selection_metrics.move_to_end(session_id)
+        while len(self._preference_selection_metrics) > 2_048:
+            self._preference_selection_metrics.popitem(last=False)
 
     def commit_criteria(
         self,
@@ -196,10 +210,13 @@ class StructuredRecommendationService:
                 else ("add" if selected_option_count > previous_count else "no_change")
             )
         )
-        self._preference_selection_metrics[session.session_id] = {
-            "started": float(previous["started"]) if previous else monotonic(),
-            "last_option_count": selected_option_count,
-        }
+        self._remember_preference_selection_metric(
+            session.session_id,
+            {
+                "started": float(previous["started"]) if previous else monotonic(),
+                "last_option_count": selected_option_count,
+            },
+        )
         log_event(
             logging.getLogger("yobi"),
             event="recommendation_preference_preview",
@@ -282,9 +299,8 @@ class StructuredRecommendationService:
         """
 
         lock_key = self._request_lock_key(session.session_id, request.request_id)
-        lock = self._request_locks.setdefault(lock_key, Lock())
         try:
-            with lock:
+            with self._request_locks.hold(lock_key):
                 try:
                     return self._process_reserved_recommendation(session, profile, request)
                 except Exception as exc:
@@ -296,8 +312,6 @@ class StructuredRecommendationService:
         finally:
             with self._request_registry_lock:
                 self._active_request_keys.discard(lock_key)
-                if self._request_locks.get(lock_key) is lock:
-                    self._request_locks.pop(lock_key, None)
 
     @staticmethod
     def _request_lock_key(session_id: str, request_id: str) -> str:
@@ -409,6 +423,49 @@ class StructuredRecommendationService:
         if dispatched.status is not RecommendationRequestStatus.DISPATCHED or dispatched.duplicate:
             return self._batch_from_record(dispatched)
 
+        # The selection contract deliberately requires exactly three items. When every active
+        # hard filter leaves only one or two grounded menus, do not call the model with an
+        # impossible schema or report a provider failure. Persist the complete strict-match set
+        # as a deterministic fallback while keeping dispatch_count at zero.
+        if len(evidence_pool) < 3:
+            fallback_json = self._search_fallback_payload(
+                criteria_record,
+                evidence_pool,
+                profile.preferred_language,
+                caution_code="STRICT_MATCH_UNDERFILLED",
+            )
+            fallback_snapshot = self._snapshot_for_result(
+                session=session,
+                request_id=request.request_id,
+                request_state_version=dispatched.state_version,
+                result_json=fallback_json,
+                evidence_pool=evidence_pool,
+            )
+            persistence_started = monotonic()
+            completed = self.repository.complete_recommendation_request(
+                session.session_id,
+                request.request_id,
+                RecommendationRequestStatus.SEARCH_FALLBACK,
+                result_json=fallback_json,
+                snapshot=fallback_snapshot,
+                failure_code="STRICT_MATCH_UNDERFILLED",
+            )
+            persistence_ms = int((monotonic() - persistence_started) * 1000)
+            self._log_terminal_timing(
+                session=session,
+                request=request,
+                record=completed,
+                criteria_ms=criteria_ms,
+                retrieval_ms=retrieval_ms,
+                retrieval_metrics=retrieval_metrics,
+                freeze_ms=freeze_ms,
+                provider_ms=0,
+                persistence_ms=persistence_ms,
+                started=started,
+                final_count=len(evidence_pool),
+            )
+            return self._batch_from_record(completed)
+
         display_locale, _display_language = _effective_display_language(profile.preferred_language)
         # Selection must be identical for equivalent criteria regardless of
         # nationality/language. Visitor context is consumed only by presentation.
@@ -416,6 +473,8 @@ class StructuredRecommendationService:
         provider_started = monotonic()
         provider_metrics: dict[str, int] = {}
         provider_attempt_sequence = 0
+        selection_ms = 0
+        presentation_ms = 0
 
         def mark_provider_call() -> None:
             called = self.repository.mark_recommendation_provider_called(
@@ -458,34 +517,50 @@ class StructuredRecommendationService:
                 raise RuntimeError("DEMO_FORCED_RECOMMENDATION_FALLBACK")
             if not self.settings.recommendation_llm_selection_enabled:
                 raise RuntimeError("RECOMMENDATION_LLM_SELECTION_DISABLED")
-            generated = self.generator.generate(
-                criteria=criteria_record.criteria.model_dump(mode="json"),
-                soft_profile_context=soft_profile_context,
-                evidence_pool=pool_payload,
-                # Selection has no user-facing prose. Keep this prompt byte-for-byte
-                # stable across visitor languages; localization happens only after
-                # the three selected menu IDs pass grounding validation.
-                locale="English",
-                before_provider_call=mark_provider_call,
-                on_provider_attempt=lambda *args: record_provider_attempt("SELECTION", *args),
-            )
+            selection_started = monotonic()
+            try:
+                generated = self.generator.generate(
+                    criteria=criteria_record.criteria.model_dump(mode="json"),
+                    soft_profile_context=soft_profile_context,
+                    evidence_pool=pool_payload,
+                    # Selection has no user-facing prose. Keep this prompt byte-for-byte
+                    # stable across visitor languages; localization happens only after
+                    # the three selected menu IDs pass grounding validation.
+                    locale="English",
+                    before_provider_call=mark_provider_call,
+                    on_provider_attempt=lambda *args: record_provider_attempt(
+                        "SELECTION", *args
+                    ),
+                )
+            finally:
+                selection_ms = int((monotonic() - selection_started) * 1000)
             provider_metrics = generated.provider_metrics
             if generated.status is RecommendationGenerationStatus.NO_MATCH:
                 raise ValueError("GENERATOR_NO_MATCH_NOT_AUTHORIZED")
             selected_pool = {item.menu.menu_id: item for item in evidence_pool}
             selected_evidence = [selected_pool[item.menu_id] for item in generated.recommendations]
-            presentations = self.presentation_service.present_selected(
-                selected_evidence,
-                session_id=session.session_id,
-                language_code=display_locale,
-                country_code=profile.country_code or "ZZ",
-                on_provider_attempt=lambda *args: record_provider_attempt("PRESENTATION", *args),
-            )
+            presentation_started = monotonic()
+            try:
+                presentations = self.presentation_service.present_selected(
+                    selected_evidence,
+                    session_id=session.session_id,
+                    language_code=display_locale,
+                    country_code=profile.country_code or "ZZ",
+                    on_provider_attempt=lambda *args: record_provider_attempt(
+                        "PRESENTATION", *args
+                    ),
+                )
+            finally:
+                presentation_ms = int((monotonic() - presentation_started) * 1000)
             result_json = self._validated_result_payload(
                 generated,
                 evidence_pool,
                 presentations,
                 max_wiki_passages=self.settings.recommendation_llm_passages_per_menu,
+                criteria_summary=self._criteria_fallback_summary(
+                    criteria_record,
+                    profile.preferred_language,
+                ),
             )
             status = RecommendationRequestStatus.COMPLETED
             snapshot = self._snapshot_for_result(
@@ -570,6 +645,8 @@ class StructuredRecommendationService:
             persistence_ms=persistence_ms,
             started=started,
             final_count=len((completed.result_json or {}).get("recommendations", [])),
+            selection_ms=selection_ms,
+            presentation_ms=presentation_ms,
         )
         return self._live_batch(completed)
 
@@ -675,6 +752,8 @@ class StructuredRecommendationService:
         persistence_ms: int,
         started: float,
         final_count: int,
+        selection_ms: int = 0,
+        presentation_ms: int = 0,
     ) -> None:
         fields: dict[str, Any] = {
             "event": "structured_recommendation_terminal",
@@ -686,6 +765,8 @@ class StructuredRecommendationService:
             "retrieval_total_ms": retrieval_ms,
             "freeze_ms": freeze_ms,
             "provider_ms": provider_ms,
+            "selection_ms": selection_ms,
+            "presentation_ms": presentation_ms,
             "persistence_ms": persistence_ms,
             "total_ms": int((monotonic() - started) * 1000),
             "final_count": final_count,
@@ -804,8 +885,7 @@ class StructuredRecommendationService:
         request: RecommendationComparisonRequest,
     ) -> RecommendationComparisonV2:
         lock_key = f"{session.session_id}:{request.request_id}"
-        lock = self._comparison_locks.setdefault(lock_key, Lock())
-        with lock:
+        with self._comparison_locks.hold(lock_key):
             return self._compare_recommendations_locked(session, profile, request)
 
     def _compare_recommendations_locked(
@@ -1087,7 +1167,9 @@ class StructuredRecommendationService:
             values.append(copy.halal_only)
         if record.criteria.dietary_filters.vegan:
             values.append(copy.vegan)
-        return "; ".join(values) or copy.criteria_default
+        if not values:
+            return copy.criteria_default
+        return f"{copy.criteria_default}: {'; '.join(values)}"
 
     def _generation_payload(self, item: EvidencePoolItem) -> dict[str, Any]:
         """Send only fields needed for bounded selection and evidence validation."""
@@ -1104,6 +1186,7 @@ class StructuredRecommendationService:
         presentations: dict[str, Any],
         *,
         max_wiki_passages: int,
+        criteria_summary: str,
     ) -> dict[str, Any]:
         pool_by_id = {item.menu.menu_id: item for item in evidence_pool}
         recommendations: list[dict[str, Any]] = []
@@ -1148,7 +1231,7 @@ class StructuredRecommendationService:
             )
         return {
             "status": "RECOMMENDED",
-            "criteria_summary": generated.criteria_summary,
+            "criteria_summary": criteria_summary,
             "recommendations": recommendations,
             "unmatched_category_codes": generated.unmatched_category_codes,
         }
@@ -1159,6 +1242,8 @@ class StructuredRecommendationService:
         criteria_record: RecommendationCriteriaRecord,
         evidence_pool: list[EvidencePoolItem],
         preferred_language: str,
+        *,
+        caution_code: str = "GENERATION_UNAVAILABLE",
     ) -> dict[str, Any]:
         locale, display_language = _effective_display_language(preferred_language)
         copy = localized_recommendation_fallback_copy(display_language)
@@ -1205,10 +1290,10 @@ class StructuredRecommendationService:
                     ),
                     "yobi_short_explanation": presentation_copy.short_explanation,
                     "yobi_long_explanation": presentation_copy.long_explanation,
-                    "source_description": (
-                        item.localized_source_description
-                        if locale != "ko" and item.localized_source_description
-                        else item.menu.description
+                    "source_description": deterministic_localized_source_description(
+                        locale,
+                        source_ko=item.menu.description,
+                        candidates=[item.localized_source_description],
                     ),
                     "review_summary": presentation_copy.review_summary,
                     "country_preference": item.country_preference,
@@ -1229,7 +1314,7 @@ class StructuredRecommendationService:
                     ],
                     "wiki_evidence_ids": [passage.evidence_id for passage in passages],
                     "wiki_passages": [passage.model_dump(mode="json") for passage in passages],
-                    "caution_codes": ["GENERATION_UNAVAILABLE"],
+                    "caution_codes": [caution_code],
                     "halal_certified": item.halal_certified,
                     "halal_scope_label": item.halal_scope_label,
                     "vegan_status": item.vegan_status,

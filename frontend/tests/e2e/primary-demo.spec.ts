@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
-import { completeCurrentOptions, selectFirstPreferenceAndRecommend, startStructuredSession } from "./structured-helpers";
+import {
+  completeCurrentOptions,
+  reachCurrentRestaurantNote,
+  selectFirstPreferenceAndRecommend,
+  startStructuredSession,
+} from "./structured-helpers";
 
 test("primary tourist flow selects criteria, recommends once and reaches the order builder", async ({ page }) => {
   const consoleErrors: string[] = [];
@@ -54,12 +59,7 @@ test("primary tourist flow selects criteria, recommends once and reaches the ord
   await page.getByRole("button", { name: "Choose this menu" }).first().click();
   await expect(page.getByTestId("order-flow")).toBeVisible();
   if (process.env.YOBI_E2E_LIVE_MODEL_ROLES === "1") {
-    const optionGroup = page.locator("[data-testid^='option-group-']:visible").first();
-    if (await optionGroup.isVisible().catch(() => false)) {
-      await page.getByRole("button", { name: /Use defaults for the rest/ }).click();
-    }
-    const note = page.locator("textarea.v2-note-input");
-    await expect(note).toBeVisible();
+    const note = await reachCurrentRestaurantNote(page);
     await note.fill("Please leave the sauce on the side.");
     await page.getByRole("button", { name: "Translate to Korean" }).click();
     await expect(page.locator(".v2-translation-preview")).toContainText(/[가-힣]/, {

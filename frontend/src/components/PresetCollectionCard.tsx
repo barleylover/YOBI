@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Clock3, MapPin } from "lucide-react";
 import { useI18n } from "../lib/i18n";
-import { menuName } from "../lib/locale";
+import { menuName, merchantName } from "../lib/locale";
 import type { CardPayload, MenuSummary } from "../types";
 
 interface Props {
@@ -55,7 +55,7 @@ export function PresetCollectionCard({ card, onChooseMenu, disabled = false }: P
             <div className="preset-body">
               {language === "English" && <p className="preset-description">{entry.description}</p>}
               <h4>{menuName(entry.menu, language)}</h4>
-              <p className="preset-merchant"><MapPin size={14} /> {language === "한국어" ? entry.label : entry.menu.merchant_name}</p>
+              <p className="preset-merchant"><MapPin size={14} /> {language === "한국어" ? entry.label : merchantName(entry.menu.merchant_name, language)}</p>
               <div className="preset-facts">
                 <strong>₩{entry.menu.price.toLocaleString(locale)}</strong>
                 <span><Clock3 size={14} /> {new Intl.NumberFormat(locale, { style: "unit", unit: "minute", unitDisplay: "short" }).format(entry.menu.eta_min)}–{new Intl.NumberFormat(locale, { style: "unit", unit: "minute", unitDisplay: "short" }).format(entry.menu.eta_max)}</span>

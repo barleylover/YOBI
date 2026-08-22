@@ -90,13 +90,22 @@ export async function selectFirstPreferenceAndRecommend(
   await expect(page.getByRole("button", { name: copy.choose, exact: true }).first()).toBeVisible({ timeout: 30_000 });
 }
 
-export async function completeCurrentOptions(page: Page, addToCartLabel = "Add to cart") {
+export async function reachCurrentRestaurantNote(page: Page) {
   const optionGroup = page.locator("[data-testid^='option-group-']:visible").first();
+  const note = page.locator("textarea.v2-note-input");
+  await Promise.race([
+    optionGroup.waitFor({ state: "visible" }),
+    note.waitFor({ state: "visible" }),
+  ]);
   if (await optionGroup.isVisible().catch(() => false)) {
     await page.getByRole("button", { name: /Use defaults for the rest|나머지는 기본값 사용|残りは標準設定/ }).click();
   }
-  const note = page.locator("textarea.v2-note-input");
   await expect(note).toBeVisible();
+  return note;
+}
+
+export async function completeCurrentOptions(page: Page, addToCartLabel = "Add to cart") {
+  const note = await reachCurrentRestaurantNote(page);
   await note.fill("");
   await expect(page.getByRole("button", { name: addToCartLabel, exact: true })).toBeEnabled();
   await page.getByRole("button", { name: addToCartLabel, exact: true }).click();

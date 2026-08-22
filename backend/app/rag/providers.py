@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from threading import Lock
+from time import monotonic, sleep
 from typing import Any, Literal, Protocol
 
 from app.core.config import Settings
+from app.core.logging import log_event
 from app.rag.embeddings import deterministic_embedding
 
 EmbeddingMode = Literal["SEARCH_DOCUMENT", "SEARCH_QUERY"]
@@ -39,6 +42,7 @@ class OCIEmbeddingProvider:
 
     version = "oci-native-embedtext-v1"
     max_inputs_per_request = 96
+    fast_transient_retry_window_seconds = 5.0
 
     def __init__(self, settings: Settings) -> None:
         compartment_id = settings.oci_compartment_id.get_secret_value().strip()
@@ -52,6 +56,10 @@ class OCIEmbeddingProvider:
         self.config_file = Path(settings.oci_embed_config_file).expanduser()
         self.config_profile = settings.oci_embed_config_profile
         self.timeout_seconds = settings.llm_timeout_seconds
+        self.transient_retry_delay_seconds = min(
+            settings.llm_retry_base_seconds,
+            settings.llm_retry_max_seconds,
+        )
         self._client: Any | None = None
         self._client_lock = Lock()
 
@@ -109,10 +117,36 @@ class OCIEmbeddingProvider:
         )
         import oci
 
-        response = self._client_for_request().embed_text(
-            details,
-            retry_strategy=oci.retry.NoneRetryStrategy(),
-        )
+        response: Any | None = None
+        for attempt in range(1, 3):
+            attempt_started = monotonic()
+            try:
+                response = self._client_for_request().embed_text(
+                    details,
+                    retry_strategy=oci.retry.NoneRetryStrategy(),
+                )
+                break
+            except oci.exceptions.RequestException as exc:
+                elapsed_seconds = monotonic() - attempt_started
+                # A request that fails immediately never reached a usable OCI
+                # response. Retry that network edge once, but do not double a
+                # full read timeout or retry HTTP/rate-limit ServiceErrors.
+                if (
+                    attempt >= 2
+                    or elapsed_seconds > self.fast_transient_retry_window_seconds
+                ):
+                    raise
+                log_event(
+                    logging.getLogger("yobi"),
+                    event="embedding_provider_fast_transient_retry",
+                    attempt=attempt,
+                    delay_ms=int(self.transient_retry_delay_seconds * 1_000),
+                    exception_type=type(exc).__name__,
+                )
+                if self.transient_retry_delay_seconds > 0:
+                    sleep(self.transient_retry_delay_seconds)
+        if response is None:  # pragma: no cover - loop exhaustiveness guard
+            raise RuntimeError("OCI_EMBEDDING_RESPONSE_MISSING")
         vectors = response.data.embeddings
         if vectors is None:
             embeddings_by_type = response.data.embeddings_by_type

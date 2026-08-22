@@ -8,7 +8,7 @@ import type { MenuSummary, RecommendationBatchV2 } from "../src/types";
 const menu: MenuSummary = {
   menu_id: "menu_chat_1",
   merchant_id: "merchant_chat_1",
-  merchant_name: "YOBI Kitchen",
+  merchant_name: "하루비어-동국대점",
   name_en: "Gimbap",
   name_ko: "김밥",
   localized_title: "Gimbap",
@@ -16,6 +16,7 @@ const menu: MenuSummary = {
   description: "Rice and vegetables wrapped in seaweed.",
   cultural_description: "A compact Korean meal.",
   price: 9000,
+  minimum_order_amount: 15000,
   delivery_fee: 2000,
   eta_min: 20,
   eta_max: 30,
@@ -68,6 +69,7 @@ const batch: RecommendationBatchV2 = {
     matched_criteria: [],
     wiki_passages: [],
     caution_codes: [],
+    halal_certified: true,
   })),
   unmatched_category_codes: [],
 };
@@ -89,14 +91,18 @@ describe("chat-style recommendation results", () => {
         language="English"
         locale="en-US"
         onChoose={vi.fn()}
-        onRetry={vi.fn()}
       />,
     );
 
     expect(screen.getAllByText("Gimbap").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Haru Beer - Dongguk Univ. Branch").length).toBeGreaterThan(0);
+    expect(screen.queryByText("하루비어-동국대점")).not.toBeInTheDocument();
     expect(screen.getByText("Seasoned rice and fillings rolled in seaweed")).toBeInTheDocument();
     expect(screen.getAllByText("YOBI:").length).toBeGreaterThan(0);
     expect(screen.getAllByText("YOGIYO:").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Minimum order ₩15,000").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Halal-friendly: yes").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Halal: yes")).not.toBeInTheDocument();
     expect(screen.queryByText("Legacy selection reason must stay hidden.")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /compare/i })).not.toBeInTheDocument();
     expect(document.querySelector(".rank-bar")).not.toBeInTheDocument();
@@ -129,7 +135,6 @@ describe("chat-style recommendation results", () => {
         language="العربية"
         locale="en"
         onChoose={vi.fn()}
-        onRetry={vi.fn()}
       />,
     );
 
@@ -160,7 +165,6 @@ describe("chat-style recommendation results", () => {
         language="English"
         locale="en-US"
         onChoose={vi.fn()}
-        onRetry={vi.fn()}
       />,
     );
 
@@ -178,12 +182,62 @@ describe("chat-style recommendation results", () => {
         language="English"
         locale="en-US"
         onChoose={vi.fn()}
-        onRetry={vi.fn()}
       />,
     );
 
     expect(document.querySelector(".v2-card-carousel")).toHaveAttribute("aria-label", "Picked for your preferences");
     expect(document.querySelectorAll(".v2-alimtalk-card")).toHaveLength(2);
     expect(screen.getAllByText("Bibimbap").length).toBeGreaterThan(0);
+  });
+
+  it("omits the duplicated retry action and the old spice-baseline helper", () => {
+    const fallbackBatch: RecommendationBatchV2 = {
+      ...batch,
+      status: "SEARCH_FALLBACK",
+      recommendations: [{
+        ...batch.recommendations[0],
+        menu: { ...batch.recommendations[0].menu, spice_level: null },
+      }],
+    };
+
+    render(
+      <RecommendationResults
+        batch={fallbackBatch}
+        copy={getRecommendationCopy("English")}
+        v2={getRedesignCopy("English")}
+        timestamp="10:05"
+        language="English"
+        locale="en-US"
+        onChoose={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Try recommendation again" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/familiar spice baseline/i)).not.toBeInTheDocument();
+  });
+
+  it("presents an underfilled strict match as a valid result instead of an LLM error", () => {
+    const underfilledBatch: RecommendationBatchV2 = {
+      ...batch,
+      status: "SEARCH_FALLBACK",
+      failure_code: "STRICT_MATCH_UNDERFILLED",
+      recommendations: [batch.recommendations[0]],
+    };
+
+    render(
+      <RecommendationResults
+        batch={underfilledBatch}
+        copy={getRecommendationCopy("English")}
+        v2={getRedesignCopy("English")}
+        timestamp="10:05"
+        language="English"
+        locale="en-US"
+        onChoose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByText("Picked for your preferences").length).toBeGreaterThan(0);
+    expect(screen.getByText("YOBI keeps every active choice unless you change it.")).toBeInTheDocument();
+    expect(screen.queryByText(/recommendation explanation could not be completed/i)).not.toBeInTheDocument();
   });
 });

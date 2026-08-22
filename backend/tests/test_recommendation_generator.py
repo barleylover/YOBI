@@ -120,6 +120,34 @@ class UsageProvider(FakeProvider):
         )
 
 
+class TruncatedThenSuccessProvider(FakeProvider):
+    def create_response(self, model: str, **kwargs: Any) -> Any:
+        self.calls.append({"model": model, **kwargs})
+        if len(self.calls) == 1:
+            return SimpleNamespace(
+                status="incomplete",
+                incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+                output_text='{"menu_ids":',
+                usage=SimpleNamespace(input_tokens=1_000, output_tokens=2_048),
+            )
+        return SimpleNamespace(
+            status="completed",
+            incomplete_details=None,
+            output_text=json.dumps(self.output),
+            usage=SimpleNamespace(input_tokens=1_000, output_tokens=300),
+        )
+
+
+class AlwaysTruncatedProvider(FakeProvider):
+    def create_response(self, model: str, **kwargs: Any) -> Any:
+        self.calls.append({"model": model, **kwargs})
+        return SimpleNamespace(
+            status="incomplete",
+            incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+            output_text='{"menu_ids":',
+        )
+
+
 def _criteria() -> dict[str, Any]:
     return {
         "cuisine_origins": ["KOREAN"],
@@ -228,12 +256,7 @@ def test_v3_presentation_copy_enforces_sentence_ranges() -> None:
 
 
 def test_generator_dispatches_once_without_tools_and_allows_bounded_rerank() -> None:
-    output = {
-        "status": "RECOMMENDED",
-        "criteria_summary": "Korean and spicy",
-        "recommendations": _recommendations_three(("dish-c", "dish-a", "dish-b")),
-        "unmatched_category_codes": [],
-    }
+    output = {"menu_ids": ["dish-c", "dish-a", "dish-b"]}
     provider = FakeProvider(output)
     generator = RecommendationGenerator(Settings(), provider=provider)
 
@@ -251,22 +274,22 @@ def test_generator_dispatches_once_without_tools_and_allows_bounded_rerank() -> 
     ]
     assert len(provider.calls) == 1
     assert provider.calls[0]["model"] == "openai.gpt-oss-120b"
-    assert provider.calls[0]["max_output_tokens"] == 4096
+    assert provider.calls[0]["max_output_tokens"] == 2048
     assert "tools" not in provider.calls[0]
     instructions = str(provider.calls[0]["instructions"])
-    assert "Return the JSON immediately without analysis or preamble." in instructions
-    assert "This call performs SELECTION only" in instructions
-    assert "do not write titles, explanations, review summaries" in instructions
+    assert "Return the JSON immediately without analysis" in instructions
+    assert "performs SELECTION only" in instructions
+    assert "Do not echo ranks, evidence, criteria" in instructions
     assert provider.calls[0]["text"]["format"]["strict"] is True
     request_payload = json.loads(provider.calls[0]["input"][0]["content"])
     assert request_payload["response_contract"] == provider.calls[0]["text"]["format"][
         "schema"
     ]
-    item_properties = request_payload["response_contract"]["properties"][
-        "recommendations"
-    ]["items"]["properties"]
-    assert "localized_title" not in item_properties
-    assert "yobi_short_explanation" not in item_properties
+    assert set(request_payload["response_contract"]["properties"]) == {"menu_ids"}
+    assert result.recommendations[0].matched_criteria[0].category_code == "cuisine_origins"
+    assert result.recommendations[0].matched_criteria[0].evidence_ids == [
+        "chunk-c-cuisine"
+    ]
 
 
 def test_generator_supplies_json_contract_without_native_structured_output() -> None:
@@ -293,14 +316,50 @@ def test_generator_supplies_json_contract_without_native_structured_output() -> 
     assert "text" not in provider.calls[0]
 
 
+def test_compact_and_legacy_selection_contracts_preserve_order_and_grounding() -> None:
+    ordered_ids = ("dish-c", "dish-a", "dish-b")
+    compact = RecommendationGenerator(
+        Settings(),
+        provider=FakeProvider({"menu_ids": list(ordered_ids)}),
+    ).generate(
+        criteria=_criteria(),
+        soft_profile_context={},
+        evidence_pool=_pool_three(),
+        locale="English",
+    )
+    legacy = RecommendationGenerator(
+        Settings(),
+        provider=FakeProvider(
+            {
+                "status": "RECOMMENDED",
+                "criteria_summary": "Korean and spicy",
+                "recommendations": _recommendations_three(ordered_ids),
+                "unmatched_category_codes": [],
+            }
+        ),
+    ).generate(
+        criteria=_criteria(),
+        soft_profile_context={},
+        evidence_pool=_pool_three(),
+        locale="English",
+    )
+
+    def selection_contract(result):
+        return [
+            (
+                item.menu_id,
+                [matched.model_dump() for matched in item.matched_criteria],
+                item.caution_codes,
+            )
+            for item in result.recommendations
+        ]
+
+    assert selection_contract(compact) == selection_contract(legacy)
+
+
 def test_generator_records_actual_usage_and_request_size_without_exposing_it_to_model() -> None:
     provider = UsageProvider(
-        {
-            "status": "RECOMMENDED",
-            "criteria_summary": "Korean and spicy",
-            "recommendations": _recommendations_three(),
-            "unmatched_category_codes": [],
-        }
+        {"menu_ids": ["dish-a", "dish-b", "dish-c"]}
     )
     result = RecommendationGenerator(Settings(), provider=provider).generate(
         criteria=_criteria(),
@@ -313,8 +372,49 @@ def test_generator_records_actual_usage_and_request_size_without_exposing_it_to_
     assert result.provider_metrics["output_tokens"] == 456
     assert result.provider_metrics["reasoning_tokens"] == 200
     assert result.provider_metrics["request_utf8_bytes"] > 0
-    assert result.provider_metrics["requested_max_output_tokens"] == 4096
+    assert result.provider_metrics["requested_max_output_tokens"] == 2048
     assert "provider_metrics" not in result.model_dump()
+
+
+def test_selection_retries_explicit_output_truncation_once_with_double_limit() -> None:
+    provider = TruncatedThenSuccessProvider(
+        {"menu_ids": ["dish-a", "dish-b", "dish-c"]}
+    )
+    attempts: list[tuple[int, str, str, str | None, dict[str, int]]] = []
+
+    result = RecommendationGenerator(Settings(), provider=provider).generate(
+        criteria=_criteria(),
+        soft_profile_context={},
+        evidence_pool=_pool_three(),
+        locale="English",
+        on_provider_attempt=lambda attempt_no, model, status, error, _latency, usage: (
+            attempts.append((attempt_no, model, status, error, usage))
+        ),
+    )
+
+    assert [call["max_output_tokens"] for call in provider.calls] == [2_048, 4_096]
+    assert [attempt[2:4] for attempt in attempts] == [
+        ("FAILED", "OUTPUT_TRUNCATED_MAX_OUTPUT_TOKENS"),
+        ("SUCCEEDED", None),
+    ]
+    assert result.provider_metrics["requested_max_output_tokens"] == 4_096
+    assert result.provider_metrics["output_tokens"] == 300
+
+
+def test_selection_stops_after_one_expanded_output_retry() -> None:
+    provider = AlwaysTruncatedProvider({})
+
+    with pytest.raises(GenAIProviderError) as caught:
+        RecommendationGenerator(Settings(), provider=provider).generate(
+            criteria=_criteria(),
+            soft_profile_context={},
+            evidence_pool=_pool_three(),
+            locale="English",
+        )
+
+    assert caught.value.code is GenAIErrorCode.CAPABILITY_LIMIT_EXCEEDED
+    assert caught.value.safe_reason_code == "OUTPUT_TRUNCATED_MAX_OUTPUT_TOKENS"
+    assert [call["max_output_tokens"] for call in provider.calls] == [2_048, 4_096]
 
 
 @pytest.mark.parametrize(
@@ -455,6 +555,26 @@ def test_generator_rejects_evidence_owned_by_another_menu() -> None:
     assert (
         caught.value.safe_reason_code
         == RecommendationGroundingRejectionCode.CATEGORY_EVIDENCE_NOT_OWNED.value
+    )
+    assert len(provider.calls) == 1
+
+
+def test_compact_selection_reconstructs_and_rechecks_server_owned_criterion_evidence() -> None:
+    pool = _pool_three()
+    pool[0]["criterion_evidence"].pop("flavors")
+    provider = FakeProvider({"menu_ids": ["dish-a", "dish-b", "dish-c"]})
+
+    with pytest.raises(GenAIProviderError) as caught:
+        RecommendationGenerator(Settings(), provider=provider).generate(
+            criteria=_criteria(),
+            soft_profile_context={},
+            evidence_pool=pool,
+            locale="English",
+        )
+
+    assert caught.value.code is GenAIErrorCode.GROUNDING_REJECTED
+    assert caught.value.safe_reason_code == (
+        RecommendationGroundingRejectionCode.MATCHED_CATEGORY_SET_MISMATCH.value
     )
     assert len(provider.calls) == 1
 
@@ -601,10 +721,8 @@ def test_generator_rejects_model_no_match_after_server_freezes_candidates() -> N
     assert "text" not in provider.calls[0]
 
 
-def test_generator_contract_requires_empty_unmatched_categories() -> None:
-    assert RECOMMENDATION_GENERATION_JSON_SCHEMA["properties"][
-        "unmatched_category_codes"
-    ]["maxItems"] == 0
+def test_generator_compact_contract_omits_server_owned_unmatched_categories() -> None:
+    assert set(RECOMMENDATION_GENERATION_JSON_SCHEMA["properties"]) == {"menu_ids"}
     provider = FakeProvider(
         {
             "status": "RECOMMENDED",
@@ -689,7 +807,7 @@ def test_structured_rate_limit_never_retries_or_dispatches_fallback_model() -> N
 
     assert caught.value.code is GenAIErrorCode.RATE_LIMIT
     assert caught.value.safe_metadata["request_utf8_bytes"] > 0
-    assert caught.value.safe_metadata["requested_max_output_tokens"] == 4096
+    assert caught.value.safe_metadata["requested_max_output_tokens"] == 2048
     assert [call["model"] for call in provider.calls] == ["openai.gpt-oss-120b"]
 
 

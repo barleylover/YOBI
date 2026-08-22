@@ -690,6 +690,84 @@ def test_cart_item_can_be_updated_and_deleted(
     assert "menu" in emptied.missing_slots
 
 
+def test_cart_prefers_latest_runtime_option_localization(
+    repository: SQLiteYobiRepository, profile_data: ProfileCreate
+) -> None:
+    profile = repository.create_profile(profile_data)
+    session = repository.create_session(profile.profile_id)
+    selected_ids = [
+        "oi_001_01_spice_mild",
+        "oi_001_01_size_regular",
+        "oi_001_01_cheese_add",
+        "oi_001_01_fishcake_remove",
+    ]
+    repository.add_cart_item(
+        session.session_id,
+        CartItemInput(menu_id="menu_001_01", option_item_ids=selected_ids),
+    )
+    with repository._connection() as connection:
+        active_family = connection.execute(
+            """
+            SELECT family.release_family_id,family.catalog_release_id,
+                   family.knowledge_release_id
+            FROM recommendation_runtime_state state
+            JOIN recommendation_release_family family
+              ON family.release_family_id=state.active_release_family_id
+            WHERE state.state_key='ACTIVE'
+            """
+        ).fetchone()
+        assert active_family is not None
+        connection.execute(
+            """
+            INSERT INTO synthetic_enrichment_release(
+              release_id,catalog_release_id,knowledge_release_id,seed_value,
+              generator_version,manifest_sha256,status,created_at
+            ) VALUES (?,?,?,?,?,?,?,?)
+            """,
+            (
+                "cart-runtime-release",
+                active_family["catalog_release_id"],
+                active_family["knowledge_release_id"],
+                "cart-runtime-seed",
+                "cart-runtime-test",
+                "c" * 64,
+                "ACTIVE",
+                "2026-08-21T00:00:00+00:00",
+            ),
+        )
+        connection.execute(
+            """
+            UPDATE recommendation_release_family
+            SET synthetic_enrichment_release_id=? WHERE release_family_id=?
+            """,
+            ("cart-runtime-release", active_family["release_family_id"]),
+        )
+    groups = repository.get_options("menu_001_01", session_id=session.session_id)
+    selected = set(selected_ids)
+    group_names = {
+        group.option_group_id: f"Localized {group.option_group_id}"
+        for group in groups
+        if any(item.option_item_id in selected for item in group.items)
+    }
+    repository.save_option_localizations(
+        session.session_id,
+        "menu_001_01",
+        group_names,
+        {option_id: f"Runtime {index}" for index, option_id in enumerate(selected_ids)},
+        "test-model",
+        "cart-runtime-v1",
+    )
+
+    preview = repository.get_cart(session.session_id)
+
+    assert [option["display_name"] for option in preview.items[0].options] == [
+        "Runtime 0",
+        "Runtime 1",
+        "Runtime 2",
+        "Runtime 3",
+    ]
+
+
 def test_cart_rejects_items_from_multiple_merchants(
     repository: SQLiteYobiRepository, profile_data: ProfileCreate
 ) -> None:

@@ -18,6 +18,7 @@ export function HandoffPage() {
   const session = useSessionStore((state) => state.session);
   const addressRefId = useSessionStore((state) => state.addressRefId);
   const addressSummary = useSessionStore((state) => state.addressSummary);
+  const restart = useSessionStore((state) => state.restart);
   const [cart, setCart] = useState<CartPreview | null>(null);
   const [loading, setLoading] = useState(true);
   const [ended, setEnded] = useState(false);
@@ -37,13 +38,35 @@ export function HandoffPage() {
     return () => controller.abort();
   }, [journeyCopy.retry, language, session]);
 
-  if (!session || !addressRefId) return <Navigate to="/" replace />;
+  if (!session || !addressRefId) return <Navigate to="/start" replace />;
 
   const won = (value: number) => `₩${value.toLocaleString(locale)}`;
   const itemCount = cart?.items.reduce((total, item) => total + item.quantity, 0) ?? 0;
   const firstItemName = cart?.items[0]
     ? (cart.items[0].display_name || (language === "한국어" ? cart.items[0].menu_name_ko : cart.items[0].menu_name))
     : "";
+
+  async function backToFreshYobi() {
+    for (const name of ["sessionStorage", "localStorage"] as const) {
+      try {
+        const storage = globalThis[name];
+        if (!storage) continue;
+        const keys = Array.from({ length: storage.length }, (_, index) => storage.key(index))
+          .filter((key): key is string => Boolean(key));
+        for (const key of keys) {
+          if (key.startsWith("yobi-")) storage.removeItem(key);
+        }
+      } catch {
+        // Storage can be disabled by browser privacy settings; in-memory reset still proceeds.
+      }
+    }
+    if ("caches" in globalThis) {
+      const keys = await globalThis.caches.keys().catch(() => []);
+      await Promise.all(keys.map((key) => globalThis.caches.delete(key))).catch(() => undefined);
+    }
+    navigate("/start", { replace: true });
+    restart();
+  }
 
   return (
     <main className="v2-screen subtle v2-handoff">
@@ -52,7 +75,7 @@ export function HandoffPage() {
           <button
             type="button"
             className="v2-icon-button light"
-            aria-label={copy.back}
+            aria-label={v2.backToMenus}
             onClick={() => navigate(`/chat/${session.session_id}`)}
           >
             <img src="/figma/back-chevron-white.svg" alt="" width={9} height={16} />
@@ -130,13 +153,14 @@ export function HandoffPage() {
             </button>
           </>
         ) : (
-          <Link
+          <button
+            type="button"
             className="v2-cta secondary"
-            style={{ borderRadius: 17, textDecoration: "none" }}
-            to={`/chat/${session.session_id}`}
+            style={{ borderRadius: 17 }}
+            onClick={() => void backToFreshYobi()}
           >
             {copy.back}
-          </Link>
+          </button>
         )}
       </footer>
     </main>

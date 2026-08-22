@@ -5,7 +5,7 @@ import type {
 } from "../types";
 import type { RecommendationCopy } from "../lib/recommendationI18n";
 import type { RedesignCopy } from "../lib/redesignI18n";
-import { asEffectiveLanguage, asSupportedLanguage, formatMinuteRange, menuName } from "../lib/locale";
+import { asEffectiveLanguage, asSupportedLanguage, formatMinuteRange, menuName, merchantName } from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
 import { carouselIndexFromOffset } from "../lib/carouselScroll";
 import { BottomSheet } from "./BottomSheet";
@@ -24,7 +24,6 @@ interface Props {
   onChoose: (recommendation: StructuredRecommendation) => void;
   /** Comparison is intentionally no longer rendered in the v3 journey. */
   onCompare?: () => Promise<unknown>;
-  onRetry: () => void;
 }
 
 export function RecommendationResults({
@@ -37,7 +36,6 @@ export function RecommendationResults({
   readOnly = false,
   timestamp,
   onChoose,
-  onRetry,
 }: Props) {
   const supportedLanguage = asSupportedLanguage(language);
   const productCopy = getProductCopy(supportedLanguage).recommendation;
@@ -45,6 +43,11 @@ export function RecommendationResults({
   const [activeIndex, setActiveIndex] = useState(0);
   const [explanationMenuId, setExplanationMenuId] = useState<string | null>(null);
   const isFallback = batch.status === "SEARCH_FALLBACK";
+  const isUnderfilledStrictMatch = isFallback && batch.failure_code === "STRICT_MATCH_UNDERFILLED";
+  const fallbackTitle = isUnderfilledStrictMatch ? copy.resultsTitle : copy.searchFallbackTitle;
+  const fallbackDescription = isUnderfilledStrictMatch
+    ? copy.noHiddenRelaxation
+    : copy.searchFallbackDescription;
 
   useEffect(() => {
     setActiveIndex(0);
@@ -62,7 +65,7 @@ export function RecommendationResults({
       data-testid="recommendation-results-message"
     >
       <h2 id="recommendation-results-title" className="visually-hidden">
-        {isFallback ? copy.searchFallbackTitle : copy.resultsTitle}
+        {isFallback ? fallbackTitle : copy.resultsTitle}
       </h2>
       {isFallback && (
         <div className="v2-bot-message">
@@ -70,8 +73,8 @@ export function RecommendationResults({
           <div className="v2-bot-stack">
             <p className="v2-bot-name">{productCopy.assistantName}</p>
             <div className="v2-bubble">
-              <p>{copy.searchFallbackTitle}</p>
-              <p className="v2-bubble-sub">{copy.searchFallbackDescription}</p>
+              <p>{fallbackTitle}</p>
+              <p className="v2-bubble-sub">{fallbackDescription}</p>
             </div>
           </div>
         </div>
@@ -95,6 +98,11 @@ export function RecommendationResults({
           >
             {batch.recommendations.map((item, index) => {
               const spiceLevel = item.menu.spice_level;
+              const minimumOrderLabel = language === "한국어"
+                ? "최소 주문"
+                : language === "日本語"
+                  ? "最低注文"
+                  : "Minimum order";
               const sourceDescription = item.source_description
                 || (asEffectiveLanguage(language) === "한국어" ? item.menu.description : "");
               return (
@@ -111,7 +119,7 @@ export function RecommendationResults({
                         {item.localized_subtitle && item.localized_subtitle !== item.localized_title && (
                           <small className="v2-card-subtitle">{item.localized_subtitle}</small>
                         )}
-                        <p>{item.menu.merchant_name}</p>
+                        <p>{merchantName(item.menu.merchant_name, language)}</p>
                       </div>
                       <strong>₩{item.menu.price.toLocaleString(locale)}</strong>
                     </div>
@@ -128,16 +136,19 @@ export function RecommendationResults({
                     <div className="v2-fact-chips">
                       <span>{formatMinuteRange(item.menu.eta_min, item.menu.eta_max, locale)}</span>
                       <span>{item.menu.delivery_fee ? `₩${item.menu.delivery_fee.toLocaleString(locale)}` : productCopy.freeDelivery}</span>
-                      {spiceLevel == null
-                        ? <span>{copy.spiceHelp}</span>
-                        : <span className="success">{v2.spiceOk(spiceLevel)}</span>}
+                      {Boolean(item.menu.minimum_order_amount) && (
+                        <span>{minimumOrderLabel} ₩{item.menu.minimum_order_amount!.toLocaleString(locale)}</span>
+                      )}
+                      {spiceLevel != null && <span className="success">{v2.spiceOk(spiceLevel)}</span>}
                       {item.halal_certified
                         ? <span className="success">{v2.halalYes}</span>
                         : <span className="warn">{v2.halalNo}</span>}
                       {item.vegan_status === "LIKELY_FIT" && <span className="success">{copy.veganLikely}</span>}
                       {item.vegan_status === "POSSIBLE_WITH_CHECKS" && <span className="warn">{copy.veganChecks}</span>}
                     </div>
-                    {item.vegan_warning && <p className="v2-card-warning">{item.vegan_warning}</p>}
+                    {item.vegan_warning && item.vegan_status !== "LIKELY_FIT" && (
+                      <p className="v2-card-warning">{item.vegan_warning}</p>
+                    )}
                     <button
                       type="button"
                       className="v2-card-secondary"
@@ -171,20 +182,12 @@ export function RecommendationResults({
         </div>
       </div>
 
-      {isFallback && !readOnly && (
-        <div className="v2-inline-replies">
-          <button type="button" className="v2-quick-reply" onClick={onRetry} disabled={busy}>
-            {copy.tryAgain}
-          </button>
-        </div>
-      )}
-
       <BottomSheet open={Boolean(explanationItem)} labelledBy="explanation-sheet-title" onClose={() => setExplanationMenuId(null)}>
         {explanationItem && (
           <div className="v2-explanation-sheet">
             <header>
               <h2 id="explanation-sheet-title">{v2.additionalExplanation}</h2>
-              <p>{explanationItem.localized_title || explanationItem.title || menuName(explanationItem.menu, language)} · {explanationItem.menu.merchant_name}</p>
+              <p>{explanationItem.localized_title || explanationItem.title || menuName(explanationItem.menu, language)} · {merchantName(explanationItem.menu.merchant_name, language)}</p>
               {explanationItem.localized_subtitle && explanationItem.localized_subtitle !== explanationItem.localized_title && (
                 <small className="v2-explanation-subtitle">{explanationItem.localized_subtitle}</small>
               )}

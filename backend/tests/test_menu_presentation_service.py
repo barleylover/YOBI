@@ -22,15 +22,21 @@ from app.domain.models import (
     OptionItem,
 )
 from app.domain.recommendation_copy import deterministic_presentation_copy
+from app.domain.structured_recommendation import EvidencePoolItem
 from app.genai.contracts import (
     GenAIErrorCode,
     GenAIProviderError,
     GenAIServingMode,
     ProviderCapabilities,
 )
-from app.genai.presentation_generator import MenuPresentationGenerator
+from app.genai.presentation_generator import (
+    MENU_PRESENTATION_JSON_SCHEMA,
+    MenuPresentationGenerator,
+    _english_title_coverage_is_sufficient,
+)
 from app.services.menu_presentation import (
     MenuPresentationService,
+    deterministic_localized_source_description,
     deterministic_localized_subtitle,
 )
 
@@ -172,6 +178,7 @@ class PresentationProvider:
         self.delay_seconds = delay_seconds
         self.calls: list[str] = []
         self.requested_ids: list[list[str]] = []
+        self.requests: list[dict[str, Any]] = []
 
     def supports_model(self, model: str) -> bool:
         return model in {"xai.grok-4.3", "openai.gpt-oss-120b"}
@@ -181,6 +188,7 @@ class PresentationProvider:
 
     def create_response(self, model: str, **kwargs: Any) -> Any:
         self.calls.append(model)
+        self.requests.append(kwargs)
         if self.rate_limit_primary and model == "xai.grok-4.3":
             raise GenAIProviderError(GenAIErrorCode.RATE_LIMIT, retryable=True)
         if self.delay_seconds:
@@ -201,6 +209,42 @@ class SplitOnBatchProvider(PresentationProvider):
         if len(menu_ids) > 1:
             return SimpleNamespace(output_text='{"items":')
         return SimpleNamespace(output_text=json.dumps(_generated_payload(menu_ids)))
+
+
+class TruncatingPresentationProvider(PresentationProvider):
+    def __init__(self, *, grok_truncations: int) -> None:
+        super().__init__()
+        self.grok_truncations = grok_truncations
+        self.grok_calls = 0
+
+    def create_response(self, model: str, **kwargs: Any) -> Any:
+        self.calls.append(model)
+        self.requests.append(kwargs)
+        request_payload = json.loads(str(kwargs["input"][0]["content"]))
+        menu_ids = [str(item["menu_id"]) for item in request_payload["menus"]]
+        self.requested_ids.append(menu_ids)
+        if model == "xai.grok-4.3":
+            self.grok_calls += 1
+            if self.grok_calls <= self.grok_truncations:
+                return SimpleNamespace(
+                    status="incomplete",
+                    incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+                    output_text='{"items":',
+                    usage=SimpleNamespace(input_tokens=1_000, output_tokens=4_096),
+                )
+        return SimpleNamespace(
+            status="completed",
+            incomplete_details=None,
+            output_text=json.dumps(_generated_payload(menu_ids)),
+            usage=SimpleNamespace(input_tokens=1_000, output_tokens=1_500),
+        )
+
+
+class AlwaysRateLimitedPresentationProvider(PresentationProvider):
+    def create_response(self, model: str, **kwargs: Any) -> Any:
+        self.calls.append(model)
+        self.requests.append(kwargs)
+        raise GenAIProviderError(GenAIErrorCode.RATE_LIMIT, retryable=True)
 
 
 def _menu() -> MenuSummary:
@@ -319,6 +363,15 @@ def _generated_payload(menu_ids: list[str] | None = None) -> dict[str, Any]:
                     "wiki_passages",
                     "synthetic_reviews",
                 ],
+                "yobi_used_evidence_ids": ["wiki-1", "wiki-2"],
+                "review_used_ids": ["review-1", "review-2"],
+                "yobi_used_source_fields": [
+                    "menu_title_ko",
+                    "localized_title",
+                    "source_description_ko",
+                    "wiki_passages",
+                ],
+                "review_used_source_fields": ["synthetic_reviews"],
                 "personalization_applied": False,
                 "covered_component_ids": [],
                 "component_mentions": [],
@@ -340,12 +393,23 @@ def _presentation_validation_reason(
     generator = MenuPresentationGenerator(Settings(), provider=provider)
     with pytest.raises(GenAIProviderError) as raised:
         generator.generate(
-            items=[
-                MenuPresentationService._generation_payload(presentation or _presentation())
-            ],
+            items=[MenuPresentationService._generation_payload(presentation or _presentation())],
             locale=locale,
         )
     return raised.value.safe_reason_code
+
+
+def _generate_presentation(
+    payload: dict[str, Any],
+    presentation: MerchantMenuPresentation | None = None,
+    *,
+    locale: str = "English",
+):
+    provider = PresentationProvider(output=json.dumps(payload))
+    return MenuPresentationGenerator(Settings(), provider=provider).generate(
+        items=[MenuPresentationService._generation_payload(presentation or _presentation())],
+        locale=locale,
+    )
 
 
 def test_menu_presentation_uses_grok_once_and_caches_structured_copy() -> None:
@@ -370,6 +434,79 @@ def test_menu_presentation_uses_grok_once_and_caches_structured_copy() -> None:
     )
     assert second.items == page.items
     assert provider.calls == ["xai.grok-4.3"]
+
+
+def test_presentation_request_uses_compact_model_owned_schema_and_output_cap() -> None:
+    provider = PresentationProvider()
+    generator = MenuPresentationGenerator(Settings(), provider=provider)
+
+    generator.generate(
+        items=[MenuPresentationService._generation_payload(_presentation())],
+        locale="English",
+    )
+
+    request = provider.requests[0]
+    assert request["max_output_tokens"] == 4096
+    assert request["text"]["format"]["schema"] == MENU_PRESENTATION_JSON_SCHEMA
+    properties = MENU_PRESENTATION_JSON_SCHEMA["properties"]["items"]["items"][
+        "properties"
+    ]
+    assert set(properties) == {
+        "menu_id",
+        "localized_subtitle",
+        "localized_source_description",
+        "yobi_short_explanation",
+        "yobi_long_explanation",
+        "review_summary",
+        "personalization_applied",
+        "covered_component_ids",
+        "component_mentions",
+    }
+    input_payload = json.loads(request["input"][0]["content"])
+    assert "evidence_type" not in input_payload["menus"][0]["wiki_passages"][0]
+
+
+def test_presentation_retries_explicit_output_truncation_once_with_double_limit() -> None:
+    provider = TruncatingPresentationProvider(grok_truncations=1)
+    attempts: list[tuple[str, str | None, dict[str, int]]] = []
+
+    result = MenuPresentationGenerator(Settings(), provider=provider).generate(
+        items=[MenuPresentationService._generation_payload(_presentation())],
+        locale="English",
+        on_provider_attempt=lambda _attempt, _model, status, error, _latency, usage: (
+            attempts.append((status, error, usage))
+        ),
+    )
+
+    assert provider.calls == ["xai.grok-4.3", "xai.grok-4.3"]
+    assert [request["max_output_tokens"] for request in provider.requests] == [4_096, 8_192]
+    assert [attempt[:2] for attempt in attempts] == [
+        ("FAILED", "OUTPUT_TRUNCATED_MAX_OUTPUT_TOKENS"),
+        ("SUCCEEDED", None),
+    ]
+    assert result.generation_model == "xai.grok-4.3"
+    assert result.provider_metrics["requested_max_output_tokens"] == 8_192
+
+
+def test_presentation_uses_gpt_oss_after_grok_exhausts_truncation_retry() -> None:
+    provider = TruncatingPresentationProvider(grok_truncations=2)
+
+    result = MenuPresentationGenerator(Settings(), provider=provider).generate(
+        items=[MenuPresentationService._generation_payload(_presentation())],
+        locale="English",
+    )
+
+    assert provider.calls == [
+        "xai.grok-4.3",
+        "xai.grok-4.3",
+        "openai.gpt-oss-120b",
+    ]
+    assert [request["max_output_tokens"] for request in provider.requests] == [
+        4_096,
+        8_192,
+        4_096,
+    ]
+    assert result.generation_model == "openai.gpt-oss-120b"
 
 
 def test_presentation_translates_card_fields_without_option_localization() -> None:
@@ -433,7 +570,7 @@ def test_presentation_translates_card_fields_without_option_localization() -> No
     assert len(repository.cache) == 1
 
 
-def test_presentation_rejects_option_localizations_from_card_model() -> None:
+def test_presentation_ignores_option_localizations_from_card_model() -> None:
     options = [
         OptionGroup(
             option_group_id="group-1",
@@ -486,12 +623,33 @@ def test_presentation_rejects_option_localizations_from_card_model() -> None:
 
     page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
 
-    assert page.items[0].generation_model == "DETERMINISTIC_GROUNDED_FALLBACK"
-    assert repository.cache == {}
+    assert page.items[0].generation_model == "xai.grok-4.3+SAFE_FIELD_FALLBACK"
+    assert len(repository.cache) == 1
+    assert page.items[0].evidence_map["safe_field_fallbacks"] == ["option_localizations"]
     assert repository.saved_option_localizations == []
 
 
-def test_phonetic_yogiyo_description_is_rejected_instead_of_cached() -> None:
+def test_presentation_canonicalizes_changed_title_without_discarding_grok_copy() -> None:
+    payload = _generated_payload()
+    payload["items"][0]["localized_title"] = "Tteokbokki!!!"
+    repository = PresentationRepository(MerchantMenuPresentationPage(items=[_presentation()]))
+    provider = PresentationProvider(output=json.dumps(payload))
+    service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        generator=MenuPresentationGenerator(Settings(), provider=provider),
+    )
+
+    page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
+
+    assert page.items[0].localized_title == "Tteokbokki"
+    assert page.items[0].yobi_short_explanation == payload["items"][0]["yobi_short_explanation"]
+    assert page.items[0].generation_model == "xai.grok-4.3+SAFE_FIELD_FALLBACK"
+    assert page.items[0].evidence_map["safe_field_fallbacks"] == ["localized_title"]
+    assert len(repository.cache) == 1
+
+
+def test_phonetic_yogiyo_description_uses_safe_field_fallback_and_caches_other_copy() -> None:
     source = "싱싱한 생 바지락으로 우려낸 깊은 육수와 정성으로 빚은 생면"
     payload = _generated_payload()
     payload["items"][0]["localized_source_description"] = (
@@ -509,43 +667,69 @@ def test_phonetic_yogiyo_description_is_rejected_instead_of_cached() -> None:
 
     page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
 
-    assert page.items[0].generation_model == "DETERMINISTIC_GROUNDED_FALLBACK"
-    assert repository.cache == {}
-    assert repository.saved_menu_localizations == []
+    assert page.items[0].generation_model == "xai.grok-4.3+SAFE_FIELD_FALLBACK"
+    assert page.items[0].source_description == ""
+    assert len(repository.cache) == 1
+    assert repository.saved_menu_localizations[0][3] == ""
 
 
-def test_english_presentation_rejects_hangul_in_any_user_visible_copy() -> None:
+def test_english_presentation_replaces_only_the_hangul_field() -> None:
     payload = _generated_payload()
     payload["items"][0]["yobi_short_explanation"] = "떡볶이 설명입니다."
 
-    assert (
-        _presentation_validation_reason(payload)
-        == "PRESENTATION_TARGET_LANGUAGE_HANGUL_REMAINS"
-    )
+    generated = _generate_presentation(payload)
+
+    assert generated.items[0].yobi_short_explanation == ""
+    assert generated.items[0].yobi_long_explanation
+    assert generated.field_fallbacks["menu-1"] == ["yobi_short_explanation"]
 
 
-def test_japanese_presentation_rejects_romanized_prose_without_japanese_script() -> None:
+def test_japanese_presentation_replaces_only_romanized_prose() -> None:
     payload = _generated_payload()
     payload["items"][0]["localized_title"] = "トッポッキ"
     presentation = _presentation(localized_title="トッポッキ", language_code="ja")
 
-    assert (
-        _presentation_validation_reason(payload, presentation, locale="日本語")
-        == "PRESENTATION_TARGET_LANGUAGE_SCRIPT_INVALID"
-    )
+    generated = _generate_presentation(payload, presentation, locale="日本語")
+
+    assert generated.items[0].localized_subtitle == ""
+    assert "localized_subtitle" in generated.field_fallbacks["menu-1"]
 
 
-def test_presentation_rejects_title_repeated_as_missing_explanatory_subtitle() -> None:
+def test_presentation_accepts_title_repeated_as_a_safe_subtitle() -> None:
     payload = _generated_payload()
     payload["items"][0]["localized_subtitle"] = "Tteokbokki"
 
-    assert (
-        _presentation_validation_reason(payload)
-        == "PRESENTATION_LOCALIZED_SUBTITLE_NOT_EXPLANATORY"
-    )
+    generated = _generate_presentation(payload)
+
+    assert generated.items[0].localized_subtitle == "Tteokbokki"
 
 
-def test_presentation_rejects_generic_wiki_copy_that_drops_specific_title_terms() -> None:
+def test_presentation_omitted_non_identity_fields_use_safe_field_fallbacks() -> None:
+    payload = _generated_payload()
+    for field_name in (
+        "localized_subtitle",
+        "yobi_short_explanation",
+        "yobi_long_explanation",
+        "review_summary",
+        "used_source_fields",
+        "yobi_used_source_fields",
+    ):
+        payload["items"][0].pop(field_name)
+
+    generated = _generate_presentation(payload)
+
+    assert generated.items[0].localized_title == "Tteokbokki"
+    assert generated.field_fallbacks["menu-1"] == [
+        "localized_subtitle",
+        "review_summary",
+        "yobi_long_explanation",
+        "yobi_short_explanation",
+    ]
+    assert generated.items[0].used_source_fields
+    assert generated.items[0].yobi_used_source_fields
+
+
+def test_presentation_accepts_natural_copy_without_token_overlap_rejection() -> None:
     payload = _generated_payload()
     payload["items"][0].update(
         {
@@ -562,25 +746,185 @@ def test_presentation_rejects_generic_wiki_copy_that_drops_specific_title_terms(
     )
     presentation = _presentation(localized_title="Nakji Kimchi Bibimbap")
 
-    assert (
-        _presentation_validation_reason(payload, presentation)
-        == "PRESENTATION_MENU_TITLE_COVERAGE_INVALID"
+    generated = _generate_presentation(payload, presentation)
+
+    assert generated.items[0].yobi_short_explanation.startswith("Bibimbap")
+
+
+def test_title_coverage_accepts_grounded_natural_copy_without_exact_token_echo() -> None:
+    assert _english_title_coverage_is_sufficient(
+        "Italian Cheese Pizza (L)",
+        "A cheese pizza with a baked crust",
+    )
+    assert _english_title_coverage_is_sufficient(
+        "Original Shrimp Aglio Olio Pasta (Slightly Spicy)",
+        "Shrimp pasta with garlic, olive oil and mild heat",
+    )
+    assert not _english_title_coverage_is_sufficient(
+        "Original Shrimp Aglio Olio Pasta (Slightly Spicy)",
+        "An Italian pasta served with a classic sauce",
     )
 
 
-def test_presentation_rejects_yobi_copy_that_does_not_reflect_restaurant_description() -> None:
+def test_presentation_does_not_require_restaurant_copy_to_be_repeated_in_yobi_copy() -> None:
     payload = _generated_payload()
-    payload["items"][0]["localized_source_description"] = (
-        "Tender octopus with crisp kimchi."
+    payload["items"][0]["localized_source_description"] = "Tender octopus with crisp kimchi."
+
+    generated = _generate_presentation(payload)
+
+    assert generated.items[0].localized_source_description == "Tender octopus with crisp kimchi."
+
+
+def test_presentation_replaces_review_leakage_only_in_yobi_fields() -> None:
+    payload = _generated_payload()
+    payload["items"][0]["yobi_short_explanation"] = (
+        "Reviewers found the chewy rice cakes balanced and easy to enjoy."
     )
 
-    assert (
-        _presentation_validation_reason(payload)
-        == "PRESENTATION_SOURCE_DESCRIPTION_NOT_REFLECTED"
+    generated = _generate_presentation(payload)
+
+    assert generated.items[0].yobi_short_explanation == ""
+    assert generated.items[0].yobi_long_explanation == ""
+    assert generated.items[0].review_summary
+
+
+def test_presentation_canonicalizes_review_ids_and_sources_claimed_for_yobi_copy() -> None:
+    payload = _generated_payload()
+    payload["items"][0]["yobi_used_evidence_ids"] = ["review-1"]
+
+    generated = _generate_presentation(payload)
+    assert generated.items[0].yobi_used_evidence_ids == ["wiki-1", "wiki-2"]
+
+    payload = _generated_payload()
+    payload["items"][0]["yobi_used_source_fields"].append("synthetic_reviews")
+    generated = _generate_presentation(payload)
+    assert "synthetic_reviews" not in generated.items[0].yobi_used_source_fields
+
+
+def test_presentation_canonicalizes_missing_model_provenance_metadata() -> None:
+    payload = _generated_payload()
+    payload["items"][0]["used_source_fields"] = ["localized_title"]
+    payload["items"][0]["yobi_used_source_fields"] = ["localized_title"]
+    payload["items"][0]["review_used_source_fields"] = []
+    repository = PresentationRepository(MerchantMenuPresentationPage(items=[_presentation()]))
+    provider = PresentationProvider(output=json.dumps(payload))
+    service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        generator=MenuPresentationGenerator(Settings(), provider=provider),
     )
 
+    page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
 
-def test_presentation_rejects_changed_quantities_in_yogiyo_translation() -> None:
+    assert page.items[0].generation_model == "xai.grok-4.3"
+    assert page.items[0].evidence_map["yobi_used_source_fields"] == [
+        "localized_title",
+        "menu_title_ko",
+        "source_description_ko",
+        "wiki_passages",
+    ]
+    assert page.items[0].evidence_map["review_used_source_fields"] == ["synthetic_reviews"]
+    assert page.items[0].evidence_map["used_source_fields"] == [
+        "localized_title",
+        "menu_title_ko",
+        "source_description_ko",
+        "synthetic_reviews",
+        "wiki_passages",
+    ]
+
+
+def test_presentation_accepts_spelled_quantity_when_value_is_unchanged() -> None:
+    payload = _generated_payload()
+    payload["items"][0].update(
+        {
+            "localized_source_description": "Beef fried rice, one serving.",
+            "localized_subtitle": "Tteokbokki served with beef fried rice",
+            "yobi_short_explanation": (
+                "Tteokbokki keeps its chewy rice cakes beside beef fried rice. "
+                "The listing is for one serving."
+            ),
+            "yobi_long_explanation": (
+                "Tteokbokki centers on chewy rice cakes. "
+                "This listing pairs them with beef fried rice. "
+                "The restaurant describes one serving. "
+                "The supplied Wiki explains the rice-cake format."
+            ),
+        }
+    )
+    repository = PresentationRepository(
+        MerchantMenuPresentationPage(
+            items=[_presentation(source_description="소고기 볶음밥 1인분")]
+        )
+    )
+    provider = PresentationProvider(output=json.dumps(payload))
+    service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        generator=MenuPresentationGenerator(Settings(), provider=provider),
+    )
+
+    page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
+
+    assert page.items[0].generation_model == "xai.grok-4.3"
+    assert page.items[0].source_description == "Beef fried rice, one serving."
+    assert len(repository.cache) == 1
+
+
+def test_presentation_accepts_spelled_spice_count_in_source_translation() -> None:
+    payload = _generated_payload()
+    payload["items"][0].update(
+        {
+            "localized_source_description": "Garlic coated in five-spice seasoning.",
+            "localized_subtitle": "Tteokbokki with five-spice garlic",
+            "yobi_short_explanation": (
+                "Tteokbokki keeps chewy rice cakes beside aromatic garlic. "
+                "The five-spice seasoning adds a layered savory aroma."
+            ),
+            "yobi_long_explanation": (
+                "Tteokbokki centers on chewy rice cakes in sauce. "
+                "This restaurant seasons fried garlic with five spices. "
+                "The garlic adds aroma and crisp texture. "
+                "The supplied Wiki explains the rice-cake format."
+            ),
+        }
+    )
+    repository = PresentationRepository(
+        MerchantMenuPresentationPage(
+            items=[_presentation(source_description="5가지 향신료를 입힌 마늘")]
+        )
+    )
+    provider = PresentationProvider(output=json.dumps(payload))
+    service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        generator=MenuPresentationGenerator(Settings(), provider=provider),
+    )
+
+    page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
+
+    assert page.items[0].generation_model == "xai.grok-4.3"
+    assert page.items[0].source_description == "Garlic coated in five-spice seasoning."
+    assert len(repository.cache) == 1
+
+
+def test_presentation_accepts_one_sentence_review_summary() -> None:
+    payload = _generated_payload()
+    payload["items"][0]["review_summary"] = "Reviewers liked the chewy texture."
+    repository = PresentationRepository(MerchantMenuPresentationPage(items=[_presentation()]))
+    provider = PresentationProvider(output=json.dumps(payload))
+    service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        generator=MenuPresentationGenerator(Settings(), provider=provider),
+    )
+
+    page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
+
+    assert page.items[0].generation_model == "xai.grok-4.3"
+    assert page.items[0].review_summary == "Reviewers liked the chewy texture."
+
+
+def test_presentation_replaces_only_yogiyo_translation_with_changed_quantities() -> None:
     payload = _generated_payload()
     payload["items"][0].update(
         {
@@ -597,13 +941,77 @@ def test_presentation_rejects_changed_quantities_in_yogiyo_translation() -> None
     )
     presentation = _presentation(source_description="코카콜라 355ml 2개")
 
-    assert (
-        _presentation_validation_reason(payload, presentation)
-        == "PRESENTATION_SOURCE_DESCRIPTION_QUANTITY_CHANGED"
+    generated = _generate_presentation(payload, presentation)
+
+    assert generated.items[0].localized_source_description == ""
+    assert generated.items[0].yobi_short_explanation
+    assert generated.field_fallbacks["menu-1"] == ["localized_source_description"]
+
+
+def test_quantity_failure_isolated_to_one_menu_in_provider_batch() -> None:
+    presentations = [
+        _presentation("menu-1"),
+        _presentation("menu-2", source_description="코카콜라 355ml 2개"),
+        _presentation("menu-3"),
+    ]
+    payload = _generated_payload([item.menu.menu_id for item in presentations])
+    payload["items"][1].update(
+        {
+            "localized_source_description": "Coca-Cola 355ml with 3 dumplings.",
+            "localized_subtitle": "Tteokbokki with Coca-Cola and dumplings",
+            "yobi_short_explanation": (
+                "Tteokbokki comes with Coca-Cola and dumplings. The rice cakes remain central."
+            ),
+            "yobi_long_explanation": (
+                "Tteokbokki centers on chewy rice cakes. "
+                "Coca-Cola is included. Dumplings accompany the dish. "
+                "The exact bundle follows the restaurant listing."
+            ),
+        }
+    )
+    repository = PresentationRepository(MerchantMenuPresentationPage(items=presentations))
+    provider = PresentationProvider(output=json.dumps(payload))
+    service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        generator=MenuPresentationGenerator(Settings(), provider=provider),
     )
 
+    page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
 
-def test_menu_presentation_rate_limit_keeps_deterministic_copy_without_model_retry() -> None:
+    assert provider.requested_ids == [["menu-1", "menu-2", "menu-3"]]
+    assert [item.generation_model for item in page.items] == [
+        "xai.grok-4.3",
+        "xai.grok-4.3+SAFE_FIELD_FALLBACK",
+        "xai.grok-4.3",
+    ]
+    assert {entry[1] for entry in repository.saved_menu_localizations} == {
+        "menu-1",
+        "menu-2",
+        "menu-3",
+    }
+    assert len(repository.cache) == 3
+
+
+def test_sentence_count_variation_does_not_reject_a_menu() -> None:
+    presentations = [_presentation(f"menu-{index}") for index in range(1, 4)]
+    payload = _generated_payload([item.menu.menu_id for item in presentations])
+    payload["items"][1]["review_summary"] = "One. Two. Three. Four."
+    repository = PresentationRepository(MerchantMenuPresentationPage(items=presentations))
+    provider = PresentationProvider(output=json.dumps(payload))
+    service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        generator=MenuPresentationGenerator(Settings(), provider=provider),
+    )
+
+    page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
+
+    assert all(item.generation_model == "xai.grok-4.3" for item in page.items)
+    assert len(repository.cache) == 3
+
+
+def test_menu_presentation_rate_limit_falls_back_to_gpt_oss_and_caches_copy() -> None:
     repository = PresentationRepository(MerchantMenuPresentationPage(items=[_presentation()]))
     provider = PresentationProvider(rate_limit_primary=True)
     service = MenuPresentationService(
@@ -614,11 +1022,82 @@ def test_menu_presentation_rate_limit_keeps_deterministic_copy_without_model_ret
 
     page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
 
-    assert provider.calls == ["xai.grok-4.3"]
+    assert provider.calls == ["xai.grok-4.3", "openai.gpt-oss-120b"]
+    assert page.items[0].generation_model == "openai.gpt-oss-120b"
+    assert len(repository.cache) == 1
+
+
+def test_menu_presentation_uses_deterministic_copy_after_both_models_rate_limit() -> None:
+    repository = PresentationRepository(MerchantMenuPresentationPage(items=[_presentation()]))
+    provider = AlwaysRateLimitedPresentationProvider()
+    service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        generator=MenuPresentationGenerator(Settings(), provider=provider),
+    )
+
+    page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
+
+    assert provider.calls == ["xai.grok-4.3", "openai.gpt-oss-120b"]
     assert page.items[0].generation_model == "DETERMINISTIC_GROUNDED_FALLBACK"
+    assert repository.cache == {}
 
 
-def test_invalid_grounding_contract_keeps_deterministic_copy_without_fallback() -> None:
+def test_selected_menu_fallback_keeps_validated_target_language_yogiyo_copy() -> None:
+    repository = PresentationRepository(MerchantMenuPresentationPage(items=[]))
+    service = MenuPresentationService(repository, Settings())  # type: ignore[arg-type]
+    item = EvidencePoolItem(
+        menu=_menu(),
+        knowledge_release_id="knowledge-1",
+        catalog_release_id="catalog-1",
+        recommendation_release_family_id="family-1",
+        localized_title="Tteokbokki",
+        localized_source_description="Chewy rice cakes cooked to order.",
+    )
+
+    presented = service.present_selected(
+        [item], session_id="session-1", language_code="en", country_code="US"
+    )
+
+    assert presented["menu-1"].source_description == "Chewy rice cakes cooked to order."
+
+
+def test_deterministic_source_fallback_rejects_old_phonetic_localizations() -> None:
+    source = "매콤한 떡볶이와 불향가득 차돌박이를 정성껏 준비했습니다"
+
+    assert (
+        deterministic_localized_source_description(
+            "en",
+            source_ko=source,
+            candidates=[
+                "Maekomhan tteokbokki wa bulhyanggadeuk chadolbakireul "
+                "jeongseongkkeot junbihaetseupnida."
+            ],
+        )
+        == ""
+    )
+    assert (
+        deterministic_localized_source_description(
+            "ja",
+            source_ko=source,
+            candidates=[
+                "メコムハン トッポッキ オァ ブルヒャンガドゥク チャドルバクイルル "
+                "ジョンソンコッ ジュンビヘッスプニダ。"
+            ],
+        )
+        == ""
+    )
+    assert (
+        deterministic_localized_source_description(
+            "en",
+            source_ko=source,
+            candidates=["Spicy tteokbokki served with smoky beef brisket."],
+        )
+        == "Spicy tteokbokki served with smoky beef brisket."
+    )
+
+
+def test_invalid_grounding_contract_tries_fallback_then_keeps_deterministic_copy() -> None:
     original = _presentation()
     repository = PresentationRepository(MerchantMenuPresentationPage(items=[original]))
     provider = PresentationProvider(output='{"items": []}')
@@ -630,7 +1109,7 @@ def test_invalid_grounding_contract_keeps_deterministic_copy_without_fallback() 
 
     page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
 
-    assert provider.calls == ["xai.grok-4.3"]
+    assert provider.calls == ["xai.grok-4.3", "openai.gpt-oss-120b"]
     assert page.items[0].model_dump(mode="json") == original.model_copy(
         update={
             "localized_title": "Tteokbokki",
@@ -641,7 +1120,7 @@ def test_invalid_grounding_contract_keeps_deterministic_copy_without_fallback() 
     assert repository.cache == {}
 
 
-def test_invalid_batch_is_not_retried_and_keeps_deterministic_copy() -> None:
+def test_invalid_batch_tries_fallback_without_splitting_and_keeps_deterministic_copy() -> None:
     items = [_presentation(f"menu-{index}") for index in range(1, 4)]
     repository = PresentationRepository(MerchantMenuPresentationPage(items=items))
     provider = SplitOnBatchProvider()
@@ -653,12 +1132,37 @@ def test_invalid_batch_is_not_retried_and_keeps_deterministic_copy() -> None:
 
     page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
 
-    assert provider.requested_ids == [["menu-1", "menu-2", "menu-3"]]
+    assert provider.requested_ids == [
+        ["menu-1", "menu-2", "menu-3"],
+        ["menu-1", "menu-2", "menu-3"],
+    ]
     assert repository.cache == {}
     assert all(item.generation_model == "DETERMINISTIC_GROUNDED_FALLBACK" for item in page.items)
 
 
-def test_compound_presentation_requires_every_component_id() -> None:
+def test_partial_batch_keeps_valid_grok_items_and_falls_back_only_missing_menu() -> None:
+    items = [_presentation(f"menu-{index}") for index in range(1, 4)]
+    payload = _generated_payload(["menu-1", "menu-2"])
+    payload["items"].append({**payload["items"][0], "menu_id": "unknown-menu"})
+    repository = PresentationRepository(MerchantMenuPresentationPage(items=items))
+    provider = PresentationProvider(output=json.dumps(payload))
+    service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        Settings(),
+        generator=MenuPresentationGenerator(Settings(), provider=provider),
+    )
+
+    page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
+
+    assert [item.generation_model for item in page.items] == [
+        "xai.grok-4.3",
+        "xai.grok-4.3",
+        "DETERMINISTIC_GROUNDED_FALLBACK",
+    ]
+    assert len(repository.cache) == 2
+
+
+def test_compound_presentation_missing_component_metadata_uses_safe_field_fallback() -> None:
     original = _presentation().model_copy(
         update={
             "evidence_map": {
@@ -682,8 +1186,10 @@ def test_compound_presentation_requires_every_component_id() -> None:
 
     page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
 
-    assert page.items[0].generation_model == "DETERMINISTIC_GROUNDED_FALLBACK"
-    assert repository.cache == {}
+    assert page.items[0].generation_model == "xai.grok-4.3+SAFE_FIELD_FALLBACK"
+    assert len(repository.cache) == 1
+    assert page.items[0].evidence_map["covered_component_ids"] == []
+    assert page.items[0].evidence_map["safe_field_fallbacks"] == ["component_metadata"]
 
 
 def test_compound_presentation_requires_component_mentions_in_actual_copy() -> None:
@@ -721,6 +1227,13 @@ def test_compound_presentation_requires_component_mentions_in_actual_copy() -> N
                 "synthetic_reviews",
                 "menu_components",
             ],
+            "yobi_used_source_fields": [
+                "menu_title_ko",
+                "localized_title",
+                "source_description_ko",
+                "wiki_passages",
+                "menu_components",
+            ],
             "covered_component_ids": ["cold-noodle", "cutlet"],
             "component_mentions": [
                 {"component_id": "cold-noodle", "mention_text": "cold noodles"},
@@ -736,9 +1249,7 @@ def test_compound_presentation_requires_component_mentions_in_actual_copy() -> N
         generator=MenuPresentationGenerator(Settings(), provider=provider),
     )
 
-    page = service.list_presentations(
-        "session-1", "merchant-1", MerchantMenuPresentationRequest()
-    )
+    page = service.list_presentations("session-1", "merchant-1", MerchantMenuPresentationRequest())
 
     assert page.items[0].generation_model == "xai.grok-4.3"
     assert len(repository.cache) == 1
@@ -746,9 +1257,15 @@ def test_compound_presentation_requires_component_mentions_in_actual_copy() -> N
         {"component_id": "cold-noodle", "mention_text": "cold noodles"},
         {"component_id": "cutlet", "mention_text": "pork cutlet"},
     ]
+    assert page.items[0].evidence_map["yobi_used_evidence_ids"] == ["wiki-1", "wiki-2"]
+    assert page.items[0].evidence_map["review_used_ids"] == ["review-1", "review-2"]
+    assert "synthetic_reviews" not in page.items[0].evidence_map["yobi_used_source_fields"]
+    assert page.items[0].evidence_map["review_used_source_fields"] == ["synthetic_reviews"]
 
 
-def test_compound_presentation_rejects_ids_mapped_to_wrong_component_copy() -> None:
+def test_compound_presentation_filters_incorrect_component_bookkeeping_without_rejecting_copy() -> (
+    None
+):
     components = [
         {"component_id": "cold-noodle", "name_en": "cold noodles"},
         {"component_id": "cutlet", "name_en": "pork cutlet"},
@@ -782,6 +1299,13 @@ def test_compound_presentation_rejects_ids_mapped_to_wrong_component_copy() -> N
                 "synthetic_reviews",
                 "menu_components",
             ],
+            "yobi_used_source_fields": [
+                "menu_title_ko",
+                "localized_title",
+                "source_description_ko",
+                "wiki_passages",
+                "menu_components",
+            ],
             "covered_component_ids": ["cold-noodle", "cutlet"],
             "component_mentions": [
                 {"component_id": "cold-noodle", "mention_text": "cold noodles"},
@@ -790,10 +1314,13 @@ def test_compound_presentation_rejects_ids_mapped_to_wrong_component_copy() -> N
         }
     )
 
-    assert (
-        _presentation_validation_reason(payload, presentation)
-        == "PRESENTATION_COMPONENT_MENTION_MEANING_INVALID"
-    )
+    generated = _generate_presentation(payload, presentation)
+
+    assert [mention.component_id for mention in generated.items[0].component_mentions] == [
+        "cold-noodle"
+    ]
+    assert generated.items[0].covered_component_ids == ["cold-noodle"]
+    assert generated.field_fallbacks["menu-1"] == ["component_metadata"]
 
 
 def test_deterministic_presentation_copy_is_locale_safe_and_schema_sized() -> None:
@@ -879,8 +1406,7 @@ def test_source_language_country_and_prompt_changes_each_invalidate_cache() -> N
                 "この商品も韓国餅の特徴を保っています。"
             ),
             "review_summary": (
-                "口コミでは、もちもちした食感が好評でした。"
-                "量にも満足したという声がありました。"
+                "口コミでは、もちもちした食感が好評でした。量にも満足したという声がありました。"
             ),
         }
     )
@@ -929,9 +1455,9 @@ def test_current_prompt_and_schema_logically_invalidate_legacy_cache_without_del
     )
 
     assert current_settings.menu_presentation_prompt_version == (
-        "yobi-menu-presentation-v8-strict-grounding"
+        "yobi-menu-presentation-v18-compact-output"
     )
-    assert current_settings.menu_presentation_schema_version == "5"
+    assert current_settings.menu_presentation_schema_version == "7"
     assert provider.requested_ids == [["menu-1"]]
     assert page.items[0].generation_model == "xai.grok-4.3"
     assert len(repository.cache) == 2

@@ -8,19 +8,27 @@ import type {
   MenuSummary,
   MerchantMenuPresentation,
   OptionGroup,
-  OptionItem,
   RestaurantNoteTranslation,
 } from "../types";
 import { useI18n } from "../lib/i18n";
-import { asSupportedLanguage, menuName } from "../lib/locale";
+import { asSupportedLanguage, menuName, merchantName } from "../lib/locale";
 import { getRecommendationCopy } from "../lib/recommendationI18n";
 import { getRedesignCopy } from "../lib/redesignI18n";
+import {
+  optionDietaryConflicts,
+  optionGroupHasNoneChoice,
+  planDefaultOptionSelections,
+  selectedOptionsPriceDelta,
+  toggledOptionSelection,
+} from "../lib/orderFlow";
 
 interface Props {
   sessionId: string;
   menu: MenuSummary;
   addressRefId: string;
   dietaryFilters?: DietaryFiltersV2;
+  cartRevision?: number;
+  precomputedOptionsOnly?: boolean;
   onClose: () => void;
   onOptionChange?: (
     menuId: string,
@@ -30,12 +38,20 @@ interface Props {
   ) => Promise<void>;
 }
 
-type Phase = "options" | "note" | "more" | "browse" | "delivery" | "review";
+type Phase = "options" | "note" | "more" | "browse" | "delivery" | "review" | "merchant-conflict";
 
-export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, onClose, onOptionChange }: Props) {
+export function OrderFlowPanel({
+  sessionId,
+  menu,
+  addressRefId,
+  dietaryFilters,
+  cartRevision = 0,
+  precomputedOptionsOnly = false,
+  onClose,
+  onOptionChange,
+}: Props) {
   const navigate = useNavigate();
   const setCartQuantity = useSessionStore((state) => state.setCartQuantity);
-  const cartQuantity = useSessionStore((state) => state.cartQuantity);
   const sourceLanguage = useSessionStore((state) => state.profile?.preferred_language) ?? "English";
   const addressSummary = useSessionStore((state) => state.addressSummary);
   const { copy, dynamicCopy, journeyCopy, language, locale } = useI18n();
@@ -52,9 +68,11 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
   const [nextMenuCursor, setNextMenuCursor] = useState<string | null>(null);
   const [loadingMoreMenus, setLoadingMoreMenus] = useState(false);
   const [noteTranslation, setNoteTranslation] = useState<RestaurantNoteTranslation | null>(null);
+  const [editingCartItemId, setEditingCartItemId] = useState<string | null>(null);
+  const [noteTouched, setNoteTouched] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [loadingOptions, setLoadingOptions] = useState(false);
   const [error, setError] = useState("");
-  const restoreCartOnMount = useRef(cartQuantity > 0);
   const transitionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadingMoreMenusRef = useRef(false);
 
@@ -65,24 +83,55 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
     setSelections({});
     setPhase("options");
     setCart(null);
+    setEditingCartItemId(null);
+    setNoteTouched(false);
     setError("");
-    Promise.all([
-      api.getOptions(activeMenu.menu_id, sessionId),
-      restoreCartOnMount.current ? api.getCart(sessionId) : Promise.resolve(null),
-    ])
-      .then(([result, restoredCart]) => {
+    setLoadingOptions(true);
+    void (async () => {
+      try {
+        // Cart ownership is cheap and authoritative. Resolve it before option
+        // localization so a cross-merchant selection never sits behind a slow
+        // model-backed option request or renders an empty order builder.
+        const restoredCart = await api.getCart(sessionId).catch(() => null);
         if (!active) return;
-        setGroups(result);
         if (restoredCart?.items.length) {
           setCart(restoredCart);
           setCartQuantity(restoredCart.items.reduce((total, item) => total + item.quantity, 0));
-          setPhase(restoredCart.missing_slots.includes("delivery_preferences") ? "delivery" : "review");
-        } else if (result.length === 0) {
-          setPhase("note");
+          const cartMerchantId = restoredCart.items[0]?.merchant_id;
+          const activeItemExists = restoredCart.items.some((item) => item.menu_id === activeMenu.menu_id);
+          if (cartMerchantId && cartMerchantId !== activeMenu.merchant_id) {
+            setPhase("merchant-conflict");
+            return;
+          }
+
+          const result = await api.getOptions(
+            activeMenu.menu_id,
+            sessionId,
+            precomputedOptionsOnly,
+          );
+          if (!active) return;
+          setGroups(result);
+          if (activeItemExists) {
+            setPhase(restoredCart.missing_slots.includes("delivery_preferences") ? "delivery" : "review");
+          } else if (result.length === 0) {
+            setPhase("note");
+          }
+        } else {
+          const result = await api.getOptions(
+            activeMenu.menu_id,
+            sessionId,
+            precomputedOptionsOnly,
+          );
+          if (!active) return;
+          setGroups(result);
+          if (result.length === 0) setPhase("note");
         }
-        restoreCartOnMount.current = false;
-      })
-      .catch((cause) => { if (active) setError(actionableError(cause, journeyCopy.retry, language)); });
+      } catch (cause) {
+        if (active) setError(actionableError(cause, journeyCopy.retry, language));
+      } finally {
+        if (active) setLoadingOptions(false);
+      }
+    })();
     return () => {
       active = false;
       if (transitionTimer.current !== null) {
@@ -90,7 +139,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
         transitionTimer.current = null;
       }
     };
-  }, [activeMenu.menu_id, journeyCopy.retry, language, sessionId, setCartQuantity]);
+  }, [activeMenu.menu_id, activeMenu.merchant_id, cartRevision, journeyCopy.retry, language, precomputedOptionsOnly, sessionId, setCartQuantity]);
 
   useEffect(() => setActiveMenu(menu), [menu]);
 
@@ -99,15 +148,87 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
     setCartQuantity(preview.items.reduce((total, item) => total + item.quantity, 0));
   }
 
+  async function routeAfterNewCartItem(preview: CartPreview) {
+    try {
+      const otherMenus = await api.getMerchantMenus(
+        sessionId,
+        activeMenu.merchant_id,
+        preview.items.map((item) => item.menu_id),
+      );
+      setPhase(otherMenus.length > 0 ? "more" : "delivery");
+    } catch {
+      // If availability cannot be proven, skip the optional upsell instead of showing a dead end.
+      setPhase("delivery");
+    }
+  }
+
+  async function recoverMerchantConflict(cause: unknown) {
+    if (!(cause instanceof Error) || !["CART_MULTIPLE_MERCHANTS", "CART_MERCHANT_CONFLICT"].includes(cause.message)) {
+      return false;
+    }
+    const preview = await api.getCart(sessionId).catch(() => null);
+    if (preview) syncCart(preview);
+    setPhase("merchant-conflict");
+    return true;
+  }
+
+  async function clearConflictingCart() {
+    if (!cart) return;
+    setBusy(true);
+    setError("");
+    try {
+      let preview = cart;
+      for (const item of [...cart.items]) {
+        preview = await api.deleteCartItem(sessionId, item.cart_item_id);
+      }
+      syncCart(preview);
+      setEditingCartItemId(null);
+      setLoadingOptions(true);
+      const result = await api.getOptions(
+        activeMenu.menu_id,
+        sessionId,
+        precomputedOptionsOnly,
+      );
+      setGroups(result);
+      setPhase(result.length ? "options" : "note");
+    } catch (cause) {
+      setError(actionableError(cause, journeyCopy.retry, language));
+    } finally {
+      setLoadingOptions(false);
+      setBusy(false);
+    }
+  }
+
+  function beginOptionEdit() {
+    if (!cart) return;
+    const line = cart.items.find((item) => item.menu_id === activeMenu.menu_id);
+    if (!line) {
+      setPhase(groups.length ? "options" : "note");
+      return;
+    }
+    const selectedIds = new Set(line.options.map((option) => option.option_item_id));
+    setSelections(Object.fromEntries(groups.map((group) => [
+      group.option_group_id,
+      group.items.filter((option) => selectedIds.has(option.option_item_id)).map((option) => option.option_item_id),
+    ])));
+    setEditingCartItemId(line.cart_item_id);
+    setNote("");
+    setNoteTouched(false);
+    setNoteTranslation(null);
+    setGroupIndex(0);
+    setPhase(groups.length ? "options" : "note");
+  }
+
   const currentGroup = groups[groupIndex];
   const selectedOptionIds = useMemo(() => Object.values(selections).flat(), [selections]);
-  const selectedDelta = useMemo(() => groups.reduce((total, group) => {
-    const optionIds = new Set(selections[group.option_group_id] ?? []);
-    return total + group.items.reduce(
-      (subtotal, option) => subtotal + (optionIds.has(option.option_item_id) ? option.price_delta : 0),
-      0,
-    );
-  }, 0), [groups, selections]);
+  const localizedOptionNames = useMemo(() => new Map(groups.flatMap((group) => group.items.map((option) => [
+    option.option_item_id,
+    option.display_name || (language === "한국어" ? option.name_ko : option.name_en),
+  ]))), [groups, language]);
+  const selectedDelta = useMemo(
+    () => selectedOptionsPriceDelta(groups, selections),
+    [groups, selections],
+  );
 
   function advanceFromGroup() {
     if (transitionTimer.current !== null) clearTimeout(transitionTimer.current);
@@ -118,33 +239,12 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
     }, 160);
   }
 
-  function sourceHasNoneOption(group: OptionGroup) {
-    return group.items.some((option) => {
-      const value = `${option.name_ko} ${option.name_en} ${option.display_name ?? ""}`
-        .replace(/\s+/g, "")
-        .toLowerCase();
-      return ["선택안함", "미선택", "none", "nooption", "選択しない", "なし"]
-        .some((token) => value.includes(token));
-    });
-  }
-
-  function optionConflicts(option: OptionItem) {
-    const breaksHalal = Boolean(dietaryFilters?.halal_certified_only && option.halal_certification_preserved === false);
-    const breaksVegan = Boolean(dietaryFilters?.vegan && option.vegan_status === "CONFLICT");
-    const needsVeganCheck = Boolean(dietaryFilters?.vegan && option.vegan_status === "POSSIBLE_WITH_CHECKS");
-    return { breaksHalal, breaksVegan, needsVeganCheck };
-  }
-
   async function selectOption(group: OptionGroup, optionId: string) {
     setBusy(true);
     setError("");
     try {
       const current = selections[group.option_group_id] ?? [];
-      const next = group.max_select > 1
-        ? current.includes(optionId)
-          ? current.filter((value) => value !== optionId)
-          : current.length < group.max_select ? [...current, optionId] : current
-        : [optionId];
+      const next = toggledOptionSelection(group, current, optionId);
       await onOptionChange?.(activeMenu.menu_id, group.option_group_id, next, false);
       setSelections((value) => ({ ...value, [group.option_group_id]: next }));
       if (group.max_select === 1) advanceFromGroup();
@@ -183,28 +283,25 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
     setBusy(true);
     setError("");
     try {
-      const next: Record<string, string[]> = { ...selections };
-      for (let index = groupIndex; index < groups.length; index += 1) {
-        const group = groups[index];
-        if (next[group.option_group_id] !== undefined) continue;
-        if (group.min_select === 0) {
-          await onOptionChange?.(activeMenu.menu_id, group.option_group_id, [], false);
-          next[group.option_group_id] = [];
-          continue;
-        }
-        const safeOptions = group.items.filter((option) => {
-          if (!option.available) return false;
-          const { breaksHalal, breaksVegan } = optionConflicts(option);
-          return !breaksHalal && !breaksVegan;
-        });
-        const optionIds = safeOptions
-          .slice(0, Math.max(1, group.min_select))
-          .map((option) => option.option_item_id);
-        if (optionIds.length < group.min_select) continue;
-        await onOptionChange?.(activeMenu.menu_id, group.option_group_id, optionIds, false);
-        next[group.option_group_id] = optionIds;
+      const plan = planDefaultOptionSelections(
+        groups,
+        selections,
+        groupIndex,
+        dietaryFilters,
+      );
+      if (plan.missingRequiredGroup) {
+        setError(v2.requiredTapOne);
+        return;
       }
-      setSelections(next);
+      for (const update of plan.updates) {
+        await onOptionChange?.(
+          activeMenu.menu_id,
+          update.optionGroupId,
+          update.optionItemIds,
+          false,
+        );
+      }
+      setSelections(plan.selections);
       setPhase("note");
     } catch (cause) {
       setError(actionableError(cause, journeyCopy.retry, language));
@@ -220,17 +317,32 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
     }
     setBusy(true);
     try {
-      const preview = await api.addCartItem(
-        sessionId,
-        activeMenu.menu_id,
-        selectedOptionIds,
-        note,
-        noteTranslation?.translation_id,
-      );
+      const preview = editingCartItemId
+        ? await api.updateCartItem(sessionId, editingCartItemId, {
+            option_item_ids: selectedOptionIds,
+            ...(noteTouched ? {
+              user_note: note,
+              ...(noteTranslation?.translation_id ? { note_translation_id: noteTranslation.translation_id } : {}),
+            } : {}),
+          })
+        : await api.addCartItem(
+            sessionId,
+            activeMenu.menu_id,
+            selectedOptionIds,
+            note,
+            noteTranslation?.translation_id,
+          );
       syncCart(preview);
-      setPhase("more");
+      if (editingCartItemId) {
+        setEditingCartItemId(null);
+        setPhase(preview.missing_slots.includes("delivery_preferences") ? "delivery" : "review");
+      } else {
+        await routeAfterNewCartItem(preview);
+      }
     } catch (cause) {
-      setError(actionableError(cause, journeyCopy.retry, language));
+      if (!(await recoverMerchantConflict(cause))) {
+        setError(actionableError(cause, journeyCopy.retry, language));
+      }
     } finally {
       setBusy(false);
     }
@@ -240,17 +352,29 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
     setBusy(true);
     setError("");
     try {
-      const preview = await api.addCartItem(
-        sessionId,
-        activeMenu.menu_id,
-        selectedOptionIds,
-        "",
-        undefined,
-      );
+      const preview = editingCartItemId
+        ? await api.updateCartItem(sessionId, editingCartItemId, {
+            option_item_ids: selectedOptionIds,
+            user_note: "",
+          })
+        : await api.addCartItem(
+            sessionId,
+            activeMenu.menu_id,
+            selectedOptionIds,
+            "",
+            undefined,
+          );
       syncCart(preview);
-      setPhase("more");
+      if (editingCartItemId) {
+        setEditingCartItemId(null);
+        setPhase(preview.missing_slots.includes("delivery_preferences") ? "delivery" : "review");
+      } else {
+        await routeAfterNewCartItem(preview);
+      }
     } catch (cause) {
-      setError(actionableError(cause, journeyCopy.retry, language));
+      if (!(await recoverMerchantConflict(cause))) {
+        setError(actionableError(cause, journeyCopy.retry, language));
+      }
     } finally {
       setBusy(false);
     }
@@ -322,6 +446,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
     setMerchantMenus([]);
     setNextMenuCursor(null);
     setNote(journeyCopy.mildNote);
+    setNoteTouched(false);
     setNoteTranslation(null);
   }
 
@@ -383,9 +508,30 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
   }
 
   const won = (value: number) => `₩${value.toLocaleString(locale)}`;
+  const minimumOrderLabel = language === "한국어" ? "최소 주문" : language === "日本語" ? "最低注文" : "Minimum order";
 
   return (
     <section className="v2-order-flow" aria-label={copy.orderBuilder} data-testid="order-flow">
+      {loadingOptions && phase === "options" && !currentGroup && (
+        <p className="v2-status" role="status">{journeyCopy.loading}</p>
+      )}
+      {phase === "merchant-conflict" && cart && (
+        <article className="v2-order-card" role="alert">
+          <div className="v2-order-body">
+            <div className="v2-order-heading">
+              <h3>{language === "한국어" ? "다른 가게의 메뉴가 장바구니에 있어요" : language === "日本語" ? "別のお店のメニューがカートにあります" : "Your cart has items from another restaurant"}</h3>
+              <p>{language === "한국어" ? "한 번에 한 가게만 주문할 수 있습니다. 기존 장바구니를 비운 뒤 이 메뉴를 설정하거나, 장바구니를 유지하세요." : language === "日本語" ? "一度に注文できるのは1店舗です。現在のカートを空にしてこのメニューを設定するか、カートをそのままにしてください。" : "A cart can contain one restaurant at a time. Clear the current cart to configure this menu, or keep your existing order."}</p>
+            </div>
+            <button type="button" className="v2-card-primary" onClick={() => void clearConflictingCart()} disabled={busy}>
+              {language === "한국어" ? "기존 장바구니 비우고 계속" : language === "日本語" ? "現在のカートを空にして続ける" : "Clear cart and continue"}
+            </button>
+            <button type="button" className="v2-card-secondary" onClick={onClose} disabled={busy}>
+              {language === "한국어" ? "기존 장바구니 유지" : language === "日本語" ? "現在のカートを保持" : "Keep current cart"}
+            </button>
+          </div>
+        </article>
+      )}
+
       {phase === "options" && currentGroup && (
         <>
           <article className="v2-order-card" data-testid={`option-group-${currentGroup.option_group_id}`}>
@@ -405,7 +551,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
                 <h3>{currentGroup.display_name || (language === "한국어" ? currentGroup.name_ko : currentGroup.name_en)}</h3>
                 <p>{currentGroup.min_select === 0 ? v2.optionalTap : v2.requiredTapOne}</p>
               </div>
-              {currentGroup.min_select === 0 && !sourceHasNoneOption(currentGroup) && (
+              {currentGroup.min_select === 0 && !optionGroupHasNoneChoice(currentGroup) && (
                 <div className="v2-option-shell">
                   <button
                     type="button"
@@ -421,7 +567,10 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
                 </div>
               )}
               {currentGroup.items.map((option) => {
-                const { breaksHalal, breaksVegan, needsVeganCheck } = optionConflicts(option);
+                const { breaksHalal, breaksVegan, needsVeganCheck } = optionDietaryConflicts(
+                  option,
+                  dietaryFilters,
+                );
                 const selected = (selections[currentGroup.option_group_id] ?? []).includes(option.option_item_id);
                 return (
                   <div key={option.option_item_id} className="v2-option-shell">
@@ -481,7 +630,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
             <textarea
               className="v2-note-input"
               value={note}
-              onChange={(event) => { setNote(event.target.value); setNoteTranslation(null); setError(""); }}
+              onChange={(event) => { setNote(event.target.value); setNoteTouched(true); setNoteTranslation(null); setError(""); }}
             />
             {noteTranslation?.status !== "FAILED" && (
               <button type="button" className="v2-card-secondary" onClick={() => void translateNote()} disabled={busy || !note.trim()}>
@@ -542,7 +691,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
         <article className="v2-order-card">
           <div className="v2-order-body">
             <div className="v2-order-heading">
-              <h3>{copy.moreFrom} · {activeMenu.merchant_name}</h3>
+              <h3>{copy.moreFrom} · {merchantName(activeMenu.merchant_name, language)}</h3>
               <p>{copy.swipeMore}</p>
             </div>
             <div
@@ -564,7 +713,10 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
                         {item.localized_subtitle && item.localized_subtitle !== item.localized_title && (
                           <small className="v2-card-subtitle">{item.localized_subtitle}</small>
                         )}
-                        <p>{item.menu.merchant_name}</p>
+                        <p>{merchantName(item.menu.merchant_name, language)}</p>
+                        {Boolean(item.menu.minimum_order_amount) && (
+                          <small>{minimumOrderLabel} {won(item.menu.minimum_order_amount!)}</small>
+                        )}
                       </div>
                       <strong>{won(item.menu.price)}</strong>
                     </div>
@@ -626,7 +778,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
               <div className="v2-divider" />
               <div className="v2-review-label-row">
                 <span>{v2.yourMenu}</span>
-                <button type="button" onClick={() => { setGroupIndex(0); setPhase(groups.length ? "options" : "note"); }} disabled={busy}>
+                <button type="button" onClick={beginOptionEdit} disabled={busy}>
                   {v2.editChip}
                 </button>
               </div>
@@ -636,7 +788,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
                   <div className="v2-cart-line" key={item.cart_item_id}>
                     <div className="copy">
                       <strong>{displayedItemName}</strong>
-                      <small>{item.options.map((option) => option.display_name || (language === "한국어" ? option.name_ko : option.name_en)).join(" · ") || journeyCopy.included}</small>
+                      <small>{item.options.map((option) => localizedOptionNames.get(option.option_item_id) || option.display_name || (language === "한국어" ? option.name_ko : option.name_en)).join(" · ") || journeyCopy.included}</small>
                     </div>
                     <div className="controls">
                       <div className="v2-stepper" aria-label={`${journeyCopy.quantity}: ${displayedItemName}`}>
@@ -676,7 +828,7 @@ export function OrderFlowPanel({ sessionId, menu, addressRefId, dietaryFilters, 
           </article>
           <div className="v2-inline-replies no-indent">
             <button type="button" className="v2-quick-reply" onClick={changeAddress} disabled={busy}>{v2.changeAddress}</button>
-            <button type="button" className="v2-quick-reply" onClick={() => { setGroupIndex(0); setPhase(groups.length ? "options" : "note"); }} disabled={busy}>
+            <button type="button" className="v2-quick-reply" onClick={beginOptionEdit} disabled={busy}>
               {v2.changeOptions}
             </button>
             <button type="button" className="v2-quick-reply" onClick={onClose} disabled={busy}>{v2.startOver}</button>

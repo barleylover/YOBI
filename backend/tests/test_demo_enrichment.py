@@ -6,6 +6,7 @@ from pathlib import Path
 from scripts.build_synthetic_enrichment_release import (
     _apply_sqlite,
     _load_sqlite_inputs,
+    _synthetic_family_id,
 )
 
 from app.db.sqlite_repository import SQLiteYobiRepository
@@ -22,6 +23,45 @@ from app.demo_enrichment import (
 def _menus() -> list[EnrichmentMenu]:
     return [
         EnrichmentMenu("m-pork", "매운 제육 덮밥", ("PORK", "SPICY")),
+        EnrichmentMenu(
+            "m-cutlet",
+            "푸짐한 돈가스김밥",
+            ("RICE",),
+            "Generous Pork cutlet gimbap",
+        ),
+        EnrichmentMenu(
+            "m-pepperoni",
+            "한그릇 페퍼로니피자",
+            ("BAKED",),
+            "One-bowl Pepperoni pizza",
+        ),
+        EnrichmentMenu(
+            "m-hidden-pork",
+            "모둠국밥",
+            ("SOUP",),
+            "Mixed gukbap",
+            "엄선된 돼지 원육과 돈골 육수로 끓였습니다.",
+        ),
+        EnrichmentMenu(
+            "m-alcohol",
+            "향긋한 버섯구이",
+            ("MUSHROOM", "GRILLED"),
+            "Fragrant grilled mushrooms",
+            "와인 소스로 풍미를 더했습니다.",
+        ),
+        EnrichmentMenu(
+            "m-korean-pork-alias",
+            "한돈 차슈 돈코츠 라멘",
+            ("NOODLES",),
+            "Tonkotsu ramen with chashu",
+        ),
+        EnrichmentMenu(
+            "m-hidden-cooking-alcohol",
+            "버섯 덮밥",
+            ("MUSHROOM", "RICE"),
+            "Mushroom rice bowl",
+            "청주와 맛술로 향을 냈습니다.",
+        ),
         EnrichmentMenu("m-veg-1", "산채 비빔밥", ("VEGETABLE", "RICE")),
         EnrichmentMenu("m-veg-2", "두부 샐러드", ("TOFU", "VEGETABLE")),
         EnrichmentMenu("m-veg-3", "버섯 국수", ("MUSHROOM", "NOODLES")),
@@ -56,6 +96,19 @@ def test_enrichment_is_reproducible_and_exact() -> None:
     assert len(first["preferences"]) == len(_menus()) * 36
     assert len(first["reviews"]) == len(_menus()) * 6
     assert len(first["localizations"]) == len(_menus())
+    assert sum(int(row["halal_fit"]) for row in first["menus"]) == (len(_menus()) + 1) // 3
+
+
+def test_synthetic_family_id_remains_distinct_at_oracle_column_limit() -> None:
+    previous = "family-" + "x" * 153
+
+    generated = _synthetic_family_id(previous, "release-v6", "a" * 64)
+
+    assert len(previous) == 160
+    assert len(generated) == 160
+    assert generated != previous
+    assert generated == _synthetic_family_id(previous, "release-v6", "a" * 64)
+    assert generated != _synthetic_family_id(previous, "release-v7", "a" * 64)
 
 
 def test_enrichment_guards_obvious_pork_and_animal_options() -> None:
@@ -66,9 +119,43 @@ def test_enrichment_guards_obvious_pork_and_animal_options() -> None:
         options=[EnrichmentOption("o-cheese", "m-veg-1", "치즈 추가")],
     )
     pork = next(row for row in rows["menus"] if row["menu_id"] == "m-pork")
+    cutlet = next(row for row in rows["menus"] if row["menu_id"] == "m-cutlet")
+    pepperoni = next(row for row in rows["menus"] if row["menu_id"] == "m-pepperoni")
+    hidden_pork = next(row for row in rows["menus"] if row["menu_id"] == "m-hidden-pork")
+    alcohol = next(row for row in rows["menus"] if row["menu_id"] == "m-alcohol")
+    korean_pork_alias = next(
+        row for row in rows["menus"] if row["menu_id"] == "m-korean-pork-alias"
+    )
+    hidden_cooking_alcohol = next(
+        row for row in rows["menus"] if row["menu_id"] == "m-hidden-cooking-alcohol"
+    )
     assert pork["halal_fit"] == 0
     assert pork["vegan_fit"] == 0
+    assert cutlet["halal_fit"] == 0
+    assert cutlet["vegan_fit"] == 0
+    assert pepperoni["halal_fit"] == 0
+    assert pepperoni["vegan_fit"] == 0
+    assert hidden_pork["halal_fit"] == 0
+    assert hidden_pork["vegan_fit"] == 0
+    assert alcohol["halal_fit"] == 0
+    assert korean_pork_alias["halal_fit"] == 0
+    assert hidden_cooking_alcohol["halal_fit"] == 0
     assert rows["options"][0]["vegan_conflict"] == 1
+    halal_ids = {row["menu_id"] for row in rows["menus"] if row["halal_fit"]}
+    assert halal_ids <= {
+        menu.menu_id
+        for menu in _menus()
+        if menu.menu_id not in {
+            "m-pork",
+            "m-cutlet",
+            "m-pepperoni",
+            "m-hidden-pork",
+            "m-alcohol",
+            "m-korean-pork-alias",
+            "m-hidden-cooking-alcohol",
+        }
+    }
+    assert halal_ids
 
 
 def test_production_size_coverage_counts_are_exact() -> None:
@@ -91,9 +178,7 @@ def test_production_size_coverage_counts_are_exact() -> None:
 def test_sqlite_release_apply_is_resumable_and_preserves_base_tables(tmp_path: Path) -> None:
     database_path = tmp_path / "enrichment.db"
     SQLiteYobiRepository(database_path).initialize()
-    catalog_release_id, knowledge_release_id, menus, options = _load_sqlite_inputs(
-        database_path
-    )
+    catalog_release_id, knowledge_release_id, menus, options = _load_sqlite_inputs(database_path)
     with sqlite3.connect(database_path) as connection:
         eligible_ids = {
             str(row[0])
@@ -103,6 +188,7 @@ def test_sqlite_release_apply_is_resumable_and_preserves_base_tables(tmp_path: P
             )
         }
     assert {menu.menu_id for menu in menus} == eligible_ids
+    assert all(menu.description for menu in menus)
     rows = build_enrichment_rows(
         release_id="release-resumable",
         seed="stable-seed",
@@ -207,6 +293,38 @@ def test_sqlite_release_apply_is_resumable_and_preserves_base_tables(tmp_path: P
                 for language_code in ("en", "ja")
             ],
         )
+        connection.executemany(
+            """
+            INSERT INTO menu_source_description_localization(
+              release_id,menu_id,language_code,description_text,model_id,
+              prompt_version,source_hash,validation_status,generated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                (
+                    "release-source",
+                    menus[0].menu_id,
+                    "en",
+                    "A validated English restaurant description.",
+                    "TEST_FIXTURE",
+                    "test-only",
+                    "c" * 64,
+                    "VALID",
+                    "2026-08-20T00:00:00+00:00",
+                ),
+                (
+                    "release-source",
+                    menus[0].menu_id,
+                    "ja",
+                    "検証済みの店舗説明です。",
+                    "TEST_FIXTURE",
+                    "test-only",
+                    "d" * 64,
+                    "VALID",
+                    "2026-08-20T00:00:00+00:00",
+                ),
+            ],
+        )
 
     _apply_sqlite(
         database_path,
@@ -233,6 +351,19 @@ def test_sqlite_release_apply_is_resumable_and_preserves_base_tables(tmp_path: P
             ).fetchone()[0]
         )
         assert localization_count == len(menus) * 3
+        copied_source_descriptions = connection.execute(
+            """
+            SELECT language_code,description_text
+            FROM menu_source_description_localization
+            WHERE release_id=? AND menu_id=?
+            ORDER BY language_code
+            """,
+            ("release-resumable", menus[0].menu_id),
+        ).fetchall()
+        assert copied_source_descriptions == [
+            ("en", "A validated English restaurant description."),
+            ("ja", "検証済みの店舗説明です。"),
+        ]
 
     SQLiteYobiRepository(database_path).initialize()
 
@@ -252,4 +383,6 @@ def test_sqlite_release_apply_is_resumable_and_preserves_base_tables(tmp_path: P
         )
 
     assert active_after_restart == active_before_restart
+    assert active_before_restart != active_family_id
+    assert len(active_before_restart) <= 160
     assert active_enrichment == "release-resumable"

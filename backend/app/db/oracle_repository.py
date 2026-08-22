@@ -23,8 +23,22 @@ from app.db.concept_query import (
 from app.db.demo_address import demo_address_status
 from app.db.message_ordering import order_conversation_messages
 from app.db.oracle_pool import OraclePool
+from app.db.runtime_contract import (
+    EXPECTED_MAPPED_MENUS,
+    EXPECTED_MERCHANT_INGREDIENTS,
+    EXPECTED_OPTION_EFFECTS,
+    EXPECTED_ORIGIN_DECLARATIONS,
+    EXPECTED_RUNTIME_COUNTS,
+    EXTERNAL_CATALOG_COUNT_TABLES,
+    RECOMMENDATION_CANDIDATE_CAP,
+    RECOMMENDATION_PASSAGE_LIMIT,
+)
+from app.db.runtime_contract import (
+    runtime_counts_compatible as _runtime_counts_compatible,
+)
 from app.db.seed_data import CATALOG_VERSION
 from app.domain.address import normalize_address_text
+from app.domain.cart_validation import deterministic_korean_order_note, structured_v3_cart_error
 from app.domain.concept_ranking import (
     RANKING_POLICY_VERSION,
     ConceptRankCandidate,
@@ -53,6 +67,7 @@ from app.domain.knowledge import (
     KnowledgeSourceKind,
     SourceScope,
 )
+from app.domain.localization import localization_ids_complete
 from app.domain.models import (
     AddressCandidate,
     AssistantTurn,
@@ -112,6 +127,7 @@ from app.domain.structured_recommendation import (
     RecommendationRequestInput,
     RecommendationRequestRecord,
     RecommendationRequestStatus,
+    price_matches_bands,
 )
 from app.knowledge.catalog_seed import KNOWLEDGE_CATALOG_VERSION, KNOWLEDGE_RELEASE_ID
 from app.knowledge.passage_ranking import rank_component_wiki_passages
@@ -137,15 +153,6 @@ from app.rag.embeddings import (
     rank_hybrid_chunks_rrf,
 )
 from app.rag.providers import choose_embedding_provider
-
-# The demo corpus is intentionally bounded at 600 menus. Keep every hard-filtered
-# candidate until the structured-preference reranker has applied its 25% share.
-RECOMMENDATION_CANDIDATE_CAP = 600
-RECOMMENDATION_PASSAGE_LIMIT = 3
-EXPECTED_MAPPED_MENUS = 600
-EXPECTED_ORIGIN_DECLARATIONS = 13
-EXPECTED_MERCHANT_INGREDIENTS = 120
-EXPECTED_OPTION_EFFECTS = 4
 
 
 def _oracle_required_text(value: str) -> str:
@@ -175,51 +182,6 @@ def _synthetic_review_query_binds(parameters: dict[str, Any]) -> dict[str, Any]:
         for key, value in parameters.items()
         if key == "synthetic_release_id" or key.startswith("synthetic_menu_")
     }
-
-
-EXPECTED_RUNTIME_COUNTS = {
-    "service_area": 3,
-    "menu_category": 100,
-    "merchant": 60,
-    "menu": 600,
-    "menu_knowledge": 600,
-    "menu_option_group": 1202,
-    "menu_option_item": 2405,
-    "review_snippet": 2400,
-    "evidence": 1200,
-    "address_place": 20,
-    "ingredient": 48,
-    "menu_ingredient": 565,
-    "allergen": 8,
-    "menu_allergen": 48,
-    "dietary_attribute": 15,
-    "menu_dietary_attribute": 1217,
-    "option_dietary_conflict": 1,
-}
-EXTERNAL_CATALOG_COUNT_TABLES = (
-    "catalog_source_payload",
-    "menu",
-    "menu_option_group",
-    "menu_option_item",
-    "menu_source_detail",
-    "menu_source_section",
-    "menu_source_section_item",
-    "merchant",
-    "merchant_source_detail",
-    "option_group_source_detail",
-    "source_option",
-)
-UPGRADE_RETAINED_RUNTIME_COUNT_KEYS = frozenset(
-    {"allergen", "dietary_attribute", "ingredient", "menu_allergen"}
-)
-
-
-def _runtime_counts_compatible(counts: dict[str, int]) -> bool:
-    return set(counts) == set(EXPECTED_RUNTIME_COUNTS) and all(
-        actual >= expected if key in UPGRADE_RETAINED_RUNTIME_COUNT_KEYS else actual == expected
-        for key, expected in EXPECTED_RUNTIME_COUNTS.items()
-        for actual in (counts[key],)
-    )
 
 
 def _now() -> datetime:
@@ -2497,6 +2459,45 @@ class OracleYobiRepository:
         criteria = RecommendationCriteriaV2.model_validate(_json(row[0]))
         conditions: list[str] = []
         parameters: dict[str, Any] = {}
+        if criteria.schema_version == "3":
+            price_range = criteria.price_range_krw
+            if price_range is None:
+                return " AND 1=0", {}
+            parameters.update(
+                {
+                    "browse_price_min_krw": price_range.min,
+                    "browse_price_max_krw": price_range.max,
+                    "browse_spice_reference_country": criteria.spice_reference_country,
+                    "browse_spice_preference": criteria.spice_preference,
+                }
+            )
+            conditions.append("menu.price BETWEEN :browse_price_min_krw AND :browse_price_max_krw")
+            synthetic_dietary_conditions = ""
+            if criteria.dietary_filters.halal_certified_only:
+                synthetic_dietary_conditions += " AND synthetic_menu.halal_fit=1"
+            if criteria.dietary_filters.vegan:
+                synthetic_dietary_conditions += " AND synthetic_menu.vegan_fit=1"
+            conditions.append(
+                f"""EXISTS (
+                  SELECT 1 FROM synthetic_menu_profile synthetic_menu
+                  JOIN synthetic_country_profile synthetic_country
+                    ON synthetic_country.release_id=synthetic_menu.release_id
+                   AND synthetic_country.country_code=:browse_spice_reference_country
+                  WHERE synthetic_menu.release_id=family.synthetic_enrichment_release_id
+                    AND synthetic_menu.menu_id=menu.menu_id
+                    AND (
+                      (:browse_spice_preference='LESS'
+                       AND synthetic_menu.spice_level<synthetic_country.spice_baseline)
+                      OR (:browse_spice_preference='SIMILAR'
+                          AND synthetic_menu.spice_level=synthetic_country.spice_baseline)
+                      OR (:browse_spice_preference='MORE'
+                          AND synthetic_menu.spice_level>synthetic_country.spice_baseline)
+                    )
+                    {synthetic_dietary_conditions}
+                )"""
+            )
+            return " AND " + " AND ".join(conditions), parameters
+
         price_conditions = [
             {
                 "UNDER_10000": "menu.price<10000",
@@ -2582,6 +2583,7 @@ class OracleYobiRepository:
                          COALESCE(merchant.name_en,merchant.name_ko) merchant_name,
                          menu.name_en,menu.name_ko,menu.category,menu.description,
                          menu.cultural_description,menu.price,
+                         COALESCE(merchant.min_order_amount,0) minimum_order_amount,
                          COALESCE(merchant.delivery_fee,0) delivery_fee,
                          COALESCE(merchant.eta_min,0) eta_min,
                          COALESCE(merchant.eta_max,0) eta_max,
@@ -2707,7 +2709,15 @@ class OracleYobiRepository:
         self,
         session_id: str,
     ) -> FeaturedMenuCollection:
-        feature_names = ("Gimbap", "Gukbap", "Hotteok", "Seolleongtang", "Eomuk")
+        feature_names = (
+            "Gimbap",
+            "Korean wheat noodles",
+            "Tteokbokki",
+            "Gukbap",
+            "Hotteok",
+            "Seolleongtang",
+            "Eomuk",
+        )
         with self.pool.connection() as connection:
             service_area_id, _excluded = self._structured_session_filters(
                 connection, session_id, exclude_history=False
@@ -2727,6 +2737,7 @@ class OracleYobiRepository:
                          COALESCE(merchant.name_en,merchant.name_ko) merchant_name,
                          menu.name_en,menu.name_ko,menu.category,menu.description,
                          menu.cultural_description,menu.price,
+                         COALESCE(merchant.min_order_amount,0) minimum_order_amount,
                          COALESCE(merchant.delivery_fee,0) delivery_fee,
                          COALESCE(merchant.eta_min,0) eta_min,
                          COALESCE(merchant.eta_max,0) eta_max,
@@ -2776,8 +2787,9 @@ class OracleYobiRepository:
                     {exact_clause}
                 ) WHERE concept_rank<=20
                 ORDER BY CASE dish_name
-                  WHEN 'Gimbap' THEN 1 WHEN 'Gukbap' THEN 2 WHEN 'Hotteok' THEN 3
-                  WHEN 'Seolleongtang' THEN 4 WHEN 'Eomuk' THEN 5 ELSE 6 END,concept_rank
+                  WHEN 'Gimbap' THEN 1 WHEN 'Korean wheat noodles' THEN 2
+                  WHEN 'Tteokbokki' THEN 3 WHEN 'Gukbap' THEN 4 WHEN 'Hotteok' THEN 5
+                  WHEN 'Seolleongtang' THEN 6 WHEN 'Eomuk' THEN 7 ELSE 8 END,concept_rank
                 """,
                 binds,
             )
@@ -2833,24 +2845,6 @@ class OracleYobiRepository:
                 )
                 for row, menu in zip(rows, menus)
             ],
-        )
-
-    @staticmethod
-    def _price_matches_v2(price: int, selected_bands: list[str]) -> bool:
-        if not selected_bands:
-            return True
-        return any(
-            (
-                code == "UNDER_10000"
-                and price < 10_000
-                or code == "FROM_10000_TO_19999"
-                and 10_000 <= price < 20_000
-                or code == "FROM_20000_TO_29999"
-                and 20_000 <= price < 30_000
-                or code == "OVER_30000"
-                and price >= 30_000
-            )
-            for code in selected_bands
         )
 
     @staticmethod
@@ -3034,20 +3028,26 @@ class OracleYobiRepository:
         dict[str, tuple[str, str | None, list[EvidenceReference]]],
     ]:
         cursor = connection.cursor()
+        spice_clause = ""
+        query_binds: dict[str, Any] = {}
+        if criteria.schema_version == "2":
+            spice_clause = "AND (menu.spice_level IS NULL OR menu.spice_level<=:max_spice_level)"
+            query_binds["max_spice_level"] = criteria.max_spice_level
         cursor.execute(
-            """
+            f"""
             SELECT menu.menu_id,menu.merchant_id,menu.name_en,menu.name_ko,
                    menu.category,menu.description,menu.cultural_description,menu.price,
                    menu.spice_level,menu.serves_min,menu.serves_max,menu.is_synthetic,
                    COALESCE(merchant.name_en,merchant.name_ko) AS merchant_name,
                    merchant.delivery_fee,merchant.eta_min,merchant.eta_max,
-                   merchant.service_area_id
+                   merchant.service_area_id,
+                   COALESCE(merchant.min_order_amount,0) AS minimum_order_amount
             FROM menu
             JOIN merchant ON merchant.merchant_id=menu.merchant_id
             WHERE menu.availability='AVAILABLE'
-              AND (menu.spice_level IS NULL OR menu.spice_level<=:max_spice_level)
+              {spice_clause}
             """,
-            max_spice_level=criteria.max_spice_level,
+            query_binds,
         )
         rows = _rows(cursor)
         cursor.execute(
@@ -3091,9 +3091,92 @@ class OracleYobiRepository:
             and (not service_area_id or str(row.get("service_area_id") or "") == service_area_id)
             and (
                 not enforce_price_bands
-                or cls._price_matches_v2(int(row["price"]), criteria.price_bands)
+                or (
+                    criteria.schema_version == "3"
+                    and criteria.price_range_krw is not None
+                    and criteria.price_range_krw.min
+                    <= int(row["price"])
+                    <= criteria.price_range_krw.max
+                )
+                or (
+                    criteria.schema_version == "2"
+                    and price_matches_bands(int(row["price"]), criteria.price_bands)
+                )
             )
         ]
+        if criteria.schema_version == "3":
+            synthetic_release_id = str(family.synthetic_enrichment_release_id or "")
+            if not synthetic_release_id or not rows:
+                return [], {}, {}
+            cursor.execute(
+                """
+                SELECT spice_baseline FROM synthetic_country_profile
+                WHERE release_id=:release_id AND country_code=:country_code
+                """,
+                release_id=synthetic_release_id,
+                country_code=criteria.spice_reference_country,
+            )
+            baseline = cursor.fetchone()
+            if baseline is None:
+                return [], {}, {}
+            spice_baseline = int(baseline[0])
+            profile_binds: dict[str, Any] = {"release_id": synthetic_release_id}
+            profile_bind_names: list[str] = []
+            for index, row in enumerate(rows):
+                bind_name = f"profile_menu_{index}"
+                profile_binds[bind_name] = str(row["menu_id"])
+                profile_bind_names.append(f":{bind_name}")
+            cursor.execute(
+                f"""
+                SELECT menu_id,spice_level,halal_fit,vegan_fit
+                FROM synthetic_menu_profile
+                WHERE release_id=:release_id
+                  AND menu_id IN ({",".join(profile_bind_names)})
+                """,
+                profile_binds,
+            )
+            profiles = _rows(cursor)
+            profile_by_menu = {str(profile["menu_id"]): profile for profile in profiles}
+
+            def v3_menu_matches(row: dict[str, Any]) -> bool:
+                profile = profile_by_menu.get(str(row["menu_id"]))
+                if profile is None:
+                    return False
+                spice_level = int(profile["spice_level"])
+                spice_matches = (
+                    spice_level < spice_baseline
+                    if criteria.spice_preference == "LESS"
+                    else spice_level > spice_baseline
+                    if criteria.spice_preference == "MORE"
+                    else spice_level == spice_baseline
+                )
+                return bool(
+                    spice_matches
+                    and (not criteria.dietary_filters.halal_certified_only or profile["halal_fit"])
+                    and (not criteria.dietary_filters.vegan or profile["vegan_fit"])
+                )
+
+            filtered_rows: list[dict[str, Any]] = [row for row in rows if v3_menu_matches(row)]
+            certifications = {
+                menu_id: (synthetic_release_id, "Synthetic halal-friendly profile")
+                for menu_id, profile in profile_by_menu.items()
+                if profile["halal_fit"]
+            }
+            synthetic_vegan: dict[str, tuple[str, str | None, list[EvidenceReference]]] = {
+                menu_id: (
+                    "LIKELY_FIT" if profile["vegan_fit"] else "UNKNOWN",
+                    (
+                        "The menu profile marks this menu vegan-friendly; "
+                        "confirm options before ordering."
+                        if profile["vegan_fit"]
+                        else "Vegan suitability is not confirmed; check ingredients and options."
+                    ),
+                    [],
+                )
+                for menu_id, profile in profile_by_menu.items()
+            }
+            return filtered_rows, certifications, synthetic_vegan
+
         certifications = cls._valid_halal_certifications_in_connection(
             connection,
             instant=instant or _now(),
@@ -4615,6 +4698,10 @@ class OracleYobiRepository:
                 selected_menu_id = candidate.menu_id
                 selected_merchant_id = candidate.merchant_id
                 need_state.selected_menu_id = candidate.menu_id
+                # Option group IDs are scoped to a single menu; stale choices must not
+                # survive a menu change and poison the next option update.
+                need_state.option_selections = {}
+                need_state.option_risk_acknowledged = []
                 selected_menu = (
                     _find_menu_projection(snapshot.cards, candidate.menu_id) if snapshot else None
                 )
@@ -4629,6 +4716,8 @@ class OracleYobiRepository:
                     selected_menu_id = None
                     selected_merchant_id = None
                     need_state.selected_menu_id = None
+                    need_state.option_selections = {}
+                    need_state.option_risk_acknowledged = []
                 dialogue_act = DialogueAct.REJECT
                 chat_state = ChatState.DISCOVERY.value
             elif event.event_type == ConversationEventType.COMPARE_MENUS:
@@ -4767,7 +4856,9 @@ class OracleYobiRepository:
             cursor = connection.cursor()
             cursor.execute(
                 """
-                SELECT m.*, COALESCE(r.name_en,r.name_ko) AS merchant_name, r.delivery_fee, r.eta_min, r.eta_max,
+                SELECT m.*, COALESCE(r.name_en,r.name_ko) AS merchant_name,
+                  r.min_order_amount AS minimum_order_amount,
+                  r.delivery_fee, r.eta_min, r.eta_max,
                   VECTOR_DISTANCE(m.embedding_vector, :query_vector, COSINE) AS vector_distance
                 FROM menu m JOIN merchant r ON r.merchant_id = m.merchant_id
                 WHERE m.availability = 'AVAILABLE'
@@ -4966,6 +5057,9 @@ class OracleYobiRepository:
             description=_catalog_text(row["description"]),
             cultural_description=_catalog_text(row["cultural_description"]),
             price=int(row["price"]),
+            minimum_order_amount=int(
+                row.get("minimum_order_amount", row.get("min_order_amount", 0)) or 0
+            ),
             delivery_fee=int(row["delivery_fee"]),
             eta_min=int(row["eta_min"]),
             eta_max=int(row["eta_max"]),
@@ -4989,7 +5083,9 @@ class OracleYobiRepository:
             cursor = connection.cursor()
             cursor.execute(
                 """
-                SELECT m.*, COALESCE(r.name_en,r.name_ko) AS merchant_name, r.delivery_fee, r.eta_min, r.eta_max
+                SELECT m.*, COALESCE(r.name_en,r.name_ko) AS merchant_name,
+                       r.min_order_amount AS minimum_order_amount,
+                       r.delivery_fee, r.eta_min, r.eta_max
                 FROM menu m JOIN merchant r ON r.merchant_id=m.merchant_id
                 WHERE m.menu_id=:id
                 """,
@@ -5176,6 +5272,7 @@ class OracleYobiRepository:
                 f"""
                 SELECT * FROM (
                   SELECT menu.*,COALESCE(merchant.name_en,merchant.name_ko) merchant_name,
+                         merchant.min_order_amount AS minimum_order_amount,
                          merchant.delivery_fee,merchant.eta_min,merchant.eta_max,
                          localization.display_name,
                          localization.source_hash AS menu_localization_source_hash,
@@ -6635,7 +6732,7 @@ class OracleYobiRepository:
             menu_id,
             prompt_version,
         )
-        return set(localized_groups) == set(group_ids) and set(localized_items) == set(item_ids)
+        return localization_ids_complete(localized_groups, localized_items, group_ids, item_ids)
 
     def load_option_localizations(
         self,
@@ -6738,7 +6835,7 @@ class OracleYobiRepository:
             group_rows = _rows(cursor)
             cursor.execute(
                 """
-                SELECT item.option_item_id,item.name_en,item.name_ko
+                SELECT item.option_item_id,item.option_group_id,item.name_en,item.name_ko
                 FROM menu_option_item item
                 JOIN menu_option_group groups
                   ON groups.option_group_id=item.option_group_id
@@ -6747,13 +6844,23 @@ class OracleYobiRepository:
                 menu_id=menu_id,
             )
             item_rows = _rows(cursor)
-            if {str(row["option_group_id"]) for row in group_rows} != set(group_names):
+            known_group_ids = {str(row["option_group_id"]) for row in group_rows}
+            known_item_ids = {str(row["option_item_id"]) for row in item_rows}
+            if not set(group_names).issubset(known_group_ids):
                 raise ValueError("OPTION_LOCALIZATION_GROUP_IDS_MISMATCH")
-            if {str(row["option_item_id"]) for row in item_rows} != set(item_names):
+            if not set(item_names).issubset(known_item_ids):
                 raise ValueError("OPTION_LOCALIZATION_ITEM_IDS_MISMATCH")
+            if any(
+                str(row["option_item_id"]) in item_names
+                and str(row["option_group_id"]) not in group_names
+                for row in item_rows
+            ):
+                raise ValueError("OPTION_LOCALIZATION_ITEM_GROUP_MISMATCH")
             release_id = str(context["synthetic_enrichment_release_id"])
             generated_at = _now()
             for row in group_rows:
+                if str(row["option_group_id"]) not in group_names:
+                    continue
                 source_hash = hashlib.sha256(
                     json.dumps(
                         [row.get("name_ko"), row.get("name_en"), language_code],
@@ -6792,6 +6899,8 @@ class OracleYobiRepository:
                     generated_at=generated_at,
                 )
             for row in item_rows:
+                if str(row["option_item_id"]) not in item_names:
+                    continue
                 source_hash = hashlib.sha256(
                     json.dumps(
                         [row.get("name_ko"), row.get("name_en"), language_code],
@@ -7368,18 +7477,6 @@ class OracleYobiRepository:
             )
         return self.get_cart(session_id)
 
-    @staticmethod
-    def _translate_note(note: str) -> str:
-        lowered = note.lower()
-        translations = []
-        if "mild" in lowered or "not spicy" in lowered:
-            translations.append("최대한 맵지 않게 부탁드립니다.")
-        if "front desk" in lowered:
-            translations.append("호텔 프런트에 맡겨 주세요.")
-        if "no cutlery" in lowered or "no disposable" in lowered:
-            translations.append("일회용 수저와 포크는 필요 없습니다.")
-        return " ".join(translations) or "요청사항을 확인해 주세요."
-
     def get_cart(self, session_id: str) -> CartPreview:
         with self.pool.connection() as connection:
             cursor = connection.cursor()
@@ -7419,8 +7516,12 @@ class OracleYobiRepository:
                 """
                 SELECT p.dietary_rules_json, p.allergy_severity,
                        p.religion_selection, p.country_code,p.preferred_language,
-                       s.meal_need_state_json
+                       s.meal_need_state_json,
+                       family.synthetic_enrichment_release_id AS active_synthetic_enrichment_release_id
                 FROM chat_session s JOIN user_profile p ON p.profile_id=s.profile_id
+                JOIN recommendation_runtime_state state ON state.state_key='ACTIVE'
+                JOIN recommendation_release_family family
+                  ON family.release_family_id=state.active_release_family_id
                 WHERE s.session_id=:id
                 """,
                 id=session_id,
@@ -7656,7 +7757,7 @@ class OracleYobiRepository:
                         menu_id=menu_id,
                     )
                     current_menu = cursor.fetchone()
-                    if not self._price_matches_v2(
+                    if not price_matches_bands(
                         int(current_menu[0]) if current_menu else -1,
                         structured_criteria.price_bands,
                     ):
@@ -7730,7 +7831,11 @@ class OracleYobiRepository:
             cart_menu_localizations: dict[str, str] = {}
             cart_option_localizations: dict[str, str] = {}
             synthetic_release_id = (
-                str(structured_criteria_row[4] or "") if structured_criteria_row is not None else ""
+                str(structured_criteria_row[4] or "")
+                if structured_criteria_row is not None
+                else str(profile_row.get("active_synthetic_enrichment_release_id") or "")
+                if profile_row is not None
+                else ""
             )
             if synthetic_release_id and profile_row is not None:
                 requested_locale = normalize_preference_locale(
@@ -7760,6 +7865,30 @@ class OracleYobiRepository:
                 cart_option_localizations = {
                     str(item["option_item_id"]): str(item["display_name"]) for item in _rows(cursor)
                 }
+                # Runtime option localization is what the visitor actually saw in
+                # the selected-menu flow. Prefer its newest version over legacy
+                # catalog rows for cart, review, and handoff responses.
+                cursor.execute(
+                    """
+                    SELECT option_item_id,display_name FROM (
+                      SELECT option_item_id,display_name,
+                             ROW_NUMBER() OVER (
+                               PARTITION BY option_item_id
+                               ORDER BY generated_at DESC,prompt_version DESC
+                             ) AS localization_rank
+                      FROM runtime_option_item_localization
+                      WHERE release_id=:release_id AND language_code=:language_code
+                    ) WHERE localization_rank=1
+                    """,
+                    release_id=synthetic_release_id,
+                    language_code=language_code,
+                )
+                cart_option_localizations.update(
+                    {
+                        str(item["option_item_id"]): str(item["display_name"])
+                        for item in _rows(cursor)
+                    }
+                )
         items = [
             CartLine(
                 cart_item_id=row["cart_item_id"],
@@ -7844,7 +7973,7 @@ class OracleYobiRepository:
                     address=preference.address_ref_id,
                     cart=cart_id,
                 )
-            korean = self._translate_note(preference.user_note)
+            korean = deterministic_korean_order_note(preference.user_note)
             stored_user_note = _oracle_required_text(preference.user_note)
             cursor.execute(
                 """
@@ -8036,27 +8165,16 @@ class OracleYobiRepository:
                 synthetic_profile = cursor.fetchone()
                 if synthetic_profile is None:
                     raise ValueError("CART_MENU_NO_LONGER_ELIGIBLE")
-                price_range = structured_criteria.price_range_krw
-                if (
-                    price_range is None
-                    or not price_range.min <= int(menu["price"]) <= price_range.max
-                ):
-                    raise ValueError("CART_MENU_NO_LONGER_ELIGIBLE")
-                spice_level = int(synthetic_profile[0])
-                spice_matches = (
-                    spice_level < country_spice_baseline
-                    if structured_criteria.spice_preference == "LESS"
-                    else spice_level > country_spice_baseline
-                    if structured_criteria.spice_preference == "MORE"
-                    else spice_level == country_spice_baseline
+                criteria_error = structured_v3_cart_error(
+                    structured_criteria,
+                    price=int(menu["price"]),
+                    spice_level=int(synthetic_profile[0]),
+                    country_spice_baseline=country_spice_baseline,
+                    halal_fit=bool(synthetic_profile[1]),
+                    vegan_fit=bool(synthetic_profile[2]),
                 )
-                if not spice_matches:
-                    raise ValueError("CART_MENU_NO_LONGER_ELIGIBLE")
-                if (
-                    structured_criteria.dietary_filters.halal_certified_only
-                    and not synthetic_profile[1]
-                ) or (structured_criteria.dietary_filters.vegan and not synthetic_profile[2]):
-                    raise ValueError("CART_DIETARY_CONFLICT")
+                if criteria_error is not None:
+                    raise ValueError(criteria_error)
             elif structured_criteria is not None:
                 if (
                     menu["spice_level"] is not None
