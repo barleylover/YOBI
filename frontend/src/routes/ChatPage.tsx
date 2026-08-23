@@ -567,7 +567,10 @@ export function ChatPage() {
         menu_id: menu.menu_id,
       });
       setPrecomputedOptionsOnly(true);
-      setSelectedMenu(result.selected_menu ?? menu);
+      setSelectedMenu({
+        ...(result.selected_menu ?? menu),
+        localized_title: menu.localized_title ?? result.selected_menu?.localized_title,
+      });
       setRecommendationPhase("ORDERING");
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (cause) {

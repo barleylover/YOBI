@@ -145,13 +145,18 @@ three sort keys. For the external catalog, review ranking uses the source menu r
 count; order and Korean-popularity are deterministic demo proxies calculated from
 source menu/merchant review counts. Only synthetic fixture menus with neither source
 count use stable menu-ID-derived demo values. `demo_basis` makes this boundary
-explicit. The response is not a live or platform-wide Yogiyo ranking.
+explicit. The prepared rows remain in metric order while the returned membership favors
+different merchants and mapped dish concepts so one restaurant cannot fill the demo.
+The API accepts a bounded limit up to 20; the English discovery screen requests and
+displays 10. The response is not a live or platform-wide Yogiyo ranking.
 
 `GET /featured/kpop-demon-hunters` returns at most one available mapped menu for each
-of Gimbap, Gukbap, Hotteok, Seolleongtang, and Eomuk, plus a browse snapshot and
+of Gimbap, Tteokbokki, Hotteok, Naengmyeon, and Eomuk, plus a browse snapshot and
 general-Wiki evidence IDs. The endpoint uses reviewed synthetic general-food prose and
 high-confidence concept mappings; it does not verify a merchant recipe or use general
-Wiki facts as merchant-specific dietary evidence.
+Wiki facts as merchant-specific dietary evidence. The English UI always keeps these
+five story slots visible and marks a missing local match unavailable rather than
+substituting an unrelated menu.
 
 Before a selectable snapshot is committed, current server rows are revalidated against
 the request's pinned release family; current price, delivery fee/ETA, halal, and vegan

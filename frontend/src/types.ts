@@ -348,6 +348,7 @@ export type FoodRankingSort = "review_count" | "order_count" | "korean_popularit
 
 export interface FoodRankingEntry {
   position: number;
+  dish_name?: string;
   metric_label: string;
   metric_value: number;
   menu: MenuSummary;

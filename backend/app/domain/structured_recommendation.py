@@ -483,6 +483,7 @@ FoodRankingSort = Literal["review_count", "order_count", "korean_popularity"]
 
 class FoodRankingEntry(BaseModel):
     position: int = Field(ge=1, le=20)
+    dish_name: str = ""
     metric_label: str
     metric_value: int = Field(ge=0)
     menu: MenuSummary

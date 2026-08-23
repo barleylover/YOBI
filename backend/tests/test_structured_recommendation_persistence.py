@@ -321,6 +321,9 @@ def test_rankings_and_featured_collections_honor_criteria_and_snapshot_selection
                 for collection in rankings.values()
                 for item in collection.items
             )
+            assert all(item.dish_name for collection in rankings.values() for item in collection.items)
+            assert all(item.menu.localized_title for collection in rankings.values() for item in collection.items)
+            assert len({item.menu.merchant_id for item in first.items}) >= min(len(first.items), 3)
             assert len({collection.items[0].menu.menu_id for collection in rankings.values()}) == 3
             snapshot_id = first.snapshot_id
             assert "demo" in first.demo_basis.lower()
@@ -329,6 +332,14 @@ def test_rankings_and_featured_collections_honor_criteria_and_snapshot_selection
             menus = [item.menu for item in featured.items]
             snapshot_id = featured.snapshot_id
             assert all(item.dish_name for item in featured.items)
+            assert {item.dish_name for item in featured.items} <= {
+                "Gimbap",
+                "Tteokbokki",
+                "Hotteok",
+                "Naengmyeon",
+                "Eomuk",
+            }
+            assert all(item.menu.localized_title for item in featured.items)
         assert menus
         assert all(menu.price < 10_000 for menu in menus)
 

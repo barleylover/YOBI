@@ -17,7 +17,11 @@ from app.country_spice_examples import (
     representative_dish,
     spice_scale_anchors,
 )
-from app.db.browse_rankings import food_ranking_sql
+from app.db.browse_rankings import (
+    KPOP_DEMON_HUNTERS_DEMO_DISHES,
+    food_ranking_sql,
+    select_diverse_ranking_rows,
+)
 from app.db.concept_query import (
     build_candidate_recall_channel_query,
     build_concept_candidate_query,
@@ -64,6 +68,7 @@ from app.domain.dialogue import (
     RecommendationSnapshot,
 )
 from app.domain.dietary import apply_profile_constraints, known_allergen_conflicts
+from app.domain.discovery_demo import english_discovery_title
 from app.domain.knowledge import (
     ClaimStatus,
     GroundedMenuKnowledge,
@@ -5235,7 +5240,7 @@ class SQLiteYobiRepository:
                        {ranking_sql.order_count} ranking_order_count,
                        {ranking_sql.korean_popularity} ranking_korean_popularity,
                        {ranking_sql.basis} ranking_metric_basis,
-                       mapping.concept_id,
+                       mapping.concept_id,concept.canonical_name_en dish_name,
                        (SELECT chunk.content FROM knowledge_chunk chunk
                         JOIN knowledge_document document
                           ON document.release_id=chunk.release_id
@@ -5259,6 +5264,9 @@ class SQLiteYobiRepository:
                 JOIN menu_concept_map mapping
                   ON mapping.release_id=family.knowledge_release_id
                  AND mapping.mapping_status='MAPPED' AND mapping.confidence_band='high'
+                JOIN dish_concept concept
+                  ON concept.release_id=mapping.release_id
+                 AND concept.concept_id=mapping.concept_id
                 JOIN menu ON menu.menu_id=mapping.menu_id AND menu.availability='AVAILABLE'
                 JOIN merchant ON merchant.merchant_id=menu.merchant_id
                 LEFT JOIN menu_source_detail source ON source.menu_id=menu.menu_id
@@ -5277,7 +5285,8 @@ class SQLiteYobiRepository:
             session_row = connection.execute(
                 """
                 SELECT session.meal_need_state_json,profile.dietary_rules_json,
-                       profile.religion_selection,profile.allergy_severity
+                       profile.religion_selection,profile.allergy_severity,
+                       profile.preferred_language
                 FROM chat_session session JOIN user_profile profile
                   ON profile.profile_id=session.profile_id
                 WHERE session.session_id=?
@@ -5291,7 +5300,7 @@ class SQLiteYobiRepository:
                 list(json.loads(str(session_row["dietary_rules_json"] or "[]"))),
                 str(session_row["religion_selection"]),
             )
-            eligible_rows = [
+            safe_rows = [
                 row
                 for row in rows
                 if not self._menu_hard_constraint_conflicts(
@@ -5300,7 +5309,11 @@ class SQLiteYobiRepository:
                     need_state,
                     str(session_row["allergy_severity"]),
                 )[0]
-            ][:bounded_limit]
+            ]
+            eligible_rows = select_diverse_ranking_rows(safe_rows, bounded_limit)
+            english_demo = (
+                normalize_preference_locale(str(session_row["preferred_language"])) == "en"
+            )
         items: list[FoodRankingEntry] = []
         menus: list[MenuSummary] = []
         for position, row in enumerate(eligible_rows, start=1):
@@ -5328,6 +5341,16 @@ class SQLiteYobiRepository:
                 EvidenceStatus.UNKNOWN,
                 1.0,
             )
+            if english_demo:
+                menu = menu.model_copy(
+                    update={
+                        "localized_title": english_discovery_title(
+                            str(row["name_en"] or ""),
+                            str(row["name_ko"] or ""),
+                            str(row["dish_name"] or ""),
+                        )
+                    }
+                )
             if row["concept_description"]:
                 menu = menu.model_copy(
                     update={
@@ -5338,6 +5361,7 @@ class SQLiteYobiRepository:
             items.append(
                 FoodRankingEntry(
                     position=position,
+                    dish_name=str(row["dish_name"] or ""),
                     metric_label=metric_label,
                     metric_value=metric_value,
                     menu=menu,
@@ -5349,8 +5373,8 @@ class SQLiteYobiRepository:
         return FoodRankingCollection(
             snapshot_id=snapshot_id,
             demo_basis=(
-                "Prepared demo activity signals are used for ordering; these are not live "
-                "Yogiyo-wide review, order, or popularity statistics."
+                "Prepared demo activity signals are combined with merchant and dish diversity; "
+                "these are not live Yogiyo-wide review, order, or popularity statistics."
             ),
             sort=sort,
             items=items,
@@ -5360,15 +5384,7 @@ class SQLiteYobiRepository:
         self,
         session_id: str,
     ) -> FeaturedMenuCollection:
-        feature_names = (
-            "Gimbap",
-            "Korean wheat noodles",
-            "Tteokbokki",
-            "Gukbap",
-            "Hotteok",
-            "Seolleongtang",
-            "Eomuk",
-        )
+        feature_names = KPOP_DEMON_HUNTERS_DEMO_DISHES
         with self._connection() as connection:
             service_area_id, _excluded = self._structured_session_filters(
                 connection, session_id, exclude_history=False
@@ -5436,16 +5452,17 @@ class SQLiteYobiRepository:
                     {exact_clause}
                 ) WHERE concept_rank<=20
                 ORDER BY CASE dish_name
-                  WHEN 'Gimbap' THEN 1 WHEN 'Korean wheat noodles' THEN 2
-                  WHEN 'Tteokbokki' THEN 3 WHEN 'Gukbap' THEN 4 WHEN 'Hotteok' THEN 5
-                  WHEN 'Seolleongtang' THEN 6 WHEN 'Eomuk' THEN 7 ELSE 8 END,concept_rank
+                  WHEN 'Gimbap' THEN 1 WHEN 'Tteokbokki' THEN 2
+                  WHEN 'Hotteok' THEN 3 WHEN 'Naengmyeon' THEN 4
+                  WHEN 'Eomuk' THEN 5 ELSE 6 END,concept_rank
                 """,
                 parameters,
             ).fetchall()
             session_row = connection.execute(
                 """
                 SELECT session.meal_need_state_json,profile.dietary_rules_json,
-                       profile.religion_selection,profile.allergy_severity
+                       profile.religion_selection,profile.allergy_severity,
+                       profile.preferred_language
                 FROM chat_session session JOIN user_profile profile
                   ON profile.profile_id=session.profile_id
                 WHERE session.session_id=?
@@ -5474,8 +5491,12 @@ class SQLiteYobiRepository:
                     continue
                 seen_dishes.add(dish_name)
                 rows.append(row)
-        menus = [
-            self._menu_summary(
+            english_demo = (
+                normalize_preference_locale(str(session_row["preferred_language"])) == "en"
+            )
+        menus: list[MenuSummary] = []
+        for row in rows:
+            menu = self._menu_summary(
                 row,
                 ["Mapped to a food in the K-pop Demon Hunters demo feature"],
                 ["General food knowledge does not verify this restaurant's recipe"],
@@ -5488,8 +5509,17 @@ class SQLiteYobiRepository:
                     )
                 }
             )
-            for row in rows
-        ]
+            if english_demo:
+                menu = menu.model_copy(
+                    update={
+                        "localized_title": english_discovery_title(
+                            str(row["name_en"] or ""),
+                            str(row["name_ko"] or ""),
+                            str(row["dish_name"] or ""),
+                        )
+                    }
+                )
+            menus.append(menu)
         snapshot_id = self._save_browse_snapshot(
             session_id, menus, query_summary="K-pop Demon Hunters mapped food feature"
         )

@@ -394,9 +394,14 @@ export const api = {
     method: "POST",
     body: JSON.stringify(input),
   }, { timeoutMs: 15_000, signal }),
-  getFoodRankings: (sessionId: string, sort: FoodRankingSort, signal?: AbortSignal) =>
+  getFoodRankings: (
+    sessionId: string,
+    sort: FoodRankingSort,
+    signal?: AbortSignal,
+    limit = 20,
+  ) =>
     request<FoodRankingCollection>(
-      `/api/v1/sessions/${sessionId}/food-rankings?sort=${encodeURIComponent(sort)}&limit=20`,
+      `/api/v1/sessions/${sessionId}/food-rankings?sort=${encodeURIComponent(sort)}&limit=${limit}`,
       undefined,
       { timeoutMs: 8_000, signal },
     ),

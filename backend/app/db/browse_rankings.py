@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 SqlDialect = Literal["sqlite", "oracle"]
 
@@ -11,6 +12,19 @@ SqlDialect = Literal["sqlite", "oracle"]
 _REVIEW_WEIGHTS = (101, 211, 307, 401, 503, 601, 701, 809)
 _ORDER_WEIGHTS = (811, 709, 607, 509, 409, 311, 223, 127)
 _POPULARITY_WEIGHTS = (131, 337, 547, 751, 953, 1151, 1361, 1571)
+
+
+# These are the five concepts used by the small English-only feature screen.
+# A concept can be absent from the response when the current delivery area or
+# the session's hard constraints leave no safe, orderable menu.  The frontend
+# keeps that slot visible as unavailable instead of substituting another dish.
+KPOP_DEMON_HUNTERS_DEMO_DISHES = (
+    "Gimbap",
+    "Tteokbokki",
+    "Hotteok",
+    "Naengmyeon",
+    "Eomuk",
+)
 
 
 @dataclass(frozen=True)
@@ -62,6 +76,73 @@ def synthetic_demo_ranking_metrics(menu_id: str) -> dict[str, int]:
             floor=100,
         ),
     }
+
+
+def select_diverse_ranking_rows(rows: Sequence[Any], limit: int) -> list[Any]:
+    """Keep prepared ranking order while avoiding a one-merchant demo wall.
+
+    The first pass admits one menu per merchant and one per mapped dish concept.
+    The second pass still keeps merchants unique but allows a repeated concept.
+    Only the final fill pass allows repeated merchants.  The selected membership
+    is finally projected back into the original metric order, so this remains a
+    deterministic presentation policy rather than a new popularity model.
+    """
+
+    bounded_limit = max(0, limit)
+    if bounded_limit == 0:
+        return []
+
+    selected: list[Any] = []
+    selected_menu_ids: set[str] = set()
+    selected_merchants: set[str] = set()
+    selected_dishes: set[str] = set()
+
+    def admit(row: Any) -> None:
+        menu_id = str(row["menu_id"])
+        selected.append(row)
+        selected_menu_ids.add(menu_id)
+        selected_merchants.add(str(row["merchant_id"]))
+        selected_dishes.add(str(row["dish_name"] or row["concept_id"]))
+
+    def in_metric_order() -> list[Any]:
+        ordered: list[Any] = []
+        emitted_menu_ids: set[str] = set()
+        for row in rows:
+            menu_id = str(row["menu_id"])
+            if menu_id not in selected_menu_ids or menu_id in emitted_menu_ids:
+                continue
+            ordered.append(row)
+            emitted_menu_ids.add(menu_id)
+            if len(ordered) == bounded_limit:
+                break
+        return ordered
+
+    for row in rows:
+        merchant_id = str(row["merchant_id"])
+        dish_name = str(row["dish_name"] or row["concept_id"])
+        if merchant_id in selected_merchants or dish_name in selected_dishes:
+            continue
+        admit(row)
+        if len(selected) == bounded_limit:
+            return in_metric_order()
+
+    for row in rows:
+        menu_id = str(row["menu_id"])
+        merchant_id = str(row["merchant_id"])
+        if menu_id in selected_menu_ids or merchant_id in selected_merchants:
+            continue
+        admit(row)
+        if len(selected) == bounded_limit:
+            return in_metric_order()
+
+    for row in rows:
+        if str(row["menu_id"]) in selected_menu_ids:
+            continue
+        admit(row)
+        if len(selected) == bounded_limit:
+            return in_metric_order()
+
+    return in_metric_order()
 
 
 def _stable_demo_metric_sql(
