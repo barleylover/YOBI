@@ -172,6 +172,68 @@ describe("chat-style recommendation results", () => {
     expect(screen.queryByText("YOGIYO:")).not.toBeInTheDocument();
   });
 
+  it.each([
+    { countryPreference: null, label: "missing" },
+    {
+      countryPreference: { country_code: "", preference_percent: 54, sample_size: 120 },
+      label: "blank",
+    },
+    {
+      countryPreference: { country_code: "ZZ", preference_percent: 54, sample_size: 120 },
+      label: "unknown",
+    },
+  ])("hides the country-preference block for $label country data", ({ countryPreference }) => {
+    const hiddenCountryBatch: RecommendationBatchV2 = {
+      ...batch,
+      recommendations: [{
+        ...batch.recommendations[0],
+        country_preference: countryPreference,
+      }],
+    };
+
+    render(
+      <RecommendationResults
+        batch={hiddenCountryBatch}
+        copy={getRecommendationCopy("English")}
+        v2={getRedesignCopy("English")}
+        timestamp="10:05"
+        language="English"
+        locale="en-US"
+        onChoose={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "View additional explanation" }));
+    expect(screen.queryByText(getRedesignCopy("English").countryPreference)).not.toBeInTheDocument();
+    expect(screen.queryByText(/ZZ.*54%/)).not.toBeInTheDocument();
+  });
+
+  it("keeps a valid United Kingdom country-preference block", () => {
+    const gbBatch: RecommendationBatchV2 = {
+      ...batch,
+      recommendations: [{
+        ...batch.recommendations[0],
+        country_preference: { country_code: "GB", preference_percent: 73, sample_size: 315 },
+      }],
+    };
+
+    render(
+      <RecommendationResults
+        batch={gbBatch}
+        copy={getRecommendationCopy("English")}
+        v2={getRedesignCopy("English")}
+        timestamp="10:05"
+        language="English"
+        locale="en-GB"
+        onChoose={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "View additional explanation" }));
+    expect(screen.getByText(/United Kingdom.*73%/)).toBeInTheDocument();
+    expect(screen.getByText("Based on 315 visitors")).toBeInTheDocument();
+  });
+
   it("renders every recommendation in the horizontal card carousel", () => {
     render(
       <RecommendationResults

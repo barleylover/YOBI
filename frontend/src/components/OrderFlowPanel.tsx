@@ -11,7 +11,7 @@ import type {
   RestaurantNoteTranslation,
 } from "../types";
 import { useI18n } from "../lib/i18n";
-import { asSupportedLanguage, menuName, merchantName } from "../lib/locale";
+import { asSupportedLanguage, LANGUAGE_META, menuName, merchantName } from "../lib/locale";
 import { getRecommendationCopy } from "../lib/recommendationI18n";
 import { getRedesignCopy } from "../lib/redesignI18n";
 import {
@@ -52,7 +52,8 @@ export function OrderFlowPanel({
 }: Props) {
   const navigate = useNavigate();
   const setCartQuantity = useSessionStore((state) => state.setCartQuantity);
-  const sourceLanguage = useSessionStore((state) => state.profile?.preferred_language) ?? "English";
+  const preferredLanguage = useSessionStore((state) => state.profile?.preferred_language) ?? "English";
+  const sourceLanguage = LANGUAGE_META[asSupportedLanguage(preferredLanguage)].code;
   const addressSummary = useSessionStore((state) => state.addressSummary);
   const { copy, dynamicCopy, journeyCopy, language, locale } = useI18n();
   const recommendationCopy = getRecommendationCopy(language);

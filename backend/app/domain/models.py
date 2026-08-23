@@ -13,6 +13,7 @@ from app.domain.dialogue import (
     ReadinessDecision,
     RecommendationResult,
 )
+from app.domain.presentation_localization import SupportedPresentationLocale
 
 
 class ChatState(str, Enum):
@@ -310,7 +311,7 @@ class MerchantMenuPresentation(BaseModel):
     review_ids: list[str] = Field(default_factory=list)
     generation_model: str
     release_id: str | None = Field(default=None, exclude=True)
-    language_code: Literal["ko", "en", "ja"] | None = Field(default=None, exclude=True)
+    language_code: SupportedPresentationLocale | None = Field(default=None, exclude=True)
     cache_key: str | None = Field(default=None, exclude=True)
     source_hash: str | None = Field(default=None, exclude=True)
     prompt_version: str | None = Field(default=None, exclude=True)
@@ -326,6 +327,41 @@ class MenuPresentationCacheEntry(BaseModel):
     language_code: Literal["ko", "en", "ja"]
     country_code: str = Field(min_length=2, max_length=2)
     localized_title: str = Field(min_length=1, max_length=300)
+    localized_subtitle: str = Field(min_length=1, max_length=500)
+    short_explanation: str = Field(min_length=1, max_length=1000)
+    long_explanation: str = Field(min_length=1, max_length=3000)
+    review_summary: str = Field(min_length=1, max_length=1500)
+    evidence_ids: list[str] = Field(default_factory=list)
+    review_ids: list[str] = Field(default_factory=list)
+    evidence_map: dict[str, Any] = Field(default_factory=dict)
+    model_id: str = Field(min_length=1, max_length=120)
+    prompt_version: str = Field(min_length=1, max_length=80)
+    content_schema_version: str = Field(min_length=1, max_length=40)
+    source_hash: str = Field(min_length=64, max_length=64)
+    personalization_applied: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+
+class RuntimeMenuSourceDescriptionLocalizationEntry(BaseModel):
+    release_id: str = Field(min_length=1, max_length=160)
+    menu_id: str = Field(min_length=1, max_length=160)
+    language_code: SupportedPresentationLocale
+    prompt_version: str = Field(min_length=1, max_length=80)
+    description_text: str = Field(min_length=1, max_length=4000)
+    model_id: str = Field(min_length=1, max_length=120)
+    source_hash: str = Field(min_length=64, max_length=64)
+    validation_status: Literal["VALID"] = "VALID"
+    generated_at: datetime
+
+
+class CountryAwareMenuPresentationCacheEntry(BaseModel):
+    cache_key: str = Field(min_length=64, max_length=128)
+    release_id: str = Field(min_length=1, max_length=160)
+    menu_id: str = Field(min_length=1, max_length=160)
+    language_code: SupportedPresentationLocale
+    user_country_code: str = Field(min_length=2, max_length=2)
+    spice_reference_country_code: str = Field(min_length=2, max_length=2)
     localized_subtitle: str = Field(min_length=1, max_length=500)
     short_explanation: str = Field(min_length=1, max_length=1000)
     long_explanation: str = Field(min_length=1, max_length=3000)

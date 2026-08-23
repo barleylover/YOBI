@@ -57,6 +57,17 @@ export function RecommendationResults({
   }, [batch.request_id]);
 
   const explanationItem = batch.recommendations.find((item) => item.menu.menu_id === explanationMenuId) ?? null;
+  const normalizedPreferenceCountryCode = explanationItem?.country_preference?.country_code
+    ?.trim()
+    .toUpperCase();
+  const visibleCountryPreference = explanationItem?.country_preference
+    && normalizedPreferenceCountryCode
+    && normalizedPreferenceCountryCode !== "ZZ"
+    ? {
+        ...explanationItem.country_preference,
+        country_code: normalizedPreferenceCountryCode,
+      }
+    : null;
 
   return (
     <section
@@ -200,16 +211,16 @@ export function RecommendationResults({
                 <p className="v2-explanation-label">{v2.yobiLabel}</p>
                 <p>{explanationItem.yobi_long_explanation || explanationItem.yobi_short_explanation || explanationItem.description}</p>
               </div>
-              {explanationItem.country_preference && (
+              {visibleCountryPreference && (
                 <div className="v2-explanation-block preference">
                   <div className="v2-preference-heading">
                     <strong>{v2.countryPreference}</strong>
-                    <span>{new Intl.DisplayNames([locale], { type: "region" }).of(explanationItem.country_preference.country_code)} · {explanationItem.country_preference.preference_percent}%</span>
+                    <span>{new Intl.DisplayNames([locale], { type: "region" }).of(visibleCountryPreference.country_code)} · {visibleCountryPreference.preference_percent}%</span>
                   </div>
-                  <div className="v2-preference-bar" role="img" aria-label={`${explanationItem.country_preference.preference_percent}%`}>
-                    <span style={{ width: `${explanationItem.country_preference.preference_percent}%` }} />
+                  <div className="v2-preference-bar" role="img" aria-label={`${visibleCountryPreference.preference_percent}%`}>
+                    <span style={{ width: `${visibleCountryPreference.preference_percent}%` }} />
                   </div>
-                  <small>{v2.sampleSize(explanationItem.country_preference.sample_size)}</small>
+                  <small>{v2.sampleSize(visibleCountryPreference.sample_size)}</small>
                 </div>
               )}
               {explanationItem.review_summary && (

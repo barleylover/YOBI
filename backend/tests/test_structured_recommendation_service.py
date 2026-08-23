@@ -35,9 +35,11 @@ from app.genai.contracts import GenAIServingMode, ProviderCapabilities
 from app.genai.recommendation_generator import RecommendationGenerator
 from app.main import app
 from app.services.demo_control import DemoControl
+from app.services.menu_presentation import MenuPresentationService
 from app.services.structured_recommendation import (
     StructuredRecommendationService,
     _effective_display_language,
+    compact_generation_payload,
 )
 
 
@@ -61,6 +63,26 @@ def test_backend_generation_uses_only_the_three_effective_display_languages() ->
         "Русский",
     ):
         assert _effective_display_language(language) == ("en", "English")
+
+
+def test_selection_payload_excludes_country_context_fields() -> None:
+    item = _pool_item("menu-a", score=0.9).model_copy(
+        update={
+            "country_preference": {
+                "country_code": "US",
+                "preference_percent": 71,
+                "sample_size": 220,
+            },
+            "spice_reference_country_code": "GB",
+            "spice_reference_dish_en": "Chicken tikka masala",
+        }
+    )
+
+    payload = compact_generation_payload(item, max_wiki_passages=2)
+
+    assert "country_preference" not in payload
+    assert "spice_reference_country_code" not in payload
+    assert "spice_reference_dish_en" not in payload
 
 
 class FakeProvider:
@@ -563,6 +585,81 @@ def _service(
         DemoControl(),
         generator=generator,
     )
+
+
+class CapturingPresentationService(MenuPresentationService):
+    last_language_code: str | None = None
+    last_country_code: str | None = None
+
+    def present_selected(self, evidence_items: list[EvidencePoolItem], **kwargs: Any):  # type: ignore[no-untyped-def]
+        self.last_language_code = str(kwargs["language_code"])
+        self.last_country_code = str(kwargs["country_code"])
+        return super().present_selected(evidence_items, **kwargs)
+
+
+def test_country_aware_flag_passes_full_locale_only_to_presentation() -> None:
+    repository = FakeRecommendationRepository(_criteria())
+    repository.evidence_pool = [
+        _pool_item("menu-a", score=0.90),
+        _pool_item("menu-b", score=0.80),
+        _pool_item("menu-c", score=0.70),
+    ]
+    provider = FakeProvider(_recommended_output(["menu-a", "menu-b", "menu-c"]))
+    settings = Settings(_env_file=None, country_aware_presentation_enabled=True)
+    presentation_service = CapturingPresentationService(repository, settings)  # type: ignore[arg-type]
+    service = StructuredRecommendationService(
+        repository,  # type: ignore[arg-type]
+        settings,
+        DemoControl(),
+        generator=RecommendationGenerator(settings, provider=provider),
+        presentation_service=presentation_service,
+    )
+    profile = _profile().model_copy(
+        update={"preferred_language": "Español", "country_code": "US"}
+    )
+
+    result = service.request_recommendation(_session(), profile, _request())
+
+    assert result.status == "RECOMMENDED"
+    assert presentation_service.last_language_code == "es"
+    assert presentation_service.last_country_code == "US"
+    assert len(provider.calls) == 1
+    assert "English" in provider.calls[0]["instructions"]
+
+
+def test_english_us_and_gb_keep_identical_selection_input_and_menu_order() -> None:
+    def run(country_code: str) -> tuple[list[str], str]:
+        repository = FakeRecommendationRepository(_criteria())
+        repository.evidence_pool = [
+            _pool_item("menu-a", score=0.90),
+            _pool_item("menu-b", score=0.80),
+            _pool_item("menu-c", score=0.70),
+        ]
+        provider = FakeProvider(_recommended_output(["menu-b", "menu-a", "menu-c"]))
+        settings = Settings(_env_file=None, country_aware_presentation_enabled=True)
+        service = StructuredRecommendationService(
+            repository,  # type: ignore[arg-type]
+            settings,
+            DemoControl(),
+            generator=RecommendationGenerator(settings, provider=provider),
+            presentation_service=MenuPresentationService(repository, settings),  # type: ignore[arg-type]
+        )
+        profile = _profile().model_copy(
+            update={"preferred_language": "English", "country_code": country_code}
+        )
+
+        result = service.request_recommendation(_session(), profile, _request())
+
+        return (
+            [item.menu.menu_id for item in result.recommendations],
+            str(provider.calls[0]["input"][0]["content"]),
+        )
+
+    us_menu_ids, us_selection_input = run("US")
+    gb_menu_ids, gb_selection_input = run("GB")
+
+    assert us_menu_ids == gb_menu_ids == ["menu-b", "menu-a", "menu-c"]
+    assert us_selection_input == gb_selection_input
 
 
 def _request(

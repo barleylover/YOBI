@@ -19,6 +19,7 @@ from app.domain.models import (
     CartPreview,
     Checkout,
     CheckoutCreate,
+    CountryAwareMenuPresentationCacheEntry,
     DeliveryPreferenceInput,
     Evidence,
     MenuPresentationCacheEntry,
@@ -33,6 +34,7 @@ from app.domain.models import (
     ProfileCreate,
     ProfileUpdate,
     RestaurantNoteTranslation,
+    RuntimeMenuSourceDescriptionLocalizationEntry,
     Session,
 )
 from app.domain.structured_recommendation import (
@@ -364,6 +366,12 @@ class YobiRepository(Protocol):
         prompt_version: str,
     ) -> bool: ...
 
+    def load_release_option_localizations(
+        self,
+        session_id: str,
+        menu_id: str,
+    ) -> tuple[dict[str, str], dict[str, str]]: ...
+
     def load_option_localizations(
         self,
         session_id: str,
@@ -385,10 +393,23 @@ class YobiRepository(Protocol):
         self,
         session_id: str,
         menu_id: str,
-        localized_title: str,
-        localized_source_description: str,
+        localized_title: str | None,
+        localized_source_description: str | None,
         model_id: str,
         prompt_version: str,
+    ) -> None: ...
+
+    def get_runtime_menu_source_description_localization(
+        self,
+        release_id: str,
+        menu_id: str,
+        language_code: str,
+        prompt_version: str,
+        source_hash: str,
+    ) -> RuntimeMenuSourceDescriptionLocalizationEntry | None: ...
+
+    def save_runtime_menu_source_description_localization(
+        self, entry: RuntimeMenuSourceDescriptionLocalizationEntry
     ) -> None: ...
 
     def list_merchant_menu_presentations(
@@ -405,6 +426,14 @@ class YobiRepository(Protocol):
     def get_menu_presentation_cache(self, cache_key: str) -> MenuPresentationCacheEntry | None: ...
 
     def save_menu_presentation_cache_entry(self, entry: MenuPresentationCacheEntry) -> None: ...
+
+    def get_country_aware_menu_presentation_cache(
+        self, cache_key: str
+    ) -> CountryAwareMenuPresentationCacheEntry | None: ...
+
+    def save_country_aware_menu_presentation_cache_entry(
+        self, entry: CountryAwareMenuPresentationCacheEntry
+    ) -> None: ...
 
     def acquire_menu_presentation_lease(
         self,

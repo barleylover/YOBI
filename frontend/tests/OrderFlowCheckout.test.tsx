@@ -437,7 +437,7 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
     const translation = {
       translation_id: "note-translation-1",
       source_text: sourceText,
-      source_language: "English",
+      source_language: "en",
       korean_text: "소스는 따로 담아 주세요.",
       back_translation: "Please pack the sauce separately.",
       model_id: "gpt-oss-20b",
@@ -469,13 +469,65 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
     expect(screen.getByRole("button", { name: "Add to cart" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Add to cart" }));
 
-    await waitFor(() => expect(translate).toHaveBeenCalledWith(session.session_id, sourceText, "English"));
+    await waitFor(() => expect(translate).toHaveBeenCalledWith(session.session_id, sourceText, "en"));
     await waitFor(() => expect(addCartItem).toHaveBeenCalledWith(
       session.session_id,
       menu.menu_id,
       [],
       sourceText,
       translation.translation_id,
+    ));
+  });
+
+  it.each([
+    ["한국어", "ko", "한국어로 번역"],
+    ["日本語", "ja", "韓国語に翻訳"],
+  ])("sends the canonical %s restaurant-note language code", async (
+    preferredLanguage,
+    expectedCode,
+    translateLabel,
+  ) => {
+    useSessionStore.setState({
+      profile: { ...profile, preferred_language: preferredLanguage },
+      session,
+      addressRefId: "address_checkout_test",
+      addressSummary: "YOBI hotel",
+      cartQuantity: 0,
+    });
+    vi.spyOn(api, "getOptions").mockResolvedValue([]);
+    const sourceText = expectedCode === "ko" ? "소스는 따로 주세요." : "ソースは別にしてください。";
+    const translate = vi.spyOn(api, "translateRestaurantNote").mockResolvedValue({
+      translation_id: `note-translation-${expectedCode}`,
+      source_text: sourceText,
+      source_language: expectedCode,
+      korean_text: "소스는 따로 주세요.",
+      back_translation: sourceText,
+      model_id: expectedCode === "ko" ? "DETERMINISTIC_KOREAN_PASSTHROUGH" : "gpt-oss-20b",
+      status: "SUCCEEDED",
+      created_at: new Date().toISOString(),
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <Routes><Route path="/chat" element={(
+          <OrderFlowPanel
+            sessionId={session.session_id}
+            menu={menu}
+            addressRefId="address_checkout_test"
+            onClose={() => undefined}
+          />
+        )} /></Routes>
+      </MemoryRouter>,
+    );
+
+    const note = await screen.findByRole("textbox");
+    fireEvent.change(note, { target: { value: sourceText } });
+    fireEvent.click(screen.getByRole("button", { name: translateLabel }));
+
+    await waitFor(() => expect(translate).toHaveBeenCalledWith(
+      session.session_id,
+      sourceText,
+      expectedCode,
     ));
   });
 
@@ -720,7 +772,7 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
     vi.spyOn(api, "translateRestaurantNote").mockResolvedValue({
       translation_id: "failed-translation",
       source_text: sourceText,
-      source_language: "English",
+      source_language: "en",
       korean_text: null,
       back_translation: null,
       model_id: "all-configured-models",

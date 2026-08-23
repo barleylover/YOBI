@@ -69,6 +69,7 @@ from app.domain.models import (
     Session,
     UserMessage,
 )
+from app.domain.preference_catalog import normalize_preference_locale
 from app.domain.structured_recommendation import (
     FeaturedMenuCollection,
     FoodRankingCollection,
@@ -89,7 +90,7 @@ from app.services.address_ocr import AddressCandidateTokenCodec, choose_address_
 from app.services.chat_service import ChatService
 from app.services.demo_control import DemoControl, FailureMode
 from app.services.menu_presentation import MenuPresentationService
-from app.services.option_localization import OptionLocalizationService, project_demo_options
+from app.services.option_localization import OptionLocalizationService
 from app.services.restaurant_note_translation import RestaurantNoteTranslationService
 from app.services.structured_recommendation import StructuredRecommendationService
 
@@ -547,8 +548,13 @@ def get_recommendation_preference_catalog(
         payload = repository.get_preference_catalog(locale)
     except Exception as exc:
         raise _structured_recommendation_http_error(exc) from exc
+    payload = {
+        **payload,
+        "locale": normalize_preference_locale(str(payload.get("locale") or locale)),
+    }
     etag_seed = ":".join(
         (
+            str(payload.get("locale", "en")),
             str(payload.get("catalog_version", "")),
             str(payload.get("knowledge_release_id", "")),
             str(payload.get("support_manifest_sha256", "")),
@@ -941,26 +947,16 @@ def get_menu_options(
     option_localization_service: OptionLocalizationService = Depends(
         get_option_localization_service
     ),
-    current_settings: Settings = Depends(get_settings),
 ) -> list[dict[str, Any]]:
     if session_id is not None:
         _require_session(repository, session_id)
-    # Discovery collections are explicitly deterministic mock views. Their
-    # option setup must not synchronously dispatch a fresh model call before a
-    # known cross-merchant cart conflict can be resolved. The repository still
-    # applies the active release's validated/precomputed localization for the
-    # session language; only runtime generation is skipped.
-    if precomputed_only:
-        groups = list(repository.get_options(menu_id, session_id=session_id))
-        if current_settings.demo_mode:
-            groups = project_demo_options(
-                groups,
-                group_limit=current_settings.demo_option_group_limit,
-                items_per_group_limit=current_settings.demo_option_items_per_group_limit,
-                total_item_limit=current_settings.demo_option_item_total_limit,
-            )
-    else:
-        groups = option_localization_service.get_options(menu_id, session_id)
+    # Discovery collections remain deterministic: the service can read complete
+    # release/runtime localizations but precomputed_only has no generation path.
+    groups = option_localization_service.get_options(
+        menu_id,
+        session_id,
+        precomputed_only=precomputed_only,
+    )
     return [
         group.model_dump(mode="json")
         for group in groups

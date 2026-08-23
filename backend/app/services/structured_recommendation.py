@@ -91,6 +91,8 @@ def compact_generation_payload(
         "menu_facts",
         "localized_title",
         "country_preference",
+        "spice_reference_country_code",
+        "spice_reference_dish_en",
         "synthetic_reviews",
     ):
         payload.pop(operational_key, None)
@@ -467,6 +469,11 @@ class StructuredRecommendationService:
             return self._batch_from_record(completed)
 
         display_locale, _display_language = _effective_display_language(profile.preferred_language)
+        presentation_locale = (
+            normalize_preference_locale(profile.preferred_language)
+            if self.settings.country_aware_presentation_enabled
+            else display_locale
+        )
         # Selection must be identical for equivalent criteria regardless of
         # nationality/language. Visitor context is consumed only by presentation.
         soft_profile_context: dict[str, Any] = {}
@@ -544,7 +551,7 @@ class StructuredRecommendationService:
                 presentations = self.presentation_service.present_selected(
                     selected_evidence,
                     session_id=session.session_id,
-                    language_code=display_locale,
+                    language_code=presentation_locale,
                     country_code=profile.country_code or "ZZ",
                     on_provider_attempt=lambda *args: record_provider_attempt(
                         "PRESENTATION", *args

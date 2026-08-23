@@ -139,6 +139,11 @@ def test_preference_catalog_etag_replays_support_manifest(repository) -> None:  
             "/api/v1/recommendation/preferences/catalog?locale=en",
             headers={"If-None-Match": first.headers["etag"]},
         )
+        japanese = client.get("/api/v1/recommendation/preferences/catalog?locale=ja")
+        cross_locale = client.get(
+            "/api/v1/recommendation/preferences/catalog?locale=ja",
+            headers={"If-None-Match": first.headers["etag"]},
+        )
     finally:
         client.close()
         app.dependency_overrides.clear()
@@ -187,6 +192,11 @@ def test_preference_catalog_etag_replays_support_manifest(repository) -> None:  
         for capability in payload["capabilities"].values()
     )
     assert replay.status_code == 304
+    assert japanese.status_code == 200
+    assert japanese.headers["etag"] != first.headers["etag"]
+    assert cross_locale.status_code == 200
+    assert first.headers["cache-control"] == "private, max-age=300"
+    assert "vary" not in first.headers
 
 
 def test_retry_excludes_seen_menus_and_returns_empty_when_exhausted(
@@ -628,6 +638,104 @@ def test_evidence_pool_is_sql_only_public_wiki_and_v2_filters(
     assert recording_provider.calls == []
     assert all(len(item.wiki_passages) <= 2 for item in pool)
     assert all(item.menu.price < 10_000 for item in pool)
+    assert all(item.spice_reference_country_code is None for item in pool)
+    assert all(item.spice_reference_dish_en is None for item in pool)
+
+    family = repository.get_active_recommendation_release_family()
+    assert family is not None
+    synthetic_release_id = "country-context-test-v1"
+    generated_at = datetime.now(timezone.utc).isoformat()
+    with repository._connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO synthetic_enrichment_release(
+              release_id,catalog_release_id,knowledge_release_id,seed_value,
+              generator_version,manifest_sha256,status,created_at,activated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                synthetic_release_id,
+                family.catalog_release_id,
+                family.knowledge_release_id,
+                "country-context-seed",
+                "country-context-test",
+                "a" * 64,
+                "ACTIVE",
+                generated_at,
+                generated_at,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO synthetic_country_profile(
+              release_id,country_code,spice_baseline,affinity_score,affinity_json
+            ) VALUES (?,?,?,?,?)
+            """,
+            (synthetic_release_id, "KR", 3, 0.5, "{}"),
+        )
+        connection.execute(
+            """
+            INSERT INTO synthetic_country_spice_example(
+              release_id,country_code,language_code,representative_dish,
+              spice_baseline,source_type,seed_hash,generated_at
+            ) VALUES (?,?,?,?,?,?,?,?)
+            """,
+            (
+                synthetic_release_id,
+                "KR",
+                "en",
+                "Shin Ramyun",
+                3,
+                "SYNTHETIC_DEMO",
+                "b" * 64,
+                generated_at,
+            ),
+        )
+        connection.executemany(
+            """
+            INSERT INTO synthetic_menu_profile(
+              release_id,menu_id,spice_level,halal_fit,vegan_fit,
+              source_type,generator_version,seed_hash
+            ) VALUES (?,?,?,?,?,?,?,?)
+            """,
+            [
+                (
+                    synthetic_release_id,
+                    item.menu.menu_id,
+                    3,
+                    1,
+                    1,
+                    "SYNTHETIC_DEMO",
+                    "country-context-test",
+                    "c" * 64,
+                )
+                for item in pool
+            ],
+        )
+        connection.execute(
+            """
+            UPDATE recommendation_release_family
+            SET synthetic_enrichment_release_id=?
+            WHERE release_family_id=?
+            """,
+            (synthetic_release_id, family.release_family_id),
+        )
+
+    enriched_pool = repository.build_recommendation_evidence_pool(
+        session.session_id,
+        profile,
+        criteria,
+        RecommendationMode.INITIAL,
+        8,
+        release_family_id=release_family_id,
+        eligibility_as_of=eligibility_as_of,
+        raw_hits_per_value=20,
+        passages_per_menu=2,
+    )
+
+    assert enriched_pool
+    assert all(item.spice_reference_country_code == "KR" for item in enriched_pool)
+    assert all(item.spice_reference_dish_en == "Shin Ramyun" for item in enriched_pool)
     assert all(
         {evidence.category_code for evidence in item.criterion_evidence}
         == {"cuisine_origins", "flavors"}
@@ -1086,15 +1194,24 @@ def test_options_api_returns_v2_halal_and_vegan_state_contract(
 def test_options_api_precomputed_mode_bypasses_runtime_model_localization(
     repository: SQLiteYobiRepository,
 ) -> None:
-    class UnexpectedRuntimeLocalization:
-        def get_options(self, menu_id: str, session_id: str | None) -> list[object]:
-            del menu_id, session_id
-            raise AssertionError("runtime option localization must not run")
+    class PrecomputedLocalization:
+        calls: list[tuple[str, str | None, bool]] = []
+
+        def get_options(
+            self,
+            menu_id: str,
+            session_id: str | None,
+            *,
+            precomputed_only: bool = False,
+        ) -> list[object]:
+            self.calls.append((menu_id, session_id, precomputed_only))
+            assert precomputed_only is True
+            return []
+
+    service = PrecomputedLocalization()
 
     app.dependency_overrides[get_repository] = lambda: repository
-    app.dependency_overrides[get_option_localization_service] = (
-        lambda: UnexpectedRuntimeLocalization()
-    )
+    app.dependency_overrides[get_option_localization_service] = lambda: service
     try:
         with TestClient(app) as client:
             response = client.get(
@@ -1104,4 +1221,5 @@ def test_options_api_precomputed_mode_bypasses_runtime_model_localization(
         app.dependency_overrides.clear()
 
     assert response.status_code == 200
-    assert response.json()
+    assert response.json() == []
+    assert service.calls == [("menu_001_01", None, True)]

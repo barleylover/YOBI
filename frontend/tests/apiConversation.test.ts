@@ -97,6 +97,54 @@ describe("versioned mutation API", () => {
     );
   });
 
+  it("keeps server preference-catalog ETags distinct across locales", async () => {
+    const enCatalog: PreferenceCatalog = {
+      schema_version: "2",
+      catalog_version: "catalog-v2",
+      knowledge_release_id: "knowledge-v2",
+      locale: "en",
+      categories: [],
+      spice_references: [],
+    };
+    const jaCatalog: PreferenceCatalog = { ...enCatalog, locale: "ja" };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: { get: vi.fn().mockReturnValue('"catalog-v2-en"') },
+        json: vi.fn().mockResolvedValue(enCatalog),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: { get: vi.fn().mockReturnValue('"catalog-v2-ja"') },
+        json: vi.fn().mockResolvedValue(jaCatalog),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.getPreferenceCatalog("en")).resolves.toEqual({
+      catalog: enCatalog,
+      etag: '"catalog-v2-en"',
+      notModified: false,
+    });
+    await expect(api.getPreferenceCatalog("ja")).resolves.toEqual({
+      catalog: jaCatalog,
+      etag: '"catalog-v2-ja"',
+      notModified: false,
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/recommendation/preferences/catalog?locale=en",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/recommendation/preferences/catalog?locale=ja",
+      expect.any(Object),
+    );
+  });
+
   it("bounds preference catalog requests with the shared timeout contract", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn((_path: string, init?: RequestInit) => new Promise<Response>(

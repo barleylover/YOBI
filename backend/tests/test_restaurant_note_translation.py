@@ -92,6 +92,94 @@ def _sauce_payload() -> dict[str, str]:
     }
 
 
+def test_display_name_and_language_code_share_one_canonical_request_hash(
+    repository: SQLiteYobiRepository,
+) -> None:
+    session_id = _session(repository)
+    provider = PlannedProvider(
+        {"meta.llama-4-maverick-17b-128e-instruct-fp8": _onion_payload()}
+    )
+    service = RestaurantNoteTranslationService(repository, Settings(), provider=provider)
+
+    display_name = service.translate(
+        session_id,
+        RestaurantNoteTranslationInput(
+            source_text="No onions, please.",
+            source_language="English",
+        ),
+    )
+    code = service.translate(
+        session_id,
+        RestaurantNoteTranslationInput(
+            source_text="No onions, please.",
+            source_language="en",
+        ),
+    )
+
+    assert code.translation_id == display_name.translation_id
+    assert code.source_language == "en"
+    assert provider.calls == ["meta.llama-4-maverick-17b-128e-instruct-fp8"]
+
+
+@pytest.mark.parametrize("source_language", ["한국어", "ko"])
+def test_korean_note_is_a_deterministic_provider_free_pass_through(
+    repository: SQLiteYobiRepository,
+    source_language: str,
+) -> None:
+    session_id = _session(repository)
+    provider = PlannedProvider({})
+    service = RestaurantNoteTranslationService(repository, Settings(), provider=provider)
+
+    translated = service.translate(
+        session_id,
+        RestaurantNoteTranslationInput(
+            source_text="소스는 따로 담아 주세요.",
+            source_language=source_language,
+        ),
+    )
+
+    assert translated.status == "SUCCEEDED"
+    assert translated.source_language == "ko"
+    assert translated.korean_text == "소스는 따로 담아 주세요."
+    assert translated.back_translation == "소스는 따로 담아 주세요."
+    assert translated.model_id == "DETERMINISTIC_KOREAN_PASSTHROUGH"
+    assert provider.calls == []
+
+
+def test_japanese_display_name_and_code_share_the_same_model_path(
+    repository: SQLiteYobiRepository,
+) -> None:
+    session_id = _session(repository)
+    provider = PlannedProvider(
+        {
+            "meta.llama-4-maverick-17b-128e-instruct-fp8": {
+                "korean_text": "양파는 빼 주세요.",
+                "back_translation": "玉ねぎは抜いてください。",
+            }
+        }
+    )
+    service = RestaurantNoteTranslationService(repository, Settings(), provider=provider)
+
+    display_name = service.translate(
+        session_id,
+        RestaurantNoteTranslationInput(
+            source_text="玉ねぎは抜いてください。",
+            source_language="日本語",
+        ),
+    )
+    code = service.translate(
+        session_id,
+        RestaurantNoteTranslationInput(
+            source_text="玉ねぎは抜いてください。",
+            source_language="ja",
+        ),
+    )
+
+    assert display_name.translation_id == code.translation_id
+    assert code.source_language == "ja"
+    assert provider.calls == ["meta.llama-4-maverick-17b-128e-instruct-fp8"]
+
+
 def test_note_translation_uses_first_available_model_and_enables_cart_note(
     repository: SQLiteYobiRepository,
 ) -> None:

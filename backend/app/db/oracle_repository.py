@@ -78,6 +78,7 @@ from app.domain.models import (
     ChatState,
     Checkout,
     CheckoutCreate,
+    CountryAwareMenuPresentationCacheEntry,
     DeliveryPreferenceInput,
     Evidence,
     EvidenceStatus,
@@ -94,6 +95,7 @@ from app.domain.models import (
     ProfileCreate,
     ProfileUpdate,
     RestaurantNoteTranslation,
+    RuntimeMenuSourceDescriptionLocalizationEntry,
     Session,
 )
 from app.domain.preference_catalog import (
@@ -101,6 +103,11 @@ from app.domain.preference_catalog import (
     normalize_preference_locale,
     preference_option_is_exposable,
     preference_query_aliases,
+)
+from app.domain.presentation_localization import (
+    normalize_presentation_locale,
+    persistable_menu_localization_fields,
+    source_translation_is_safe,
 )
 from app.domain.recommendation import (
     operational_menu_signal,
@@ -4137,7 +4144,8 @@ class OracleYobiRepository:
                        description_localization.source_hash
                          AS source_description_source_hash,
                        preference.preference_percent,preference.sample_size,
-                       country.spice_baseline
+                       country.spice_baseline,
+                       spice_example.representative_dish AS spice_reference_dish_en
                 FROM synthetic_menu_profile profile
                 JOIN synthetic_country_profile country
                   ON country.release_id=profile.release_id
@@ -4156,6 +4164,10 @@ class OracleYobiRepository:
                   ON preference.release_id=profile.release_id
                  AND preference.menu_id=profile.menu_id
                  AND preference.country_code=:country_code
+                LEFT JOIN synthetic_country_spice_example spice_example
+                  ON spice_example.release_id=profile.release_id
+                 AND spice_example.country_code=:spice_reference_country
+                 AND spice_example.language_code='en'
                 WHERE profile.release_id=:synthetic_release_id
                   AND profile.menu_id IN ({",".join(selected_binds)})
                 """,
@@ -4332,6 +4344,14 @@ class OracleYobiRepository:
                     ),
                     country_spice_baseline=(
                         int(synthetic["spice_baseline"]) if synthetic is not None else None
+                    ),
+                    spice_reference_country_code=(
+                        spice_reference_country if synthetic is not None else None
+                    ),
+                    spice_reference_dish_en=(
+                        _oracle_logical_text(synthetic.get("spice_reference_dish_en"))
+                        if synthetic is not None and synthetic.get("spice_reference_dish_en")
+                        else None
                     ),
                     country_preference=(
                         {
@@ -5610,6 +5630,94 @@ class OracleYobiRepository:
                 updated_at=entry.updated_at,
             )
 
+    @staticmethod
+    def _country_aware_presentation_cache_entry_from_row(
+        row: dict[str, Any],
+    ) -> CountryAwareMenuPresentationCacheEntry:
+        return CountryAwareMenuPresentationCacheEntry(
+            cache_key=str(row["cache_key"]),
+            release_id=str(row["release_id"]),
+            menu_id=str(row["menu_id"]),
+            language_code=cast(Any, str(row["language_code"])),
+            user_country_code=str(row["user_country_code"]),
+            spice_reference_country_code=str(row["spice_reference_country_code"]),
+            localized_subtitle=_oracle_logical_text(row["localized_subtitle"]),
+            short_explanation=_oracle_logical_text(row["short_explanation"]),
+            long_explanation=_oracle_logical_text(row["long_explanation"]),
+            review_summary=_oracle_logical_text(row["review_summary"]),
+            evidence_ids=list(_json(row.get("evidence_ids_json") or "[]")),
+            review_ids=list(_json(row.get("review_ids_json") or "[]")),
+            evidence_map=dict(_json(row.get("evidence_map_json") or "{}")),
+            model_id=str(row["model_id"]),
+            prompt_version=str(row["prompt_version"]),
+            content_schema_version=str(row["content_schema_version"]),
+            source_hash=str(row["source_hash"]),
+            personalization_applied=bool(row.get("personalization_applied") or 0),
+            created_at=_datetime(row["created_at"]),
+            updated_at=_datetime(row["updated_at"]),
+        )
+
+    def get_country_aware_menu_presentation_cache(
+        self, cache_key: str
+    ) -> CountryAwareMenuPresentationCacheEntry | None:
+        with self.pool.connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                "SELECT * FROM country_aware_menu_presentation_cache "
+                "WHERE cache_key=:cache_key",
+                cache_key=cache_key,
+            )
+            row = _row(cursor)
+        return self._country_aware_presentation_cache_entry_from_row(row) if row else None
+
+    def save_country_aware_menu_presentation_cache_entry(
+        self, entry: CountryAwareMenuPresentationCacheEntry
+    ) -> None:
+        with self.pool.connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                MERGE INTO country_aware_menu_presentation_cache target
+                USING (SELECT :cache_key cache_key FROM dual) source
+                ON (target.cache_key=source.cache_key)
+                WHEN NOT MATCHED THEN INSERT (
+                  cache_key,release_id,menu_id,language_code,user_country_code,
+                  spice_reference_country_code,localized_subtitle,short_explanation,
+                  long_explanation,review_summary,evidence_ids_json,review_ids_json,
+                  evidence_map_json,model_id,prompt_version,content_schema_version,
+                  source_hash,personalization_applied,created_at,updated_at
+                ) VALUES (
+                  :cache_key,:release_id,:menu_id,:language_code,:user_country_code,
+                  :spice_reference_country_code,:localized_subtitle,:short_explanation,
+                  :long_explanation,:review_summary,:evidence_ids_json,:review_ids_json,
+                  :evidence_map_json,:model_id,:prompt_version,:content_schema_version,
+                  :source_hash,:personalization_applied,:created_at,:updated_at
+                )
+                """,
+                cache_key=entry.cache_key,
+                release_id=entry.release_id,
+                menu_id=entry.menu_id,
+                language_code=entry.language_code,
+                user_country_code=entry.user_country_code,
+                spice_reference_country_code=entry.spice_reference_country_code,
+                localized_subtitle=entry.localized_subtitle,
+                short_explanation=entry.short_explanation,
+                long_explanation=entry.long_explanation,
+                review_summary=entry.review_summary,
+                evidence_ids_json=json.dumps(entry.evidence_ids, ensure_ascii=False),
+                review_ids_json=json.dumps(entry.review_ids, ensure_ascii=False),
+                evidence_map_json=json.dumps(
+                    entry.evidence_map, ensure_ascii=False, sort_keys=True
+                ),
+                model_id=entry.model_id,
+                prompt_version=entry.prompt_version,
+                content_schema_version=entry.content_schema_version,
+                source_hash=entry.source_hash,
+                personalization_applied=int(entry.personalization_applied),
+                created_at=entry.created_at,
+                updated_at=entry.updated_at,
+            )
+
     def acquire_menu_presentation_lease(
         self,
         cache_key: str,
@@ -6719,6 +6827,71 @@ class OracleYobiRepository:
                 )
         return result
 
+    def load_release_option_localizations(
+        self,
+        session_id: str,
+        menu_id: str,
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        with self.pool.connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                SELECT profile.preferred_language,family.synthetic_enrichment_release_id
+                FROM chat_session chat
+                JOIN user_profile profile ON profile.profile_id=chat.profile_id
+                JOIN recommendation_runtime_state state ON state.state_key='ACTIVE'
+                JOIN recommendation_release_family family
+                  ON family.release_family_id=state.active_release_family_id
+                WHERE chat.session_id=:session_id
+                """,
+                session_id=session_id,
+            )
+            context = _row(cursor)
+            if context is None or not context.get("synthetic_enrichment_release_id"):
+                return {}, {}
+            requested = normalize_preference_locale(str(context["preferred_language"]))
+            language_code = requested if requested in {"ko", "ja"} else "en"
+            release_id = str(context["synthetic_enrichment_release_id"])
+            cursor.execute(
+                """
+                SELECT localization.option_group_id,localization.display_name
+                FROM option_group_localization localization
+                JOIN menu_option_group groups
+                  ON groups.option_group_id=localization.option_group_id
+                WHERE localization.release_id=:release_id
+                  AND localization.language_code=:language_code
+                  AND groups.menu_id=:menu_id
+                """,
+                release_id=release_id,
+                language_code=language_code,
+                menu_id=menu_id,
+            )
+            group_names = {
+                str(row["option_group_id"]): str(row["display_name"])
+                for row in _rows(cursor)
+            }
+            cursor.execute(
+                """
+                SELECT localization.option_item_id,localization.display_name
+                FROM option_item_localization localization
+                JOIN menu_option_item item
+                  ON item.option_item_id=localization.option_item_id
+                JOIN menu_option_group groups
+                  ON groups.option_group_id=item.option_group_id
+                WHERE localization.release_id=:release_id
+                  AND localization.language_code=:language_code
+                  AND groups.menu_id=:menu_id
+                """,
+                release_id=release_id,
+                language_code=language_code,
+                menu_id=menu_id,
+            )
+            item_names = {
+                str(row["option_item_id"]): str(row["display_name"])
+                for row in _rows(cursor)
+            }
+        return group_names, item_names
+
     def option_localizations_complete(
         self,
         session_id: str,
@@ -6943,8 +7116,8 @@ class OracleYobiRepository:
         self,
         session_id: str,
         menu_id: str,
-        localized_title: str,
-        localized_source_description: str,
+        localized_title: str | None,
+        localized_source_description: str | None,
         model_id: str,
         prompt_version: str,
     ) -> None:
@@ -6973,47 +7146,55 @@ class OracleYobiRepository:
             language_code = requested if requested in {"ko", "ja"} else "en"
             release_id = str(context["synthetic_enrichment_release_id"])
             generated_at = _now()
-            title_source_hash = hashlib.sha256(
-                json.dumps(
-                    [context.get("name_ko"), language_code, prompt_version],
-                    ensure_ascii=False,
-                ).encode()
-            ).hexdigest()
-            cursor.execute(
-                """
-                MERGE INTO menu_localization target
-                USING (
-                  SELECT :release_id release_id,:menu_id menu_id,
-                         :language_code language_code FROM dual
-                ) source
-                ON (target.release_id=source.release_id
-                    AND target.menu_id=source.menu_id
-                    AND target.language_code=source.language_code)
-                WHEN MATCHED THEN UPDATE SET
-                  display_name=:display_name,model_id=:model_id,
-                  prompt_version=:prompt_version,source_hash=:source_hash,
-                  validation_status='VALID',generated_at=:generated_at
-                WHEN NOT MATCHED THEN INSERT (
-                  release_id,menu_id,language_code,display_name,model_id,prompt_version,
-                  wiki_evidence_ids_json,source_hash,validation_status,generated_at
-                ) VALUES (
-                  :release_id,:menu_id,:language_code,:display_name,:model_id,
-                  :prompt_version,'[]',:source_hash,'VALID',:generated_at
-                )
-                """,
-                release_id=release_id,
-                menu_id=menu_id,
+            source_description = _oracle_logical_text(context.get("description")).strip()
+            title_value, description_value = persistable_menu_localization_fields(
+                source_description=source_description,
                 language_code=language_code,
-                display_name=localized_title,
-                model_id=model_id,
-                prompt_version=prompt_version,
-                source_hash=title_source_hash,
-                generated_at=generated_at,
+                localized_title=localized_title,
+                localized_source_description=localized_source_description,
             )
-            if _oracle_logical_text(context.get("description")):
+            if title_value:
+                title_source_hash = hashlib.sha256(
+                    json.dumps(
+                        [context.get("name_ko"), language_code, prompt_version],
+                        ensure_ascii=False,
+                    ).encode()
+                ).hexdigest()
+                cursor.execute(
+                    """
+                    MERGE INTO menu_localization target
+                    USING (
+                      SELECT :release_id release_id,:menu_id menu_id,
+                             :language_code language_code FROM dual
+                    ) source
+                    ON (target.release_id=source.release_id
+                        AND target.menu_id=source.menu_id
+                        AND target.language_code=source.language_code)
+                    WHEN MATCHED THEN UPDATE SET
+                      display_name=:display_name,model_id=:model_id,
+                      prompt_version=:prompt_version,source_hash=:source_hash,
+                      validation_status='VALID',generated_at=:generated_at
+                    WHEN NOT MATCHED THEN INSERT (
+                      release_id,menu_id,language_code,display_name,model_id,prompt_version,
+                      wiki_evidence_ids_json,source_hash,validation_status,generated_at
+                    ) VALUES (
+                      :release_id,:menu_id,:language_code,:display_name,:model_id,
+                      :prompt_version,'[]',:source_hash,'VALID',:generated_at
+                    )
+                    """,
+                    release_id=release_id,
+                    menu_id=menu_id,
+                    language_code=language_code,
+                    display_name=title_value,
+                    model_id=model_id,
+                    prompt_version=prompt_version,
+                    source_hash=title_source_hash,
+                    generated_at=generated_at,
+                )
+            if description_value:
                 description_source_hash = hashlib.sha256(
                     json.dumps(
-                        [context.get("description"), language_code, prompt_version],
+                        [source_description, language_code, prompt_version],
                         ensure_ascii=False,
                     ).encode()
                 ).hexdigest()
@@ -7042,12 +7223,105 @@ class OracleYobiRepository:
                     release_id=release_id,
                     menu_id=menu_id,
                     language_code=language_code,
-                    description_text=localized_source_description,
+                    description_text=description_value,
                     model_id=model_id,
                     prompt_version=prompt_version,
                     source_hash=description_source_hash,
                     generated_at=generated_at,
                 )
+
+    def get_runtime_menu_source_description_localization(
+        self,
+        release_id: str,
+        menu_id: str,
+        language_code: str,
+        prompt_version: str,
+        source_hash: str,
+    ) -> RuntimeMenuSourceDescriptionLocalizationEntry | None:
+        with self.pool.connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM runtime_menu_source_description_localization
+                WHERE release_id=:release_id AND menu_id=:menu_id
+                  AND language_code=:language_code AND prompt_version=:prompt_version
+                  AND source_hash=:source_hash AND validation_status='VALID'
+                """,
+                release_id=release_id,
+                menu_id=menu_id,
+                language_code=normalize_presentation_locale(language_code),
+                prompt_version=prompt_version,
+                source_hash=source_hash,
+            )
+            row = _row(cursor)
+        if row is None:
+            return None
+        return RuntimeMenuSourceDescriptionLocalizationEntry(
+            release_id=str(row["release_id"]),
+            menu_id=str(row["menu_id"]),
+            language_code=cast(Any, str(row["language_code"])),
+            prompt_version=str(row["prompt_version"]),
+            description_text=_oracle_logical_text(row["description_text"]),
+            model_id=str(row["model_id"]),
+            source_hash=str(row["source_hash"]),
+            validation_status="VALID",
+            generated_at=_datetime(row["generated_at"]),
+        )
+
+    def save_runtime_menu_source_description_localization(
+        self, entry: RuntimeMenuSourceDescriptionLocalizationEntry
+    ) -> None:
+        language_code = normalize_presentation_locale(entry.language_code)
+        with self.pool.connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                "SELECT description FROM menu WHERE menu_id=:menu_id",
+                menu_id=entry.menu_id,
+            )
+            source_row = _row(cursor)
+            source_description = (
+                _oracle_logical_text(source_row.get("description")).strip()
+                if source_row is not None
+                else ""
+            )
+            description_value = entry.description_text.strip()
+            if not source_translation_is_safe(
+                source_description, description_value, language_code
+            ):
+                return
+            cursor.execute(
+                """
+                MERGE INTO runtime_menu_source_description_localization target
+                USING (
+                  SELECT :release_id release_id,:menu_id menu_id,
+                         :language_code language_code,:prompt_version prompt_version
+                  FROM dual
+                ) source
+                ON (target.release_id=source.release_id
+                    AND target.menu_id=source.menu_id
+                    AND target.language_code=source.language_code
+                    AND target.prompt_version=source.prompt_version)
+                WHEN MATCHED THEN UPDATE SET
+                  description_text=:description_text,model_id=:model_id,
+                  source_hash=:source_hash,validation_status='VALID',
+                  generated_at=:generated_at
+                WHEN NOT MATCHED THEN INSERT (
+                  release_id,menu_id,language_code,prompt_version,description_text,
+                  model_id,source_hash,validation_status,generated_at
+                ) VALUES (
+                  :release_id,:menu_id,:language_code,:prompt_version,:description_text,
+                  :model_id,:source_hash,'VALID',:generated_at
+                )
+                """,
+                release_id=entry.release_id,
+                menu_id=entry.menu_id,
+                language_code=language_code,
+                prompt_version=entry.prompt_version,
+                description_text=description_value,
+                model_id=entry.model_id,
+                source_hash=entry.source_hash,
+                generated_at=entry.generated_at,
+            )
 
     def resolve_address(self, text: str, file_hash: str | None = None) -> list[AddressCandidate]:
         with self.pool.connection() as connection:
@@ -8967,6 +9241,10 @@ class OracleYobiRepository:
                     "eligible_option_items": 0,
                     "localized_option_groups": 0,
                     "localized_option_items": 0,
+                    "release_localized_option_groups": 0,
+                    "release_localized_option_items": 0,
+                    "runtime_localized_option_groups": 0,
+                    "runtime_localized_option_items": 0,
                 }
                 enrichment_release_id = (
                     str(active_family_row.get("synthetic_enrichment_release_id") or "")
@@ -8996,6 +9274,12 @@ class OracleYobiRepository:
                              AND language_code IN ('ko','en','ja')),
                           (SELECT COUNT(*) FROM option_item_localization
                            WHERE release_id=:enrichment_release_id
+                             AND language_code IN ('ko','en','ja')),
+                          (SELECT COUNT(*) FROM runtime_option_group_localization
+                           WHERE release_id=:enrichment_release_id
+                             AND language_code IN ('ko','en','ja')),
+                          (SELECT COUNT(*) FROM runtime_option_item_localization
+                           WHERE release_id=:enrichment_release_id
                              AND language_code IN ('ko','en','ja'))
                         FROM dual
                         """,
@@ -9007,6 +9291,10 @@ class OracleYobiRepository:
                         "eligible_option_items": int(eligible_options[1] or 0),
                         "localized_option_groups": int(localized_options[0] or 0),
                         "localized_option_items": int(localized_options[1] or 0),
+                        "release_localized_option_groups": int(localized_options[0] or 0),
+                        "release_localized_option_items": int(localized_options[1] or 0),
+                        "runtime_localized_option_groups": int(localized_options[2] or 0),
+                        "runtime_localized_option_items": int(localized_options[3] or 0),
                     }
                 cursor.execute(
                     """
@@ -9236,6 +9524,14 @@ class OracleYobiRepository:
                 "merchant_ingredients": 0,
                 "option_effects": 0,
                 "chunk_metadata_mismatches": 0,
+                "eligible_option_groups": 0,
+                "eligible_option_items": 0,
+                "localized_option_groups": 0,
+                "localized_option_items": 0,
+                "release_localized_option_groups": 0,
+                "release_localized_option_items": 0,
+                "runtime_localized_option_groups": 0,
+                "runtime_localized_option_items": 0,
             }
             if knowledge:
                 release_id = str(knowledge["release_id"])

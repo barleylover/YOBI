@@ -355,6 +355,8 @@ class EvidencePoolItem(BaseModel):
     source_description_source_hash: str | None = None
     synthetic_spice_level: int | None = Field(default=None, ge=1, le=5)
     country_spice_baseline: int | None = Field(default=None, ge=1, le=5)
+    spice_reference_country_code: str | None = Field(default=None, min_length=2, max_length=2)
+    spice_reference_dish_en: str | None = Field(default=None, max_length=300)
     country_preference: dict[str, Any] | None = None
     synthetic_reviews: list[dict[str, Any]] = Field(default_factory=list)
     menu_components: list[dict[str, str]] = Field(default_factory=list)
@@ -391,6 +393,8 @@ class EvidencePoolItem(BaseModel):
             "spice_level": self.menu.spice_level,
             "synthetic_spice_level": self.synthetic_spice_level,
             "country_spice_baseline": self.country_spice_baseline,
+            "spice_reference_country_code": self.spice_reference_country_code,
+            "spice_reference_dish_en": self.spice_reference_dish_en,
             "halal_certified": self.halal_certified,
             "halal_scope_label": self.halal_scope_label,
             "vegan_status": self.vegan_status,

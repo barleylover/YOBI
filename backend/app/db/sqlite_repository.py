@@ -79,6 +79,7 @@ from app.domain.models import (
     ChatState,
     Checkout,
     CheckoutCreate,
+    CountryAwareMenuPresentationCacheEntry,
     DeliveryPreferenceInput,
     Evidence,
     EvidenceStatus,
@@ -95,6 +96,7 @@ from app.domain.models import (
     ProfileCreate,
     ProfileUpdate,
     RestaurantNoteTranslation,
+    RuntimeMenuSourceDescriptionLocalizationEntry,
     Session,
 )
 from app.domain.preference_catalog import (
@@ -105,6 +107,11 @@ from app.domain.preference_catalog import (
     normalize_preference_locale,
     preference_option_is_exposable,
     preference_query_aliases,
+)
+from app.domain.presentation_localization import (
+    normalize_presentation_locale,
+    persistable_menu_localization_fields,
+    source_translation_is_safe,
 )
 from app.domain.recommendation import (
     operational_menu_signal,
@@ -4218,7 +4225,8 @@ class SQLiteYobiRepository:
                        description_localization.source_hash
                          AS source_description_source_hash,
                        preference.preference_percent,preference.sample_size,
-                       country.spice_baseline
+                       country.spice_baseline,
+                       spice_example.representative_dish AS spice_reference_dish_en
                 FROM synthetic_menu_profile profile
                 JOIN synthetic_country_profile country
                   ON country.release_id=profile.release_id
@@ -4237,6 +4245,10 @@ class SQLiteYobiRepository:
                   ON preference.release_id=profile.release_id
                  AND preference.menu_id=profile.menu_id
                  AND preference.country_code=?
+                LEFT JOIN synthetic_country_spice_example spice_example
+                  ON spice_example.release_id=profile.release_id
+                 AND spice_example.country_code=?
+                 AND spice_example.language_code='en'
                 WHERE profile.release_id=?
                   AND profile.menu_id IN ({placeholders})
                 """,
@@ -4245,6 +4257,7 @@ class SQLiteYobiRepository:
                     presentation_locale,
                     presentation_locale,
                     country_code,
+                    spice_reference_country,
                     synthetic_release_id,
                     *selected_ids,
                 ),
@@ -4419,6 +4432,14 @@ class SQLiteYobiRepository:
                     ),
                     country_spice_baseline=(
                         int(synthetic["spice_baseline"]) if synthetic is not None else None
+                    ),
+                    spice_reference_country_code=(
+                        spice_reference_country if synthetic is not None else None
+                    ),
+                    spice_reference_dish_en=(
+                        str(synthetic["spice_reference_dish_en"])
+                        if synthetic is not None and synthetic["spice_reference_dish_en"]
+                        else None
                     ),
                     country_preference=(
                         {
@@ -6539,6 +6560,81 @@ class SQLiteYobiRepository:
                 ),
             )
 
+    @staticmethod
+    def _country_aware_presentation_cache_entry_from_row(
+        row: sqlite3.Row,
+    ) -> CountryAwareMenuPresentationCacheEntry:
+        return CountryAwareMenuPresentationCacheEntry(
+            cache_key=str(row["cache_key"]),
+            release_id=str(row["release_id"]),
+            menu_id=str(row["menu_id"]),
+            language_code=cast(Any, str(row["language_code"])),
+            user_country_code=str(row["user_country_code"]),
+            spice_reference_country_code=str(row["spice_reference_country_code"]),
+            localized_subtitle=str(row["localized_subtitle"]),
+            short_explanation=str(row["short_explanation"]),
+            long_explanation=str(row["long_explanation"]),
+            review_summary=str(row["review_summary"]),
+            evidence_ids=list(json.loads(str(row["evidence_ids_json"] or "[]"))),
+            review_ids=list(json.loads(str(row["review_ids_json"] or "[]"))),
+            evidence_map=dict(json.loads(str(row["evidence_map_json"] or "{}"))),
+            model_id=str(row["model_id"]),
+            prompt_version=str(row["prompt_version"]),
+            content_schema_version=str(row["content_schema_version"]),
+            source_hash=str(row["source_hash"]),
+            personalization_applied=bool(row["personalization_applied"] or 0),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+            updated_at=datetime.fromisoformat(str(row["updated_at"])),
+        )
+
+    def get_country_aware_menu_presentation_cache(
+        self, cache_key: str
+    ) -> CountryAwareMenuPresentationCacheEntry | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM country_aware_menu_presentation_cache WHERE cache_key=?",
+                (cache_key,),
+            ).fetchone()
+        return self._country_aware_presentation_cache_entry_from_row(row) if row else None
+
+    def save_country_aware_menu_presentation_cache_entry(
+        self, entry: CountryAwareMenuPresentationCacheEntry
+    ) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO country_aware_menu_presentation_cache(
+                  cache_key,release_id,menu_id,language_code,user_country_code,
+                  spice_reference_country_code,localized_subtitle,short_explanation,
+                  long_explanation,review_summary,evidence_ids_json,review_ids_json,
+                  evidence_map_json,model_id,prompt_version,content_schema_version,
+                  source_hash,personalization_applied,created_at,updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    entry.cache_key,
+                    entry.release_id,
+                    entry.menu_id,
+                    entry.language_code,
+                    entry.user_country_code,
+                    entry.spice_reference_country_code,
+                    entry.localized_subtitle,
+                    entry.short_explanation,
+                    entry.long_explanation,
+                    entry.review_summary,
+                    json.dumps(entry.evidence_ids, ensure_ascii=False),
+                    json.dumps(entry.review_ids, ensure_ascii=False),
+                    json.dumps(entry.evidence_map, ensure_ascii=False, sort_keys=True),
+                    entry.model_id,
+                    entry.prompt_version,
+                    entry.content_schema_version,
+                    entry.source_hash,
+                    int(entry.personalization_applied),
+                    entry.created_at.isoformat(),
+                    entry.updated_at.isoformat(),
+                ),
+            )
+
     def acquire_menu_presentation_lease(
         self,
         cache_key: str,
@@ -7629,6 +7725,61 @@ class SQLiteYobiRepository:
                 )
         return result
 
+    def load_release_option_localizations(
+        self,
+        session_id: str,
+        menu_id: str,
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        with self._connection() as connection:
+            context = connection.execute(
+                """
+                SELECT profile.preferred_language,family.synthetic_enrichment_release_id
+                FROM chat_session session
+                JOIN user_profile profile ON profile.profile_id=session.profile_id
+                JOIN recommendation_runtime_state state ON state.state_key='ACTIVE'
+                JOIN recommendation_release_family family
+                  ON family.release_family_id=state.active_release_family_id
+                WHERE session.session_id=?
+                """,
+                (session_id,),
+            ).fetchone()
+            if context is None or not context["synthetic_enrichment_release_id"]:
+                return {}, {}
+            requested = normalize_preference_locale(str(context["preferred_language"]))
+            language_code = requested if requested in {"ko", "ja"} else "en"
+            release_id = str(context["synthetic_enrichment_release_id"])
+            group_names = {
+                str(row["option_group_id"]): str(row["display_name"])
+                for row in connection.execute(
+                    """
+                    SELECT localization.option_group_id,localization.display_name
+                    FROM option_group_localization localization
+                    JOIN menu_option_group groups
+                      ON groups.option_group_id=localization.option_group_id
+                    WHERE localization.release_id=? AND localization.language_code=?
+                      AND groups.menu_id=?
+                    """,
+                    (release_id, language_code, menu_id),
+                )
+            }
+            item_names = {
+                str(row["option_item_id"]): str(row["display_name"])
+                for row in connection.execute(
+                    """
+                    SELECT localization.option_item_id,localization.display_name
+                    FROM option_item_localization localization
+                    JOIN menu_option_item item
+                      ON item.option_item_id=localization.option_item_id
+                    JOIN menu_option_group groups
+                      ON groups.option_group_id=item.option_group_id
+                    WHERE localization.release_id=? AND localization.language_code=?
+                      AND groups.menu_id=?
+                    """,
+                    (release_id, language_code, menu_id),
+                )
+            }
+        return group_names, item_names
+
     def option_localizations_complete(
         self,
         session_id: str,
@@ -7835,8 +7986,8 @@ class SQLiteYobiRepository:
         self,
         session_id: str,
         menu_id: str,
-        localized_title: str,
-        localized_source_description: str,
+        localized_title: str | None,
+        localized_source_description: str | None,
         model_id: str,
         prompt_version: str,
     ) -> None:
@@ -7862,40 +8013,48 @@ class SQLiteYobiRepository:
             language_code = requested if requested in {"ko", "ja"} else "en"
             release_id = str(context["synthetic_enrichment_release_id"])
             generated_at = _now()
-            title_source_hash = hashlib.sha256(
-                json.dumps(
-                    [context["name_ko"], language_code, prompt_version],
-                    ensure_ascii=False,
-                ).encode()
-            ).hexdigest()
-            connection.execute(
-                """
-                INSERT INTO menu_localization(
-                  release_id,menu_id,language_code,display_name,model_id,prompt_version,
-                  wiki_evidence_ids_json,source_hash,validation_status,generated_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(release_id,menu_id,language_code) DO UPDATE SET
-                  display_name=excluded.display_name,model_id=excluded.model_id,
-                  prompt_version=excluded.prompt_version,source_hash=excluded.source_hash,
-                  validation_status='VALID',generated_at=excluded.generated_at
-                """,
-                (
-                    release_id,
-                    menu_id,
-                    language_code,
-                    localized_title,
-                    model_id,
-                    prompt_version,
-                    "[]",
-                    title_source_hash,
-                    "VALID",
-                    generated_at,
-                ),
+            source_description = str(context["description"] or "").strip()
+            title_value, description_value = persistable_menu_localization_fields(
+                source_description=source_description,
+                language_code=language_code,
+                localized_title=localized_title,
+                localized_source_description=localized_source_description,
             )
-            if str(context["description"] or ""):
+            if title_value:
+                title_source_hash = hashlib.sha256(
+                    json.dumps(
+                        [context["name_ko"], language_code, prompt_version],
+                        ensure_ascii=False,
+                    ).encode()
+                ).hexdigest()
+                connection.execute(
+                    """
+                    INSERT INTO menu_localization(
+                      release_id,menu_id,language_code,display_name,model_id,prompt_version,
+                      wiki_evidence_ids_json,source_hash,validation_status,generated_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(release_id,menu_id,language_code) DO UPDATE SET
+                      display_name=excluded.display_name,model_id=excluded.model_id,
+                      prompt_version=excluded.prompt_version,source_hash=excluded.source_hash,
+                      validation_status='VALID',generated_at=excluded.generated_at
+                    """,
+                    (
+                        release_id,
+                        menu_id,
+                        language_code,
+                        title_value,
+                        model_id,
+                        prompt_version,
+                        "[]",
+                        title_source_hash,
+                        "VALID",
+                        generated_at,
+                    ),
+                )
+            if description_value:
                 description_source_hash = hashlib.sha256(
                     json.dumps(
-                        [context["description"], language_code, prompt_version],
+                        [source_description, language_code, prompt_version],
                         ensure_ascii=False,
                     ).encode()
                 ).hexdigest()
@@ -7914,7 +8073,7 @@ class SQLiteYobiRepository:
                         release_id,
                         menu_id,
                         language_code,
-                        localized_source_description,
+                        description_value,
                         model_id,
                         prompt_version,
                         description_source_hash,
@@ -7922,6 +8081,76 @@ class SQLiteYobiRepository:
                         generated_at,
                     ),
                 )
+
+    def get_runtime_menu_source_description_localization(
+        self,
+        release_id: str,
+        menu_id: str,
+        language_code: str,
+        prompt_version: str,
+        source_hash: str,
+    ) -> RuntimeMenuSourceDescriptionLocalizationEntry | None:
+        locale = normalize_presentation_locale(language_code)
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM runtime_menu_source_description_localization
+                WHERE release_id=? AND menu_id=? AND language_code=?
+                  AND prompt_version=? AND source_hash=? AND validation_status='VALID'
+                """,
+                (release_id, menu_id, locale, prompt_version, source_hash),
+            ).fetchone()
+        if row is None:
+            return None
+        return RuntimeMenuSourceDescriptionLocalizationEntry(
+            release_id=str(row["release_id"]),
+            menu_id=str(row["menu_id"]),
+            language_code=cast(Any, str(row["language_code"])),
+            prompt_version=str(row["prompt_version"]),
+            description_text=str(row["description_text"]),
+            model_id=str(row["model_id"]),
+            source_hash=str(row["source_hash"]),
+            validation_status="VALID",
+            generated_at=datetime.fromisoformat(str(row["generated_at"])),
+        )
+
+    def save_runtime_menu_source_description_localization(
+        self, entry: RuntimeMenuSourceDescriptionLocalizationEntry
+    ) -> None:
+        source_row: sqlite3.Row | None
+        with self._connection() as connection:
+            source_row = connection.execute(
+                "SELECT description FROM menu WHERE menu_id=?",
+                (entry.menu_id,),
+            ).fetchone()
+            source_description = str(source_row["description"] or "").strip() if source_row else ""
+            if not source_translation_is_safe(
+                source_description, entry.description_text, entry.language_code
+            ):
+                return
+            connection.execute(
+                """
+                INSERT INTO runtime_menu_source_description_localization(
+                  release_id,menu_id,language_code,prompt_version,description_text,
+                  model_id,source_hash,validation_status,generated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(release_id,menu_id,language_code,prompt_version) DO UPDATE SET
+                  description_text=excluded.description_text,model_id=excluded.model_id,
+                  source_hash=excluded.source_hash,validation_status='VALID',
+                  generated_at=excluded.generated_at
+                """,
+                (
+                    entry.release_id,
+                    entry.menu_id,
+                    entry.language_code,
+                    entry.prompt_version,
+                    entry.description_text,
+                    entry.model_id,
+                    entry.source_hash,
+                    "VALID",
+                    entry.generated_at.isoformat(),
+                ),
+            )
 
     def resolve_address(self, text: str, file_hash: str | None = None) -> list[AddressCandidate]:
         normalized = normalize_address_text(text)
@@ -9630,6 +9859,10 @@ class SQLiteYobiRepository:
                     "eligible_option_items": 0,
                     "localized_option_groups": 0,
                     "localized_option_items": 0,
+                    "release_localized_option_groups": 0,
+                    "release_localized_option_items": 0,
+                    "runtime_localized_option_groups": 0,
+                    "runtime_localized_option_items": 0,
                 }
                 enrichment_release_id = (
                     str(active_family_row["synthetic_enrichment_release_id"] or "")
@@ -9655,15 +9888,28 @@ class SQLiteYobiRepository:
                           (SELECT COUNT(*) FROM option_group_localization
                            WHERE release_id=? AND language_code IN ('ko','en','ja')),
                           (SELECT COUNT(*) FROM option_item_localization
+                           WHERE release_id=? AND language_code IN ('ko','en','ja')),
+                          (SELECT COUNT(*) FROM runtime_option_group_localization
+                           WHERE release_id=? AND language_code IN ('ko','en','ja')),
+                          (SELECT COUNT(*) FROM runtime_option_item_localization
                            WHERE release_id=? AND language_code IN ('ko','en','ja'))
                         """,
-                        (enrichment_release_id, enrichment_release_id),
+                        (
+                            enrichment_release_id,
+                            enrichment_release_id,
+                            enrichment_release_id,
+                            enrichment_release_id,
+                        ),
                     ).fetchone()
                     option_localization_counts = {
                         "eligible_option_groups": int(eligible_options[0] or 0),
                         "eligible_option_items": int(eligible_options[1] or 0),
                         "localized_option_groups": int(localized_options[0] or 0),
                         "localized_option_items": int(localized_options[1] or 0),
+                        "release_localized_option_groups": int(localized_options[0] or 0),
+                        "release_localized_option_items": int(localized_options[1] or 0),
+                        "runtime_localized_option_groups": int(localized_options[2] or 0),
+                        "runtime_localized_option_items": int(localized_options[3] or 0),
                     }
                 synthetic_core = int(
                     connection.execute(
@@ -9878,6 +10124,14 @@ class SQLiteYobiRepository:
                 "merchant_ingredients": 0,
                 "option_effects": 0,
                 "chunk_metadata_mismatches": 0,
+                "eligible_option_groups": 0,
+                "eligible_option_items": 0,
+                "localized_option_groups": 0,
+                "localized_option_items": 0,
+                "release_localized_option_groups": 0,
+                "release_localized_option_items": 0,
+                "runtime_localized_option_groups": 0,
+                "runtime_localized_option_items": 0,
             }
             expected_counts: dict[str, int] = {}
             declared_actual_counts: dict[str, int] = {}

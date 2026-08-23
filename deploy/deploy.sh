@@ -182,6 +182,7 @@ readonly EXPECTED_MIGRATIONS=(
   017_grounded_menu_presentation.sql
   018_llm_runtime_resilience.sql
   019_option_localization_runtime.sql
+  020_country_aware_menu_presentation.sql
 )
 for migration in "${EXPECTED_MIGRATIONS[@]}"; do
   [[ -f "$ROOT_DIR/database/migrations/$migration" ]] \
@@ -194,7 +195,7 @@ actual_migration_list="$(
   done | LC_ALL=C sort
 )"
 [[ "$actual_migration_list" == "$expected_migration_list" ]] \
-  || { printf 'Migration directory must contain exactly 001-019.\n' >&2; exit 1; }
+  || { printf 'Migration directory must contain exactly 001-020.\n' >&2; exit 1; }
 
 source_git_commit="$(git -C "$ROOT_DIR" rev-parse --verify HEAD)"
 source_git_branch="$(git -C "$ROOT_DIR" branch --show-current)"
@@ -697,13 +698,13 @@ sudo env PYTHONPATH="$new_release" "${runtime_env_runner[@]}" \
   'from deploy.secure_bootstrap import Settings, verify_database
 status = verify_database(Settings())
 if not (
-    status["expected_migration_count"] == status["applied_migration_count"] == 19
+    status["expected_migration_count"] == status["applied_migration_count"] == 20
     and status["latest_expected_migration"]
     == status["latest_applied_migration"]
-    == "019"
+    == "020"
 ):
     raise SystemExit("MIGRATION_LEDGER_NOT_EXACT")
-print("Verified exact migrations=001-019 runtime_user=YOBI_APP")'
+print("Verified exact migrations=001-020 runtime_user=YOBI_APP")'
 old_knowledge_release_id="$(run_knowledge_manager get-active)"
 old_recommendation_release_family_id="$(run_recommendation_manager get-active)"
 knowledge_restore_required=true

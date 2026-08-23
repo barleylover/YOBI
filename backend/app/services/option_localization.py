@@ -143,7 +143,13 @@ class OptionLocalizationService:
         self._key_locks_guard = Lock()
         self._key_locks: dict[tuple[str, str, str], Lock] = {}
 
-    def get_options(self, menu_id: str, session_id: str | None) -> list[OptionGroup]:
+    def get_options(
+        self,
+        menu_id: str,
+        session_id: str | None,
+        *,
+        precomputed_only: bool = False,
+    ) -> list[OptionGroup]:
         groups = self._project_groups(
             list(self.repository.get_options(menu_id, session_id=session_id))
         )
@@ -158,6 +164,8 @@ class OptionLocalizationService:
         language_code = normalize_preference_locale(profile.preferred_language)
         if language_code == "ko":
             return groups
+        if precomputed_only:
+            return self._precomputed_options(groups, session_id, menu_id)
 
         group_ids = [group.option_group_id for group in groups]
         item_ids = [item.option_item_id for group in groups for item in group.items]
@@ -202,6 +210,36 @@ class OptionLocalizationService:
                 locale=locale,
                 item_ids=item_ids,
             )
+
+    def _precomputed_options(
+        self,
+        groups: list[OptionGroup],
+        session_id: str,
+        menu_id: str,
+    ) -> list[OptionGroup]:
+        group_ids = [group.option_group_id for group in groups]
+        item_ids = [item.option_item_id for group in groups for item in group.items]
+        try:
+            runtime_groups, runtime_items = self.repository.load_option_localizations(
+                session_id,
+                menu_id,
+                self._cache_prompt_version(),
+            )
+        except Exception:
+            return groups
+        if set(runtime_groups) != set(group_ids) or set(runtime_items) != set(item_ids):
+            return groups
+        try:
+            release_groups, release_items = (
+                self.repository.load_release_option_localizations(session_id, menu_id)
+            )
+        except Exception:
+            release_groups, release_items = {}, {}
+        return self._apply_localizations(
+            groups,
+            {**runtime_groups, **release_groups},
+            {**runtime_items, **release_items},
+        )
 
     def _project_groups(self, groups: list[OptionGroup]) -> list[OptionGroup]:
         if not self.settings.demo_mode:

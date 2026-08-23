@@ -92,6 +92,11 @@ class Settings(BaseSettings):
     recommendation_prompt_version: str = "yobi-structured-rag-v4-compact-id-selection"
     menu_presentation_prompt_version: str = "yobi-menu-presentation-v18-compact-output"
     menu_presentation_schema_version: str = "7"
+    country_aware_presentation_enabled: bool = False
+    country_aware_presentation_prompt_version: str = (
+        "yobi-country-aware-presentation-v1-grounded-translation"
+    )
+    country_aware_presentation_schema_version: str = "1"
     option_localization_prompt_version: str = "yobi-option-localization-v8-control-token-fix"
     restaurant_note_prompt_version: str = "yobi-restaurant-note-v3-validated-order-context"
     menu_presentation_wait_seconds: float = Field(default=10.0, ge=0.0, le=30.0)
