@@ -22,6 +22,14 @@ describe("demo-facing Japanese localization", () => {
     expect(merchantName("피자마루-약수점", "日本語")).toBe("ピザマル・薬水店");
     expect(merchantName("Pizza Maru - Yaksu Branch", "日本語")).toBe("ピザマル・薬水店");
     expect(merchantName("Myeongdong Jjajang Workshop", "日本語")).toBe("明洞 チャジャン 工房");
+    expect(merchantName("나성중식(미국식중식&덮밥)", "日本語")).toBe(
+      "ナソン中華（アメリカ風中華＆丼）",
+    );
+    expect(merchantName("SPECIAL여수수산", "日本語")).toBe("スペシャル麗水水産");
+    expect(merchantName("스시도", "日本語")).toBe("スシド");
+    expect(merchantName("나성중식(미국식중식&덮밥)", "English")).toBe(
+      "Naseongjungsik(miguksikjungsik&deopbap)",
+    );
     expect(demoHotelName("YOBI Myeongdong Hotel", "日本語")).toBe("YOBI明洞ホテル");
     expect(demoRoadAddress("서울특별시 중구 을지로 21", "日本語")).toBe(
       "ソウル特別市 中区 乙支路21",

@@ -544,8 +544,12 @@ def test_synthetic_vegan_runtime_guard_rejects_obvious_animal_aliases() -> None:
     vegetables = _menu("menu-vegetable", score=0.8).model_copy(
         update={"name_en": "Tofu vegetable bibimbap", "name_ko": "두부 채소 비빔밥"}
     )
+    octopus = _menu("menu-octopus", score=0.7).model_copy(
+        update={"name_en": "Tako wasabi", "name_ko": "타코와사비"}
+    )
 
     assert StructuredRecommendationService._has_obvious_animal_ingredient(gopchang)
+    assert StructuredRecommendationService._has_obvious_animal_ingredient(octopus)
     assert not StructuredRecommendationService._has_obvious_animal_ingredient(vegetables)
     assert not StructuredRecommendationService._has_obvious_animal_ingredient(
         vegetables.model_copy(update={"name_en": "Eggplant and champignon bibimbap"})

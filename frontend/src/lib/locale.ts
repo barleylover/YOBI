@@ -125,6 +125,7 @@ const DEMO_MERCHANT_NAMES_JA: Record<string, string> = {
 };
 
 const DEMO_MERCHANT_TERMS_JA: Array<[RegExp, string]> = [
+  [/SPECIAL/gi, "スペシャル"],
   [/Boneless Korean fried chicken/gi, "骨なし韓国フライドチキン"],
   [/Spicy stir-fried pork/gi, "辛口豚炒め"],
   [/Bean sprout gukbap/gi, "もやしクッパ"],
@@ -187,9 +188,82 @@ const DEMO_MERCHANT_TERMS_JA: Array<[RegExp, string]> = [
   [/Room/gi, "店"],
 ];
 
+const DEMO_MERCHANT_TERMS_KO_JA: Array<[RegExp, string]> = [
+  [/미국식/g, "アメリカ風"],
+  [/중화요리/g, "中華料理"],
+  [/중식/g, "中華"],
+  [/한식/g, "韓国料理"],
+  [/일식/g, "日本料理"],
+  [/양식/g, "洋食"],
+  [/분식/g, "軽食"],
+  [/덮밥/g, "丼"],
+  [/국밥/g, "クッパ"],
+  [/여수/g, "麗水"],
+  [/수산/g, "水産"],
+  [/명동/g, "明洞"],
+  [/종로/g, "鍾路"],
+  [/홍대/g, "弘大"],
+  [/강남/g, "江南"],
+  [/을지로/g, "乙支路"],
+  [/동대문/g, "東大門"],
+  [/남대문/g, "南大門"],
+  [/본점/g, "本店"],
+  [/지점/g, "店"],
+  [/피자/g, "ピザ"],
+  [/파스타/g, "パスタ"],
+  [/카페/g, "カフェ"],
+  [/커피/g, "コーヒー"],
+  [/치킨/g, "チキン"],
+  [/스시/g, "スシ"],
+  [/김밥/g, "キンパ"],
+  [/떡볶이/g, "トッポッキ"],
+  [/족발/g, "チョッパル"],
+  [/보쌈/g, "ポッサム"],
+  [/곱창/g, "コプチャン"],
+  [/돈가스|돈까스/g, "トンカツ"],
+  [/라멘|라면/g, "ラーメン"],
+  [/냉면/g, "冷麺"],
+  [/만두/g, "マンドゥ"],
+  [/바베큐|바비큐/g, "バーベキュー"],
+  [/키친/g, "キッチン"],
+  [/다이닝/g, "ダイニング"],
+  [/푸드/g, "フード"],
+  [/하우스/g, "ハウス"],
+  [/점/g, "店"],
+];
+
 const HANGUL_INITIALS = ["g", "kk", "n", "d", "tt", "r", "m", "b", "pp", "s", "ss", "", "j", "jj", "ch", "k", "t", "p", "h"];
 const HANGUL_VOWELS = ["a", "ae", "ya", "yae", "eo", "e", "yeo", "ye", "o", "wa", "wae", "oe", "yo", "u", "wo", "we", "wi", "yu", "eu", "ui", "i"];
 const HANGUL_FINALS = ["", "k", "k", "ks", "n", "n", "nh", "t", "l", "lk", "lm", "lb", "ls", "lt", "lp", "lh", "m", "p", "ps", "t", "t", "ng", "t", "t", "k", "t", "p", "h"];
+
+const HANGUL_VOWEL_TO_KATAKANA_COLUMN = [
+  0, 1, 5, 6, 2, 1, 7, 6, 2, 9, 10, 10, 7, 3, 12, 10, 11, 8, 3, 11, 4,
+] as const;
+
+const HANGUL_INITIAL_TO_KATAKANA_ROW = [
+  "g", "k", "n", "d", "t", "r", "m", "b", "p", "s", "s", "vowel", "j", "j", "ch", "k", "t", "p", "h",
+] as const;
+
+const KATAKANA_ROWS: Record<(typeof HANGUL_INITIAL_TO_KATAKANA_ROW)[number], readonly string[]> = {
+  vowel: ["ア", "エ", "オ", "ウ", "イ", "ヤ", "イェ", "ヨ", "ユ", "ワ", "ウェ", "ウィ", "ウォ"],
+  g: ["ガ", "ゲ", "ゴ", "グ", "ギ", "ギャ", "ギェ", "ギョ", "ギュ", "グァ", "グェ", "グィ", "グォ"],
+  k: ["カ", "ケ", "コ", "ク", "キ", "キャ", "キェ", "キョ", "キュ", "クァ", "クェ", "クィ", "クォ"],
+  n: ["ナ", "ネ", "ノ", "ヌ", "ニ", "ニャ", "ニェ", "ニョ", "ニュ", "ヌァ", "ヌェ", "ヌィ", "ヌォ"],
+  d: ["ダ", "デ", "ド", "ドゥ", "ディ", "デャ", "デェ", "デョ", "デュ", "ドァ", "ドェ", "ドィ", "ドォ"],
+  t: ["タ", "テ", "ト", "トゥ", "ティ", "テャ", "テェ", "テョ", "テュ", "トァ", "トェ", "トィ", "トォ"],
+  r: ["ラ", "レ", "ロ", "ル", "リ", "リャ", "リェ", "リョ", "リュ", "ルァ", "ルェ", "ルィ", "ルォ"],
+  m: ["マ", "メ", "モ", "ム", "ミ", "ミャ", "ミェ", "ミョ", "ミュ", "ムァ", "ムェ", "ムィ", "ムォ"],
+  b: ["バ", "ベ", "ボ", "ブ", "ビ", "ビャ", "ビェ", "ビョ", "ビュ", "ブァ", "ブェ", "ブィ", "ブォ"],
+  p: ["パ", "ペ", "ポ", "プ", "ピ", "ピャ", "ピェ", "ピョ", "ピュ", "プァ", "プェ", "プィ", "プォ"],
+  s: ["サ", "セ", "ソ", "ス", "シ", "シャ", "シェ", "ショ", "シュ", "スァ", "スェ", "スィ", "スォ"],
+  j: ["ジャ", "ジェ", "ジョ", "ジュ", "ジ", "ジャ", "ジェ", "ジョ", "ジュ", "ジュァ", "ジュェ", "ジュィ", "ジュォ"],
+  ch: ["チャ", "チェ", "チョ", "チュ", "チ", "チャ", "チェ", "チョ", "チュ", "チュァ", "チュェ", "チュィ", "チュォ"],
+  h: ["ハ", "ヘ", "ホ", "フ", "ヒ", "ヒャ", "ヒェ", "ヒョ", "ヒュ", "ファ", "フェ", "フィ", "フォ"],
+};
+
+const KATAKANA_FINALS = [
+  "", "ク", "ク", "クス", "ン", "ン", "ン", "ッ", "ル", "ルク", "ルム", "ルプ", "ルス", "ルト", "ルプ", "ル", "ム", "プ", "プス", "ッ", "ッ", "ン", "ッ", "ッ", "ク", "ッ", "プ", "ッ",
+] as const;
 
 function romanizeHangul(value: string) {
   const romanized = Array.from(value, (character) => {
@@ -203,6 +277,18 @@ function romanizeHangul(value: string) {
   return romanized.replace(/(^|[\s·-])([a-z])/g, (_, prefix: string, letter: string) => `${prefix}${letter.toUpperCase()}`);
 }
 
+function transliterateHangulToKatakana(value: string) {
+  return Array.from(value, (character) => {
+    const code = character.charCodeAt(0) - 0xac00;
+    if (code < 0 || code > 11171) return character;
+    const initial = Math.floor(code / 588);
+    const vowel = Math.floor((code % 588) / 28);
+    const final = code % 28;
+    const row = KATAKANA_ROWS[HANGUL_INITIAL_TO_KATAKANA_ROW[initial]];
+    return `${row[HANGUL_VOWEL_TO_KATAKANA_COLUMN[vowel]]}${KATAKANA_FINALS[final]}`;
+  }).join("");
+}
+
 export function merchantName(name: string, language: string) {
   const effectiveLanguage = asEffectiveLanguage(language);
   if (effectiveLanguage === "한국어") return name;
@@ -213,11 +299,22 @@ export function merchantName(name: string, language: string) {
     if (koreanName && DEMO_MERCHANT_NAMES_JA[koreanName]) {
       return DEMO_MERCHANT_NAMES_JA[koreanName];
     }
-    if (/[가-힣]/.test(name)) return `韓国料理店「${name}」`;
-    return DEMO_MERCHANT_TERMS_JA.reduce(
+    const semanticallyLocalized = DEMO_MERCHANT_TERMS_KO_JA.reduce(
       (localized, [pattern, replacement]) => localized.replace(pattern, replacement),
       name,
-    ).replace(/\s+/g, " ").trim();
+    );
+    const japaneseName = /[가-힣]/.test(semanticallyLocalized)
+      ? transliterateHangulToKatakana(semanticallyLocalized)
+      : semanticallyLocalized;
+    return DEMO_MERCHANT_TERMS_JA.reduce(
+      (localized, [pattern, replacement]) => localized.replace(pattern, replacement),
+      japaneseName,
+    )
+      .replace(/\(/g, "（")
+      .replace(/\)/g, "）")
+      .replace(/&/g, "＆")
+      .replace(/\s+/g, " ")
+      .trim();
   }
   if (!/[가-힣]/.test(name)) return name;
   const knownName = DEMO_MERCHANT_NAMES[name];

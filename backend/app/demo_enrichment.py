@@ -51,7 +51,7 @@ COUNTRY_CODES = (
     "TR",
     "NL",
 )
-GENERATOR_VERSION = "yobi-synthetic-enrichment-v9-animal-alias-coverage"
+GENERATOR_VERSION = "yobi-synthetic-enrichment-v10-animal-alias-coverage"
 SOURCE_TYPE = "SYNTHETIC_DEMO"
 LANGUAGE_CODES: tuple[LanguageCode, ...] = ("ko", "en", "ja")
 
@@ -181,6 +181,27 @@ _ANIMAL_TOKENS = _PORK_TOKENS + (
     "생선",
     "새우",
     "오징어",
+    "문어",
+    "낙지",
+    "주꾸미",
+    "쭈꾸미",
+    "타코와사비",
+    "연어",
+    "참치",
+    "고등어",
+    "장어",
+    "명태",
+    "꼬막",
+    "조개",
+    "홍합",
+    "전복",
+    "게살",
+    "꽃게",
+    "킹크랩",
+    "랍스터",
+    "사시미",
+    "육회",
+    "회덮밥",
     "해물",
     "계란",
     "달걀",
