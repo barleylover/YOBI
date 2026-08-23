@@ -167,6 +167,7 @@ def test_enrichment_rejects_obvious_offal_and_meat_aliases_from_vegan_fit() -> N
             EnrichmentMenu("m-gopchang", "소고기 곱창구이", ("GRILLED",), "Grilled beef intestine"),
             EnrichmentMenu("m-galbi", "양념 갈비", ("GRILLED",), "Marinated short ribs"),
             EnrichmentMenu("m-octopus", "타코와사비", ("COLD",), "Tako wasabi"),
+            EnrichmentMenu("m-clam", "바지락생면칼국수", ("SOUP",), "Fresh clam kalguksu"),
             EnrichmentMenu("m-vegetable", "구운 채소", ("VEGETABLE", "GRILLED")),
         ],
     )
@@ -175,6 +176,7 @@ def test_enrichment_rejects_obvious_offal_and_meat_aliases_from_vegan_fit() -> N
     assert profiles["m-gopchang"]["vegan_fit"] == 0
     assert profiles["m-galbi"]["vegan_fit"] == 0
     assert profiles["m-octopus"]["vegan_fit"] == 0
+    assert profiles["m-clam"]["vegan_fit"] == 0
 
 
 def test_us_and_japan_spice_guides_have_two_localized_approximate_anchors() -> None:

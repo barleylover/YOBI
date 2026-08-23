@@ -73,6 +73,7 @@ describe("order-flow option logic", () => {
 
     expect(menuHasObviousVeganConflict(menu("타코와사비", "Tako wasabi"))).toBe(true);
     expect(menuHasObviousVeganConflict(menu("새우계란볶음밥", "Shrimp egg fried rice"))).toBe(true);
+    expect(menuHasObviousVeganConflict(menu("바지락생면칼국수", "Fresh clam kalguksu"))).toBe(true);
     expect(menuHasObviousVeganConflict(menu("가지버섯덮밥", "Eggplant mushroom rice bowl"))).toBe(false);
   });
 
