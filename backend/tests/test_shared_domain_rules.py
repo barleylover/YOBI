@@ -1,0 +1,90 @@
+from __future__ import annotations
+
+import pytest
+
+from app.domain.cart_validation import (
+    CART_DIETARY_CONFLICT,
+    CART_MENU_NO_LONGER_ELIGIBLE,
+    deterministic_korean_order_note,
+    structured_v3_cart_error,
+)
+from app.domain.localization import localization_ids_complete
+from app.domain.structured_recommendation import RecommendationCriteriaV2
+
+
+@pytest.mark.parametrize(
+    ("preference", "spice_level", "expected"),
+    [
+        ("LESS", 2, None),
+        ("LESS", 3, CART_MENU_NO_LONGER_ELIGIBLE),
+        ("SIMILAR", 3, None),
+        ("MORE", 4, None),
+        ("MORE", 3, CART_MENU_NO_LONGER_ELIGIBLE),
+    ],
+)
+def test_structured_v3_cart_rule_preserves_spice_semantics(
+    preference: str,
+    spice_level: int,
+    expected: str | None,
+) -> None:
+    criteria = RecommendationCriteriaV2.model_validate(
+        {
+            "schema_version": "3",
+            "price_range_krw": {"min": 10_000, "max": 20_000},
+            "spice_preference": preference,
+        }
+    )
+
+    assert (
+        structured_v3_cart_error(
+            criteria,
+            price=15_000,
+            spice_level=spice_level,
+            country_spice_baseline=3,
+            halal_fit=True,
+            vegan_fit=True,
+        )
+        == expected
+    )
+
+
+def test_structured_v3_cart_rule_keeps_price_before_dietary_error_priority() -> None:
+    criteria = RecommendationCriteriaV2.model_validate(
+        {
+            "schema_version": "3",
+            "price_range_krw": {"min": 10_000, "max": 20_000},
+            "dietary_filters": {"halal_certified_only": True, "vegan": True},
+        }
+    )
+
+    assert (
+        structured_v3_cart_error(
+            criteria,
+            price=9_999,
+            spice_level=3,
+            country_spice_baseline=3,
+            halal_fit=False,
+            vegan_fit=False,
+        )
+        == CART_MENU_NO_LONGER_ELIGIBLE
+    )
+    assert (
+        structured_v3_cart_error(
+            criteria,
+            price=10_000,
+            spice_level=3,
+            country_spice_baseline=3,
+            halal_fit=False,
+            vegan_fit=False,
+        )
+        == CART_DIETARY_CONFLICT
+    )
+
+
+def test_shared_localization_and_note_fallback_rules() -> None:
+    assert localization_ids_complete({"g1": "Group"}, {"i1": "Item"}, ["g1"], ["i1"])
+    assert not localization_ids_complete({"g1": "Group"}, {}, ["g1"], ["i1"])
+    assert deterministic_korean_order_note("Mild, front desk, no cutlery") == (
+        "최대한 맵지 않게 부탁드립니다. 호텔 프런트에 맡겨 주세요. "
+        "일회용 수저와 포크는 필요 없습니다."
+    )

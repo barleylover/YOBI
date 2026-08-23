@@ -1,0 +1,19 @@
+{
+  "approval_boundary": "SILVER_LABELS_REQUIRE_HUMAN_REVIEW_BEFORE_OCI_WRITE",
+  "artifacts": {
+    "adjudication.json": "e51bdf12263904d060f2df669f00db4dd4515d55ac4e633aa600a9fded6c6d5c",
+    "metrics_silver.json": "52b86566410985f9f5405a0e85644af146584971d8ccb09d861442a2b8c1912d",
+    "queries.json": "839c5d7662670ab2ae179214f761f5c19984e71c92c5bba3949638d89cd6620a",
+    "representative_30.json": "f6514c88de0f4cec995af6b3516321ea2f99efd90e8fd43d08deaa43eb31222d",
+    "tuning_policy_silver.json": "3e42e1aedb8b875621d43e7fc2fe34a84d19ae8f6eaccb56b73fdf441b45b8e2"
+  },
+  "candidate_release": {
+    "feature_manifest_sha256": "21518714d6549e0602f312535fcf1960d3bad0e2ef7631b6e35298add255ea98",
+    "knowledge_release_id": "external-knowledge-13d51589941ebe911a350626",
+    "ranking_policy_version": "yobi-hybrid-rank-v2",
+    "release_family_id": "external-recommendation-13d51589941ebe911a350626-21518714d6-d557ecf273"
+  },
+  "manifest_sha256": "15af1158ae5f928d919ad3c03d147b91d2d1453cda43be8c35503ba81eab4f1c",
+  "schema_version": "1",
+  "status": "PASS"
+}

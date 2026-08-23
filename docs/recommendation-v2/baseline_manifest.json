@@ -1,0 +1,38 @@
+{
+  "schema_version": "1",
+  "captured_at": "2026-08-18T02:32:43+09:00",
+  "git": {
+    "base_commit": "035992ca8f1f449d814940833ed0fceb3e0465ea",
+    "branch": "codex/recommendation-v2-hybrid",
+    "isolated_clone": "/Users/kimjunggil/Documents/YOBI/mvp-recommendation-v2",
+    "original_checkout_preserved": "/Users/kimjunggil/Documents/YOBI/mvp"
+  },
+  "inputs": [
+    {
+      "role": "catalog_zip",
+      "path": "tmp/recommendation-v2-baseline/yogiyo_selected_200.catalog.zip",
+      "sha256": "251ef65b4bbec84d9fa28e26775e0abed2ea94a11f76ea4bb18bd2bed6d2c79a"
+    },
+    {
+      "role": "quality_evaluation_sqlite_mirror",
+      "path": "tmp/recommendation-v2-baseline/sqlite-mirror-v7-expanded.db",
+      "menu_count": 15085,
+      "sha256": "6a50de94eff89b4268320b94d90a5a3f5977645119b962ce6604ec8a4b5efd39"
+    }
+  ],
+  "live_readiness_before_write": {
+    "checked_read_only": true,
+    "health_status": "ok",
+    "ready_status": "ready",
+    "application_release_id": "20260817T013442Z-62553867069f",
+    "source_git_commit": "035992ca8f1f449d814940833ed0fceb3e0465ea",
+    "catalog_mode": "EXTERNAL_SOURCE",
+    "v2_structured_recommendation_metadata_present": false
+  },
+  "quality_boundary": {
+    "local_600_menu_database": "unit_and_e2e_fixture_only",
+    "quality_database": "15085_menu_mirror",
+    "oracle_write_performed": false,
+    "provider_probe_performed": false
+  }
+}

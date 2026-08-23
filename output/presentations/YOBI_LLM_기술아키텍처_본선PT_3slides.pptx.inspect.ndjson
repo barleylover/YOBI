@@ -1,0 +1,151 @@
+{"kind":"deck","id":"pr/rk8g40","name":"Deck"}
+{"kind":"layout","layoutId":"401b69bc-949b-4aee-968f-ef2ef7a10462","name":"Master","type":"master"}
+{"kind":"layout","layoutId":"b70cda8f-04e2-453e-ae64-fcf22b9264a5","name":"Title Slide","type":"title"}
+{"kind":"slide","id":"sl/z1gsas","slide":1,"title":"03 · TECH ARCHITECTURE / LLM","textShapes":27}
+{"kind":"shape","id":"sh/vipsv658","slide":1,"name":"ambient-glow-top","bbox":[980,0,300,300]}
+{"kind":"shape","id":"sh/wjytobmt","slide":1,"name":"ambient-glow-bottom","bbox":[0,540,260,180]}
+{"kind":"shape","id":"sh/xk7axgne","slide":1,"name":"accent-rail","bbox":[42,36,4,648]}
+{"kind":"textbox","id":"sh/mtwbi1or","slide":1,"name":"section-1","text":"03 · TECH ARCHITECTURE / LLM","textPreview":"03 · TECH ARCHITECTURE / LLM","textChars":28,"textLines":1,"bbox":[72,34,360,24]}
+{"kind":"textbox","id":"sh/nu5sr65c","slide":1,"name":"wordmark-1","text":"YOBI  /  SPACE VECTOR","textPreview":"YOBI  /  SPACE VECTOR","textChars":21,"textLines":1,"bbox":[927,34,281,24]}
+{"kind":"textbox","id":"sh/8vetkb6x","slide":1,"name":"title-1-1","text":"추천은 서버가 결정하고,","textPreview":"추천은 서버가 결정하고,","textChars":13,"textLines":1,"bbox":[72,78,840,62]}
+{"kind":"textbox","id":"sh/9gnatwn2","slide":1,"name":"title-1-2","text":"LLM은 근거를 설명합니다","textPreview":"LLM은 근거를 설명합니다","textChars":14,"textLines":1,"bbox":[72,137,900,64]}
+{"kind":"textbox","id":"sh/6p0bul4v","slide":1,"name":"subtitle-1","text":"결정은 안정적으로\n설명은 사람답게","textPreview":"결정은 안정적으로 | 설명은 사람답게","textChars":18,"textLines":2,"bbox":[925,102,283,70]}
+{"kind":"shape","id":"sh/7q9c3q5g","slide":1,"bbox":[72,211,1136,0]}
+{"kind":"textbox","id":"sh/zatw721w","slide":1,"name":"server-label","text":"SERVER  /  DECISION","textPreview":"SERVER  /  DECISION","textChars":19,"textLines":1,"bbox":[72,246,280,26]}
+{"kind":"textbox","id":"sh/e9kvexkr","slide":1,"name":"llm-label","text":"LLM  /  COMMUNICATION","textPreview":"LLM  /  COMMUNICATION","textChars":21,"textLines":1,"bbox":[843,246,365,26]}
+{"kind":"shape","id":"sh/1cbe9cj2","slide":1,"name":"server-node-1","bbox":[72,338,194,142]}
+{"kind":"textbox","id":"sh/0b2dg7ih","slide":1,"name":"server-node-1-number","text":"01","textPreview":"01","textChars":2,"textLines":1,"bbox":[90,354,52,24]}
+{"kind":"textbox","id":"sh/netwb218","slide":1,"name":"server-node-1-title","text":"객관 조건 필터","textPreview":"객관 조건 필터","textChars":8,"textLines":1,"bbox":[90,388,158,33]}
+{"kind":"textbox","id":"sh/mdkvih0n","slide":1,"name":"server-node-1-body","text":"배달지역 · 판매상태\n가격 · 검수된 맵기","textPreview":"배달지역 · 판매상태 | 가격 · 검수된 맵기","textChars":23,"textLines":2,"bbox":[90,431,158,38]}
+{"kind":"shape","id":"sh/9gvedcje","slide":1,"name":"server-node-2","bbox":[292,338,194,142]}
+{"kind":"textbox","id":"sh/ofmd47it","slide":1,"name":"server-node-2-number","text":"02","textPreview":"02","textChars":2,"textLines":1,"bbox":[310,354,52,24]}
+{"kind":"textbox","id":"sh/b2dwfm14","slide":1,"name":"server-node-2-title","text":"취향 지원 검증","textPreview":"취향 지원 검증","textChars":8,"textLines":1,"bbox":[310,388,158,33]}
+{"kind":"textbox","id":"sh/ah4v6h0j","slide":1,"name":"server-node-2-body","text":"같은 범주 OR\n다른 범주 AND","textPreview":"같은 범주 OR | 다른 범주 AND","textChars":18,"textLines":2,"bbox":[310,431,158,38]}
+{"kind":"shape","id":"sh/6xozelkr","slide":1,"name":"server-node-3","bbox":[512,338,194,142]}
+{"kind":"textbox","id":"sh/7yhg7qlc","slide":1,"name":"server-node-3-number","text":"03","textPreview":"03","textChars":2,"textLines":1,"bbox":[530,354,52,24]}
+{"kind":"textbox","id":"sh/8zqhgv2x","slide":1,"name":"server-node-3-title","text":"TOP 3 동결","textPreview":"TOP 3 동결","textChars":8,"textLines":1,"bbox":[530,388,158,33]}
+{"kind":"textbox","id":"sh/t0zy903i","slide":1,"name":"server-node-3-body","text":"명시 점수 · 다양성\n고정된 메뉴와 순서","textPreview":"명시 점수 · 다양성 | 고정된 메뉴와 순서","textChars":22,"textLines":2,"bbox":[530,431,158,38]}
+{"kind":"shape","id":"sh/y9ofalkv","slide":1,"bbox":[266,409,26,0]}
+{"kind":"shape","id":"sh/jaxg36lg","slide":1,"bbox":[486,409,26,0]}
+{"kind":"shape","id":"sh/kb6xcb21","slide":1,"bbox":[780,282,0,264]}
+{"kind":"shape","id":"sh/lwfy5g3m","slide":1,"name":"bounded-input-badge","bbox":[738,298,272,28]}
+{"kind":"textbox","id":"sh/i5szm5kz","slide":1,"name":"bounded-input-badge-text","text":"동결 메뉴 + Wiki 근거만 전달","textPreview":"동결 메뉴 + Wiki 근거만 전달","textChars":19,"textLines":1,"bbox":[738,299,272,26]}
+{"kind":"shape","id":"sh/361gfalk","slide":1,"name":"gpt-oss-node","bbox":[875,341,180,180]}
+{"kind":"textbox","id":"sh/d03254n2","slide":1,"name":"oci-genai-label","text":"OCI GENAI","textPreview":"OCI GENAI","textChars":9,"textLines":1,"bbox":[903,375,124,22]}
+{"kind":"textbox","id":"sh/szu1czmh","slide":1,"name":"gpt-oss-name","text":"GPT-OSS\n120B","textPreview":"GPT-OSS | 120B","textChars":12,"textLines":2,"bbox":[899,402,132,66]}
+{"kind":"textbox","id":"sh/ryl03u5w","slide":1,"name":"one-dispatch","text":"설명 전용 · 최대 1회","textPreview":"설명 전용 · 최대 1회","textChars":13,"textLines":1,"bbox":[893,478,144,24]}
+{"kind":"shape","id":"sh/qxcjap4b","slide":1,"bbox":[779.5,335.5,22,169]}
+{"kind":"textbox","id":"sh/5wji14nq","slide":1,"name":"llm-output-1","text":"선택 이유","textPreview":"선택 이유","textChars":5,"textLines":1,"bbox":[1088,350,120,24]}
+{"kind":"textbox","id":"sh/4va18zm5","slide":1,"name":"llm-output-2","text":"음식 설명","textPreview":"음식 설명","textChars":5,"textLines":1,"bbox":[1088,403,120,24]}
+{"kind":"textbox","id":"sh/3u10zu5k","slide":1,"name":"llm-output-3","text":"다국어 요약","textPreview":"다국어 요약","textChars":6,"textLines":1,"bbox":[1088,456,120,24]}
+{"kind":"shape","id":"sh/itsj6p4z","slide":1,"bbox":[1068,363,12,0]}
+{"kind":"shape","id":"sh/9sn2donu","slide":1,"bbox":[1068,416,12,0]}
+{"kind":"shape","id":"sh/ore1kjmp","slide":1,"bbox":[1068,469,12,0]}
+{"kind":"shape","id":"sh/wv294jm5","slide":1,"name":"failsafe-strip","bbox":[72,598,1136,58]}
+{"kind":"textbox","id":"sh/hwbadonq","slide":1,"name":"failsafe-label","text":"FAIL-SAFE","textPreview":"FAIL-SAFE","textChars":9,"textLines":1,"bbox":[94,617,104,20]}
+{"kind":"textbox","id":"sh/utkr2t4z","slide":1,"name":"failsafe-copy","text":"생성 모델이 멈춰도 메뉴·순위는 유지 — 동일 결과를 Wiki 기반 결정론적 설명으로 제공합니다","textPreview":"생성 모델이 멈춰도 메뉴·순위는 유지 — 동일 결과를 Wiki 기반 결정론적 설명으로 제공합니다","textChars":53,"textLines":1,"bbox":[205,611,971,32]}
+{"kind":"textbox","id":"sh/vutsbe5k","slide":1,"name":"footer-1","text":"YOBI · 근거 기반 AI 푸드 컨시어지","textPreview":"YOBI · 근거 기반 AI 푸드 컨시어지","textChars":23,"textLines":1,"bbox":[72,684,420,18]}
+{"kind":"textbox","id":"sh/4z2983mh","slide":1,"name":"page-1","text":"01 / 03","textPreview":"01 / 03","textChars":7,"textLines":1,"bbox":[1100,684,108,18]}
+{"kind":"notes","id":"nt/z1gsas","slide":1,"text":"핵심은 LLM에게 추천 결정권을 주지 않았다는 점입니다. 사용자가 고른 조건을 서버가 먼저 검증하고, 명시 점수와 다양성 정책으로 최대 3개의 메뉴와 순서를 동결합니다. LLM은 그 결과와 음식 Wiki 근거만 받아 사용자의 언어로 선택 이유와 설명을 작성합니다. 모델이 실패하거나 응답이 계약을 어겨도 메뉴와 순위는 바뀌지 않고, 같은 결과를 결정론적 설명으로 보여 줍니다.\n\n[Sources]\n- /Users/kimjunggil/Documents/YOBI/mvp/docs/ARCHITECTURE.md, lines 37-83, accessed 2026-08-17\n- /Users/kimjunggil/Documents/YOBI/mvp/docs/RAG_DESIGN.md, lines 9-25 and 129-183, accessed 2026-08-17\n- /Users/kimjunggil/Documents/YOBI/mvp/backend/app/core/config.py, structured recommendation settings, accessed 2026-08-17"}
+{"kind":"slide","id":"sl/j4ysqr","slide":2,"title":"03 · TECH ARCHITECTURE / LLM","textShapes":29}
+{"kind":"shape","id":"sh/h4n21gn2","slide":2,"name":"ambient-glow-top","bbox":[980,0,300,300]}
+{"kind":"shape","id":"sh/u1cj6l4b","slide":2,"name":"ambient-glow-bottom","bbox":[0,540,260,180]}
+{"kind":"shape","id":"sh/v2lkzq5w","slide":2,"name":"accent-rail","bbox":[42,36,4,648]}
+{"kind":"textbox","id":"sh/8zu14bm5","slide":2,"name":"section-2","text":"03 · TECH ARCHITECTURE / LLM","textPreview":"03 · TECH ARCHITECTURE / LLM","textChars":28,"textLines":1,"bbox":[72,34,360,24]}
+{"kind":"textbox","id":"sh/9032xgnq","slide":2,"name":"wordmark-2","text":"YOBI  /  SPACE VECTOR","textPreview":"YOBI  /  SPACE VECTOR","textChars":21,"textLines":1,"bbox":[927,34,281,24]}
+{"kind":"textbox","id":"sh/mxcj214f","slide":2,"name":"title-2-1","text":"음식 지식 Wiki가 ‘메뉴명’을","textPreview":"음식 지식 Wiki가 ‘메뉴명’을","textChars":18,"textLines":1,"bbox":[72,78,840,62]}
+{"kind":"textbox","id":"sh/7ylkv650","slide":2,"name":"title-2-2","text":"‘이해 가능한 음식’으로 바꿉니다","textPreview":"‘이해 가능한 음식’으로 바꿉니다","textChars":18,"textLines":1,"bbox":[72,137,900,64]}
+{"kind":"textbox","id":"sh/kva10rm9","slide":2,"name":"subtitle-2","text":"YOBI가 만든\n버전형 음식 지식 계층","textPreview":"YOBI가 만든 | 버전형 음식 지식 계층","textChars":21,"textLines":2,"bbox":[925,102,283,70]}
+{"kind":"shape","id":"sh/lwj2twnu","slide":2,"bbox":[72,211,1136,0]}
+{"kind":"textbox","id":"sh/1wvat8ri","slide":2,"name":"menu-name-label","text":"MESSY MENU NAMES","textPreview":"MESSY MENU NAMES","textChars":16,"textLines":1,"bbox":[72,247,238,24]}
+{"kind":"textbox","id":"sh/0vmt03ax","slide":2,"name":"menu-name-1","text":"참치김밥","textPreview":"참치김밥","textChars":4,"textLines":1,"bbox":[72,299,245,38]}
+{"kind":"textbox","id":"sh/fudsry9c","slide":2,"name":"menu-name-2","text":"Tuna kimbap","textPreview":"Tuna kimbap","textChars":11,"textLines":1,"bbox":[72,350,245,38]}
+{"kind":"textbox","id":"sh/et4byts7","slide":2,"name":"menu-name-3","text":"참치마요 김밥","textPreview":"참치마요 김밥","textChars":7,"textLines":1,"bbox":[72,401,245,38]}
+{"kind":"textbox","id":"sh/dsvaporm","slide":2,"name":"menu-name-caption","text":"이름만 달라도\n같은 음식 개념일 수 있습니다","textPreview":"이름만 달라도 | 같은 음식 개념일 수 있습니다","textChars":24,"textLines":2,"bbox":[72,477,250,54]}
+{"kind":"shape","id":"sh/srm9wja1","slide":2,"bbox":[328,334,42,0]}
+{"kind":"shape","id":"sh/r6tsne9g","slide":2,"bbox":[328,384,42,0]}
+{"kind":"shape","id":"sh/65kru9sv","slide":2,"bbox":[328,434,42,0]}
+{"kind":"shape","id":"sh/54balora","slide":2,"name":"food-wiki-surface","bbox":[382,248,520,348]}
+{"kind":"shape","id":"sh/4329sjap","slide":2,"name":"wiki-badge","bbox":[407,270,259,28]}
+{"kind":"textbox","id":"sh/w76t8jil","slide":2,"name":"wiki-badge-text","text":"YOBI FOOD KNOWLEDGE WIKI","textPreview":"YOBI FOOD KNOWLEDGE WIKI","textChars":24,"textLines":1,"bbox":[407,271,259,26]}
+{"kind":"textbox","id":"sh/x8fahoz6","slide":2,"name":"wiki-definition","text":"서비스가 사용할 수 있도록\n검토·버전 관리되는 음식 지식 계약","textPreview":"서비스가 사용할 수 있도록 | 검토·버전 관리되는 음식 지식 계약","textChars":34,"textLines":2,"bbox":[407,314,455,62]}
+{"kind":"shape","id":"sh/alob690v","slide":2,"name":"concept-cuisine","bbox":[407,404,135,50]}
+{"kind":"textbox","id":"sh/v6xsfeh0","slide":2,"text":"CUISINE\n한국 음식","textPreview":"CUISINE | 한국 음식","textChars":13,"textLines":2,"bbox":[420,411,109,37]}
+{"kind":"shape","id":"sh/8jmt4zip","slide":2,"name":"concept-family","bbox":[407,470,135,50]}
+{"kind":"textbox","id":"sh/9kfad4za","slide":2,"text":"FAMILY\n김밥","textPreview":"FAMILY | 김밥","textChars":9,"textLines":2,"bbox":[420,477,109,37]}
+{"kind":"shape","id":"sh/mh4r290j","slide":2,"name":"concept-variant","bbox":[407,536,135,50]}
+{"kind":"textbox","id":"sh/nidsbu14","slide":2,"text":"VARIANT\n참치김밥","textPreview":"VARIANT | 참치김밥","textChars":12,"textLines":2,"bbox":[420,543,109,37]}
+{"kind":"shape","id":"sh/sfqtg3it","slide":2,"bbox":[474.5,454,0,16]}
+{"kind":"shape","id":"sh/tgzu98ze","slide":2,"bbox":[474.5,520,0,16]}
+{"kind":"textbox","id":"sh/3a1wf21g","slide":2,"name":"wiki-layer-1-label","text":"IDENTITY","textPreview":"IDENTITY","textChars":8,"textLines":1,"bbox":[590,407,112,22]}
+{"kind":"textbox","id":"sh/29sv6xkb","slide":2,"name":"wiki-layer-1","text":"이름 · 별칭 · 계층 관계","textPreview":"이름 · 별칭 · 계층 관계","textChars":15,"textLines":1,"bbox":[590,431,274,28]}
+{"kind":"shape","id":"sh/pw3ehcjm","slide":2,"bbox":[569,446,10,0]}
+{"kind":"textbox","id":"sh/obud8721","slide":2,"name":"wiki-layer-2-label","text":"ESSENTIAL FACTS","textPreview":"ESSENTIAL FACTS","textChars":15,"textLines":1,"bbox":[590,471,170,22]}
+{"kind":"textbox","id":"sh/bylwj21s","slide":2,"name":"wiki-layer-2","text":"정의 재료 · 조리 방식","textPreview":"정의 재료 · 조리 방식","textChars":13,"textLines":1,"bbox":[590,495,274,28]}
+{"kind":"shape","id":"sh/qxcvahk7","slide":2,"bbox":[569,510,10,0]}
+{"kind":"textbox","id":"sh/d03elcjy","slide":2,"name":"wiki-layer-3-label","text":"HUMAN PROSE","textPreview":"HUMAN PROSE","textChars":11,"textLines":1,"bbox":[590,535,150,22]}
+{"kind":"textbox","id":"sh/czudc72d","slide":2,"name":"wiki-layer-3","text":"맛 · 식감 · 문화 맥락","textPreview":"맛 · 식감 · 문화 맥락","textChars":14,"textLines":1,"bbox":[590,559,274,28]}
+{"kind":"shape","id":"sh/r2hc7il8","slide":2,"bbox":[569,574,10,0]}
+{"kind":"shape","id":"sh/618vydk3","slide":2,"bbox":[914,385,38,0]}
+{"kind":"textbox","id":"sh/ylcvedsj","slide":2,"name":"grounded-output-label","text":"GROUNDED OUTPUT","textPreview":"GROUNDED OUTPUT","textChars":15,"textLines":1,"bbox":[962,247,246,24]}
+{"kind":"textbox","id":"sh/jmlwnit4","slide":2,"name":"open-quote","text":"“","textPreview":"“","textChars":1,"textLines":1,"bbox":[960,292,60,65]}
+{"kind":"textbox","id":"sh/knudgnap","slide":2,"name":"grounded-quote","text":"참치김밥은\n담백한 밥과 김에\n부드러운 참치 속이\n더해진 김밥 변형입니다.","textPreview":"참치김밥은 | 담백한 밥과 김에 | 부드러운 참치 속이 | 더해진 김밥 변형입니다.","textChars":40,"textLines":4,"bbox":[972,328,236,166]}
+{"kind":"textbox","id":"sh/5o3epsba","slide":2,"name":"chunk-caption","text":"문단 → chunk → embedding\n→ 검색 가능한 설명 근거","textPreview":"문단 → chunk → embedding | → 검색 가능한 설명 근거","textChars":37,"textLines":2,"bbox":[972,523,236,56]}
+{"kind":"shape","id":"sh/6pwvixsv","slide":2,"name":"wiki-boundary-strip","bbox":[72,610,1136,50]}
+{"kind":"textbox","id":"sh/7q5wr29g","slide":2,"name":"truth-boundary-label","text":"TRUTH BOUNDARY","textPreview":"TRUTH BOUNDARY","textChars":14,"textLines":1,"bbox":[94,625,140,20]}
+{"kind":"textbox","id":"sh/sbedkna1","slide":2,"name":"truth-boundary-copy","text":"일반 음식 지식 ≠ 특정 가게의 실제 레시피 · 할랄 인증 · 메뉴별 맵기","textPreview":"일반 음식 지식 ≠ 특정 가게의 실제 레시피 · 할랄 인증 · 메뉴별 맵기","textChars":41,"textLines":1,"bbox":[252,621,920,28]}
+{"kind":"textbox","id":"sh/tcnetsrm","slide":2,"name":"footer-2","text":"YOBI · 근거 기반 AI 푸드 컨시어지","textPreview":"YOBI · 근거 기반 AI 푸드 컨시어지","textChars":23,"textLines":1,"bbox":[72,684,420,18]}
+{"kind":"textbox","id":"sh/udwfmxsr","slide":2,"name":"page-2","text":"02 / 03","textPreview":"02 / 03","textChars":7,"textLines":1,"bbox":[1100,684,108,18]}
+{"kind":"notes","id":"nt/j4ysqr","slide":2,"text":"음식 지식 Wiki는 기존에 있던 일반 서비스 명칭이 아니라 YOBI가 만든 내부 지식 계층입니다. 서로 다른 메뉴명을 cuisine-family-variant 개념에 연결하고, 이름과 별칭·핵심 재료와 조리 방식·맛과 식감·문화 맥락을 출처와 검토 상태와 함께 버전 관리합니다. 이 문서를 문단 단위로 나누고 임베딩해 RAG 근거로 씁니다. 중요한 경계는 일반 음식 지식이 특정 가게의 실제 레시피나 인증을 대신하지 않는다는 점입니다.\n\n[Sources]\n- /Users/kimjunggil/Documents/YOBI/mvp/docs/ARCHITECTURE.md, lines 93-115, accessed 2026-08-17\n- /Users/kimjunggil/Documents/YOBI/mvp/docs/RAG_DESIGN.md, lines 58-84, accessed 2026-08-17\n- /Users/kimjunggil/Documents/YOBI/mvp/knowledge/dishes/korean/rice/gimbap.md, accessed 2026-08-17\n- /Users/kimjunggil/Documents/YOBI/mvp/knowledge/dishes/korean/rice/gimbap/tuna-gimbap.md, accessed 2026-08-17"}
+{"kind":"slide","id":"sl/j3idyp","slide":3,"title":"03 · TECH ARCHITECTURE / LLM","textShapes":34}
+{"kind":"shape","id":"sh/7e9grmtg","slide":3,"name":"ambient-glow-top","bbox":[980,0,300,300]}
+{"kind":"shape","id":"sh/sfix0ru1","slide":3,"name":"ambient-glow-bottom","bbox":[0,540,260,180]}
+{"kind":"shape","id":"sh/tgrytcbm","slide":3,"name":"accent-rail","bbox":[42,36,4,648]}
+{"kind":"textbox","id":"sh/i9gfuxcz","slide":3,"name":"section-3","text":"03 · TECH ARCHITECTURE / LLM","textPreview":"03 · TECH ARCHITECTURE / LLM","textChars":28,"textLines":1,"bbox":[72,34,360,24]}
+{"kind":"textbox","id":"sh/japgn2tk","slide":3,"name":"wordmark-3","text":"YOBI  /  SPACE VECTOR","textPreview":"YOBI  /  SPACE VECTOR","textChars":21,"textLines":1,"bbox":[927,34,281,24]}
+{"kind":"textbox","id":"sh/kbixw7u5","slide":3,"name":"title-3-1","text":"Hybrid RAG는 근거를 찾고,","textPreview":"Hybrid RAG는 근거를 찾고,","textChars":19,"textLines":1,"bbox":[72,78,840,62]}
+{"kind":"textbox","id":"sh/5crypcba","slide":3,"name":"title-3-2","text":"LLM은 그 근거만 읽기 좋게 씁니다","textPreview":"LLM은 그 근거만 읽기 좋게 씁니다","textChars":20,"textLines":1,"bbox":[72,137,900,64]}
+{"kind":"textbox","id":"sh/algfqxcn","slide":3,"name":"subtitle-3","text":"SQL의 정확성 +\nVector Search의 의미 검색","textPreview":"SQL의 정확성 + | Vector Search의 의미 검색","textChars":31,"textLines":2,"bbox":[925,102,283,70]}
+{"kind":"shape","id":"sh/bmpwj2t8","slide":3,"bbox":[72,211,1136,0]}
+{"kind":"textbox","id":"sh/nutoj29g","slide":3,"name":"retrieve-label","text":"RETRIEVE  /  ORACLE AI DATABASE 26ai","textPreview":"RETRIEVE  /  ORACLE AI DATABASE 26ai","textChars":36,"textLines":1,"bbox":[72,244,544,24]}
+{"kind":"shape","id":"sh/2tk7qxsv","slide":3,"name":"oracle-surface","bbox":[72,281,592,286]}
+{"kind":"shape","id":"sh/pwv6lsrm","slide":3,"name":"one-db-badge","bbox":[96,303,325,28]}
+{"kind":"textbox","id":"sh/ovmps7a1","slide":3,"name":"one-db-badge-text","text":"ONE DATABASE · NO SEPARATE VECTOR DB","textPreview":"ONE DATABASE · NO SEPARATE VECTOR DB","textChars":36,"textLines":1,"bbox":[96,304,325,26]}
+{"kind":"textbox","id":"sh/bidon29s","slide":3,"name":"sql-lane-label","text":"EXACT / SQL","textPreview":"EXACT / SQL","textChars":11,"textLines":1,"bbox":[96,354,210,24]}
+{"kind":"textbox","id":"sh/ah47uxs7","slide":3,"name":"sql-lane-copy","text":"배달 가능 · 판매 상태\n가격 · 검토된 취향 지원","textPreview":"배달 가능 · 판매 상태 | 가격 · 검토된 취향 지원","textChars":28,"textLines":2,"bbox":[96,389,230,63]}
+{"kind":"textbox","id":"sh/xkv6pcry","slide":3,"name":"sql-lane-caption","text":"객관 조건과 후보를 확정","textPreview":"객관 조건과 후보를 확정","textChars":13,"textLines":1,"bbox":[96,467,230,26]}
+{"kind":"shape","id":"sh/cjmpw7qd","slide":3,"bbox":[360,350,0,152]}
+{"kind":"textbox","id":"sh/rm9obi98","slide":3,"name":"vector-lane-label","text":"VECTOR / LEXICAL","textPreview":"VECTOR / LEXICAL","textChars":16,"textLines":1,"bbox":[390,354,235,24]}
+{"kind":"textbox","id":"sh/q10nids3","slide":3,"name":"vector-lane-copy","text":"음식 Wiki 문단의\n의미·표현 유사도 검색","textPreview":"음식 Wiki 문단의 | 의미·표현 유사도 검색","textChars":24,"textLines":2,"bbox":[390,389,245,63]}
+{"kind":"textbox","id":"sh/uh8rqlsb","slide":3,"name":"vector-lane-caption","text":"설명에 쓸 근거만 제한","textPreview":"설명에 쓸 근거만 제한","textChars":12,"textLines":1,"bbox":[390,467,230,26]}
+{"kind":"shape","id":"sh/vihsjqtw","slide":3,"name":"evidence-pool-bar","bbox":[96,517,544,35]}
+{"kind":"textbox","id":"sh/gjq9svah","slide":3,"name":"evidence-pool-copy","text":"FROZEN TOP 3  +  EVIDENCE IDs  +  WIKI PASSAGES","textPreview":"FROZEN TOP 3  +  EVIDENCE IDs  +  WIKI PASSAGES","textChars":47,"textLines":1,"bbox":[112,525,512,18]}
+{"kind":"shape","id":"sh/hkzalgb2","slide":3,"name":"rag-llm-node","bbox":[724,344,178,178]}
+{"kind":"textbox","id":"sh/mdorm1cf","slide":3,"name":"generate-label","text":"GENERATE","textPreview":"GENERATE","textChars":8,"textLines":1,"bbox":[751,370,124,22]}
+{"kind":"textbox","id":"sh/7ehsf6t0","slide":3,"name":"rag-model-name","text":"GPT-OSS\n120B","textPreview":"GPT-OSS | 120B","textChars":12,"textLines":2,"bbox":[750,404,126,64]}
+{"kind":"textbox","id":"sh/8fq9obul","slide":3,"name":"rag-model-contract","text":"strict JSON · 1회","textPreview":"strict JSON · 1회","textChars":16,"textLines":1,"bbox":[749,481,128,22]}
+{"kind":"shape","id":"sh/9gzahgb6","slide":3,"bbox":[664,424,60,9]}
+{"kind":"textbox","id":"sh/ypori1cj","slide":3,"name":"validate-label","text":"VALIDATE  /  SHOW","textPreview":"VALIDATE  /  SHOW","textChars":17,"textLines":1,"bbox":[958,244,250,24]}
+{"kind":"shape","id":"sh/zqx8r6to","slide":3,"name":"validator-surface","bbox":[958,305,250,142]}
+{"kind":"textbox","id":"sh/143ux4v6","slide":3,"name":"validator-title","text":"STRICT VALIDATOR","textPreview":"STRICT VALIDATOR","textChars":16,"textLines":1,"bbox":[980,327,206,24]}
+{"kind":"textbox","id":"sh/03udozu1","slide":3,"name":"validator-copy","text":"같은 메뉴 ID · 같은 순서\n선택 조건 · 근거 ID 범위","textPreview":"같은 메뉴 ID · 같은 순서 | 선택 조건 · 근거 ID 범위","textChars":33,"textLines":2,"bbox":[980,367,206,58]}
+{"kind":"shape","id":"sh/f2lcvudg","slide":3,"bbox":[902,376,56,57]}
+{"kind":"shape","id":"sh/e1cvmpcv","slide":3,"name":"grounded-cards","bbox":[958,475,250,92]}
+{"kind":"textbox","id":"sh/dg3utkva","slide":3,"name":"grounded-cards-title","text":"GROUNDED CARDS","textPreview":"GROUNDED CARDS","textChars":14,"textLines":1,"bbox":[980,491,206,22]}
+{"kind":"textbox","id":"sh/sfudkfup","slide":3,"name":"grounded-cards-copy","text":"서버 사실 + 근거 기반\n설명","textPreview":"서버 사실 + 근거 기반 | 설명","textChars":16,"textLines":2,"bbox":[980,520,206,43]}
+{"kind":"shape","id":"sh/relcrud4","slide":3,"bbox":[1083,447,0,28]}
+{"kind":"shape","id":"sh/qdsbipwj","slide":3,"name":"evidence-strip","bbox":[72,604,1136,58]}
+{"kind":"textbox","id":"sh/5cjupkve","slide":3,"name":"metric-menus","text":"15,085","textPreview":"15,085","textChars":6,"textLines":1,"bbox":[94,616,108,27]}
+{"kind":"textbox","id":"sh/4batgfet","slide":3,"text":"MENUS","textPreview":"MENUS","textChars":5,"textLines":1,"bbox":[94,643,108,14]}
+{"kind":"textbox","id":"sh/4f2lwjup","slide":3,"name":"metric-concepts","text":"114","textPreview":"114","textChars":3,"textLines":1,"bbox":[236,616,96,27]}
+{"kind":"textbox","id":"sh/5gb2pova","slide":3,"text":"WIKI CONCEPTS","textPreview":"WIKI CONCEPTS","textChars":13,"textLines":1,"bbox":[222,643,124,14]}
+{"kind":"textbox","id":"sh/idk3u9cj","slide":3,"name":"metric-chunks","text":"1,299","textPreview":"1,299","textChars":5,"textLines":1,"bbox":[378,616,96,27]}
+{"kind":"textbox","id":"sh/jetkned4","slide":3,"text":"CHUNKS","textPreview":"CHUNKS","textChars":6,"textLines":1,"bbox":[378,643,96,14]}
+{"kind":"textbox","id":"sh/sjml03ul","slide":3,"name":"metric-mappings","text":"1,955","textPreview":"1,955","textChars":5,"textLines":1,"bbox":[512,616,96,27]}
+{"kind":"textbox","id":"sh/tkvmtov6","slide":3,"text":"HIGH-CONFIDENCE MAPPINGS","textPreview":"HIGH-CONFIDENCE MAPPINGS","textChars":24,"textLines":1,"bbox":[480,643,160,14]}
+{"kind":"shape","id":"sh/6h43ytcv","slide":3,"bbox":[674,618,0,32]}
+{"kind":"textbox","id":"sh/ridkrydg","slide":3,"name":"metric-live","text":"LIVE 5 / 5","textPreview":"LIVE 5 / 5","textChars":10,"textLines":1,"bbox":[716,615,137,26]}
+{"kind":"textbox","id":"sh/8nilozeh","slide":3,"name":"metric-live-caption","text":"GROUNDED · DIVERSE · STABLE","textPreview":"GROUNDED · DIVERSE · STABLE","textChars":27,"textLines":1,"bbox":[866,620,315,24]}
+{"kind":"textbox","id":"sh/9or2h4v2","slide":3,"name":"footer-3","text":"YOBI · 근거 기반 AI 푸드 컨시어지","textPreview":"YOBI · 근거 기반 AI 푸드 컨시어지","textChars":23,"textLines":1,"bbox":[72,684,420,18]}
+{"kind":"textbox","id":"sh/b2hon2xk","slide":3,"name":"page-3","text":"03 / 03","textPreview":"03 / 03","textChars":7,"textLines":1,"bbox":[1100,684,108,18]}
+{"kind":"notes","id":"nt/j3idyp","slide":3,"text":"RAG는 모델을 다시 학습시키는 방식이 아니라, 질문과 맞는 근거를 먼저 찾아 프롬프트에 붙이는 구조입니다. YOBI는 Oracle AI Database 26ai 한 곳에서 SQL의 객관 조건과 AI Vector Search의 의미 검색을 결합합니다. 서버가 상위 3개와 순서를 동결하고 근거 ID를 붙인 뒤, GPT-OSS 120B가 한 번만 설명을 생성합니다. 마지막 validator가 메뉴·순서·조건·근거 범위를 검사하고, 실패하면 추가 호출 없이 같은 메뉴를 fallback 설명으로 보여 줍니다.\n\n[Sources]\n- /Users/kimjunggil/Documents/YOBI/mvp/docs/RAG_DESIGN.md, lines 86-170, accessed 2026-08-17\n- /Users/kimjunggil/Documents/YOBI/mvp/docs/IMPLEMENTATION_STATUS.md, lines 5-30 and 52-65, accessed 2026-08-17\n- /Users/kimjunggil/Documents/YOBI/mvp/docs/TEST_REPORT.md, lines 23-78, accessed 2026-08-17\n- /Users/kimjunggil/Documents/YOBI/mvp/backend/app/core/config.py, model and embedding settings, accessed 2026-08-17"}

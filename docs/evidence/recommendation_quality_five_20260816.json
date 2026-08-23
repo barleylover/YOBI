@@ -1,0 +1,83 @@
+{
+  "cases": [
+    {
+      "error_codes": [],
+      "evidence_count": 12,
+      "language": "en",
+      "latency_ms": 6709.189,
+      "matched_group_count_min": 1,
+      "menu_order_sha256": "7ada9b2688ffe21abfc2cf07aff2319140c07987aec9a851a29cd7c485de5481",
+      "merchant_count": 3,
+      "name": "single_en",
+      "required_group_count": 1,
+      "result_count": 3,
+      "status": "PASS"
+    },
+    {
+      "error_codes": [],
+      "evidence_count": 12,
+      "language": "ko",
+      "latency_ms": 7336.52,
+      "matched_group_count_min": 1,
+      "menu_order_sha256": "7ada9b2688ffe21abfc2cf07aff2319140c07987aec9a851a29cd7c485de5481",
+      "merchant_count": 3,
+      "name": "single_ko",
+      "required_group_count": 1,
+      "result_count": 3,
+      "status": "PASS"
+    },
+    {
+      "error_codes": [],
+      "evidence_count": 12,
+      "language": "en",
+      "latency_ms": 7860.266,
+      "matched_group_count_min": 2,
+      "menu_order_sha256": "64f22ec61050a92db940223eee8b145bf78a02cc092334c445b135b17b047e71",
+      "merchant_count": 3,
+      "name": "multi_and",
+      "required_group_count": 2,
+      "result_count": 3,
+      "status": "PASS"
+    },
+    {
+      "error_codes": [],
+      "evidence_count": 12,
+      "language": "en",
+      "latency_ms": 7674.76,
+      "matched_group_count_min": 0,
+      "menu_order_sha256": "e0ed22f08472f83a15a1e90033f81501d38c11283f5c15c27addd9e718b47c99",
+      "merchant_count": 3,
+      "name": "price_only",
+      "required_group_count": 0,
+      "result_count": 3,
+      "status": "PASS"
+    },
+    {
+      "error_codes": [],
+      "evidence_count": 12,
+      "language": "en",
+      "latency_ms": 7024.413,
+      "matched_group_count_min": 1,
+      "menu_order_sha256": "7ada9b2688ffe21abfc2cf07aff2319140c07987aec9a851a29cd7c485de5481",
+      "merchant_count": 3,
+      "name": "single_repeat",
+      "required_group_count": 1,
+      "result_count": 3,
+      "status": "PASS"
+    }
+  ],
+  "completed": 5,
+  "gate": "recommendation-quality-five",
+  "latency_ms": {
+    "max": 7860.266,
+    "median": 7336.52,
+    "percentile_claim": "not_made_for_five_samples"
+  },
+  "release": {
+    "application_release_id": "20260816T034237Z-e9417303ad55",
+    "catalog_version": "preference-catalog-2026.08.12-v2"
+  },
+  "requested": 5,
+  "server_order_stable_across_language_and_repeat": true,
+  "status": "PASS"
+}
