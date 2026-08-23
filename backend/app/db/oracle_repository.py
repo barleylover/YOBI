@@ -84,6 +84,7 @@ from app.domain.models import (
     CheckoutCreate,
     CountryAwareMenuPresentationCacheEntry,
     DeliveryPreferenceInput,
+    DeliveryPreferenceSummary,
     Evidence,
     EvidenceStatus,
     MenuPresentationCacheEntry,
@@ -8232,24 +8233,26 @@ class OracleYobiRepository:
             minimum_order_amount=minimum_order_amount,
             minimum_order_shortfall=minimum_order_shortfall,
             delivery_preference=(
-                {
-                    "handoff_method": str(delivery_preference["handoff_method"]),
-                    "cutlery": bool(delivery_preference["cutlery"]),
-                    "ring_bell": bool(delivery_preference["ring_bell"]),
-                    "front_desk": bool(delivery_preference["front_desk"]),
-                    "user_note": _oracle_logical_text(
-                        delivery_preference.get("user_note")
-                    )
-                    or "",
-                    "korean_note": _oracle_logical_text(
-                        delivery_preference.get("korean_note")
-                    )
-                    or "",
-                    "back_translation": _oracle_logical_text(
-                        delivery_preference.get("back_translation")
-                    )
-                    or "",
-                }
+                DeliveryPreferenceSummary.model_validate(
+                    {
+                        "handoff_method": str(delivery_preference["handoff_method"]),
+                        "cutlery": bool(delivery_preference["cutlery"]),
+                        "ring_bell": bool(delivery_preference["ring_bell"]),
+                        "front_desk": bool(delivery_preference["front_desk"]),
+                        "user_note": _oracle_logical_text(
+                            delivery_preference.get("user_note")
+                        )
+                        or "",
+                        "korean_note": _oracle_logical_text(
+                            delivery_preference.get("korean_note")
+                        )
+                        or "",
+                        "back_translation": _oracle_logical_text(
+                            delivery_preference.get("back_translation")
+                        )
+                        or "",
+                    }
+                )
                 if delivery_preference is not None
                 else None
             ),
