@@ -1,4 +1,32 @@
-import type { DietaryFiltersV2, OptionGroup, OptionItem } from "../types";
+import type { DietaryFiltersV2, MenuSummary, OptionGroup, OptionItem } from "../types";
+
+const OBVIOUS_ANIMAL_MENU_TOKENS = [
+  "PORK", "BEEF", "MEAT", "CHICKEN", "FISH", "SEAFOOD", "SHRIMP", "PRAWN",
+  "OCTOPUS", "TAKO WASABI", "CRAB", "LOBSTER", "TUNA", "SALMON", "EGG",
+  "CHEESE", "MILK", "DAIRY", "GALBI", "GOPCHANG", "DAECHANG", "MAKCHANG",
+  "돼지", "한돈", "삼겹", "제육", "족발", "보쌈", "돈가스", "돈까스", "돈카츠",
+  "돈코츠", "차슈", "베이컨", "햄", "소시지", "페퍼로니", "소고기", "쇠고기",
+  "비프", "갈비", "곱창", "대창", "막창", "닭", "치킨", "생선", "새우", "오징어",
+  "문어", "낙지", "주꾸미", "쭈꾸미", "타코와사비", "연어", "참치", "고등어",
+  "장어", "명태", "꼬막", "조개", "홍합", "전복", "게살", "꽃게", "킹크랩",
+  "랍스터", "사시미", "육회", "회덮밥", "해물", "계란", "달걀", "치즈", "우유",
+] as const;
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function menuHasObviousVeganConflict(menu: MenuSummary) {
+  const text = [menu.name_ko, menu.name_en, menu.description, menu.cultural_description]
+    .filter(Boolean)
+    .join(" ")
+    .toUpperCase();
+  return OBVIOUS_ANIMAL_MENU_TOKENS.some((token) => (
+    /^[A-Z ]+$/.test(token)
+      ? new RegExp(`(?<![A-Z])${escapeRegExp(token)}(?![A-Z])`).test(text)
+      : text.includes(token)
+  ));
+}
 
 export interface OptionConflicts {
   breaksHalal: boolean;

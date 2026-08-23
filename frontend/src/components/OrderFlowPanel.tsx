@@ -23,6 +23,7 @@ import {
 import { getRecommendationCopy } from "../lib/recommendationI18n";
 import { getRedesignCopy } from "../lib/redesignI18n";
 import {
+  menuHasObviousVeganConflict,
   optionDietaryConflicts,
   optionGroupHasNoneChoice,
   planDefaultOptionSelections,
@@ -174,7 +175,10 @@ export function OrderFlowPanel({
         activeMenu.merchant_id,
         preview.items.map((item) => item.menu_id),
       );
-      setPhase(otherMenus.length > 0 ? "more" : "delivery");
+      const compatibleMenus = dietaryFilters?.vegan
+        ? otherMenus.filter((candidate) => !menuHasObviousVeganConflict(candidate))
+        : otherMenus;
+      setPhase(compatibleMenus.length > 0 ? "more" : "delivery");
     } catch {
       // If availability cannot be proven, skip the optional upsell instead of showing a dead end.
       setPhase("delivery");
@@ -446,14 +450,25 @@ export function OrderFlowPanel({
       limit: 12,
       exclude_menu_ids: excludedMenuIds,
     });
-    if (page.items.length > 0 || cursor) return page;
+    if (page.items.length > 0 || cursor) {
+      return {
+        ...page,
+        items: dietaryFilters?.vegan
+          ? page.items.filter((item) => !menuHasObviousVeganConflict(item.menu))
+          : page.items,
+      };
+    }
     const catalogMenus = await api.getMerchantMenus(
       sessionId,
       activeMenu.merchant_id,
       excludedMenuIds,
     );
     return {
-      items: catalogMenus.map(catalogFallbackPresentation),
+      items: catalogMenus
+        .filter((candidate) => (
+          !dietaryFilters?.vegan || !menuHasObviousVeganConflict(candidate)
+        ))
+        .map(catalogFallbackPresentation),
       next_cursor: null,
     };
   }
