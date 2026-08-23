@@ -31,7 +31,7 @@ from app.domain.structured_recommendation import (
     RecommendationRequestStatus,
 )
 from app.knowledge.preference_support import support_manifest_sha256
-from app.main import app
+from app.main import _preference_catalog_etag, app
 from app.rag.embeddings import deterministic_embedding
 
 
@@ -203,6 +203,24 @@ def test_preference_catalog_etag_replays_support_manifest(repository) -> None:  
     assert cross_locale.status_code == 200
     assert first.headers["cache-control"] == "private, max-age=300"
     assert "vary" not in first.headers
+
+
+def test_preference_catalog_etag_changes_with_visible_payload_content() -> None:
+    base = {
+        "locale": "en",
+        "catalog_version": "same-version",
+        "country_spice_profiles": [
+            {"country_code": "US", "spice_scale_anchors": [{"familiar_dish": "Old"}]}
+        ],
+    }
+    changed = {
+        **base,
+        "country_spice_profiles": [
+            {"country_code": "US", "spice_scale_anchors": [{"familiar_dish": "New"}]}
+        ],
+    }
+
+    assert _preference_catalog_etag(base) != _preference_catalog_etag(changed)
 
 
 def test_retry_excludes_seen_menus_and_returns_empty_when_exhausted(

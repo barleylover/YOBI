@@ -552,6 +552,18 @@ def _etag_matches(if_none_match: str | None, current_etag: str) -> bool:
     return False
 
 
+def _preference_catalog_etag(payload: dict[str, Any]) -> str:
+    """Bind the validator to every locale-specific field that reaches the browser."""
+
+    canonical_payload = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f'"{hashlib.sha256(canonical_payload.encode()).hexdigest()}"'
+
+
 @app.get("/api/v1/recommendation/preferences/catalog")
 def get_recommendation_preference_catalog(
     response: Response,
@@ -567,17 +579,7 @@ def get_recommendation_preference_catalog(
         **payload,
         "locale": normalize_preference_locale(str(payload.get("locale") or locale)),
     }
-    etag_seed = ":".join(
-        (
-            str(payload.get("locale", "en")),
-            str(payload.get("catalog_version", "")),
-            str(payload.get("knowledge_release_id", "")),
-            str(payload.get("support_manifest_sha256", "")),
-            str(payload.get("feature_manifest_sha256", "")),
-            str(payload.get("ranking_policy_version", "")),
-        )
-    )
-    etag = f'"{hashlib.sha256(etag_seed.encode()).hexdigest()}"'
+    etag = _preference_catalog_etag(payload)
     response.headers["ETag"] = etag
     response.headers["Cache-Control"] = "private, max-age=300"
     if _etag_matches(if_none_match, etag):
