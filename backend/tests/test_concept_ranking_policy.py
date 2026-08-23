@@ -957,7 +957,7 @@ def test_exact_only_query_uses_materialized_wiki_eligibility_before_menu_join(
     assert "per_merchant_limit" not in preview.parameters
 
 
-def test_synthetic_demo_ranking_sql_is_stable_and_source_counts_take_priority() -> None:
+def test_synthetic_demo_ranking_sql_is_stable_and_blends_source_counts() -> None:
     expressions = food_ranking_sql(
         "sqlite",
         menu_id="menu_id",
@@ -995,10 +995,11 @@ def test_synthetic_demo_ranking_sql_is_stable_and_source_counts_take_priority() 
             """
         ).fetchone()
         assert source_row is not None
+        prepared_source_metrics = synthetic_demo_ranking_metrics("menu-source")
         assert dict(source_row) == {
             "review_count": 42,
-            "order_count": 309,
-            "korean_popularity": 67,
+            "order_count": prepared_source_metrics["order_count"] + 309,
+            "korean_popularity": prepared_source_metrics["korean_popularity"] + 67,
             "basis": "SOURCE_COUNTS",
         }
     finally:

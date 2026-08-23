@@ -91,7 +91,7 @@ def food_ranking_sql(
     menu_review_count: str,
     merchant_review_count: str,
 ) -> FoodRankingSql:
-    """Build the identical SQLite/Oracle source-first ranking expressions."""
+    """Build identical SQLite/Oracle ranking expressions for the prepared demo."""
 
     missing_synthetic_source = (
         f"({is_synthetic}=1 AND COALESCE({menu_review_count},0)=0 "
@@ -128,12 +128,12 @@ def food_ranking_sql(
         ),
         order_count=(
             f"CASE WHEN {missing_synthetic_source} THEN {order_demo} "
-            f"ELSE COALESCE({menu_review_count},0)*7+"
+            f"ELSE {order_demo}+COALESCE({menu_review_count},0)*7+"
             f"COALESCE({merchant_review_count},0)*3 END"
         ),
         korean_popularity=(
             f"CASE WHEN {missing_synthetic_source} THEN {popularity_demo} "
-            f"ELSE COALESCE({menu_review_count},0)+"
+            f"ELSE {popularity_demo}+COALESCE({menu_review_count},0)+"
             f"COALESCE({merchant_review_count},0)*5 END"
         ),
         basis=(
