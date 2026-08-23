@@ -85,7 +85,7 @@ export function getRecommendationCopy(language: SupportedLanguage) {
       halalCertified: "Halal-friendly information included",
       halalScope: "Information scope",
       spiceTitle: "Preferred spice level",
-      spiceHelp: "Compare the menu with the familiar spice baseline for your selected country.",
+      spiceHelp: "Choose an inclusive range from level 1 to 5. Levels 2 and 4 include familiar Scoville-based examples.",
       experienceNotice: "Review the menu and delivery details before continuing.",
     };
   }
@@ -97,7 +97,7 @@ export function getRecommendationCopy(language: SupportedLanguage) {
       halalCertified: "할랄 친화 정보 있음",
       halalScope: "정보 범위",
       spiceTitle: "선호하는 맵기",
-      spiceHelp: "선택한 국가에서 익숙한 맵기를 기준으로 비교해 고르세요.",
+      spiceHelp: "1단계부터 5단계 사이에서 원하는 맵기 범위를 고르세요. 2단계와 4단계에는 스코빌 기준 예시가 있어요.",
       experienceNotice: "계속하기 전 메뉴와 배달 정보를 확인해 주세요.",
     };
   }
@@ -108,7 +108,7 @@ export function getRecommendationCopy(language: SupportedLanguage) {
     halalCertified: "ハラール対応の情報あり",
     halalScope: "情報の範囲",
     spiceTitle: "好みの辛さ",
-    spiceHelp: "選択した国で慣れ親しんだ辛さを基準に選んでください。",
+    spiceHelp: "レベル1〜5から希望する辛さの範囲を選んでください。レベル2と4にはスコヴィル値を使った目安があります。",
     experienceNotice: "続ける前にメニューと配達情報を確認してください。",
   };
 }

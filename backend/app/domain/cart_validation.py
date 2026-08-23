@@ -22,7 +22,9 @@ def structured_v3_cart_error(
         return CART_MENU_NO_LONGER_ELIGIBLE
 
     spice_matches = (
-        spice_level < country_spice_baseline
+        criteria.spice_range.min <= spice_level <= criteria.spice_range.max
+        if criteria.spice_range is not None
+        else spice_level < country_spice_baseline
         if criteria.spice_preference == "LESS"
         else spice_level > country_spice_baseline
         if criteria.spice_preference == "MORE"

@@ -11,7 +11,15 @@ import type {
   RestaurantNoteTranslation,
 } from "../types";
 import { useI18n } from "../lib/i18n";
-import { asSupportedLanguage, LANGUAGE_META, menuName, merchantName, travelerOptionLabel } from "../lib/locale";
+import {
+  asSupportedLanguage,
+  LANGUAGE_META,
+  localizeDemoAddressSummary,
+  localizedVeganWarning,
+  menuName,
+  merchantName,
+  travelerOptionLabel,
+} from "../lib/locale";
 import { getRecommendationCopy } from "../lib/recommendationI18n";
 import { getRedesignCopy } from "../lib/redesignI18n";
 import {
@@ -73,7 +81,7 @@ export function OrderFlowPanel({
   const [editingCartItemId, setEditingCartItemId] = useState<string | null>(null);
   const [noteTouched, setNoteTouched] = useState(false);
   const [handoffMethod, setHandoffMethod] = useState<HandoffMethod>("front_desk");
-  const [includeCutlery, setIncludeCutlery] = useState(true);
+  const [includeCutlery, setIncludeCutlery] = useState(false);
   const [ringBell, setRingBell] = useState(false);
   const [upsellHistory, setUpsellHistory] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -415,17 +423,48 @@ export function OrderFlowPanel({
     }
   }
 
+  function catalogFallbackPresentation(nextMenu: MenuSummary): MerchantMenuPresentation {
+    return {
+      menu: nextMenu,
+      localized_title: menuName(nextMenu, language),
+      localized_subtitle: null,
+      yobi_short_explanation: dynamicCopy.catalogDescription,
+      yobi_long_explanation: dynamicCopy.catalogDescription,
+      source_description: language === "한국어" ? nextMenu.description : "",
+      review_summary: "",
+      country_preference: { country_code: "ZZ", preference_percent: 0, sample_size: 0 },
+      evidence_ids: [],
+      review_ids: [],
+      generation_model: "CATALOG_FALLBACK",
+    };
+  }
+
+  async function merchantPresentationPage(cursor: string | null) {
+    const excludedMenuIds = cart?.items.map((item) => item.menu_id) ?? [];
+    const page = await api.getMerchantMenuPresentations(sessionId, activeMenu.merchant_id, {
+      cursor,
+      limit: 12,
+      exclude_menu_ids: excludedMenuIds,
+    });
+    if (page.items.length > 0 || cursor) return page;
+    const catalogMenus = await api.getMerchantMenus(
+      sessionId,
+      activeMenu.merchant_id,
+      excludedMenuIds,
+    );
+    return {
+      items: catalogMenus.map(catalogFallbackPresentation),
+      next_cursor: null,
+    };
+  }
+
   async function loadMerchantMenus(cursor: string | null, replace = false) {
     if (!cart || loadingMoreMenusRef.current) return;
     loadingMoreMenusRef.current = true;
     setLoadingMoreMenus(true);
     setError("");
     try {
-      const page = await api.getMerchantMenuPresentations(sessionId, activeMenu.merchant_id, {
-        cursor,
-        limit: 12,
-        exclude_menu_ids: cart.items.map((item) => item.menu_id),
-      });
+      const page = await merchantPresentationPage(cursor);
       setMerchantMenus((current) => {
         const merged = replace ? page.items : [...current, ...page.items];
         return Array.from(new Map(merged.map((item) => [item.menu.menu_id, item])).values());
@@ -444,10 +483,7 @@ export function OrderFlowPanel({
     setBusy(true);
     setError("");
     try {
-      const page = await api.getMerchantMenuPresentations(sessionId, activeMenu.merchant_id, {
-        limit: 12,
-        exclude_menu_ids: cart.items.map((item) => item.menu_id),
-      });
+      const page = await merchantPresentationPage(null);
       setMerchantMenus(page.items);
       setNextMenuCursor(page.next_cursor ?? null);
       setUpsellHistory((current) => [...current, copy.yesMore]);
@@ -637,7 +673,13 @@ export function OrderFlowPanel({
                     </button>
                     {(breaksHalal || breaksVegan || needsVeganCheck) && (
                       <p className={breaksHalal || breaksVegan ? "v2-option-guidance conflict" : "v2-option-guidance"}>
-                        {breaksHalal ? recommendationCopy.halalHelp : option.vegan_warning || recommendationCopy.veganChecks}
+                        {breaksHalal
+                          ? recommendationCopy.halalHelp
+                          : localizedVeganWarning(
+                              breaksVegan ? "CONFLICT" : "POSSIBLE_WITH_CHECKS",
+                              language,
+                              option.vegan_warning || recommendationCopy.veganChecks,
+                            )}
                       </p>
                     )}
                   </div>
@@ -859,7 +901,7 @@ export function OrderFlowPanel({
                 <span>{v2.deliverTo}</span>
                 <button type="button" onClick={changeAddress} disabled={busy}>{v2.editChip}</button>
               </div>
-              <p className="v2-review-address">{addressSummary}</p>
+              <p className="v2-review-address">{localizeDemoAddressSummary(addressSummary, language)}</p>
               <div className="v2-divider" />
               <div className="v2-review-label-row">
                 <span>{v2.yourMenu}</span>

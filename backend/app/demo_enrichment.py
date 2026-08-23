@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -246,7 +247,21 @@ def _number(seed: str, *parts: str) -> int:
 
 def _contains(text: str, tokens: tuple[str, ...]) -> bool:
     upper = text.upper()
-    return any(token.upper() in upper for token in tokens)
+    return any(
+        (
+            re.search(rf"(?<![A-Z]){re.escape(token.upper())}(?![A-Z])", upper)
+            is not None
+        )
+        if token.isascii()
+        else token.upper() in upper
+        for token in tokens
+    )
+
+
+def has_obvious_animal_ingredient(*text_parts: str) -> bool:
+    """Fail closed for obvious animal aliases in synthetic vegan demo data."""
+
+    return _contains(" ".join(part for part in text_parts if part), _ANIMAL_TOKENS)
 
 
 def build_country_profiles(release_id: str, seed: str) -> list[dict[str, Any]]:
@@ -288,7 +303,7 @@ def build_menu_profiles(
         basis = " ".join((menu.name_ko, menu.name_en, menu.description, *menu.feature_codes))
         basis_by_menu[menu.menu_id] = basis
         value = _number(seed, "menu", menu.menu_id)
-        has_animal = _contains(basis, _ANIMAL_TOKENS)
+        has_animal = has_obvious_animal_ingredient(basis)
         if not has_animal:
             eligible_for_vegan.append(menu.menu_id)
         vegan = not has_animal and value % 5 == 0

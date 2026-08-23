@@ -178,10 +178,22 @@ def _hard_eligibility_conditions(
         parameters["synthetic_enrichment_release_id"] = synthetic_enrichment_release_id
         parameters["price_min_krw"] = criteria.price_range_krw.min
         parameters["price_max_krw"] = criteria.price_range_krw.max
-        parameters["spice_reference_country"] = criteria.spice_reference_country
-        conditions.extend(
-            [
-                "menu.price BETWEEN :price_min_krw AND :price_max_krw",
+        conditions.append("menu.price BETWEEN :price_min_krw AND :price_max_krw")
+        if criteria.spice_range is not None:
+            parameters["spice_min_level"] = criteria.spice_range.min
+            parameters["spice_max_level"] = criteria.spice_range.max
+            conditions.append(
+                """EXISTS (
+                  SELECT 1 FROM synthetic_menu_profile synthetic_menu
+                  WHERE synthetic_menu.release_id=:synthetic_enrichment_release_id
+                    AND synthetic_menu.menu_id=menu.menu_id
+                    AND synthetic_menu.spice_level BETWEEN :spice_min_level AND :spice_max_level
+                )"""
+            )
+        else:
+            parameters["spice_reference_country"] = criteria.spice_reference_country
+            parameters["spice_preference"] = criteria.spice_preference
+            conditions.append(
                 """EXISTS (
                   SELECT 1 FROM synthetic_menu_profile synthetic_menu
                   JOIN synthetic_country_profile synthetic_country
@@ -197,10 +209,8 @@ def _hard_eligibility_conditions(
                       OR (:spice_preference='MORE'
                         AND synthetic_menu.spice_level>synthetic_country.spice_baseline)
                     )
-                )""",
-            ]
-        )
-        parameters["spice_preference"] = criteria.spice_preference
+                )"""
+            )
         if criteria.dietary_filters.halal_certified_only:
             conditions.append(
                 """EXISTS (

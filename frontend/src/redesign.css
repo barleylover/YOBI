@@ -1645,30 +1645,123 @@ body {
   color: #1677d2 !important;
 }
 
-.v2-relative-spice {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
-  width: 100%;
+.v2-spice-range-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface-subtle);
 }
 
-.v2-relative-spice button {
-  min-height: 46px;
-  padding: 8px 6px;
-  border: 1px solid var(--surface-border);
-  border-radius: 12px;
+.v2-spice-range-summary strong {
+  font-size: 13px;
+  color: var(--brand-primary);
+}
+
+.v2-spice-range-summary small {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.v2-spice-range {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  align-items: center;
+  width: 100%;
+  padding: 8px 0;
+}
+
+.v2-spice-range-track,
+.v2-spice-range-fill {
+  position: absolute;
+  top: 50%;
+  height: 8px;
+  border-radius: 999px;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.v2-spice-range-track {
+  left: 10%;
+  width: 80%;
+  background: var(--gray-200);
+}
+
+.v2-spice-range-fill {
+  left: var(--spice-range-start);
+  width: var(--spice-range-width);
+  min-width: 0;
+  background: var(--brand-primary);
+}
+
+.v2-spice-range button {
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  margin: 0 auto;
+  padding: 0;
+  border: 2px solid var(--surface-border);
+  border-radius: 50%;
   background: var(--surface-base);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 650;
   color: var(--text-default);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 800;
   cursor: pointer;
 }
 
-.v2-relative-spice button.selected {
+.v2-spice-range button.in-range {
   border-color: var(--brand-primary);
   background: var(--brand-soft);
   color: var(--brand-primary);
+}
+
+.v2-spice-range button.endpoint {
+  background: var(--brand-primary);
+  color: #fff;
+  box-shadow: 0 0 0 3px var(--surface-base);
+}
+
+.v2-spice-range button.pending {
+  box-shadow: 0 0 0 4px rgba(242, 57, 121, 0.2);
+  transform: scale(1.08);
+}
+
+.v2-spice-guide {
+  gap: 8px;
+  padding: 10px 0 0;
+}
+
+.v2-spice-guide > small {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.v2-spice-anchor-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0;
+}
+
+.v2-spice-anchor-grid p {
+  width: clamp(96px, 24vw, 132px);
+  margin: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--surface-border);
+  border-radius: 10px;
+  background: var(--surface-base);
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 1.4;
+  color: var(--text-default);
+  text-align: center;
+  justify-self: center;
 }
 
 .v2-price-range {

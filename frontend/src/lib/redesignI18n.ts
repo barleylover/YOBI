@@ -67,9 +67,11 @@ export interface RedesignCopy {
   spiceLess: string;
   spiceSimilar: string;
   spiceMore: string;
+  spiceRangeSelection: (minimum: number, maximum: number) => string;
+  spiceRangeInstruction: (firstEndpoint: number | null) => string;
   representativeSpice: (country: string, dish: string, level: number) => string;
   spiceScaleGuide: string;
-  spiceScaleAnchor: (level: number, familiarDish: string, koreanDish: string, shu: number) => string;
+  spiceScaleAnchor: (level: number, familiarDish: string, shuMin: number, shuMax: number) => string;
   priceRange: string;
   priceMinimum: string;
   priceMaximum: string;
@@ -202,9 +204,17 @@ const en: RedesignCopy = {
   spiceLess: "Less spicy",
   spiceSimilar: "About the same",
   spiceMore: "More spicy",
+  spiceRangeSelection: (minimum, maximum) => minimum === 1 && maximum === 5
+    ? "Any spice · levels 1–5"
+    : minimum === maximum
+      ? `Spice level ${minimum} only`
+      : `Spice levels ${minimum}–${maximum}`,
+  spiceRangeInstruction: (firstEndpoint) => firstEndpoint == null
+    ? "Tap the first endpoint, then tap the second. Tap the same level twice for an exact match."
+    : `Level ${firstEndpoint} selected. Tap the other endpoint, or tap ${firstEndpoint} again for this level only.`,
   representativeSpice: (country, dish, level) => `${country} reference: ${dish} · spice ${level}/5`,
-  spiceScaleGuide: "Two approximate reference anchors—not a medical or restaurant guarantee.",
-  spiceScaleAnchor: (level, familiarDish, koreanDish, shu) => `Level ${level}: ${familiarDish} ≈ ${koreanDish} · about ${shu.toLocaleString()} SHU`,
+  spiceScaleGuide: "Familiar anchors use approximate Scoville ranges. Ingredients and preparation can change perceived heat.",
+  spiceScaleAnchor: (level, familiarDish, shuMin, shuMax) => `Level ${level}: ${familiarDish} · ${shuMin === shuMax ? `about ${shuMin.toLocaleString()}` : `${shuMin.toLocaleString()}–${shuMax.toLocaleString()}`} SHU`,
   priceRange: "Price range",
   priceMinimum: "Minimum price",
   priceMaximum: "Maximum price",
@@ -339,9 +349,17 @@ const ko: RedesignCopy = {
   spiceLess: "기준보다 덜 맵게",
   spiceSimilar: "기준과 비슷하게",
   spiceMore: "기준보다 더 맵게",
+  spiceRangeSelection: (minimum, maximum) => minimum === 1 && maximum === 5
+    ? "맵기 제한 없음 · 1–5단계"
+    : minimum === maximum
+      ? `맵기 ${minimum}단계만`
+      : `맵기 ${minimum}–${maximum}단계`,
+  spiceRangeInstruction: (firstEndpoint) => firstEndpoint == null
+    ? "범위의 시작과 끝을 차례로 누르세요. 같은 단계를 두 번 누르면 그 단계만 선택됩니다."
+    : `${firstEndpoint}단계를 골랐어요. 다른 끝점을 누르거나, 같은 단계를 다시 눌러 정확히 선택하세요.`,
   representativeSpice: (country, dish, level) => `${country} 기준: ${dish} · 맵기 ${level}/5`,
-  spiceScaleGuide: "근사 비교 기준 두 가지예요. 의학적 기준이나 식당 보장은 아닙니다.",
-  spiceScaleAnchor: (level, familiarDish, koreanDish, shu) => `${level}단계: ${familiarDish} ≈ ${koreanDish} · 약 ${shu.toLocaleString()} SHU`,
+  spiceScaleGuide: "친숙한 예시는 근사 스코빌 범위 기준입니다. 재료와 조리법에 따라 체감 맵기는 달라질 수 있어요.",
+  spiceScaleAnchor: (level, familiarDish, shuMin, shuMax) => `${level}단계: ${familiarDish} · ${shuMin === shuMax ? `약 ${shuMin.toLocaleString()}` : `${shuMin.toLocaleString()}–${shuMax.toLocaleString()}`} SHU`,
   priceRange: "가격 범위",
   priceMinimum: "최소 가격",
   priceMaximum: "최대 가격",
@@ -437,10 +455,19 @@ const ja: RedesignCopy = {
   alwaysOn: "Kフードおすすめ", today: "今日", foundSummary: (menus, merchants) => `${merchants}店から${menus}品を見つけました。`,
   editChip: "編集", yobiPick: "YOBIのおすすめ", pickCount: (index, total) => `${index} / ${total}`,
   yogiyoLabel: "YOGIYO:", yobiLabel: "YOBI:", spiceLess: "基準より辛くない",
-  spiceSimilar: "基準と同じくらい", spiceMore: "基準より辛い", priceRange: "価格帯",
+  spiceSimilar: "基準と同じくらい", spiceMore: "基準より辛い",
+  spiceRangeSelection: (minimum, maximum) => minimum === 1 && maximum === 5
+    ? "辛さ指定なし・レベル1〜5"
+    : minimum === maximum
+      ? `辛さレベル${minimum}のみ`
+      : `辛さレベル${minimum}〜${maximum}`,
+  spiceRangeInstruction: (firstEndpoint) => firstEndpoint == null
+    ? "範囲の始点と終点を順にタップしてください。同じレベルを2回タップすると、そのレベルだけを選べます。"
+    : `レベル${firstEndpoint}を選びました。もう一方の端点、または同じレベルをもう一度タップしてください。`,
+  priceRange: "価格帯",
   representativeSpice: (country, dish, level) => `${country}の目安：${dish}・辛さ${level}/5`,
-  spiceScaleGuide: "おおよその比較基準です。医学的基準や店舗保証ではありません。",
-  spiceScaleAnchor: (level, familiarDish, koreanDish, shu) => `レベル${level}：${familiarDish} ≈ ${koreanDish}・約${shu.toLocaleString()} SHU`,
+  spiceScaleGuide: "身近な例はおおよそのスコヴィル値です。材料や調理法で体感の辛さは変わります。",
+  spiceScaleAnchor: (level, familiarDish, shuMin, shuMax) => `レベル${level}：${familiarDish}・${shuMin === shuMax ? `約${shuMin.toLocaleString()}` : `${shuMin.toLocaleString()}〜${shuMax.toLocaleString()}`} SHU`,
   priceMinimum: "最低価格", priceMaximum: "最高価格",
   countryPreference: "同じ国からの旅行者の好み", sampleSize: (count) => `${count.toLocaleString()}人を基準`,
   reviewSummary: "レビュー要約", spiceOk: (level) => `辛さ ${level}/5`,

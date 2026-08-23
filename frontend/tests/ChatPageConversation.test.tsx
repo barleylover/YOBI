@@ -120,7 +120,7 @@ const catalog: PreferenceCatalog = {
     label: `${country} examples`,
     levels: ([1, 2, 3, 4, 5] as const).map((level) => ({ level, label: `${level}`, example: `Food ${level}` })),
   })),
-  price_range_krw: { min: 8000, max: 25000, step: 1000 },
+  price_range_krw: { min: 4000, max: 50000, step: 1000 },
   country_spice_profiles: [
     { country_code: "KR", spice_baseline: 4, representative_dish: "Shin Ramyun" },
     { country_code: "US", spice_baseline: 2, representative_dish: "Buffalo wings" },
@@ -251,11 +251,12 @@ describe("ChatPage structured recommendation contract", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sweet" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Sweet" })).toHaveAttribute("aria-pressed", "true"));
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    expect(screen.getByRole("radio", { name: "About the same" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText("Any spice · levels 1–5")).toBeInTheDocument();
+    expect(screen.getByTestId("spice-range-selector")).toBeInTheDocument();
     expect(screen.getByRole("slider", { name: "Minimum price" })).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: /Halal-friendly only/ })).toBeEnabled();
     expect(screen.getByRole("switch", { name: /Vegan options only/ })).toBeEnabled();
-    expect(screen.getByText("United States reference: Buffalo wings · spice 2/5")).toBeInTheDocument();
+    expect(screen.queryByText(/United States reference/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Find my dish/ }));
 
     await waitFor(() => expect(putCriteria).toHaveBeenCalledWith(
@@ -264,8 +265,8 @@ describe("ChatPage structured recommendation contract", () => {
         schema_version: "3",
         cuisine_origins: ["KOREAN"],
         flavors: ["SWEET"],
-        spice_preference: "SIMILAR",
-        price_range_krw: { min: 8000, max: 25000 },
+        spice_range: { min: 1, max: 5 },
+        price_range_krw: { min: 6000, max: 50000 },
       }),
       0,
       catalog.catalog_version,
@@ -419,9 +420,9 @@ describe("ChatPage structured recommendation contract", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Cancel and edit conditions" }));
 
     await waitFor(() => expect(cancel).toHaveBeenCalledWith(session.session_id, pendingBatch.request_id));
-    expect(await screen.findByRole("radio", { name: "About the same" })).toBeInTheDocument();
+    expect(await screen.findByTestId("spice-range-selector")).toBeInTheDocument();
     resolveLate(batch);
-    await waitFor(() => expect(screen.getByRole("radio", { name: "About the same" })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("spice-range-selector")).toBeInTheDocument());
     expect(screen.queryByText("An easy Korean meal")).not.toBeInTheDocument();
     expect(useSessionStore.getState().recommendationPhase).toBe("SELECTING");
   });
@@ -519,7 +520,8 @@ describe("ChatPage structured recommendation contract", () => {
     await waitFor(() => expect(useSessionStore.getState().draftCriteria).toMatchObject({
       dietary_filters: { halal_certified_only: false, vegan: false },
       spice_preference: "MORE",
-      price_range_krw: { min: 8000, max: 25000 },
+      spice_range: { min: 1, max: 5 },
+      price_range_krw: { min: 6000, max: 50000 },
     }));
   });
 

@@ -182,9 +182,13 @@ def test_us_and_japan_spice_guides_have_two_localized_approximate_anchors() -> N
     assert [anchor["level"] for anchor in us] == [2, 4]
     assert [anchor["level"] for anchor in japan] == [2, 4]
     assert all(int(anchor["approximate_shu"]) > 0 for anchor in [*us, *japan])
-    assert us[0]["familiar_dish"] == "Mild Buffalo wings"
-    assert japan[0]["familiar_dish"] == "中辛カレー"
-    assert spice_scale_anchors("KR", "en") == []
+    assert all(
+        int(anchor["approximate_shu_min"]) <= int(anchor["approximate_shu_max"])
+        for anchor in [*us, *japan]
+    )
+    assert us[0]["familiar_dish"] == "Pepperoncini-topped pizza"
+    assert japan[0]["familiar_dish"] == "焼きししとう"
+    assert spice_scale_anchors("KR", "en") == us
 
 
 def test_production_size_coverage_counts_are_exact() -> None:

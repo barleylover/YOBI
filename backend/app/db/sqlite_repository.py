@@ -3199,16 +3199,18 @@ class SQLiteYobiRepository:
             synthetic_release_id = str(family["synthetic_enrichment_release_id"] or "")
             if not synthetic_release_id or not rows:
                 return [], {}, {}
-            baseline = connection.execute(
-                """
-                SELECT spice_baseline FROM synthetic_country_profile
-                WHERE release_id=? AND country_code=?
-                """,
-                (synthetic_release_id, criteria.spice_reference_country),
-            ).fetchone()
-            if baseline is None:
-                return [], {}, {}
-            spice_baseline = int(baseline["spice_baseline"])
+            spice_baseline: int | None = None
+            if criteria.spice_range is None:
+                baseline = connection.execute(
+                    """
+                    SELECT spice_baseline FROM synthetic_country_profile
+                    WHERE release_id=? AND country_code=?
+                    """,
+                    (synthetic_release_id, criteria.spice_reference_country),
+                ).fetchone()
+                if baseline is None:
+                    return [], {}, {}
+                spice_baseline = int(baseline["spice_baseline"])
             menu_ids_for_profile = [str(row["menu_id"]) for row in rows]
             placeholders = ",".join("?" for _ in menu_ids_for_profile)
             profiles = connection.execute(
@@ -3227,9 +3229,11 @@ class SQLiteYobiRepository:
                     return False
                 spice_level = int(profile["spice_level"])
                 spice_matches = (
-                    spice_level < spice_baseline
+                    criteria.spice_range.min <= spice_level <= criteria.spice_range.max
+                    if criteria.spice_range is not None
+                    else spice_level < spice_baseline  # type: ignore[operator]
                     if criteria.spice_preference == "LESS"
-                    else spice_level > spice_baseline
+                    else spice_level > spice_baseline  # type: ignore[operator]
                     if criteria.spice_preference == "MORE"
                     else spice_level == spice_baseline
                 )
@@ -4214,7 +4218,14 @@ class SQLiteYobiRepository:
             else None
         )
         country_code = profile.country_code or "ZZ"
-        spice_reference_country = criteria.spice_reference_country
+        spice_reference_country = (
+            "JP"
+            if criteria.spice_range is not None
+            and criteria.spice_reference_country == "JP"
+            else "US"
+            if criteria.spice_range is not None
+            else criteria.spice_reference_country
+        )
         requested_locale = normalize_preference_locale(profile.preferred_language)
         presentation_locale = requested_locale if requested_locale in {"ko", "ja"} else "en"
         if decisions and synthetic_release_id:
@@ -5077,8 +5088,6 @@ class SQLiteYobiRepository:
                 {
                     "browse_price_min_krw": price_range.min,
                     "browse_price_max_krw": price_range.max,
-                    "browse_spice_reference_country": criteria.spice_reference_country,
-                    "browse_spice_preference": criteria.spice_preference,
                 }
             )
             conditions.append("menu.price BETWEEN :browse_price_min_krw AND :browse_price_max_krw")
@@ -5087,25 +5096,49 @@ class SQLiteYobiRepository:
                 synthetic_dietary_conditions += " AND synthetic_menu.halal_fit=1"
             if criteria.dietary_filters.vegan:
                 synthetic_dietary_conditions += " AND synthetic_menu.vegan_fit=1"
-            conditions.append(
-                f"""EXISTS (
-                  SELECT 1 FROM synthetic_menu_profile synthetic_menu
-                  JOIN synthetic_country_profile synthetic_country
-                    ON synthetic_country.release_id=synthetic_menu.release_id
-                   AND synthetic_country.country_code=:browse_spice_reference_country
-                  WHERE synthetic_menu.release_id=family.synthetic_enrichment_release_id
-                    AND synthetic_menu.menu_id=menu.menu_id
-                    AND (
-                      (:browse_spice_preference='LESS'
-                       AND synthetic_menu.spice_level<synthetic_country.spice_baseline)
-                      OR (:browse_spice_preference='SIMILAR'
-                          AND synthetic_menu.spice_level=synthetic_country.spice_baseline)
-                      OR (:browse_spice_preference='MORE'
-                          AND synthetic_menu.spice_level>synthetic_country.spice_baseline)
-                    )
-                    {synthetic_dietary_conditions}
-                )"""
-            )
+            if criteria.spice_range is not None:
+                parameters.update(
+                    {
+                        "browse_spice_min_level": criteria.spice_range.min,
+                        "browse_spice_max_level": criteria.spice_range.max,
+                    }
+                )
+                conditions.append(
+                    f"""EXISTS (
+                      SELECT 1 FROM synthetic_menu_profile synthetic_menu
+                      WHERE synthetic_menu.release_id=family.synthetic_enrichment_release_id
+                        AND synthetic_menu.menu_id=menu.menu_id
+                        AND synthetic_menu.spice_level BETWEEN :browse_spice_min_level
+                                                           AND :browse_spice_max_level
+                        {synthetic_dietary_conditions}
+                    )"""
+                )
+            else:
+                parameters.update(
+                    {
+                        "browse_spice_reference_country": criteria.spice_reference_country,
+                        "browse_spice_preference": criteria.spice_preference,
+                    }
+                )
+                conditions.append(
+                    f"""EXISTS (
+                      SELECT 1 FROM synthetic_menu_profile synthetic_menu
+                      JOIN synthetic_country_profile synthetic_country
+                        ON synthetic_country.release_id=synthetic_menu.release_id
+                       AND synthetic_country.country_code=:browse_spice_reference_country
+                      WHERE synthetic_menu.release_id=family.synthetic_enrichment_release_id
+                        AND synthetic_menu.menu_id=menu.menu_id
+                        AND (
+                          (:browse_spice_preference='LESS'
+                           AND synthetic_menu.spice_level<synthetic_country.spice_baseline)
+                          OR (:browse_spice_preference='SIMILAR'
+                              AND synthetic_menu.spice_level=synthetic_country.spice_baseline)
+                          OR (:browse_spice_preference='MORE'
+                              AND synthetic_menu.spice_level>synthetic_country.spice_baseline)
+                        )
+                        {synthetic_dietary_conditions}
+                    )"""
+                )
             return " AND " + " AND ".join(conditions), parameters
 
         price_conditions = [
@@ -8740,7 +8773,11 @@ class SQLiteYobiRepository:
                             spice = int(profile["spice_level"])
                             preference = structured_criteria.spice_preference or "SIMILAR"
                             spice_matches = (
-                                spice < spice_baseline
+                                structured_criteria.spice_range.min
+                                <= spice
+                                <= structured_criteria.spice_range.max
+                                if structured_criteria.spice_range is not None
+                                else spice < spice_baseline
                                 if preference == "LESS"
                                 else spice > spice_baseline
                                 if preference == "MORE"
@@ -9156,19 +9193,20 @@ class SQLiteYobiRepository:
         if structured_criteria is not None and structured_criteria.schema_version == "3":
             if not synthetic_release_id:
                 raise ValueError("CART_MENU_NO_LONGER_ELIGIBLE")
-            baseline = connection.execute(
-                """
-                SELECT spice_baseline FROM synthetic_country_profile
-                WHERE release_id=? AND country_code=?
-                """,
-                (
-                    synthetic_release_id,
-                    structured_criteria.spice_reference_country,
-                ),
-            ).fetchone()
-            if baseline is None:
-                raise ValueError("CART_MENU_NO_LONGER_ELIGIBLE")
-            country_spice_baseline = int(baseline["spice_baseline"])
+            if structured_criteria.spice_range is None:
+                baseline = connection.execute(
+                    """
+                    SELECT spice_baseline FROM synthetic_country_profile
+                    WHERE release_id=? AND country_code=?
+                    """,
+                    (
+                        synthetic_release_id,
+                        structured_criteria.spice_reference_country,
+                    ),
+                ).fetchone()
+                if baseline is None:
+                    raise ValueError("CART_MENU_NO_LONGER_ELIGIBLE")
+                country_spice_baseline = int(baseline["spice_baseline"])
         merchant_ids: set[str] = set()
         subtotal = 0
         changed = False

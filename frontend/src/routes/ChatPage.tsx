@@ -351,8 +351,11 @@ export function ChatPage() {
       visibleSelectionChanged = true;
     }
     if (next.schema_version === "3") {
-      const priceCatalog = catalog.price_range_krw ?? { min: 8_000, max: 25_000, step: 1_000 };
-      const selectedPrice = next.price_range_krw ?? { min: priceCatalog.min, max: priceCatalog.max };
+      const priceCatalog = catalog.price_range_krw ?? { min: 4_000, max: 50_000, step: 1_000 };
+      const selectedPrice = next.price_range_krw ?? {
+        min: Math.max(priceCatalog.min, 6_000),
+        max: Math.min(priceCatalog.max, 50_000),
+      };
       const clampedPrice = {
         min: Math.max(priceCatalog.min, Math.min(selectedPrice.min, priceCatalog.max - priceCatalog.step)),
         max: Math.min(priceCatalog.max, Math.max(selectedPrice.max, priceCatalog.min + priceCatalog.step)),
@@ -361,8 +364,8 @@ export function ChatPage() {
         next.price_range_krw = clampedPrice;
         changed = true;
       }
-      if (!next.spice_preference) {
-        next.spice_preference = "SIMILAR";
+      if (!next.spice_range) {
+        next.spice_range = { min: 1, max: 5 };
         changed = true;
       }
       next.price_bands = [];
@@ -399,11 +402,8 @@ export function ChatPage() {
         .map((option) => option.label);
     });
     if (transcriptCriteria.schema_version === "3") {
-      labels.push({
-        LESS: v2.spiceLess,
-        SIMILAR: v2.spiceSimilar,
-        MORE: v2.spiceMore,
-      }[transcriptCriteria.spice_preference ?? "SIMILAR"]);
+      const spiceRange = transcriptCriteria.spice_range ?? { min: 1, max: 5 };
+      labels.push(v2.spiceRangeSelection(spiceRange.min, spiceRange.max));
       if (transcriptCriteria.price_range_krw) {
         labels.push(
           `₩${transcriptCriteria.price_range_krw.min.toLocaleString(locale)}–₩${transcriptCriteria.price_range_krw.max.toLocaleString(locale)}`,

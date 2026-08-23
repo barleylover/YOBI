@@ -121,20 +121,25 @@ describe("catalog capability contract", () => {
         spice_scale_anchors: [
           {
             level: 2,
-            familiar_dish: "Mild Buffalo wings",
+            familiar_dish: "Pepperoncini-topped pizza",
             korean_dish: "Mild kimchi fried rice",
-            approximate_shu: 500,
+            approximate_shu: 300,
+            approximate_shu_min: 100,
+            approximate_shu_max: 500,
           },
           {
             level: 4,
-            familiar_dish: "Hot Buffalo wings",
+            familiar_dish: "Jalapeño poppers",
             korean_dish: "Tteokbokki",
-            approximate_shu: 5_000,
+            approximate_shu: 5_250,
+            approximate_shu_min: 2_500,
+            approximate_shu_max: 8_000,
           },
         ],
       }],
     }, "en");
     const onCancel = vi.fn();
+    const onChange = vi.fn();
     const criteria: RecommendationCriteriaV2 = {
       ...emptyCriteria(),
       cuisine_origins: ["KOREAN"],
@@ -158,7 +163,7 @@ describe("catalog capability contract", () => {
           timing_ms: 4,
         }}
         conflictMessage="Conflict"
-        onChange={vi.fn()}
+        onChange={onChange}
         onComplete={vi.fn()}
         onBack={vi.fn()}
         onCancel={onCancel}
@@ -170,8 +175,20 @@ describe("catalog capability contract", () => {
     expect(container.querySelectorAll(".v2-progress > span.active")).toHaveLength(2);
     expect(screen.getByText("12 dishes from 4 restaurants currently fit")).toBeInTheDocument();
     expect(screen.getByRole("slider", { name: "Maximum price" })).toHaveAttribute("max", "50000");
-    expect(screen.getByText(/Level 2: Mild Buffalo wings.*Mild kimchi fried rice.*500 SHU/)).toBeInTheDocument();
-    expect(screen.getByText(/Level 4: Hot Buffalo wings.*Tteokbokki.*5,000 SHU/)).toBeInTheDocument();
+    expect(screen.getByText(/Level 2: Pepperoncini-topped pizza.*100–500 SHU/)).toBeInTheDocument();
+    expect(screen.getByText(/Level 4: Jalapeño poppers.*2,500–8,000 SHU/)).toBeInTheDocument();
+    expect(screen.getByText("Any spice · levels 1–5")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Preferred spice level 2/5" }));
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Preferred spice level 4/5" }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      spice_range: { min: 2, max: 4 },
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "Preferred spice level 1/5" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preferred spice level 1/5" }));
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      spice_range: { min: 1, max: 1 },
+    }));
     expect(screen.getByRole("button", { name: "Save changes" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel changes" }));
     expect(onCancel).toHaveBeenCalledTimes(1);

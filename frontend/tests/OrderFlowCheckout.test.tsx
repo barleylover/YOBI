@@ -470,7 +470,7 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
     expect(screen.getByRole("radio", { name: "Leave at the hotel front desk" })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByRole("radio", { name: "Leave at my door" })).toHaveAttribute("aria-checked", "false");
     expect(screen.getByRole("radio", { name: "Meet me outside" })).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByRole("switch", { name: "Include disposable cutlery" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Include disposable cutlery" })).not.toBeChecked();
     expect(screen.queryByRole("switch", { name: "Ring the bell on arrival" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("radio", { name: "Leave at my door" }));
     expect(screen.getByRole("switch", { name: "Ring the bell on arrival" })).not.toBeChecked();
@@ -481,10 +481,10 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
       "address_checkout_test",
       {
         handoff_method: "front_desk",
-        cutlery: true,
+        cutlery: false,
         ring_bell: false,
         front_desk: true,
-        user_note: "Please leave it at the hotel front desk. Please include disposable cutlery.",
+        user_note: "Please leave it at the hotel front desk. No disposable cutlery.",
       },
     ));
     const review = await screen.findByTestId("cart-review");
@@ -661,6 +661,45 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
       limit: 12,
       exclude_menu_ids: [menu.menu_id],
     });
+  });
+
+  it("falls back to same-restaurant catalog menus when Wiki presentations are empty", async () => {
+    useSessionStore.setState({
+      profile,
+      session,
+      addressRefId: "address_checkout_test",
+      addressSummary: "YOBI hotel",
+      cartQuantity: 0,
+    });
+    vi.spyOn(api, "getOptions").mockResolvedValue([]);
+    vi.spyOn(api, "addCartItem").mockResolvedValue(cart);
+    const catalogMenu = {
+      ...presentation(7).menu,
+      localized_title: null,
+      name_en: "Catalog-only restaurant dish",
+    };
+    const getMerchantMenus = vi.spyOn(api, "getMerchantMenus").mockResolvedValue([catalogMenu]);
+    vi.spyOn(api, "getMerchantMenuPresentations").mockResolvedValue({ items: [], next_cursor: null });
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <Routes><Route path="/chat" element={(
+          <OrderFlowPanel
+            sessionId={session.session_id}
+            menu={menu}
+            addressRefId="address_checkout_test"
+            onClose={() => undefined}
+          />
+        )} /></Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add to cart" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Yes, show more dishes" }));
+
+    expect(await screen.findByRole("heading", { name: "Catalog-only restaurant dish" })).toBeInTheDocument();
+    expect(screen.getByText("A dish available for the current catalog and delivery context.")).toBeInTheDocument();
+    expect(getMerchantMenus).toHaveBeenCalledTimes(2);
   });
 
   it("renders localized option group and item display names", async () => {

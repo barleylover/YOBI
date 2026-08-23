@@ -469,6 +469,47 @@ def test_v3_query_fails_closed_without_active_synthetic_release() -> None:
     assert "synthetic_enrichment_release_id" not in query.parameters
 
 
+def test_v3_absolute_spice_range_is_inclusive_and_country_independent() -> None:
+    connection = _connection()
+    try:
+        for level in range(1, 6):
+            menu_id = f"menu-level-{level}"
+            _insert_menu(
+                connection,
+                menu_id=menu_id,
+                merchant_id=f"merchant-level-{level}",
+                concept_id=f"concept-level-{level}",
+            )
+            _insert_synthetic_profile(connection, menu_id=menu_id, spice_level=level)
+
+        criteria = RecommendationCriteriaV2.model_validate(
+            {
+                "schema_version": "3",
+                "price_range_krw": {"min": 6_000, "max": 50_000},
+                "spice_range": {"min": 2, "max": 4},
+                "spice_preference": "MORE",
+                "spice_reference_country": "ZZ",
+            }
+        )
+        query = _query(
+            criteria,
+            limit=None,
+            synthetic_enrichment_release_id="enrichment-v1",
+        )
+        rows = connection.execute(query.sql, query.parameters).fetchall()
+
+        assert {row["menu_id"] for row in rows} == {
+            "menu-level-2",
+            "menu-level-3",
+            "menu-level-4",
+        }
+        assert "synthetic_country_profile" not in query.sql
+        assert query.parameters["spice_min_level"] == 2
+        assert query.parameters["spice_max_level"] == 4
+    finally:
+        connection.close()
+
+
 def test_v3_requires_ordered_price_range_and_v2_snapshot_remains_readable() -> None:
     with pytest.raises(ValueError, match="PRICE_RANGE_REQUIRED"):
         RecommendationCriteriaV2.model_validate({"schema_version": "3"})
@@ -477,6 +518,14 @@ def test_v3_requires_ordered_price_range_and_v2_snapshot_remains_readable() -> N
             {
                 "schema_version": "3",
                 "price_range_krw": {"min": 25000, "max": 8000},
+            }
+        )
+    with pytest.raises(ValueError, match="SPICE_RANGE_ORDER_INVALID"):
+        RecommendationCriteriaV2.model_validate(
+            {
+                "schema_version": "3",
+                "price_range_krw": {"min": 6_000, "max": 50_000},
+                "spice_range": {"min": 4, "max": 2},
             }
         )
 

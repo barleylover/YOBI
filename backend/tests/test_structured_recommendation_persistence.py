@@ -139,6 +139,10 @@ def test_preference_catalog_etag_replays_support_manifest(repository) -> None:  
             "/api/v1/recommendation/preferences/catalog?locale=en",
             headers={"If-None-Match": first.headers["etag"]},
         )
+        weak_replay = client.get(
+            "/api/v1/recommendation/preferences/catalog?locale=en",
+            headers={"If-None-Match": f"W/{first.headers['etag']}"},
+        )
         japanese = client.get("/api/v1/recommendation/preferences/catalog?locale=ja")
         cross_locale = client.get(
             "/api/v1/recommendation/preferences/catalog?locale=ja",
@@ -149,6 +153,8 @@ def test_preference_catalog_etag_replays_support_manifest(repository) -> None:  
         app.dependency_overrides.clear()
 
     assert first.status_code == 200
+    assert replay.status_code == 304
+    assert weak_replay.status_code == 304
     payload = first.json()
     assert payload["support_manifest_sha256"] != "0" * 64
     assert payload["ranking_policy_version"] == RANKING_POLICY_VERSION

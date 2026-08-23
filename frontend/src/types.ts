@@ -88,7 +88,7 @@ export type SpiceReferenceCountry =
   | "US" | "GB" | "CA" | "AU" | "NZ" | "IE" | "KR" | "JP" | "CN" | "TW"
   | "HK" | "SG" | "ES" | "MX" | "AR" | "CO" | "FR" | "BE" | "DE" | "AT"
   | "CH" | "IT" | "PT" | "BR" | "TH" | "VN" | "ID" | "MY" | "SA" | "AE"
-  | "EG" | "IN" | "RU" | "PH" | "TR" | "NL";
+  | "EG" | "IN" | "RU" | "PH" | "TR" | "NL" | "ZZ";
 
 export interface DietaryFiltersV2 {
   halal_certified_only: boolean;
@@ -108,6 +108,7 @@ export interface RecommendationCriteriaV2 {
   cooking_methods: string[];
   dietary_filters: DietaryFiltersV2;
   max_spice_level: 1 | 2 | 3 | 4 | 5;
+  spice_range?: { min: 1 | 2 | 3 | 4 | 5; max: 1 | 2 | 3 | 4 | 5 } | null;
   spice_preference?: "LESS" | "SIMILAR" | "MORE";
   spice_reference_country: SpiceReferenceCountry;
 }
@@ -156,6 +157,8 @@ export interface SpiceScaleAnchor {
   familiar_dish: string;
   korean_dish: string;
   approximate_shu: number;
+  approximate_shu_min: number;
+  approximate_shu_max: number;
 }
 
 export interface PreferenceCatalog {

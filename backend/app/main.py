@@ -537,6 +537,21 @@ def _resolve_session_profile(
     return session, profile
 
 
+def _etag_matches(if_none_match: str | None, current_etag: str) -> bool:
+    """Accept weak/strong validators for GET revalidation through gzip proxies."""
+
+    if not if_none_match:
+        return False
+    current_opaque = current_etag.removeprefix("W/").strip()
+    for candidate in if_none_match.split(","):
+        normalized = candidate.strip()
+        if normalized == "*":
+            return True
+        if normalized.removeprefix("W/").strip() == current_opaque:
+            return True
+    return False
+
+
 @app.get("/api/v1/recommendation/preferences/catalog")
 def get_recommendation_preference_catalog(
     response: Response,
@@ -565,7 +580,7 @@ def get_recommendation_preference_catalog(
     etag = f'"{hashlib.sha256(etag_seed.encode()).hexdigest()}"'
     response.headers["ETag"] = etag
     response.headers["Cache-Control"] = "private, max-age=300"
-    if if_none_match == etag:
+    if _etag_matches(if_none_match, etag):
         response.status_code = status.HTTP_304_NOT_MODIFIED
         return None
     return payload

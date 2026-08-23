@@ -48,6 +48,40 @@ def test_structured_v3_cart_rule_preserves_spice_semantics(
     )
 
 
+@pytest.mark.parametrize(
+    ("spice_level", "expected"),
+    [
+        (1, CART_MENU_NO_LONGER_ELIGIBLE),
+        (2, None),
+        (3, None),
+        (4, None),
+        (5, CART_MENU_NO_LONGER_ELIGIBLE),
+    ],
+)
+def test_structured_v3_cart_rule_uses_inclusive_absolute_spice_range(
+    spice_level: int,
+    expected: str | None,
+) -> None:
+    criteria = RecommendationCriteriaV2.model_validate(
+        {
+            "schema_version": "3",
+            "price_range_krw": {"min": 10_000, "max": 20_000},
+            "spice_range": {"min": 2, "max": 4},
+            # A contradictory legacy value proves the new range takes priority.
+            "spice_preference": "LESS",
+        }
+    )
+
+    assert structured_v3_cart_error(
+        criteria,
+        price=15_000,
+        spice_level=spice_level,
+        country_spice_baseline=3,
+        halal_fit=True,
+        vegan_fit=True,
+    ) == expected
+
+
 def test_structured_v3_cart_rule_keeps_price_before_dietary_error_priority() -> None:
     criteria = RecommendationCriteriaV2.model_validate(
         {

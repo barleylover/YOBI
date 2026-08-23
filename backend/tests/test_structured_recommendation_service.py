@@ -537,6 +537,21 @@ def test_freeze_server_candidates_keeps_only_wiki_grounded_menus_and_backfills()
     assert all(item.wiki_passages for item in frozen)
 
 
+def test_synthetic_vegan_runtime_guard_rejects_obvious_animal_aliases() -> None:
+    gopchang = _menu("menu-gopchang", score=0.9).model_copy(
+        update={"name_en": "Gopchang Daechang Rice Bowl", "name_ko": "곱창대창덮밥"}
+    )
+    vegetables = _menu("menu-vegetable", score=0.8).model_copy(
+        update={"name_en": "Tofu vegetable bibimbap", "name_ko": "두부 채소 비빔밥"}
+    )
+
+    assert StructuredRecommendationService._has_obvious_animal_ingredient(gopchang)
+    assert not StructuredRecommendationService._has_obvious_animal_ingredient(vegetables)
+    assert not StructuredRecommendationService._has_obvious_animal_ingredient(
+        vegetables.model_copy(update={"name_en": "Eggplant and champignon bibimbap"})
+    )
+
+
 def _generated_recommendation(menu_id: str, rank: int) -> dict[str, Any]:
     suffix = menu_id.rsplit("-", maxsplit=1)[-1]
     return {

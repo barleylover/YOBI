@@ -150,15 +150,21 @@ function normalizeCountrySpiceProfiles(value: unknown, locale: string) {
         const anchor = record(entry);
         const level = Number(anchor.level);
         const approximateShu = Number(anchor.approximate_shu);
+        const approximateShuMin = Number(anchor.approximate_shu_min ?? approximateShu);
+        const approximateShuMax = Number(anchor.approximate_shu_max ?? approximateShu);
         const familiarDish = textValue(anchor.familiar_dish);
         const koreanDish = textValue(anchor.korean_dish);
         if (![2, 4].includes(level) || !Number.isFinite(approximateShu) || approximateShu < 0
+          || !Number.isFinite(approximateShuMin) || !Number.isFinite(approximateShuMax)
+          || approximateShuMin < 0 || approximateShuMin > approximateShuMax
           || !familiarDish || !koreanDish) return [];
         return [{
           level: level as 2 | 4,
           familiar_dish: familiarDish,
           korean_dish: koreanDish,
           approximate_shu: Math.round(approximateShu),
+          approximate_shu_min: Math.round(approximateShuMin),
+          approximate_shu_max: Math.round(approximateShuMax),
         }];
       });
     return [{

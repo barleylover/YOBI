@@ -11,6 +11,7 @@ import {
   asSupportedLanguage,
   formatMinuteRange,
   isAdventurousDish,
+  localizedVeganWarning,
   menuName,
   merchantName,
 } from "../lib/locale";
@@ -36,8 +37,6 @@ interface Props {
 
 export function RecommendationResults({
   batch,
-  catalog,
-  spiceReferenceCountry,
   copy,
   v2,
   language,
@@ -78,10 +77,6 @@ export function RecommendationResults({
         country_code: normalizedPreferenceCountryCode,
       }
     : null;
-  const spiceReferenceProfile = catalog?.country_spice_profiles?.find(
-    (profile) => profile.country_code === spiceReferenceCountry,
-  );
-
   return (
     <section
       className="v2-results"
@@ -177,15 +172,7 @@ export function RecommendationResults({
                         <span>{minimumOrderLabel} ₩{item.menu.minimum_order_amount!.toLocaleString(locale)}</span>
                       )}
                       {spiceLevel != null && (
-                        <span className="success">
-                          {spiceReferenceProfile
-                            ? v2.spiceComparison(
-                                spiceLevel,
-                                spiceLevel < spiceReferenceProfile.spice_baseline ? -1 : spiceLevel > spiceReferenceProfile.spice_baseline ? 1 : 0,
-                                spiceReferenceProfile.representative_dish,
-                              )
-                            : v2.spiceOk(spiceLevel)}
-                        </span>
+                        <span className="success">{v2.spiceOk(spiceLevel)}</span>
                       )}
                       {item.halal_certified
                         ? <span className="success">{v2.halalYes}</span>
@@ -195,7 +182,9 @@ export function RecommendationResults({
                       {adventurous && <span className="warn">{v2.adventurousChoice}</span>}
                     </div>
                     {item.vegan_warning && item.vegan_status !== "LIKELY_FIT" && (
-                      <p className="v2-card-warning">{item.vegan_warning}</p>
+                      <p className="v2-card-warning">
+                        {localizedVeganWarning(item.vegan_status, language, item.vegan_warning)}
+                      </p>
                     )}
                     <button
                       type="button"

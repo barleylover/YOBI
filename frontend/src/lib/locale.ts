@@ -89,6 +89,13 @@ const DEMO_ROAD_ADDRESSES: Record<string, string> = {
   "서울특별시 중구 데모로 21": "21 Demo-ro, Jung-gu, Seoul",
 };
 
+const DEMO_ROAD_ADDRESSES_JA: Record<string, string> = {
+  "서울특별시 중구 을지로 21": "ソウル特別市 中区 乙支路21",
+  "서울특별시 중구 데모로 21": "ソウル特別市 中区 デモ路21",
+  "21 Eulji-ro, Jung-gu, Seoul": "ソウル特別市 中区 乙支路21",
+  "21 Demo-ro, Jung-gu, Seoul": "ソウル特別市 中区 デモ路21",
+};
+
 const DEMO_MERCHANT_NAMES: Record<string, string> = {
   "하루비어-동국대점": "Haru Beer - Dongguk Univ. Branch",
   "피자마루-약수점": "Pizza Maru - Yaksu Branch",
@@ -102,6 +109,83 @@ const DEMO_MERCHANT_NAMES: Record<string, string> = {
   "본도시락-서울시청점": "Bon Dosirak - Seoul City Hall Branch",
   "김밥천국-명동본점": "Gimbap Cheonguk - Myeongdong Main Branch",
 };
+
+const DEMO_MERCHANT_NAMES_JA: Record<string, string> = {
+  "하루비어-동국대점": "ハルビア・東国大学店",
+  "피자마루-약수점": "ピザマル・薬水店",
+  "파스타입니다-종로점": "パスタイムニダ・鍾路店",
+  "미친피자-본점": "ミチンピザ・本店",
+  "국밥생각-충정로점": "クッパセンガク・忠正路店",
+  "미도인덮밥,스테이크-대학로점": "ミドイン丼＆ステーキ・大学路店",
+  "남경중화요리-남대문시장점": "南京中華料理・南大門市場店",
+  "비빔밥입니다-공덕점": "ビビンバイムニダ・孔徳店",
+  "맛단(맛있는다이어트식단)-종로점": "マッタン（おいしいダイエット食）・鍾路店",
+  "본도시락-서울시청점": "ボン弁当・ソウル市庁店",
+  "김밥천국-명동본점": "キンパ天国・明洞本店",
+};
+
+const DEMO_MERCHANT_TERMS_JA: Array<[RegExp, string]> = [
+  [/Boneless Korean fried chicken/gi, "骨なし韓国フライドチキン"],
+  [/Spicy stir-fried pork/gi, "辛口豚炒め"],
+  [/Bean sprout gukbap/gi, "もやしクッパ"],
+  [/Cheese pork cutlet/gi, "チーズとんかつ"],
+  [/Grilled mackerel/gi, "サバ焼き"],
+  [/Beef jjajangmyeon/gi, "牛肉チャジャン麺"],
+  [/Jjajang fried rice/gi, "チャジャン炒飯"],
+  [/Chocolate croffle/gi, "チョコレートクロッフル"],
+  [/Chicken Kalguksu/gi, "鶏カルグクス"],
+  [/Bibim naengmyeon/gi, "ビビン冷麺"],
+  [/Bibim kalguksu/gi, "ビビンカルグクス"],
+  [/Bulgogi gimbap/gi, "プルコギキンパ"],
+  [/Bulgogi pizza/gi, "プルコギピザ"],
+  [/Kimchi mandu/gi, "キムチマンドゥ"],
+  [/Kimchi stew/gi, "キムチチゲ"],
+  [/Korean baekban/gi, "韓国定食"],
+  [/Spicy tangsuyuk/gi, "辛口酢豚"],
+  [/Cheese tteokbokki/gi, "チーズトッポッキ"],
+  [/Bibim guksu/gi, "ビビングクス"],
+  [/Eomuk udon/gi, "オムクうどん"],
+  [/Soft Tofu/gi, "スンドゥブ"],
+  [/Hong Kong Banjeom/gi, "香港飯店"],
+  [/No More Pizza/gi, "ノーモアピザ"],
+  [/Yeopgi Tteokbokki/gi, "ヨプギトッポッキ"],
+  [/Myeongdong/gi, "明洞"],
+  [/Hongdae/gi, "弘大"],
+  [/Gangnam/gi, "江南"],
+  [/Euljiro/gi, "乙支路"],
+  [/Cheonggye/gi, "清渓"],
+  [/Jongno/gi, "鍾路"],
+  [/Namsan/gi, "南山"],
+  [/Seoul/gi, "ソウル"],
+  [/Hanok/gi, "韓屋"],
+  [/Eulji/gi, "乙支"],
+  [/Rose/gi, "ロゼ"],
+  [/Tteokbokki/gi, "トッポッキ"],
+  [/Tteok/gi, "トック"],
+  [/Kalguksu/gi, "カルグクス"],
+  [/Bibimbap/gi, "ビビンバ"],
+  [/Gimbap/gi, "キンパ"],
+  [/Crisp Chicken/gi, "サクサクチキン"],
+  [/Samgyetang/gi, "サムゲタン"],
+  [/Jjajang/gi, "チャジャン"],
+  [/Bulgogi/gi, "プルコギ"],
+  [/Hotteok/gi, "ホットク"],
+  [/Japchae/gi, "チャプチェ"],
+  [/Jjamppong/gi, "チャンポン"],
+  [/Gukbap/gi, "クッパ"],
+  [/Seolleongtang/gi, "ソルロンタン"],
+  [/Eomuk/gi, "オムク"],
+  [/Bingsu/gi, "ピンス"],
+  [/Dosirak/gi, "お弁当"],
+  [/Sundubu jjigae/gi, "スンドゥブチゲ"],
+  [/Garden/gi, "ガーデン"],
+  [/Workshop/gi, "工房"],
+  [/Kitchen/gi, "キッチン"],
+  [/Dining/gi, "ダイニング"],
+  [/Table/gi, "食堂"],
+  [/House/gi, "店"],
+  [/Room/gi, "店"],
+];
 
 const HANGUL_INITIALS = ["g", "kk", "n", "d", "tt", "r", "m", "b", "pp", "s", "ss", "", "j", "jj", "ch", "k", "t", "p", "h"];
 const HANGUL_VOWELS = ["a", "ae", "ya", "yae", "eo", "e", "yeo", "ye", "o", "wa", "wae", "oe", "yo", "u", "wo", "we", "wi", "yu", "eu", "ui", "i"];
@@ -120,7 +204,22 @@ function romanizeHangul(value: string) {
 }
 
 export function merchantName(name: string, language: string) {
-  if (asEffectiveLanguage(language) === "한국어" || !/[가-힣]/.test(name)) return name;
+  const effectiveLanguage = asEffectiveLanguage(language);
+  if (effectiveLanguage === "한국어") return name;
+  if (effectiveLanguage === "日本語") {
+    const koreanName = DEMO_MERCHANT_NAMES[name]
+      ? name
+      : Object.entries(DEMO_MERCHANT_NAMES).find(([, englishName]) => englishName === name)?.[0];
+    if (koreanName && DEMO_MERCHANT_NAMES_JA[koreanName]) {
+      return DEMO_MERCHANT_NAMES_JA[koreanName];
+    }
+    if (/[가-힣]/.test(name)) return `韓国料理店「${name}」`;
+    return DEMO_MERCHANT_TERMS_JA.reduce(
+      (localized, [pattern, replacement]) => localized.replace(pattern, replacement),
+      name,
+    ).replace(/\s+/g, " ").trim();
+  }
+  if (!/[가-힣]/.test(name)) return name;
   const knownName = DEMO_MERCHANT_NAMES[name];
   if (knownName) return knownName;
   return romanizeHangul(name)
@@ -130,8 +229,46 @@ export function merchantName(name: string, language: string) {
 }
 
 export function demoRoadAddress(address: string, language: string) {
-  if (asEffectiveLanguage(language) === "한국어") return address;
+  const effectiveLanguage = asEffectiveLanguage(language);
+  if (effectiveLanguage === "한국어") return address;
+  if (effectiveLanguage === "日本語") return DEMO_ROAD_ADDRESSES_JA[address] ?? address;
   return DEMO_ROAD_ADDRESSES[address] ?? address;
+}
+
+export function demoHotelName(name: string, language: string) {
+  if (asEffectiveLanguage(language) !== "日本語") return name;
+  if (["YOBI Myeongdong Hotel", "YOBI Hotel Myeongdong", "요비호텔"].includes(name)) {
+    return "YOBI明洞ホテル";
+  }
+  const demoHotel = /^YOBI Demo Hotel (\d+)$/i.exec(name);
+  return demoHotel ? `YOBIデモホテル ${demoHotel[1]}` : name;
+}
+
+export function localizeDemoAddressSummary(summary: string, language: string) {
+  if (!summary) return summary;
+  const [hotel, ...addressParts] = summary.split(" · ");
+  const address = addressParts.join(" · ");
+  const localizedHotel = demoHotelName(hotel, language);
+  return address ? `${localizedHotel} · ${demoRoadAddress(address, language)}` : localizedHotel;
+}
+
+export function localizedVeganWarning(
+  status: "LIKELY_FIT" | "POSSIBLE_WITH_CHECKS" | "CONFLICT" | "UNKNOWN" | null | undefined,
+  language: string,
+  originalWarning?: string | null,
+) {
+  const effectiveLanguage = asEffectiveLanguage(language);
+  if (effectiveLanguage === "English") return originalWarning ?? "";
+  if (effectiveLanguage === "日本語") {
+    if (status === "CONFLICT") return "動物性の原材料が確認されているため、ヴィーガン条件には合いません。";
+    if (status === "POSSIBLE_WITH_CHECKS") return "ヴィーガン対応か、注文前に原材料とオプションを店舗へ確認してください。";
+    if (status === "LIKELY_FIT") return "ヴィーガン対応候補です。選んだオプションを注文前に確認してください。";
+    return "ヴィーガン対応は未確認です。原材料とオプションをご確認ください。";
+  }
+  if (status === "CONFLICT") return "동물성 재료가 확인되어 비건 조건과 맞지 않습니다.";
+  if (status === "POSSIBLE_WITH_CHECKS") return "주문 전 가게에 재료와 옵션의 비건 여부를 확인해 주세요.";
+  if (status === "LIKELY_FIT") return "비건 가능 메뉴입니다. 주문 전 선택한 옵션을 확인해 주세요.";
+  return "비건 여부가 확인되지 않았습니다. 재료와 옵션을 확인해 주세요.";
 }
 
 export function formatMinuteRange(minimum: number, maximum: number, locale: string) {

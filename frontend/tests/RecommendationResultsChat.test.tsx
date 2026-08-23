@@ -111,7 +111,8 @@ describe("chat-style recommendation results", () => {
     expect(screen.getAllByText("YOBI:").length).toBeGreaterThan(0);
     expect(screen.getAllByText("YOGIYO:").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Minimum order ₩15,000").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Spice 1/5 · less spicy than Buffalo wings").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Spice 1/5").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/less spicy than Buffalo wings/)).not.toBeInTheDocument();
     expect(screen.getAllByText("No obvious pork or alcohol detected · not halal-certified").length).toBeGreaterThan(0);
     expect(screen.queryByText("Halal: yes")).not.toBeInTheDocument();
     expect(screen.queryByText("Legacy selection reason must stay hidden.")).not.toBeInTheDocument();
