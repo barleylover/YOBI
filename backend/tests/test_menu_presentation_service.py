@@ -516,6 +516,12 @@ def test_presentation_request_uses_compact_model_owned_schema_and_output_cap() -
     }
     input_payload = json.loads(request["input"][0]["content"])
     assert "evidence_type" not in input_payload["menus"][0]["wiki_passages"][0]
+    instructions = str(request["instructions"])
+    assert "prioritize supported taste, perceived heat, how it is commonly eaten" in instructions
+    assert 'gopbaegi as "extra-large portion"' in instructions
+    assert 'jeon as "savory Korean pancake"' in instructions
+    assert "dosirak" in instructions and '"Korean lunchbox"' in instructions
+    assert "Avoid encyclopedic taxonomy" in instructions
 
 
 def test_presentation_retries_explicit_output_truncation_once_with_double_limit() -> None:
@@ -1792,7 +1798,7 @@ def test_current_prompt_and_schema_logically_invalidate_legacy_cache_without_del
     )
 
     assert current_settings.menu_presentation_prompt_version == (
-        "yobi-menu-presentation-v18-compact-output"
+        "yobi-menu-presentation-v19-traveler-tone"
     )
     assert current_settings.menu_presentation_schema_version == "7"
     assert provider.requested_ids == [["menu-1"]]

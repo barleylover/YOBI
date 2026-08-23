@@ -63,6 +63,45 @@ def representative_dish(country_code: str, locale: str) -> str:
     ]
 
 
+_SPICE_SCALE_ANCHORS: dict[str, dict[LanguageCode, tuple[dict[str, object], ...]]] = {
+    "US": {
+        "en": (
+            {"level": 2, "familiar_dish": "Mild Buffalo wings", "korean_dish": "Mild kimchi fried rice", "approximate_shu": 500},
+            {"level": 4, "familiar_dish": "Hot Buffalo wings", "korean_dish": "Tteokbokki", "approximate_shu": 5_000},
+        ),
+        "ko": (
+            {"level": 2, "familiar_dish": "순한 버팔로 윙", "korean_dish": "순한 김치볶음밥", "approximate_shu": 500},
+            {"level": 4, "familiar_dish": "매운 버팔로 윙", "korean_dish": "떡볶이", "approximate_shu": 5_000},
+        ),
+        "ja": (
+            {"level": 2, "familiar_dish": "マイルドなバッファローウィング", "korean_dish": "マイルドなキムチチャーハン", "approximate_shu": 500},
+            {"level": 4, "familiar_dish": "辛口バッファローウィング", "korean_dish": "トッポッキ", "approximate_shu": 5_000},
+        ),
+    },
+    "JP": {
+        "en": (
+            {"level": 2, "familiar_dish": "Medium-spicy Japanese curry", "korean_dish": "Mild kimchi fried rice", "approximate_shu": 500},
+            {"level": 4, "familiar_dish": "Extra-hot Japanese curry", "korean_dish": "Tteokbokki", "approximate_shu": 5_000},
+        ),
+        "ko": (
+            {"level": 2, "familiar_dish": "중간 매운 일본 카레", "korean_dish": "순한 김치볶음밥", "approximate_shu": 500},
+            {"level": 4, "familiar_dish": "아주 매운 일본 카레", "korean_dish": "떡볶이", "approximate_shu": 5_000},
+        ),
+        "ja": (
+            {"level": 2, "familiar_dish": "中辛カレー", "korean_dish": "マイルドなキムチチャーハン", "approximate_shu": 500},
+            {"level": 4, "familiar_dish": "激辛カレー", "korean_dish": "トッポッキ", "approximate_shu": 5_000},
+        ),
+    },
+}
+
+
+def spice_scale_anchors(country_code: str, locale: str) -> list[dict[str, object]]:
+    """Return optional, explicitly approximate demo anchors for the UI control."""
+
+    anchors = _SPICE_SCALE_ANCHORS.get(country_code.upper(), {}).get(effective_language(locale), ())
+    return [dict(anchor) for anchor in anchors]
+
+
 def example_seed_hash(seed: str, country_code: str, language_code: LanguageCode) -> str:
     value = f"{seed}|country-spice-example-v1|{country_code}|{language_code}"
     return sha256(value.encode("utf-8")).hexdigest()

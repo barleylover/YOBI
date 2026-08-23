@@ -24,7 +24,7 @@ test("selection is deterministic and calls recommendation only after completion"
   await page.getByRole("button", { name: "Find my dish", exact: true }).click();
   await expect.poll(() => recommendationRequests.length).toBe(1);
   expect(recommendationRequests[0]).toMatchObject({ mode: "INITIAL" });
-  await expect(page.getByRole("button", { name: "Choose this menu" }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Choose this dish" }).first()).toBeVisible();
   expect(legacyMessageRequests).toEqual([]);
 });
 
@@ -41,8 +41,8 @@ test("different menus keeps committed criteria and creates one SIMILAR request",
   await page.getByRole("button", { name: "Next", exact: true }).click();
   await page.getByRole("button", { name: "Next", exact: true }).click();
   await page.getByRole("button", { name: "Find my dish", exact: true }).click();
-  await expect(page.getByRole("button", { name: "See other menus" })).toBeVisible();
-  await page.getByRole("button", { name: "See other menus" }).click();
+  await expect(page.getByRole("button", { name: "See other dishes" })).toBeVisible();
+  await page.getByRole("button", { name: "See other dishes" }).click();
 
   await expect.poll(() => modes).toEqual(["INITIAL", "SIMILAR"]);
   await expect(page.getByRole("textbox")).toHaveCount(0);

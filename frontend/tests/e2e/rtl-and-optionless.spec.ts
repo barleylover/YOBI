@@ -61,7 +61,7 @@ test("an optionless menu reaches the cart and Yogiyo handoff without a restauran
   selectedMenuName = await selectedCard.getByRole("heading").innerText();
   selectedMenuPrice = Number((await selectedCard.locator(".v2-card-title-row > strong").innerText()).replace(/\D/g, ""));
 
-  await page.getByRole("button", { name: "Choose this menu" }).first().click();
+  await page.getByRole("button", { name: "Choose this dish" }).first().click();
   await expect(page.locator("[data-testid^='option-group-']")).toHaveCount(0);
   await page.locator("textarea.v2-note-input").fill("");
   await page.getByRole("button", { name: "Add to cart" }).click();
@@ -71,7 +71,7 @@ test("an optionless menu reaches the cart and Yogiyo handoff without a restauran
   await page.getByRole("button", { name: "No, continue to delivery" }).click();
   await page.getByRole("button", { name: "Confirm delivery details" }).click();
   await expect(page.getByTestId("cart-review")).toContainText(selectedMenuName);
-  await page.getByRole("button", { name: /Prepare this order/ }).click();
+  await page.getByRole("button", { name: /Place order/ }).click();
 
   await expect(page).toHaveURL(/\/handoff$/);
   await expect(page.getByRole("heading", { name: "Ready to order" })).toBeVisible();

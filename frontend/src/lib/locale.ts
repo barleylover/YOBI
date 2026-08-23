@@ -35,6 +35,7 @@ export const COUNTRIES = [
   ["Thailand", "TH"], ["Vietnam", "VN"], ["Indonesia", "ID"], ["Malaysia", "MY"],
   ["Saudi Arabia", "SA"], ["United Arab Emirates", "AE"], ["Egypt", "EG"], ["India", "IN"],
   ["Russia", "RU"], ["Philippines", "PH"], ["Türkiye", "TR"], ["Netherlands", "NL"],
+  ["Other", "ZZ"],
 ] as const;
 
 export const LANGUAGE_COUNTRIES: Record<SupportedLanguage, string[]> = {
@@ -94,6 +95,12 @@ const DEMO_MERCHANT_NAMES: Record<string, string> = {
   "파스타입니다-종로점": "Pasta Imnida - Jongno Branch",
   "미친피자-본점": "Crazy Pizza - Main Branch",
   "국밥생각-충정로점": "Gukbap Saenggak - Chungjeongno Branch",
+  "미도인덮밥,스테이크-대학로점": "Midoin Deopbap & Steak - Daehak-ro Branch",
+  "남경중화요리-남대문시장점": "Namgyeong Chinese Restaurant - Namdaemun Market",
+  "비빔밥입니다-공덕점": "Bibimbap-imnida - Gongdeok Branch",
+  "맛단(맛있는다이어트식단)-종로점": "Matdan - Jongno Branch",
+  "본도시락-서울시청점": "Bon Dosirak - Seoul City Hall Branch",
+  "김밥천국-명동본점": "Gimbap Cheonguk - Myeongdong Main Branch",
 };
 
 const HANGUL_INITIALS = ["g", "kk", "n", "d", "tt", "r", "m", "b", "pp", "s", "ss", "", "j", "jj", "ch", "k", "t", "p", "h"];
@@ -137,11 +144,36 @@ export function formatMinuteRange(minimum: number, maximum: number, locale: stri
 }
 
 export function countryCode(country: string) {
-  return COUNTRIES.find(([name]) => name === country)?.[1] ?? "US";
+  return COUNTRIES.find(([name]) => name === country)?.[1] ?? "ZZ";
 }
 
 export function countryName(country: string, locale: string) {
   const region = COUNTRIES.find(([name]) => name === country)?.[1];
   if (!region) return country;
+  if (region === "ZZ") return country;
   return new Intl.DisplayNames([locale], { type: "region" }).of(region) ?? country;
+}
+
+export function countryFlag(countryCodeValue: string) {
+  if (!/^[A-Z]{2}$/.test(countryCodeValue) || countryCodeValue === "ZZ") return "🌐";
+  return String.fromCodePoint(...Array.from(countryCodeValue, (letter) => 127397 + letter.charCodeAt(0)));
+}
+
+const ADVENTUROUS_DISH_PATTERN = /곱창|대창|막창|내장|홍어|산낙지|번데기|순대|gopchang|daechang|makchang|intestine|tripe|hongeo|raw octopus|silkworm|blood sausage/i;
+
+export function isAdventurousDish(...values: Array<string | null | undefined>) {
+  return ADVENTUROUS_DISH_PATTERN.test(values.filter(Boolean).join(" "));
+}
+
+export function travelerOptionLabel(value: string, language: string) {
+  if (language !== "English") return value;
+  const normalized = value.trim().toLowerCase();
+  if (["gopbaegi add-on", "gopbaegi addon", "add gopbaegi"].includes(normalized)) {
+    return normalized.startsWith("add ")
+      ? "Extra-large portion (gopbaegi)"
+      : "Portion size";
+  }
+  if (["no gopbaegi", "without gopbaegi"].includes(normalized)) return "Regular portion";
+  if (normalized === "nostalgic sausage jeon") return "Nostalgic sausage pancake (jeon)";
+  return value;
 }

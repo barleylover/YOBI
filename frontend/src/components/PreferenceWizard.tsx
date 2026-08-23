@@ -40,6 +40,7 @@ interface Props {
   onValidateAdd?: (criteria: RecommendationCriteriaV2) => Promise<boolean>;
   onComplete: () => void;
   onBack: () => void;
+  onCancel?: () => void;
 }
 
 function countCriteria(criteria: RecommendationCriteriaV2) {
@@ -54,6 +55,8 @@ export function PreferenceWizard({
   copy,
   v2,
   busy = false,
+  previewLoading = false,
+  preview = null,
   previewMessage = "",
   canSubmitUnchanged = false,
   conflictMessage,
@@ -63,6 +66,7 @@ export function PreferenceWizard({
   onValidateAdd,
   onComplete,
   onBack,
+  onCancel,
 }: Props) {
   const [section, setSection] = useState<WizardSection>(initialSection);
   const sectionIndex = SECTION_ORDER.indexOf(section);
@@ -96,9 +100,9 @@ export function PreferenceWizard({
     conditions: v2.sectionConditions,
   };
   const stepLabels: Record<WizardSection, string> = {
-    core: v2.stepOf(2, 4, v2.sectionPreferences),
-    taste: v2.stepOf(3, 4, v2.sectionTaste),
-    conditions: v2.stepOf(4, 4, v2.sectionConditions),
+    core: v2.stepPreferences,
+    taste: v2.stepPreferencesTaste,
+    conditions: v2.stepPreferencesConditions,
   };
 
   async function toggle(category: PreferenceCategoryCode, code: string) {
@@ -183,7 +187,6 @@ export function PreferenceWizard({
                 title={option.description ?? undefined}
                 onClick={() => void toggle(category.code, option.code)}
               >
-                {selected && <img src="/figma/radio-check.svg" alt="" width={12} height={10} />}
                 {option.label}
               </button>
             );
@@ -230,8 +233,8 @@ export function PreferenceWizard({
         </button>
       </header>
       <div className="v2-progress" aria-hidden="true">
-        {[0, 1, 2, 3].map((step) => (
-          <span key={step} className={step <= sectionIndex + 1 ? "active" : ""} />
+        {[0, 1, 2].map((step) => (
+          <span key={step} className={step <= 1 ? "active" : ""} />
         ))}
       </div>
       <div className="v2-section-tabs" role="tablist" aria-label={v2.sectionPreferences}>
@@ -260,6 +263,14 @@ export function PreferenceWizard({
 
         {notice && <p className="v2-status" role="status">{notice}</p>}
 
+        <div className="v2-live-preview" role="status" aria-live="polite">
+          {previewLoading
+            ? <span>{copy.loadingChoices}</span>
+            : preview
+              ? <strong>{v2.liveCount(preview.eligible_menu_count, preview.eligible_merchant_count)}</strong>
+              : <span>{v2.craveSubtitle}</span>}
+        </div>
+
         {previewMessage && <p className="v2-error" role="status">{previewMessage}</p>}
 
         {section !== "conditions" && grouped[section].map((category) => categoryCard(category))}
@@ -272,13 +283,30 @@ export function PreferenceWizard({
               </header>
               <p className="v2-card-help">{copy.spiceHelp}</p>
               {countrySpiceProfile && (
-                <p className="v2-spice-reference" data-testid="country-spice-reference">
-                  {v2.representativeSpice(
-                    spiceCountryName,
-                    countrySpiceProfile.representative_dish,
-                    countrySpiceProfile.spice_baseline,
+                <div className="v2-spice-guide" data-testid="country-spice-reference">
+                  <p className="v2-spice-reference">
+                    {v2.representativeSpice(
+                      spiceCountryName,
+                      countrySpiceProfile.representative_dish,
+                      countrySpiceProfile.spice_baseline,
+                    )}
+                  </p>
+                  {Boolean(countrySpiceProfile.spice_scale_anchors?.length) && (
+                    <div className="v2-spice-anchors">
+                      <small>{v2.spiceScaleGuide}</small>
+                      {countrySpiceProfile.spice_scale_anchors!.map((anchor) => (
+                        <p key={anchor.level}>
+                          {v2.spiceScaleAnchor(
+                            anchor.level,
+                            anchor.familiar_dish,
+                            anchor.korean_dish,
+                            anchor.approximate_shu,
+                          )}
+                        </p>
+                      ))}
+                    </div>
                   )}
-                </p>
+                </div>
               )}
               <div className="v2-relative-spice" role="radiogroup" aria-label={copy.spiceTitle}>
                 {([
@@ -379,10 +407,15 @@ export function PreferenceWizard({
       </div>
 
       <footer className="v2-sticky-bar">
+        {onCancel && (
+          <button type="button" className="v2-text-button v2-wizard-cancel" onClick={onCancel} disabled={busy}>
+            {v2.cancelChanges}
+          </button>
+        )}
         <div className="v2-selection-bar">
           <p>{copy.selectedCount(selectedCount)}</p>
           <button type="button" className="v2-selection-next" onClick={goNext} disabled={nextDisabled}>
-            {section === "conditions" ? v2.findMyDish : v2.next}
+            {section === "conditions" ? (onCancel ? v2.saveChanges : v2.findMyDish) : v2.next}
             <img src="/figma/right-chevron-white.svg" alt="" width={7} height={14} />
           </button>
         </div>

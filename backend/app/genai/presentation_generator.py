@@ -973,8 +973,13 @@ Field rules:
   every literal digit, unit, Latin brand name, and product code exactly.
 - yobi_short_explanation and yobi_long_explanation explain the food using only the title,
   restaurant description, menu facts, Wiki passages, components, and a supported country cue.
-  Aim for 1-2 concise sentences in the short field and 2-5 in the long field, but prioritize
-  accuracy and natural language over sentence count. Never use synthetic_reviews and never mention
+  Write for a hungry visitor: prioritize supported taste, perceived heat, how it is commonly eaten,
+  and who may enjoy it. Aim for 1-2 concise sentences in the short field and 2-5 in the long field,
+  but prioritize accuracy and natural language over sentence count. Avoid encyclopedic taxonomy,
+  history lessons, and meta phrases such as "subtype" or "distinguished by preparation". On first
+  use, explain gopbaegi as "extra-large portion", jeon as "savory Korean pancake", and dosirak as
+  "Korean lunchbox" when those terms are grounded in the supplied listing. Never use
+  synthetic_reviews and never mention
   reviewers, diners, customers, ratings, feedback, praise, comments, or what people said.
 - review_summary is the only review field. Base it exclusively on synthetic_reviews. If none are
   supplied, state neutrally that no review summary is available; do not invent sentiment.
@@ -1021,8 +1026,13 @@ Field rules:
   is empty, return an empty string. Preserve every literal digit, unit, Latin brand name, and
   product code exactly.
 - yobi_short_explanation and yobi_long_explanation explain the food using only the title,
-  restaurant description, menu facts, Wiki passages, and components. Never use synthetic_reviews
-  and never mention reviewers, diners, customers, ratings, feedback, praise, or comments.
+  restaurant description, menu facts, Wiki passages, and components. Write for a hungry visitor:
+  prioritize supported taste, perceived heat, how it is commonly eaten, and who may enjoy it.
+  Avoid encyclopedic taxonomy, history lessons, and meta phrases such as "subtype" or
+  "distinguished by preparation". On first use, explain gopbaegi as "extra-large portion", jeon as
+  "savory Korean pancake", and dosirak as "Korean lunchbox" when those terms are grounded in the
+  supplied listing. Never use synthetic_reviews and never mention reviewers, diners, customers,
+  ratings, feedback, praise, or comments.
 - presentation_country_context.user_country_code may guide familiar wording, but it never proves
   what people from that country like or eat.
 - A spice comparison is allowed only when presentation_country_context.comparison_is_complete is

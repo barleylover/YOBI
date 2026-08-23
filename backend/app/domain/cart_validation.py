@@ -46,6 +46,16 @@ def deterministic_korean_order_note(note: str) -> str:
         translations.append("최대한 맵지 않게 부탁드립니다.")
     if "front desk" in lowered:
         translations.append("호텔 프런트에 맡겨 주세요.")
+    elif "at the door" in lowered:
+        translations.append("문 앞에 놓아 주세요.")
+    elif "meet me outside" in lowered:
+        translations.append("건물 밖에서 직접 전달해 주세요.")
     if "no cutlery" in lowered or "no disposable" in lowered:
         translations.append("일회용 수저와 포크는 필요 없습니다.")
+    elif "include disposable cutlery" in lowered:
+        translations.append("일회용 수저와 포크를 포함해 주세요.")
+    if "do not ring" in lowered or "no bell" in lowered:
+        translations.append("벨을 누르지 말아 주세요.")
+    elif "ring the bell" in lowered:
+        translations.append("도착하면 벨을 눌러 주세요.")
     return " ".join(translations) or "요청사항을 확인해 주세요."

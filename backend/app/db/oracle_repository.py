@@ -12,7 +12,11 @@ from uuid import uuid4
 import oracledb
 
 from app.core.config import Settings
-from app.country_spice_examples import effective_language, representative_dish
+from app.country_spice_examples import (
+    effective_language,
+    representative_dish,
+    spice_scale_anchors,
+)
 from app.db.browse_rankings import food_ranking_sql
 from app.db.concept_query import (
     build_candidate_recall_channel_query,
@@ -2327,6 +2331,7 @@ class OracleYobiRepository:
                 "spice_baseline": int(row[1]),
                 "representative_dish": _oracle_logical_text(row[2])
                 or representative_dish(str(row[0]), locale),
+                "spice_scale_anchors": spice_scale_anchors(str(row[0]), locale),
             }
             for row in synthetic_country_rows
         ]
@@ -2664,15 +2669,15 @@ class OracleYobiRepository:
             }[sort]
             if str(row["ranking_metric_basis"]) == "DETERMINISTIC_SYNTHETIC_FALLBACK":
                 metric_label = {
-                    "review_count": "Deterministic demo review score",
-                    "order_count": "Deterministic demo order score",
-                    "korean_popularity": "Deterministic demo Korean-popularity score",
+                    "review_count": "Prepared review activity",
+                    "order_count": "Prepared order activity",
+                    "korean_popularity": "Prepared Korean-popularity signal",
                 }[sort]
             else:
                 metric_label = {
-                    "review_count": "Source menu review count",
-                    "order_count": "Deterministic demo order proxy",
-                    "korean_popularity": "Deterministic demo Korean-popularity proxy",
+                    "review_count": "Review activity",
+                    "order_count": "Prepared order activity",
+                    "korean_popularity": "Prepared Korean-popularity signal",
                 }[sort]
             menu = self._menu_summary(
                 row,
@@ -2684,9 +2689,7 @@ class OracleYobiRepository:
             if row.get("concept_description"):
                 menu = menu.model_copy(
                     update={
-                        "cultural_description": (
-                            "General food reference: " + str(row["concept_description"])
-                        )
+                        "cultural_description": str(row["concept_description"])
                     }
                 )
             menus.append(menu)
@@ -2704,9 +2707,8 @@ class OracleYobiRepository:
         return FoodRankingCollection(
             snapshot_id=snapshot_id,
             demo_basis=(
-                "YOBI demo only. Provided source counts take priority. Synthetic menus with "
-                "no source counts use stable menu-ID-derived demo scores so sort controls "
-                "remain demonstrable. No value is a live Yogiyo-wide statistic."
+                "Prepared demo activity signals are used for ordering; these are not live "
+                "Yogiyo-wide review, order, or popularity statistics."
             ),
             sort=sort,
             items=items,
@@ -2827,7 +2829,7 @@ class OracleYobiRepository:
             ).model_copy(
                 update={
                     "cultural_description": (
-                        "General food reference: " + str(row.get("concept_description"))
+                        str(row.get("concept_description"))
                         if row.get("concept_description")
                         else ""
                     )
@@ -7783,9 +7785,15 @@ class OracleYobiRepository:
             )
             delivery_fee = int(cursor.fetchone()[0])
             cursor.execute(
-                "SELECT 1 FROM delivery_preference WHERE cart_id=:id", id=cart["cart_id"]
+                """
+                SELECT handoff_method,cutlery,ring_bell,front_desk,
+                       user_note,korean_note,back_translation
+                FROM delivery_preference WHERE cart_id=:id
+                """,
+                id=cart["cart_id"],
             )
-            has_delivery = cursor.fetchone() is not None
+            delivery_preference = _row(cursor)
+            has_delivery = delivery_preference is not None
             cursor.execute(
                 """
                 SELECT p.dietary_rules_json, p.allergy_severity,
@@ -8183,6 +8191,8 @@ class OracleYobiRepository:
                     for option in _json(row["option_snapshot_json"])
                 ],
                 line_total=int(row["line_total"]),
+                user_note=_oracle_logical_text(row.get("user_note")) or "",
+                korean_note=_oracle_logical_text(row.get("korean_note")) or "",
             )
             for row in rows
         ]
@@ -8221,6 +8231,28 @@ class OracleYobiRepository:
             dietary_warnings=warnings,
             minimum_order_amount=minimum_order_amount,
             minimum_order_shortfall=minimum_order_shortfall,
+            delivery_preference=(
+                {
+                    "handoff_method": str(delivery_preference["handoff_method"]),
+                    "cutlery": bool(delivery_preference["cutlery"]),
+                    "ring_bell": bool(delivery_preference["ring_bell"]),
+                    "front_desk": bool(delivery_preference["front_desk"]),
+                    "user_note": _oracle_logical_text(
+                        delivery_preference.get("user_note")
+                    )
+                    or "",
+                    "korean_note": _oracle_logical_text(
+                        delivery_preference.get("korean_note")
+                    )
+                    or "",
+                    "back_translation": _oracle_logical_text(
+                        delivery_preference.get("back_translation")
+                    )
+                    or "",
+                }
+                if delivery_preference is not None
+                else None
+            ),
             ready_to_checkout=not missing,
             confirmed=(
                 bool(cart["confirmed"]) and cart.get("confirmed_fingerprint") == current_fingerprint

@@ -516,16 +516,28 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ manual }),
     }),
-  updateDelivery: (sessionId: string, addressRefId: string) =>
+  updateDelivery: (
+    sessionId: string,
+    addressRefId: string,
+    preference: {
+      handoff_method: "front_desk" | "door" | "meet_outside";
+      cutlery: boolean;
+      ring_bell: boolean;
+      front_desk: boolean;
+      user_note: string;
+    } = {
+      handoff_method: "front_desk",
+      cutlery: true,
+      ring_bell: false,
+      front_desk: true,
+      user_note: "Please leave it at the hotel front desk and include disposable cutlery.",
+    },
+  ) =>
     request<CartPreview>(`/api/v1/sessions/${sessionId}/delivery`, {
       method: "PATCH",
       body: JSON.stringify({
         address_ref_id: addressRefId,
-        handoff_method: "front_desk",
-        cutlery: false,
-        ring_bell: false,
-        front_desk: true,
-        user_note: "Please leave it at the hotel front desk. No disposable cutlery.",
+        ...preference,
       }),
     }),
   confirmCart: (sessionId: string) =>

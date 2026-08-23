@@ -1,9 +1,12 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PreferenceSelector } from "../src/components/PreferenceSelector";
+import { PreferenceWizard } from "../src/components/PreferenceWizard";
 import { normalizePreferenceCatalog } from "../src/lib/preferenceCatalog";
 import { getRecommendationCopy } from "../src/lib/recommendationI18n";
+import { getRedesignCopy } from "../src/lib/redesignI18n";
 import { emptyCriteria } from "../src/stores/session";
+import type { RecommendationCriteriaV2 } from "../src/types";
 
 function rawCatalog(locale: string) {
   return {
@@ -98,11 +101,79 @@ describe("catalog capability contract", () => {
     }, "en");
 
     expect(catalog.schema_version).toBe("3");
-    expect(catalog.price_range_krw).toEqual({ min: 4_000, max: 62_000, step: 1_000 });
+    expect(catalog.price_range_krw).toEqual({ min: 4_000, max: 50_000, step: 1_000 });
     expect(catalog.country_spice_profiles).toEqual([
       { country_code: "US", spice_baseline: 2, representative_dish: "Buffalo wings" },
       { country_code: "JP", spice_baseline: 1, representative_dish: "Medium-spicy Japanese curry" },
     ]);
     expect(catalog.synthetic_enrichment_release_id).toBe("synthetic-release-v1");
+  });
+
+  it("shows the live preview, consistent three-step progress, spice anchors, and edit cancel", () => {
+    const catalog = normalizePreferenceCatalog({
+      ...rawCatalog("en"),
+      schema_version: "3",
+      price_range_krw: { min: 4_000, max: 62_000, step: 1_000 },
+      country_spice_profiles: [{
+        country_code: "US",
+        spice_baseline: 2,
+        representative_dish: "Buffalo wings",
+        spice_scale_anchors: [
+          {
+            level: 2,
+            familiar_dish: "Mild Buffalo wings",
+            korean_dish: "Mild kimchi fried rice",
+            approximate_shu: 500,
+          },
+          {
+            level: 4,
+            familiar_dish: "Hot Buffalo wings",
+            korean_dish: "Tteokbokki",
+            approximate_shu: 5_000,
+          },
+        ],
+      }],
+    }, "en");
+    const onCancel = vi.fn();
+    const criteria: RecommendationCriteriaV2 = {
+      ...emptyCriteria(),
+      cuisine_origins: ["KOREAN"],
+      spice_reference_country: "US",
+    };
+
+    const { container } = render(
+      <PreferenceWizard
+        catalog={catalog}
+        criteria={criteria}
+        copy={getRecommendationCopy("English")}
+        v2={getRedesignCopy("English")}
+        initialSection="conditions"
+        preview={{
+          eligible_menu_count: 12,
+          eligible_merchant_count: 4,
+          zero_reason_codes: [],
+          release_id: "release-preview",
+          support_manifest_sha256: "a".repeat(64),
+          ranking_policy_version: "ranking-v1",
+          timing_ms: 4,
+        }}
+        conflictMessage="Conflict"
+        onChange={vi.fn()}
+        onComplete={vi.fn()}
+        onBack={vi.fn()}
+        onCancel={onCancel}
+      />,
+    );
+
+    expect(screen.getByText("Step 2 of 3 · Preferences")).toBeInTheDocument();
+    expect(container.querySelectorAll(".v2-progress > span")).toHaveLength(3);
+    expect(container.querySelectorAll(".v2-progress > span.active")).toHaveLength(2);
+    expect(screen.getByText("12 dishes from 4 restaurants currently fit")).toBeInTheDocument();
+    expect(screen.getByRole("slider", { name: "Maximum price" })).toHaveAttribute("max", "50000");
+    expect(screen.getByText(/Level 2: Mild Buffalo wings.*Mild kimchi fried rice.*500 SHU/)).toBeInTheDocument();
+    expect(screen.getByText(/Level 4: Hot Buffalo wings.*Tteokbokki.*5,000 SHU/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel changes" }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 });

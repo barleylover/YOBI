@@ -465,6 +465,10 @@ def test_selected_menu_options_generate_once_then_use_prompt_versioned_cache() -
     assert first[0].items[0].display_name == "Add Coca-Cola 355ml"
     assert second == first
     assert len(provider.calls) == 1
+    instructions = str(provider.calls[0]["instructions"])
+    assert '곱빼기 as "Extra-large portion (gopbaegi)"' in instructions
+    assert '"savory Korean pancake (jeon)"' in instructions
+    assert '"Korean lunchbox (dosirak)"' in instructions
     assert repository.saved_prompt == service._cache_prompt_version()
 
 

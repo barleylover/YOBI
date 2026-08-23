@@ -3,14 +3,29 @@ import { useLocation, useNavigate } from "react-router-dom";
 import {
   LANGUAGES,
   asSupportedLanguage,
+  countryFlag,
   countryName,
   effectiveLanguageMeta,
   sortedCountries,
 } from "../lib/locale";
 import { LANGUAGE_ENGLISH_NAMES, getRedesignCopy } from "../lib/redesignI18n";
+import { getProductCopy } from "../lib/productI18n";
 import { useSessionStore } from "../stores/session";
 
 type PickerTab = "language" | "country";
+
+const COUNTRY_SEARCH_ALIASES: Record<string, string> = {
+  US: "usa america united states 미국 アメリカ",
+  GB: "uk britain england united kingdom 영국 イギリス",
+  KR: "korea south korea republic of korea 한국 대한민국 韓国",
+  JP: "japan 일본 日本",
+  TR: "turkey turkiye türkiye 튀르키예 トルコ",
+  ZZ: "other elsewhere unknown 기타 그 외 その他",
+};
+
+function normalizeSearchValue(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase();
+}
 
 export function LocalePage() {
   const navigate = useNavigate();
@@ -25,6 +40,7 @@ export function LocalePage() {
   const effectiveMeta = effectiveLanguageMeta(supportedLanguage);
   const locale = effectiveMeta.code;
   const copy = getRedesignCopy(supportedLanguage);
+  const productCopy = getProductCopy(supportedLanguage);
   const countries = useMemo(() => sortedCountries(supportedLanguage), [supportedLanguage]);
 
   useEffect(() => {
@@ -32,13 +48,14 @@ export function LocalePage() {
     document.documentElement.dir = effectiveMeta.direction;
   }, [effectiveMeta.code, effectiveMeta.direction]);
 
-  const normalizedSearch = search.trim().toLowerCase();
+  const normalizedSearch = normalizeSearchValue(search.trim());
   const visibleLanguages = LANGUAGES.filter((item) => !normalizedSearch
-    || item.toLowerCase().includes(normalizedSearch)
-    || LANGUAGE_ENGLISH_NAMES[item].toLowerCase().includes(normalizedSearch));
-  const visibleCountries = countries.filter(([name]) => !normalizedSearch
-    || name.toLowerCase().includes(normalizedSearch)
-    || countryName(name, locale).toLowerCase().includes(normalizedSearch));
+    || normalizeSearchValue(item).includes(normalizedSearch)
+    || normalizeSearchValue(LANGUAGE_ENGLISH_NAMES[item]).includes(normalizedSearch));
+  const visibleCountries = countries.filter(([name, code]) => !normalizedSearch
+    || normalizeSearchValue(name).includes(normalizedSearch)
+    || normalizeSearchValue(countryName(name, locale)).includes(normalizedSearch)
+    || normalizeSearchValue(COUNTRY_SEARCH_ALIASES[code] ?? "").includes(normalizedSearch));
 
   function chooseLanguage(nextLanguage: string) {
     const nextSupported = asSupportedLanguage(nextLanguage);
@@ -87,12 +104,18 @@ export function LocalePage() {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder={tab === "language" ? copy.searchLanguage : copy.searchCountry}
+            aria-label={tab === "language" ? copy.searchLanguage : copy.searchCountry}
           />
         </label>
       </div>
 
       <div className="v2-body" style={{ paddingTop: 4, paddingBottom: 8 }} role="tabpanel">
-        <p className="v2-list-section-label">{copy.suggested}</p>
+        {tab === "country" && (
+          <p className="v2-locale-help">{productCopy.entry.countryHelp(language)}</p>
+        )}
+        <p className="v2-list-section-label">
+          {tab === "language" ? copy.languageTab(LANGUAGES.length) : copy.countryTab(countries.length)}
+        </p>
         {tab === "language" && visibleLanguages.map((item) => {
           const selected = item === language;
           return (
@@ -113,6 +136,7 @@ export function LocalePage() {
         })}
         {tab === "country" && visibleCountries.map(([name, code]) => {
           const selected = name === country;
+          const localizedName = countryName(name, locale);
           return (
             <button
               type="button"
@@ -121,14 +145,21 @@ export function LocalePage() {
               aria-pressed={selected}
               onClick={() => setLocaleDraft(language, name)}
             >
+              <span className="v2-country-flag" aria-hidden="true">{countryFlag(code)}</span>
               <div>
-                <strong>{countryName(name, locale)}</strong>
-                <small>{name}</small>
+                <strong>{localizedName}</strong>
+                {normalizeSearchValue(localizedName) !== normalizeSearchValue(name) && <small>{name}</small>}
               </div>
               <span className={selected ? "v2-radio checked" : "v2-radio"} aria-hidden="true" />
             </button>
           );
         })}
+        {((tab === "language" && visibleLanguages.length === 0)
+          || (tab === "country" && visibleCountries.length === 0)) && (
+          <p className="v2-status" role="status">
+            {language === "한국어" ? "검색 결과가 없습니다." : language === "日本語" ? "検索結果がありません。" : "No matching results."}
+          </p>
+        )}
       </div>
     </main>
   );

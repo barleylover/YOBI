@@ -407,6 +407,18 @@ class CartLine(BaseModel):
     unit_price: int
     options: list[dict[str, Any]]
     line_total: int
+    user_note: str | None = None
+    korean_note: str | None = None
+
+
+class DeliveryPreferenceSummary(BaseModel):
+    handoff_method: Literal["front_desk", "door", "meet_outside"]
+    cutlery: bool
+    ring_bell: bool
+    front_desk: bool
+    user_note: str
+    korean_note: str
+    back_translation: str
 
 
 class CartPreview(BaseModel):
@@ -421,6 +433,7 @@ class CartPreview(BaseModel):
     dietary_warnings: list[str]
     minimum_order_amount: int = 0
     minimum_order_shortfall: int = 0
+    delivery_preference: DeliveryPreferenceSummary | None = None
     ready_to_checkout: bool
     confirmed: bool
 
@@ -428,10 +441,10 @@ class CartPreview(BaseModel):
 class DeliveryPreferenceInput(BaseModel):
     address_ref_id: str | None = None
     handoff_method: Literal["front_desk", "door", "meet_outside"] = "front_desk"
-    cutlery: bool = False
+    cutlery: bool = True
     ring_bell: bool = False
     front_desk: bool = True
-    user_note: str = "Please leave it at the hotel front desk."
+    user_note: str = "Please leave it at the hotel front desk and include disposable cutlery."
 
 
 class CheckoutCreate(BaseModel):

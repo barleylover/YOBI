@@ -497,7 +497,11 @@ short plate, 등심왕돈까스 as pork loin cutlet, 버팔로봉 as buffalo chi
 favoriting the restaurant, never steaming food. Translate 핫봉 as hot chicken drumettes and 라구 as
 ragu. "선택 안함" means "None"; "비조리" means "Uncooked" and must not be changed to "Cooked".
 A heading such as "맛 선택" may naturally be "Flavor"; it does not need the literal word
-"selection". Before returning, silently count the groups and every group's items, compare them to
+"selection". For English, translate 곱빼기 as "Extra-large portion (gopbaegi)", 전 as
+"savory Korean pancake (jeon)" when it names the food form, and 도시락 as
+"Korean lunchbox (dosirak)" on first use. For other target languages, translate these meanings
+naturally and retain the Korean term in parentheses only when it helps a traveler point to the
+listing. Before returning, silently count the groups and every group's items, compare them to
 the input, and verify that every output position still describes the source label at that same
 position. Do not return Markdown, analysis, or commentary. Prompt version:
 {self.settings.option_localization_prompt_version}.

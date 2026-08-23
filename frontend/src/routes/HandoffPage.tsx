@@ -100,6 +100,8 @@ export function HandoffPage() {
                   <div>
                     <strong>{item.display_name || (language === "한국어" ? item.menu_name_ko : item.menu_name)} ×{item.quantity}</strong>
                     <small>{item.options.map((option) => option.display_name || (language === "한국어" ? option.name_ko : option.name_en)).join(" · ") || journeyCopy.included}</small>
+                    {item.user_note && <small><b>{v2.restaurantRequest}:</b> {item.user_note}</small>}
+                    {item.korean_note && <small lang="ko">{item.korean_note}</small>}
                   </div>
                   <strong>{won(item.line_total)}</strong>
                 </div>
@@ -109,6 +111,13 @@ export function HandoffPage() {
             <div className="v2-price-row"><span>{v2.subtotal}</span><strong>{won(cart.subtotal)}</strong></div>
             <div className="v2-price-row"><span>{productCopy.recommendation.deliveryFee}</span><strong>{won(cart.delivery_fee)}</strong></div>
             <div className="v2-price-row total big"><span>{journeyCopy.total}</span><strong>{won(cart.total_price)}</strong></div>
+            {cart.delivery_preference && (
+              <div className="v2-review-request">
+                <strong>{v2.courierRequest}</strong>
+                <small>{cart.delivery_preference.user_note}</small>
+                <p lang="ko">{cart.delivery_preference.korean_note}</p>
+              </div>
+            )}
           </section>
         )}
 

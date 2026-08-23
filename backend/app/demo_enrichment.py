@@ -50,7 +50,7 @@ COUNTRY_CODES = (
     "TR",
     "NL",
 )
-GENERATOR_VERSION = "yobi-synthetic-enrichment-v8-halal-alias-coverage"
+GENERATOR_VERSION = "yobi-synthetic-enrichment-v9-animal-alias-coverage"
 SOURCE_TYPE = "SYNTHETIC_DEMO"
 LANGUAGE_CODES: tuple[LanguageCode, ...] = ("ko", "en", "ja")
 
@@ -149,6 +149,15 @@ _HALAL_EXCLUSION_TOKENS = _PORK_TOKENS + (
 )
 _ANIMAL_TOKENS = _PORK_TOKENS + (
     "BEEF",
+    "MEAT",
+    "GALBI",
+    "SHORT RIB",
+    "GOPCHANG",
+    "DAECHANG",
+    "MAKCHANG",
+    "TRIPE",
+    "INTESTINE",
+    "BLOOD SAUSAGE",
     "CHICKEN",
     "FISH",
     "SEAFOOD",
@@ -159,6 +168,13 @@ _ANIMAL_TOKENS = _PORK_TOKENS + (
     "제육",
     "소고기",
     "쇠고기",
+    "고기",
+    "갈비",
+    "곱창",
+    "대창",
+    "막창",
+    "내장",
+    "양곱창",
     "닭",
     "치킨",
     "생선",

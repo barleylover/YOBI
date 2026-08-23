@@ -338,6 +338,44 @@ describe("ChatPage structured recommendation contract", () => {
     expect(await screen.findByText("An easy Korean meal")).toBeInTheDocument();
   }, 8_000);
 
+  it("cancels criteria edits and restores the prior result without a new request", async () => {
+    prepareStore();
+    useSessionStore.setState({
+      committedCriteria: criteria,
+      draftCriteria: criteria,
+      criteriaVersion: 1,
+      recommendationPhase: "RESULTS",
+      latestRecommendation: batch,
+    });
+    vi.spyOn(api, "getPreferenceCatalog").mockResolvedValue({
+      catalog,
+      etag: '"catalog-v2-test"',
+      notModified: false,
+    });
+    vi.spyOn(api, "getConversation").mockResolvedValue(conversation({
+      state_version: 2,
+      recommendation_criteria: criteria,
+      criteria_version: 1,
+      latest_recommendation: batch,
+    }));
+    const putCriteria = vi.spyOn(api, "putRecommendationCriteria");
+    const createRecommendation = vi.spyOn(api, "createRecommendation");
+
+    renderPage();
+    expect(await screen.findByText("An easy Korean meal")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit filters" }));
+    expect(await screen.findByRole("heading", { name: "What are you craving?" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Korean" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Korean" })).toHaveAttribute("aria-pressed", "false"));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel changes" }));
+
+    expect(await screen.findByText("An easy Korean meal")).toBeInTheDocument();
+    expect(useSessionStore.getState().draftCriteria).toEqual(criteria);
+    expect(useSessionStore.getState().recommendationPhase).toBe("RESULTS");
+    expect(putCriteria).not.toHaveBeenCalled();
+    expect(createRecommendation).not.toHaveBeenCalled();
+  });
+
   it("stays on conditions after cancel even when the provider result arrives late", async () => {
     prepareStore();
     const pendingBatch: RecommendationBatchV2 = {
@@ -507,7 +545,7 @@ describe("ChatPage structured recommendation contract", () => {
     vi.spyOn(api, "getOptions").mockResolvedValue([]);
 
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "Choose this menu" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Choose this dish" }));
 
     expect(document.querySelector(".rank-bar")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Compare/ })).not.toBeInTheDocument();
@@ -524,7 +562,7 @@ describe("ChatPage structured recommendation contract", () => {
     await waitFor(() => expect(screen.getByTestId("order-flow")).toBeInTheDocument());
     expect(screen.getByTestId("selected-menu-message")).toHaveTextContent("An easy Korean meal");
     expect(screen.getByTestId("recommendation-results-message")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Choose this menu" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Choose this dish" })).not.toBeInTheDocument();
   });
 
   it("hydrates option events from the live conversation version, not the older recommendation snapshot", async () => {

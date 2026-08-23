@@ -21,6 +21,8 @@ export interface RedesignCopy {
   matchingAddresses: (count: number) => string;
   search: string;
   continueWithAddress: string;
+  searchConsentHint: string;
+  selectAddressHint: string;
   demoDeliveryBanner: string;
   demoFootnote: string;
   back: string;
@@ -66,6 +68,8 @@ export interface RedesignCopy {
   spiceSimilar: string;
   spiceMore: string;
   representativeSpice: (country: string, dish: string, level: number) => string;
+  spiceScaleGuide: string;
+  spiceScaleAnchor: (level: number, familiarDish: string, koreanDish: string, shu: number) => string;
   priceRange: string;
   priceMinimum: string;
   priceMaximum: string;
@@ -73,8 +77,11 @@ export interface RedesignCopy {
   sampleSize: (count: number) => string;
   reviewSummary: string;
   spiceOk: (level: number) => string;
+  spiceComparison: (level: number, comparison: -1 | 0 | 1, referenceDish: string) => string;
+  estimatedArrival: string;
   halalYes: string;
   halalNo: string;
+  adventurousChoice: string;
   viewExplanation: string;
   chooseThisMenu: string;
   additionalExplanation: string;
@@ -117,6 +124,19 @@ export interface RedesignCopy {
   backTranslation: string;
   retryTranslation: string;
   addWithoutNote: string;
+  restaurantNotePlaceholder: string;
+  handoffFrontDesk: string;
+  handoffDoor: string;
+  handoffMeetOutside: string;
+  includeCutlery: string;
+  noCutlery: string;
+  ringBell: string;
+  doNotRingBell: string;
+  restaurantRequest: string;
+  courierRequest: string;
+  cancelChanges: string;
+  saveChanges: string;
+  estimatedTotalHelp: string;
 }
 
 const en: RedesignCopy = {
@@ -134,6 +154,8 @@ const en: RedesignCopy = {
   matchingAddresses: (count) => `${count} matching address${count === 1 ? "" : "es"}`,
   search: "Search",
   continueWithAddress: "Continue with this address",
+  searchConsentHint: "Allow address use before searching.",
+  selectAddressHint: "Search for and select an address to continue.",
   demoDeliveryBanner: "Delivery area confirmed.",
   demoFootnote: "",
   back: "Back",
@@ -146,7 +168,7 @@ const en: RedesignCopy = {
   craveSubtitle: "Pick as many as you like. Results update live.",
   foundForYou: "I found these for you.",
   morePreferences: (count) => `+${count} more`,
-  liveCount: (menus, merchants) => `${menus.toLocaleString()} menus · ${merchants.toLocaleString()} restaurants fit right now`,
+  liveCount: (menus, merchants) => `${menus.toLocaleString()} dishes from ${merchants.toLocaleString()} restaurants currently fit`,
   any: "Any",
   clear: "Clear",
   next: "Next",
@@ -156,24 +178,24 @@ const en: RedesignCopy = {
   veryHot: "Very hot",
   halalLabel: "Halal-friendly only",
   veganLabel: "Vegan options only",
-  capabilityUnavailable: "Not enough reviewed menus yet",
+  capabilityUnavailable: "Not enough reviewed dishes yet",
   findingTitle: "Finding your dish",
-  findingMenus: "YOBI is finding menus for YOU!",
-  makingExplanation: "YOBI is making an explanation for YOU!",
+  findingMenus: "YOBI is finding dishes for YOU!",
+  makingExplanation: "Writing your recommendations",
   matchingSummary: (conditions, menus) => (menus == null
-    ? `Matching ${conditions} condition${conditions === 1 ? "" : "s"} against today’s menus.`
-    : `Matching ${conditions} condition${conditions === 1 ? "" : "s"} against ${menus.toLocaleString()} menus.`),
-  stageChecking: "Checking available menus",
+    ? `Matching ${conditions} condition${conditions === 1 ? "" : "s"} against today’s dishes.`
+    : `Matching ${conditions} condition${conditions === 1 ? "" : "s"} against ${menus.toLocaleString()} dishes.`),
+  stageChecking: "Checking available dishes",
   stageReading: "Reading the wiki and preparing matches",
   stageRanking: "Ranking your matches",
-  usuallyFewSeconds: "This usually takes a few seconds",
-  preparingTip: "You can change your spice limit or diet any time from Menu → Edit my info.",
+  usuallyFewSeconds: "This usually takes about 20 seconds",
+  preparingTip: "Your saved choices stay unchanged while YOBI prepares the explanation.",
   cancelAndEdit: "Cancel and edit conditions",
   alwaysOn: "K-food recommendations · always on",
   today: "Today",
-  foundSummary: (menus, merchants) => `Found ${menus.toLocaleString()} menus from ${merchants.toLocaleString()} restaurants for your choices.`,
+  foundSummary: (menus, merchants) => `Found ${menus.toLocaleString()} dishes from ${merchants.toLocaleString()} restaurants for your choices.`,
   editChip: "Edit",
-  yobiPick: "YOBI PICK ARRIVED",
+  yobiPick: "YOBI’s pick",
   pickCount: (index, total) => `${index} / ${total}`,
   yogiyoLabel: "YOGIYO:",
   yobiLabel: "YOBI:",
@@ -181,42 +203,47 @@ const en: RedesignCopy = {
   spiceSimilar: "About the same",
   spiceMore: "More spicy",
   representativeSpice: (country, dish, level) => `${country} reference: ${dish} · spice ${level}/5`,
+  spiceScaleGuide: "Two approximate reference anchors—not a medical or restaurant guarantee.",
+  spiceScaleAnchor: (level, familiarDish, koreanDish, shu) => `Level ${level}: ${familiarDish} ≈ ${koreanDish} · about ${shu.toLocaleString()} SHU`,
   priceRange: "Price range",
   priceMinimum: "Minimum price",
   priceMaximum: "Maximum price",
-  countryPreference: "Travellers from your country who liked this menu",
+  countryPreference: "Travelers from your country who liked this dish",
   sampleSize: (count) => `Based on ${count.toLocaleString()} visitors`,
   reviewSummary: "What diners say",
-  spiceOk: (level) => `Spice ${level}/5 ok`,
-  halalYes: "Halal-friendly: yes",
-  halalNo: "Halal-friendly: no",
-  viewExplanation: "View additional explanation",
-  chooseThisMenu: "Choose this menu",
-  additionalExplanation: "Additional Explanation",
+  spiceOk: (level) => `Spice ${level}/5`,
+  spiceComparison: (level, comparison, referenceDish) => `Spice ${level}/5 · ${comparison < 0 ? "less spicy than" : comparison > 0 ? "hotter than" : "about as spicy as"} ${referenceDish}`,
+  estimatedArrival: "ETA",
+  halalYes: "No obvious pork or alcohol detected · not halal-certified",
+  halalNo: "Halal status not verified",
+  adventurousChoice: "Adventurous choice · check the texture and ingredients",
+  viewExplanation: "Why YOBI picked this",
+  chooseThisMenu: "Choose this dish",
+  additionalExplanation: "Why YOBI picked this",
   aiGenerated: "AI generated",
   wikiEvidence: "Wiki evidence",
   gotIt: "Got it",
-  seeOtherMenus: "See other menus",
+  seeOtherMenus: "See other dishes",
   editFilters: "Edit filters",
   menuBar: "Menu",
   openCart: "Open cart",
   editMyInfo: "Edit my info",
   orderSetup: (index, total) => `Order setup · Option ${index} of ${total}`,
   requiredTapOne: "Required · tap one",
-  optionalTap: "Optional · choose any or none",
+  optionalTap: "Optional · choose one or none",
   noneOption: "None",
   doneOptions: "Done",
-  useDefaults: "Use defaults for the rest",
-  changeMenu: "Change menu",
+  useDefaults: "Use defaults for remaining options",
+  changeMenu: "Pick a different dish",
   niceChoice: (count) => (count > 0
     ? `Nice choice. Just ${count} quick option${count === 1 ? "" : "s"} and your order is ready to prepare.`
     : "Nice choice. Your order is almost ready to prepare."),
-  orderReady: "Order ready to prepare",
+  orderReady: "Order summary",
   deliverTo: "Deliver to",
-  yourMenu: "Your menu",
-  totalEstimated: "Total (estimated)",
-  demoOrderWarning: "Review the menu, options and delivery details before continuing.",
-  prepareOrder: (total) => `Prepare this order · ${total}`,
+  yourMenu: "Your order",
+  totalEstimated: "Estimated total",
+  demoOrderWarning: "Review the dish, options and delivery details before continuing.",
+  prepareOrder: (total) => `Place order · ${total}`,
   changeAddress: "Change address",
   changeOptions: "Change options",
   startOver: "Start over",
@@ -224,16 +251,29 @@ const en: RedesignCopy = {
   itemsSummary: (count, name) => `${count} item${count === 1 ? "" : "s"} · ${name}`,
   subtotal: "Subtotal",
   openInYogiyo: "Open in Yogiyo",
-  backToMenus: "Back to menus",
+  backToMenus: "Back to dishes",
   handoffDemoNotice: "YOBI hands this basket to Yogiyo to continue your order.",
   restaurantNote: "How should we say it? Restaurant note",
-  restaurantNoteHelp: "Write in your language. YOBI will translate it into Korean for the restaurant.",
+  restaurantNoteHelp: "Write in your language, then translate to Korean before adding it.",
   translateNote: "Translate to Korean",
   translatingNote: "Translating…",
   koreanTranslation: "Message to restaurant",
-  backTranslation: "Check in your language",
+  backTranslation: "In your words",
   retryTranslation: "Try Korean translation again",
   addWithoutNote: "Add without restaurant note",
+  restaurantNotePlaceholder: "Example: Please make it as mild as possible.",
+  handoffFrontDesk: "Leave at the hotel front desk",
+  handoffDoor: "Leave at my door",
+  handoffMeetOutside: "Meet me outside",
+  includeCutlery: "Include disposable cutlery",
+  noCutlery: "No disposable cutlery",
+  ringBell: "Ring the bell on arrival",
+  doNotRingBell: "Do not ring the bell",
+  restaurantRequest: "Restaurant request",
+  courierRequest: "Courier handoff request",
+  cancelChanges: "Cancel changes",
+  saveChanges: "Save changes",
+  estimatedTotalHelp: "The final amount is confirmed in Yogiyo before payment.",
 };
 
 const ko: RedesignCopy = {
@@ -251,6 +291,8 @@ const ko: RedesignCopy = {
   matchingAddresses: (count) => `주소 ${count}건 일치`,
   search: "검색",
   continueWithAddress: "이 주소로 계속하기",
+  searchConsentHint: "검색 전에 주소 사용 동의에 체크해 주세요.",
+  selectAddressHint: "계속하려면 주소를 검색하고 하나를 선택해 주세요.",
   demoDeliveryBanner: "배달 가능 지역을 확인했어요.",
   demoFootnote: "",
   back: "뒤로",
@@ -298,15 +340,20 @@ const ko: RedesignCopy = {
   spiceSimilar: "기준과 비슷하게",
   spiceMore: "기준보다 더 맵게",
   representativeSpice: (country, dish, level) => `${country} 기준: ${dish} · 맵기 ${level}/5`,
+  spiceScaleGuide: "근사 비교 기준 두 가지예요. 의학적 기준이나 식당 보장은 아닙니다.",
+  spiceScaleAnchor: (level, familiarDish, koreanDish, shu) => `${level}단계: ${familiarDish} ≈ ${koreanDish} · 약 ${shu.toLocaleString()} SHU`,
   priceRange: "가격 범위",
   priceMinimum: "최소 가격",
   priceMaximum: "최대 가격",
   countryPreference: "같은 국가 여행객의 메뉴 선호도",
   sampleSize: (count) => `여행객 ${count.toLocaleString()}명 기준`,
   reviewSummary: "리뷰 요약",
-  spiceOk: (level) => `맵기 ${level}/5 통과`,
-  halalYes: "할랄 친화: 예",
-  halalNo: "할랄 친화: 아니요",
+  spiceOk: (level) => `맵기 ${level}/5`,
+  spiceComparison: (level, comparison, referenceDish) => `맵기 ${level}/5 · ${referenceDish}${comparison < 0 ? "보다 덜 매워요" : comparison > 0 ? "보다 더 매워요" : "와 비슷해요"}`,
+  estimatedArrival: "예상 도착",
+  halalYes: "할랄 친화 프로필 · 인증 아님",
+  halalNo: "할랄 여부 미확인",
+  adventurousChoice: "도전적인 음식 · 식감과 재료를 확인하세요",
   viewExplanation: "추가 설명 보기",
   chooseThisMenu: "이 메뉴 선택",
   additionalExplanation: "추가 설명",
@@ -344,13 +391,26 @@ const ko: RedesignCopy = {
   backToMenus: "메뉴로 돌아가기",
   handoffDemoNotice: "YOBI가 주문을 계속할 수 있도록 이 장바구니를 요기요로 전달합니다.",
   restaurantNote: "식당에는 어떻게 전할까요?",
-  restaurantNoteHelp: "사용 중인 언어로 적으면 YOBI가 식당에 전달할 한국어로 번역해요.",
+  restaurantNoteHelp: "사용 중인 언어로 적고, 담기 전에 한국어로 번역해 주세요.",
   translateNote: "한국어로 번역",
   translatingNote: "번역 중…",
   koreanTranslation: "식당에 보낼 메시지",
   backTranslation: "내 언어로 다시 확인",
   retryTranslation: "번역 다시 시도",
   addWithoutNote: "요청사항 없이 장바구니에 담기",
+  restaurantNotePlaceholder: "예: 가능한 한 맵지 않게 해 주세요.",
+  handoffFrontDesk: "호텔 프런트에 맡기기",
+  handoffDoor: "문 앞에 놓기",
+  handoffMeetOutside: "건물 밖에서 만나기",
+  includeCutlery: "일회용 수저 포함",
+  noCutlery: "일회용 수저 제외",
+  ringBell: "도착하면 벨 누르기",
+  doNotRingBell: "벨 누르지 않기",
+  restaurantRequest: "가게 요청사항",
+  courierRequest: "배달 인계 요청",
+  cancelChanges: "수정 취소",
+  saveChanges: "변경사항 저장",
+  estimatedTotalHelp: "최종 금액은 결제 전 Yogiyo에서 확인합니다.",
 };
 
 const ja: RedesignCopy = {
@@ -359,12 +419,14 @@ const ja: RedesignCopy = {
   searchCountry: "国・地域を検索", suggested: "おすすめ", stepDelivery: "ステップ1/3・配達",
   stepPreferences: "ステップ2/3・好み", stepPreferencesTaste: "ステップ2/3・味の好み",
   stepPreferencesConditions: "ステップ2/3・条件", matchingAddresses: (count) => `${count}件の住所が一致`,
-  search: "検索", continueWithAddress: "この住所で続ける", demoDeliveryBanner: "配達可能エリアを確認しました。",
+  search: "検索", continueWithAddress: "この住所で続ける",
+  searchConsentHint: "検索する前に、住所利用への同意を選択してください。",
+  selectAddressHint: "続けるには住所を検索して選択してください。", demoDeliveryBanner: "配達可能エリアを確認しました。",
   demoFootnote: "", back: "戻る", stepOf: (step, total, label) => `ステップ${step}/${total}・${label}`,
   sectionCore: "基本", sectionTaste: "味", sectionConditions: "条件", sectionPreferences: "好み",
   craveTitle: "どんな料理が食べたいですか？", craveSubtitle: "好きなだけ選べます。",
   foundForYou: "こちらのメニューを見つけました。", morePreferences: (count) => `ほか${count}件`,
-  liveCount: () => "", any: "指定なし", clear: "クリア", next: "次へ", findMyDish: "料理を探す",
+  liveCount: (menus, merchants) => `現在${merchants.toLocaleString()}店・${menus.toLocaleString()}品が条件に一致`, any: "指定なし", clear: "クリア", next: "次へ", findMyDish: "料理を探す",
   upTo: (level) => `${level}まで`, mild: "マイルド", veryHot: "とても辛い",
   halalLabel: "ハラール対応のみ", veganLabel: "ヴィーガンのみ", capabilityUnavailable: "現在利用できません",
   findingTitle: "料理を探しています", findingMenus: "YOBIがあなたのメニューを探しています！",
@@ -377,10 +439,14 @@ const ja: RedesignCopy = {
   yogiyoLabel: "YOGIYO:", yobiLabel: "YOBI:", spiceLess: "基準より辛くない",
   spiceSimilar: "基準と同じくらい", spiceMore: "基準より辛い", priceRange: "価格帯",
   representativeSpice: (country, dish, level) => `${country}の目安：${dish}・辛さ${level}/5`,
+  spiceScaleGuide: "おおよその比較基準です。医学的基準や店舗保証ではありません。",
+  spiceScaleAnchor: (level, familiarDish, koreanDish, shu) => `レベル${level}：${familiarDish} ≈ ${koreanDish}・約${shu.toLocaleString()} SHU`,
   priceMinimum: "最低価格", priceMaximum: "最高価格",
   countryPreference: "同じ国からの旅行者の好み", sampleSize: (count) => `${count.toLocaleString()}人を基準`,
-  reviewSummary: "レビュー要約", spiceOk: (level) => `辛さ ${level}/5`, halalYes: "ハラール対応候補：はい",
-  halalNo: "ハラール対応候補：いいえ", viewExplanation: "詳しい説明を見る", chooseThisMenu: "このメニューを選ぶ",
+  reviewSummary: "レビュー要約", spiceOk: (level) => `辛さ ${level}/5`,
+  spiceComparison: (level, comparison, referenceDish) => `辛さ ${level}/5・${referenceDish}${comparison < 0 ? "より辛くありません" : comparison > 0 ? "より辛い" : "と同じくらい"}`, estimatedArrival: "到着予定",
+  halalYes: "ハラール対応候補・認証ではありません", halalNo: "ハラール情報は未確認",
+  adventurousChoice: "挑戦的な料理・食感と材料を確認してください", viewExplanation: "詳しい説明を見る", chooseThisMenu: "このメニューを選ぶ",
   additionalExplanation: "詳しい説明", aiGenerated: "YOBIの説明", wikiEvidence: "Wikiの根拠",
   gotIt: "確認", seeOtherMenus: "ほかのメニューを見る", editFilters: "条件を編集", menuBar: "メニュー",
   openCart: "カートを開く", editMyInfo: "情報を編集", orderSetup: (index, total) => `注文設定・${index}/${total}`,
@@ -393,10 +459,18 @@ const ja: RedesignCopy = {
   startOver: "最初から", readyToOrder: "注文準備完了", itemsSummary: (count, name) => `${count}点・${name}`,
   subtotal: "小計", openInYogiyo: "Yogiyoで開く", backToMenus: "メニューに戻る",
   handoffDemoNotice: "注文を続けるため、YOBIがこのカートをYogiyoへ引き継ぎます。",
-  restaurantNote: "お店にはどう伝えますか？", restaurantNoteHelp: "使っている言語で入力すると、YOBIが韓国語に翻訳します。",
+  restaurantNote: "お店にはどう伝えますか？", restaurantNoteHelp: "使っている言語で入力し、追加する前に韓国語へ翻訳してください。",
   translateNote: "韓国語に翻訳", translatingNote: "翻訳中…", koreanTranslation: "お店へのメッセージ",
   backTranslation: "自分の言語で確認", retryTranslation: "韓国語への翻訳を再試行",
   addWithoutNote: "お店へのメモなしでカートに追加",
+  restaurantNotePlaceholder: "例：できるだけ辛くしないでください。",
+  handoffFrontDesk: "ホテルフロントに預ける", handoffDoor: "ドアの前に置く",
+  handoffMeetOutside: "建物の外で受け取る", includeCutlery: "使い捨てカトラリーを付ける",
+  noCutlery: "使い捨てカトラリー不要", ringBell: "到着時にベルを鳴らす",
+  doNotRingBell: "ベルを鳴らさない", restaurantRequest: "店舗への要望",
+  courierRequest: "配達員への受け渡し要望", cancelChanges: "変更をキャンセル",
+  saveChanges: "変更を保存",
+  estimatedTotalHelp: "最終金額は支払い前にYogiyoで確認します。",
 };
 
 export function getRedesignCopy(language: SupportedLanguage): RedesignCopy {

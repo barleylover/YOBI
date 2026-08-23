@@ -151,6 +151,13 @@ export interface SpiceReferenceGroup {
   levels: SpiceReferenceLevel[];
 }
 
+export interface SpiceScaleAnchor {
+  level: 2 | 4;
+  familiar_dish: string;
+  korean_dish: string;
+  approximate_shu: number;
+}
+
 export interface PreferenceCatalog {
   schema_version: "2" | "3";
   catalog_version: string;
@@ -163,6 +170,7 @@ export interface PreferenceCatalog {
     country_code: SpiceReferenceCountry;
     spice_baseline: 1 | 2 | 3 | 4 | 5;
     representative_dish: string;
+    spice_scale_anchors?: SpiceScaleAnchor[];
   }>;
   synthetic_enrichment_release_id?: string | null;
   capabilities?: {
@@ -667,6 +675,8 @@ export interface CartPreview {
     unit_price: number;
     options: Array<{ option_item_id: string; name_en: string; name_ko: string; display_name?: string | null; price_delta: number }>;
     line_total: number;
+    user_note?: string | null;
+    korean_note?: string | null;
   }>;
   subtotal: number;
   delivery_fee: number;
@@ -675,6 +685,15 @@ export interface CartPreview {
   dietary_warnings: string[];
   minimum_order_amount: number;
   minimum_order_shortfall: number;
+  delivery_preference?: {
+    handoff_method: "front_desk" | "door" | "meet_outside";
+    cutlery: boolean;
+    ring_bell: boolean;
+    front_desk: boolean;
+    user_note: string;
+    korean_note: string;
+    back_translation: string;
+  } | null;
   ready_to_checkout: boolean;
   confirmed: boolean;
 }

@@ -52,8 +52,8 @@ test("provider unavailability yields selectable deterministic results", async ({
   await startStructuredSession(page);
   await selectFirstPreferenceAndRecommend(page);
 
-  await expect(page.getByRole("heading", { name: "Closest matching menus" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Closest matching dishes" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Try recommendation again" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Choose this menu" }).first()).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Choose this dish" }).first()).toBeEnabled();
   await expect(page.getByRole("button", { name: "Edit filters" })).toBeVisible();
 });

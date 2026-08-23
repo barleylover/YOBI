@@ -1,19 +1,27 @@
 import { useEffect, useRef, useState } from "react";
 import type {
+  PreferenceCatalog,
   RecommendationBatchV2,
   StructuredRecommendation,
 } from "../types";
 import type { RecommendationCopy } from "../lib/recommendationI18n";
 import type { RedesignCopy } from "../lib/redesignI18n";
-import { asEffectiveLanguage, asSupportedLanguage, formatMinuteRange, menuName, merchantName } from "../lib/locale";
+import {
+  asEffectiveLanguage,
+  asSupportedLanguage,
+  formatMinuteRange,
+  isAdventurousDish,
+  menuName,
+  merchantName,
+} from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
 import { carouselIndexFromOffset } from "../lib/carouselScroll";
 import { BottomSheet } from "./BottomSheet";
 
 interface Props {
   batch: RecommendationBatchV2;
-  /** Kept as an optional prop for callers restoring an older result component. */
-  catalog?: unknown;
+  catalog?: PreferenceCatalog;
+  spiceReferenceCountry?: string;
   copy: RecommendationCopy;
   v2: RedesignCopy;
   language: string;
@@ -28,6 +36,8 @@ interface Props {
 
 export function RecommendationResults({
   batch,
+  catalog,
+  spiceReferenceCountry,
   copy,
   v2,
   language,
@@ -68,6 +78,9 @@ export function RecommendationResults({
         country_code: normalizedPreferenceCountryCode,
       }
     : null;
+  const spiceReferenceProfile = catalog?.country_spice_profiles?.find(
+    (profile) => profile.country_code === spiceReferenceCountry,
+  );
 
   return (
     <section
@@ -116,6 +129,13 @@ export function RecommendationResults({
                   : "Minimum order";
               const sourceDescription = item.source_description
                 || (asEffectiveLanguage(language) === "한국어" ? item.menu.description : "");
+              const adventurous = isAdventurousDish(
+                item.localized_title,
+                item.menu.name_en,
+                item.menu.name_ko,
+                sourceDescription,
+              );
+              const localizedMerchantName = merchantName(item.menu.merchant_name, language);
               return (
                 <article className="v2-alimtalk-card" key={item.menu.menu_id} data-testid={`menu-${item.menu.menu_id}`}>
                   <div className="v2-card-strip">
@@ -130,7 +150,13 @@ export function RecommendationResults({
                         {item.localized_subtitle && item.localized_subtitle !== item.localized_title && (
                           <small className="v2-card-subtitle">{item.localized_subtitle}</small>
                         )}
-                        <p>{merchantName(item.menu.merchant_name, language)}</p>
+                        {asEffectiveLanguage(language) !== "한국어" && item.menu.name_ko && (
+                          <small className="v2-card-korean-name" lang="ko">{item.menu.name_ko}</small>
+                        )}
+                        <p>{localizedMerchantName}</p>
+                        {localizedMerchantName !== item.menu.merchant_name && (
+                          <small className="v2-card-original-name" lang="ko">{item.menu.merchant_name}</small>
+                        )}
                       </div>
                       <strong>₩{item.menu.price.toLocaleString(locale)}</strong>
                     </div>
@@ -145,17 +171,28 @@ export function RecommendationResults({
                       </p>
                     )}
                     <div className="v2-fact-chips">
-                      <span>{formatMinuteRange(item.menu.eta_min, item.menu.eta_max, locale)}</span>
-                      <span>{item.menu.delivery_fee ? `₩${item.menu.delivery_fee.toLocaleString(locale)}` : productCopy.freeDelivery}</span>
+                      <span>{v2.estimatedArrival} · {formatMinuteRange(item.menu.eta_min, item.menu.eta_max, locale)}</span>
+                      <span>{productCopy.deliveryFee} · {item.menu.delivery_fee ? `₩${item.menu.delivery_fee.toLocaleString(locale)}` : productCopy.freeDelivery}</span>
                       {Boolean(item.menu.minimum_order_amount) && (
                         <span>{minimumOrderLabel} ₩{item.menu.minimum_order_amount!.toLocaleString(locale)}</span>
                       )}
-                      {spiceLevel != null && <span className="success">{v2.spiceOk(spiceLevel)}</span>}
+                      {spiceLevel != null && (
+                        <span className="success">
+                          {spiceReferenceProfile
+                            ? v2.spiceComparison(
+                                spiceLevel,
+                                spiceLevel < spiceReferenceProfile.spice_baseline ? -1 : spiceLevel > spiceReferenceProfile.spice_baseline ? 1 : 0,
+                                spiceReferenceProfile.representative_dish,
+                              )
+                            : v2.spiceOk(spiceLevel)}
+                        </span>
+                      )}
                       {item.halal_certified
                         ? <span className="success">{v2.halalYes}</span>
                         : <span className="warn">{v2.halalNo}</span>}
                       {item.vegan_status === "LIKELY_FIT" && <span className="success">{copy.veganLikely}</span>}
                       {item.vegan_status === "POSSIBLE_WITH_CHECKS" && <span className="warn">{copy.veganChecks}</span>}
+                      {adventurous && <span className="warn">{v2.adventurousChoice}</span>}
                     </div>
                     {item.vegan_warning && item.vegan_status !== "LIKELY_FIT" && (
                       <p className="v2-card-warning">{item.vegan_warning}</p>

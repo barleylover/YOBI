@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import type { RedesignCopy } from "../lib/redesignI18n";
 
 interface Props {
@@ -8,12 +7,7 @@ interface Props {
 }
 
 export function PreparingScreen({ v2, phase, onCancel }: Props) {
-  const [explaining, setExplaining] = useState(false);
-  useEffect(() => {
-    setExplaining(false);
-    const timer = window.setTimeout(() => setExplaining(true), 5_000);
-    return () => window.clearTimeout(timer);
-  }, []);
+  const explaining = phase === "GENERATING";
   const stageIndex = phase === "GENERATING" ? 1 : 0;
   const stages = [v2.stageChecking, v2.stageReading, v2.stageRanking];
   return (

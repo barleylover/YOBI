@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { LANGUAGES, asEffectiveLanguage, effectiveLanguageMeta } from "../src/lib/locale";
+import {
+  LANGUAGES,
+  asEffectiveLanguage,
+  effectiveLanguageMeta,
+  travelerOptionLabel,
+} from "../src/lib/locale";
 import { getProductCopy } from "../src/lib/productI18n";
 import { getRecommendationCopy } from "../src/lib/recommendationI18n";
 import { getRedesignCopy } from "../src/lib/redesignI18n";
@@ -59,7 +64,15 @@ describe("product-flow localization", () => {
         redesign.liveCount(228, 27),
         redesign.prepareOrder("₩12,000"),
       ].join(" ");
-      expect(visibleCopy.match(/demo|mock|synthetic|데모|목업|합성|デモ|モック|合成/i), language).toBeNull();
+      expect(visibleCopy.match(/\bdemo\b|\bmock\b|\bsynthetic\b|데모|목업|합성|デモ|モック|合成/i), language).toBeNull();
     }
+  });
+
+  it("turns common romanized option terms into traveler-friendly English", () => {
+    expect(travelerOptionLabel("Gopbaegi Add-On", "English")).toBe("Portion size");
+    expect(travelerOptionLabel("Add Gopbaegi", "English")).toBe("Extra-large portion (gopbaegi)");
+    expect(travelerOptionLabel("No Gopbaegi", "English")).toBe("Regular portion");
+    expect(travelerOptionLabel("nostalgic sausage jeon", "English")).toBe("Nostalgic sausage pancake (jeon)");
+    expect(travelerOptionLabel("곱빼기 추가", "한국어")).toBe("곱빼기 추가");
   });
 });

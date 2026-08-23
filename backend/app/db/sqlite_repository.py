@@ -12,7 +12,11 @@ from time import monotonic
 from typing import Any, Literal, cast
 from uuid import uuid4
 
-from app.country_spice_examples import effective_language, representative_dish
+from app.country_spice_examples import (
+    effective_language,
+    representative_dish,
+    spice_scale_anchors,
+)
 from app.db.browse_rankings import food_ranking_sql
 from app.db.concept_query import (
     build_candidate_recall_channel_query,
@@ -4951,6 +4955,9 @@ class SQLiteYobiRepository:
                     row["representative_dish"]
                     or representative_dish(str(row["country_code"]), locale)
                 ),
+                "spice_scale_anchors": spice_scale_anchors(
+                    str(row["country_code"]), locale
+                ),
             }
             for row in synthetic_country_rows
         ]
@@ -5270,15 +5277,15 @@ class SQLiteYobiRepository:
             }[sort]
             if str(row["ranking_metric_basis"]) == "DETERMINISTIC_SYNTHETIC_FALLBACK":
                 metric_label = {
-                    "review_count": "Deterministic demo review score",
-                    "order_count": "Deterministic demo order score",
-                    "korean_popularity": "Deterministic demo Korean-popularity score",
+                    "review_count": "Prepared review activity",
+                    "order_count": "Prepared order activity",
+                    "korean_popularity": "Prepared Korean-popularity signal",
                 }[sort]
             else:
                 metric_label = {
-                    "review_count": "Source menu review count",
-                    "order_count": "Deterministic demo order proxy",
-                    "korean_popularity": "Deterministic demo Korean-popularity proxy",
+                    "review_count": "Review activity",
+                    "order_count": "Prepared order activity",
+                    "korean_popularity": "Prepared Korean-popularity signal",
                 }[sort]
             menu = self._menu_summary(
                 row,
@@ -5290,9 +5297,7 @@ class SQLiteYobiRepository:
             if row["concept_description"]:
                 menu = menu.model_copy(
                     update={
-                        "cultural_description": (
-                            "General food reference: " + str(row["concept_description"])
-                        )
+                        "cultural_description": str(row["concept_description"])
                     }
                 )
             menus.append(menu)
@@ -5310,9 +5315,8 @@ class SQLiteYobiRepository:
         return FoodRankingCollection(
             snapshot_id=snapshot_id,
             demo_basis=(
-                "YOBI demo only. Provided source counts take priority. Synthetic menus with "
-                "no source counts use stable menu-ID-derived demo scores so sort controls "
-                "remain demonstrable. No value is a live Yogiyo-wide statistic."
+                "Prepared demo activity signals are used for ordering; these are not live "
+                "Yogiyo-wide review, order, or popularity statistics."
             ),
             sort=sort,
             items=items,
@@ -5446,9 +5450,7 @@ class SQLiteYobiRepository:
             ).model_copy(
                 update={
                     "cultural_description": (
-                        "General food reference: " + str(row["concept_description"])
-                        if row["concept_description"]
-                        else ""
+                        str(row["concept_description"]) if row["concept_description"] else ""
                     )
                 }
             )
@@ -8569,9 +8571,15 @@ class SQLiteYobiRepository:
                     tuple(merchant_ids),
                 ).fetchone()
                 delivery_fee = int(fee_row["fee"] or 0)
-            has_delivery = connection.execute(
-                "SELECT 1 FROM delivery_preference WHERE cart_id = ?", (cart["cart_id"],)
+            delivery_preference = connection.execute(
+                """
+                SELECT handoff_method,cutlery,ring_bell,front_desk,
+                       user_note,korean_note,back_translation
+                FROM delivery_preference WHERE cart_id = ?
+                """,
+                (cart["cart_id"],),
             ).fetchone()
+            has_delivery = delivery_preference is not None
             profile_row = connection.execute(
                 """
                 SELECT p.dietary_rules_json, p.allergy_severity,
@@ -8940,6 +8948,8 @@ class SQLiteYobiRepository:
                     for option in json.loads(row["option_snapshot_json"])
                 ],
                 line_total=row["line_total"],
+                user_note=str(row["user_note"] or ""),
+                korean_note=str(row["korean_note"] or ""),
             )
             for row in rows
         ]
@@ -8978,6 +8988,21 @@ class SQLiteYobiRepository:
             dietary_warnings=warnings,
             minimum_order_amount=minimum_order_amount,
             minimum_order_shortfall=minimum_order_shortfall,
+            delivery_preference=(
+                {
+                    "handoff_method": str(delivery_preference["handoff_method"]),
+                    "cutlery": bool(delivery_preference["cutlery"]),
+                    "ring_bell": bool(delivery_preference["ring_bell"]),
+                    "front_desk": bool(delivery_preference["front_desk"]),
+                    "user_note": str(delivery_preference["user_note"] or ""),
+                    "korean_note": str(delivery_preference["korean_note"] or ""),
+                    "back_translation": str(
+                        delivery_preference["back_translation"] or ""
+                    ),
+                }
+                if delivery_preference is not None
+                else None
+            ),
             ready_to_checkout=not missing,
             confirmed=(
                 bool(cart["confirmed"]) and cart["confirmed_fingerprint"] == current_fingerprint

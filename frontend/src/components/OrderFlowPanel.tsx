@@ -11,7 +11,7 @@ import type {
   RestaurantNoteTranslation,
 } from "../types";
 import { useI18n } from "../lib/i18n";
-import { asSupportedLanguage, LANGUAGE_META, menuName, merchantName } from "../lib/locale";
+import { asSupportedLanguage, LANGUAGE_META, menuName, merchantName, travelerOptionLabel } from "../lib/locale";
 import { getRecommendationCopy } from "../lib/recommendationI18n";
 import { getRedesignCopy } from "../lib/redesignI18n";
 import {
@@ -39,6 +39,7 @@ interface Props {
 }
 
 type Phase = "options" | "note" | "more" | "browse" | "delivery" | "review" | "merchant-conflict";
+type HandoffMethod = "front_desk" | "door" | "meet_outside";
 
 export function OrderFlowPanel({
   sessionId,
@@ -63,7 +64,7 @@ export function OrderFlowPanel({
   const [groups, setGroups] = useState<OptionGroup[]>([]);
   const [groupIndex, setGroupIndex] = useState(0);
   const [selections, setSelections] = useState<Record<string, string[]>>({});
-  const [note, setNote] = useState(journeyCopy.mildNote);
+  const [note, setNote] = useState("");
   const [cart, setCart] = useState<CartPreview | null>(null);
   const [merchantMenus, setMerchantMenus] = useState<MerchantMenuPresentation[]>([]);
   const [nextMenuCursor, setNextMenuCursor] = useState<string | null>(null);
@@ -71,6 +72,10 @@ export function OrderFlowPanel({
   const [noteTranslation, setNoteTranslation] = useState<RestaurantNoteTranslation | null>(null);
   const [editingCartItemId, setEditingCartItemId] = useState<string | null>(null);
   const [noteTouched, setNoteTouched] = useState(false);
+  const [handoffMethod, setHandoffMethod] = useState<HandoffMethod>("front_desk");
+  const [includeCutlery, setIncludeCutlery] = useState(true);
+  const [ringBell, setRingBell] = useState(false);
+  const [upsellHistory, setUpsellHistory] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [loadingOptions, setLoadingOptions] = useState(false);
   const [error, setError] = useState("");
@@ -147,6 +152,11 @@ export function OrderFlowPanel({
   function syncCart(preview: CartPreview) {
     setCart(preview);
     setCartQuantity(preview.items.reduce((total, item) => total + item.quantity, 0));
+    if (preview.delivery_preference) {
+      setHandoffMethod(preview.delivery_preference.handoff_method);
+      setIncludeCutlery(preview.delivery_preference.cutlery);
+      setRingBell(preview.delivery_preference.ring_bell);
+    }
   }
 
   async function routeAfterNewCartItem(preview: CartPreview) {
@@ -213,7 +223,7 @@ export function OrderFlowPanel({
       group.items.filter((option) => selectedIds.has(option.option_item_id)).map((option) => option.option_item_id),
     ])));
     setEditingCartItemId(line.cart_item_id);
-    setNote("");
+    setNote(line.user_note ?? "");
     setNoteTouched(false);
     setNoteTranslation(null);
     setGroupIndex(0);
@@ -224,11 +234,19 @@ export function OrderFlowPanel({
   const selectedOptionIds = useMemo(() => Object.values(selections).flat(), [selections]);
   const localizedOptionNames = useMemo(() => new Map(groups.flatMap((group) => group.items.map((option) => [
     option.option_item_id,
-    option.display_name || (language === "한국어" ? option.name_ko : option.name_en),
+    travelerOptionLabel(
+      option.display_name || (language === "한국어" ? option.name_ko : option.name_en),
+      language,
+    ),
   ]))), [groups, language]);
   const selectedDelta = useMemo(
     () => selectedOptionsPriceDelta(groups, selections),
     [groups, selections],
+  );
+  const noteRequiresTranslation = Boolean(
+    note.trim()
+    && (!editingCartItemId || noteTouched)
+    && (noteTranslation?.status !== "SUCCEEDED" || noteTranslation.source_text !== note),
   );
 
   function advanceFromGroup() {
@@ -248,7 +266,6 @@ export function OrderFlowPanel({
       const next = toggledOptionSelection(group, current, optionId);
       await onOptionChange?.(activeMenu.menu_id, group.option_group_id, next, false);
       setSelections((value) => ({ ...value, [group.option_group_id]: next }));
-      if (group.max_select === 1) advanceFromGroup();
     } catch (cause) {
       setError(actionableError(cause, journeyCopy.retry, language));
     } finally {
@@ -262,7 +279,6 @@ export function OrderFlowPanel({
     try {
       await onOptionChange?.(activeMenu.menu_id, group.option_group_id, [], false);
       setSelections((current) => ({ ...current, [group.option_group_id]: [] }));
-      advanceFromGroup();
     } catch (cause) {
       setError(actionableError(cause, journeyCopy.retry, language));
     } finally {
@@ -312,7 +328,7 @@ export function OrderFlowPanel({
   }
 
   async function addToCart() {
-    if (note.trim() && (noteTranslation?.status !== "SUCCEEDED" || noteTranslation.source_text !== note)) {
+    if (noteRequiresTranslation) {
       setError(v2.restaurantNoteHelp);
       return;
     }
@@ -434,6 +450,7 @@ export function OrderFlowPanel({
       });
       setMerchantMenus(page.items);
       setNextMenuCursor(page.next_cursor ?? null);
+      setUpsellHistory((current) => [...current, copy.yesMore]);
       setPhase(page.items.length ? "browse" : "delivery");
     } catch (cause) {
       setError(actionableError(cause, journeyCopy.retry, language));
@@ -446,15 +463,37 @@ export function OrderFlowPanel({
     setActiveMenu({ ...nextMenu.menu, localized_title: nextMenu.localized_title } as MenuSummary);
     setMerchantMenus([]);
     setNextMenuCursor(null);
-    setNote(journeyCopy.mildNote);
+    setNote("");
     setNoteTouched(false);
     setNoteTranslation(null);
+  }
+
+  function continueToDelivery() {
+    setUpsellHistory((current) => [...current, copy.noDelivery]);
+    setPhase("delivery");
   }
 
   async function saveDelivery() {
     setBusy(true);
     try {
-      const preview = await api.updateDelivery(sessionId, addressRefId);
+      const locationNote = handoffMethod === "front_desk"
+        ? "Please leave it at the hotel front desk."
+        : handoffMethod === "door"
+          ? "Please leave it at the door."
+          : "Please meet me outside.";
+      const cutleryNote = includeCutlery
+        ? "Please include disposable cutlery."
+        : "No disposable cutlery.";
+      const bellNote = handoffMethod === "front_desk"
+        ? ""
+        : ringBell ? "Please ring the bell." : "Please do not ring the bell.";
+      const preview = await api.updateDelivery(sessionId, addressRefId, {
+        handoff_method: handoffMethod,
+        cutlery: includeCutlery,
+        ring_bell: handoffMethod !== "front_desk" && ringBell,
+        front_desk: handoffMethod === "front_desk",
+        user_note: [locationNote, cutleryNote, bellNote].filter(Boolean).join(" "),
+      });
       syncCart(preview);
       setPhase("review");
     } catch (cause) {
@@ -516,6 +555,13 @@ export function OrderFlowPanel({
       {loadingOptions && phase === "options" && !currentGroup && (
         <p className="v2-status" role="status">{journeyCopy.loading}</p>
       )}
+      {upsellHistory.length > 0 && (
+        <div className="v2-order-history" role="log" aria-label={copy.moreQuestion}>
+          {upsellHistory.map((answer, index) => (
+            <p key={`${answer}-${index}`}><small>{copy.moreQuestion}</small><strong>{answer}</strong></p>
+          ))}
+        </div>
+      )}
       {phase === "merchant-conflict" && cart && (
         <article className="v2-order-card" role="alert">
           <div className="v2-order-body">
@@ -539,7 +585,7 @@ export function OrderFlowPanel({
             <div className="v2-card-strip stacked">
               <div className="strip-row">
                 <span>{v2.orderSetup(groupIndex + 1, groups.length)}</span>
-                <span>+{won(selectedDelta)}</span>
+                <span>{language === "English" ? "Options" : copy.options}: +{won(selectedDelta)}</span>
               </div>
               <div className="strip-progress" aria-hidden="true">
                 {groups.map((group, index) => (
@@ -549,7 +595,7 @@ export function OrderFlowPanel({
             </div>
             <div className="v2-order-body">
               <div className="v2-order-heading">
-                <h3>{currentGroup.display_name || (language === "한국어" ? currentGroup.name_ko : currentGroup.name_en)}</h3>
+                <h3>{travelerOptionLabel(currentGroup.display_name || (language === "한국어" ? currentGroup.name_ko : currentGroup.name_en), language)}</h3>
                 <p>{currentGroup.min_select === 0 ? v2.optionalTap : v2.requiredTapOne}</p>
               </div>
               {currentGroup.min_select === 0 && !optionGroupHasNoneChoice(currentGroup) && (
@@ -583,7 +629,7 @@ export function OrderFlowPanel({
                     >
                       <span className={selected ? "radio checked" : "radio"} aria-hidden="true" />
                       <span className="labels">
-                        <strong>{option.display_name || (language === "한국어" ? option.name_ko : option.name_en)}</strong>
+                        <strong>{travelerOptionLabel(option.display_name || (language === "한국어" ? option.name_ko : option.name_en), language)}</strong>
                       </span>
                       <span className={option.price_delta ? "price strong" : "price"}>
                         {option.price_delta ? `+${won(option.price_delta)}` : journeyCopy.included}
@@ -597,16 +643,14 @@ export function OrderFlowPanel({
                   </div>
                 );
               })}
-              {currentGroup.max_select > 1 && (
-                <button
-                  type="button"
-                  className="v2-card-primary"
-                  onClick={() => finishMultiSelect(currentGroup)}
-                  disabled={busy || (selections[currentGroup.option_group_id] ?? []).length < currentGroup.min_select}
-                >
-                  {v2.doneOptions}
-                </button>
-              )}
+              <button
+                type="button"
+                className="v2-card-primary"
+                onClick={() => finishMultiSelect(currentGroup)}
+                disabled={busy || (selections[currentGroup.option_group_id] ?? []).length < currentGroup.min_select}
+              >
+                {v2.doneOptions}
+              </button>
             </div>
           </article>
           <div className="v2-inline-replies no-indent">
@@ -631,8 +675,12 @@ export function OrderFlowPanel({
             <textarea
               className="v2-note-input"
               value={note}
+              maxLength={200}
+              aria-label={v2.restaurantNote}
+              placeholder={v2.restaurantNotePlaceholder}
               onChange={(event) => { setNote(event.target.value); setNoteTouched(true); setNoteTranslation(null); setError(""); }}
             />
+            <small className="v2-character-count">{note.length}/200</small>
             {noteTranslation?.status !== "FAILED" && (
               <button type="button" className="v2-card-secondary" onClick={() => void translateNote()} disabled={busy || !note.trim()}>
                 {busy ? v2.translatingNote : v2.translateNote}
@@ -659,7 +707,7 @@ export function OrderFlowPanel({
               type="button"
               className="v2-card-primary"
               onClick={() => void addToCart()}
-              disabled={busy || Boolean(note.trim() && (noteTranslation?.status !== "SUCCEEDED" || noteTranslation.source_text !== note))}
+              disabled={busy || noteRequiresTranslation}
             >
               {copy.addCart}
             </button>
@@ -675,13 +723,28 @@ export function OrderFlowPanel({
                 <h3>{copy.moreQuestion}</h3>
                 <p>{copy.moreDescription}</p>
               </div>
+              <div className="v2-cart-summary" aria-label={v2.yourMenu}>
+                {cart.items.map((item) => (
+                  <div key={item.cart_item_id}>
+                    <span>{item.quantity} × {item.display_name || (language === "한국어" ? item.menu_name_ko : item.menu_name)}</span>
+                    <strong>{won(item.line_total)}</strong>
+                  </div>
+                ))}
+                <div className="total"><span>{v2.subtotal}</span><strong>{won(cart.subtotal)}</strong></div>
+                {cart.minimum_order_amount > 0 && (
+                  <small>
+                    {journeyCopy.restaurantMinimum}: {won(cart.subtotal)} / {won(cart.minimum_order_amount)}
+                    {cart.minimum_order_shortfall > 0 ? ` · ${journeyCopy.add} ${won(cart.minimum_order_shortfall)}` : ` · ${journeyCopy.met}`}
+                  </small>
+                )}
+              </div>
             </div>
           </article>
           <div className="v2-inline-replies no-indent">
             <button type="button" className="v2-quick-reply brand" onClick={() => void browseThisRestaurant()} disabled={busy}>
               {copy.yesMore}
             </button>
-            <button type="button" className="v2-quick-reply" onClick={() => setPhase("delivery")} disabled={busy}>
+            <button type="button" className="v2-quick-reply" onClick={continueToDelivery} disabled={busy}>
               {copy.noDelivery}
             </button>
           </div>
@@ -745,17 +808,38 @@ export function OrderFlowPanel({
               <h3>{journeyCopy.handoffQuestion}</h3>
               <p>{copy.handoff}</p>
             </div>
-            <div className="v2-option-row selected as-static">
-              <span className="radio checked" aria-hidden="true" />
-              <span className="labels">
-                <strong>{journeyCopy.hotelFrontDesk}</strong>
-                <small>{journeyCopy.noBellCutlery}</small>
-              </span>
+            <div className="v2-option-shell" role="radiogroup" aria-label={copy.handoff}>
+              {([
+                ["front_desk", v2.handoffFrontDesk],
+                ["door", v2.handoffDoor],
+                ["meet_outside", v2.handoffMeetOutside],
+              ] as const).map(([method, label]) => (
+                <button
+                  type="button"
+                  className={handoffMethod === method ? "v2-option-row selected" : "v2-option-row"}
+                  role="radio"
+                  aria-checked={handoffMethod === method}
+                  key={method}
+                  onClick={() => setHandoffMethod(method)}
+                  disabled={busy}
+                >
+                  <span className={handoffMethod === method ? "radio checked" : "radio"} aria-hidden="true" />
+                  <span className="labels"><strong>{label}</strong></span>
+                </button>
+              ))}
             </div>
-            <div className="v2-translation-preview">
-              <small>{journeyCopy.messageCourier}</small>
-              <strong>호텔 프런트에 맡겨 주세요. 일회용 수저와 포크는 필요 없습니다.</strong>
-            </div>
+            <label className="v2-switch-row compact">
+              <div><strong>{v2.includeCutlery}</strong></div>
+              <input type="checkbox" role="switch" checked={includeCutlery} onChange={(event) => setIncludeCutlery(event.target.checked)} disabled={busy} />
+              <span className="v2-switch" aria-hidden="true" />
+            </label>
+            {handoffMethod !== "front_desk" && (
+              <label className="v2-switch-row compact">
+                <div><strong>{v2.ringBell}</strong></div>
+                <input type="checkbox" role="switch" checked={ringBell} onChange={(event) => setRingBell(event.target.checked)} disabled={busy} />
+                <span className="v2-switch" aria-hidden="true" />
+              </label>
+            )}
             <button type="button" className="v2-card-primary" onClick={() => void saveDelivery()} disabled={busy}>
               {copy.confirmDelivery}
             </button>
@@ -789,7 +873,9 @@ export function OrderFlowPanel({
                   <div className="v2-cart-line" key={item.cart_item_id}>
                     <div className="copy">
                       <strong>{displayedItemName}</strong>
-                      <small>{item.options.map((option) => localizedOptionNames.get(option.option_item_id) || option.display_name || (language === "한국어" ? option.name_ko : option.name_en)).join(" · ") || journeyCopy.included}</small>
+                      <small>{item.options.map((option) => localizedOptionNames.get(option.option_item_id) || travelerOptionLabel(option.display_name || (language === "한국어" ? option.name_ko : option.name_en), language)).join(" · ") || journeyCopy.included}</small>
+                      {item.user_note && <small className="v2-cart-note"><b>{v2.restaurantRequest}:</b> {item.user_note}</small>}
+                      {item.korean_note && <small className="v2-cart-note" lang="ko">{item.korean_note}</small>}
                     </div>
                     <div className="controls">
                       <div className="v2-stepper" aria-label={`${journeyCopy.quantity}: ${displayedItemName}`}>
@@ -803,6 +889,23 @@ export function OrderFlowPanel({
                   </div>
                 );
               })}
+              {cart.delivery_preference && (
+                <div className="v2-review-request">
+                  <div className="v2-review-label-row"><span>{v2.courierRequest}</span></div>
+                  <strong>{cart.delivery_preference.handoff_method === "front_desk"
+                    ? v2.handoffFrontDesk
+                    : cart.delivery_preference.handoff_method === "door"
+                      ? v2.handoffDoor
+                      : v2.handoffMeetOutside}</strong>
+                  <small>{[
+                    cart.delivery_preference.cutlery ? v2.includeCutlery : v2.noCutlery,
+                    ...(cart.delivery_preference.handoff_method === "front_desk"
+                      ? []
+                      : [cart.delivery_preference.ring_bell ? v2.ringBell : v2.doNotRingBell]),
+                  ].filter(Boolean).join(" · ")}</small>
+                  {cart.delivery_preference.korean_note && <p lang="ko">{cart.delivery_preference.korean_note}</p>}
+                </div>
+              )}
               <div className="v2-divider" />
               <div className="v2-price-row"><span>{v2.subtotal}</span><strong>{won(cart.subtotal)}</strong></div>
               <div className="v2-price-row"><span>{copy.delivery}</span><strong>{won(cart.delivery_fee)}</strong></div>
@@ -811,10 +914,16 @@ export function OrderFlowPanel({
                 <span>{v2.totalEstimated}</span>
                 <strong>{won(cart.total_price)}</strong>
               </div>
+              <p className="v2-estimated-total-help">{v2.estimatedTotalHelp}</p>
               {cart.minimum_order_amount != null && cart.missing_slots.includes("minimum_order_amount") && (
-                <p className="v2-option-guidance conflict">
+                <p className="v2-option-guidance conflict" id="checkout-disabled-reason">
                   {journeyCopy.restaurantMinimum}: {won(cart.subtotal)} / {won(cart.minimum_order_amount)}
                   {cart.minimum_order_shortfall ? ` · ${journeyCopy.add} ${won(cart.minimum_order_shortfall)}` : ""}
+                </p>
+              )}
+              {!cart.ready_to_checkout && !cart.missing_slots.includes("minimum_order_amount") && (
+                <p className="v2-option-guidance conflict" id="checkout-disabled-reason">
+                  {journeyCopy.completeRequirements}
                 </p>
               )}
               <button
@@ -822,6 +931,7 @@ export function OrderFlowPanel({
                 className="v2-card-primary"
                 onClick={() => void proceedToHandoff()}
                 disabled={busy || !cart.ready_to_checkout}
+                aria-describedby={!cart.ready_to_checkout ? "checkout-disabled-reason" : undefined}
               >
                 {v2.prepareOrder(won(cart.total_price))}
               </button>

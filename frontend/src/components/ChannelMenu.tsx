@@ -37,11 +37,6 @@ export function ChannelMenu({ sessionId, language, locale, disabled = false, onC
   const [feature, setFeature] = useState<FeaturedMenuCollection | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const localizedMetricLabel = sort === "review_count"
-    ? copy.reviews
-    : sort === "order_count"
-      ? copy.orders
-      : copy.koreanPopularity;
   const minimumOrderLabel = language === "한국어" ? "최소 주문" : language === "日本語" ? "最低注文" : "Minimum order";
 
   useEffect(() => {
@@ -140,7 +135,6 @@ export function ChannelMenu({ sessionId, language, locale, disabled = false, onC
                       <strong>{menuName(entry.menu, language)}</strong>
                       <small>{merchantName(entry.menu.merchant_name, language)}{entry.menu.minimum_order_amount ? ` · ${minimumOrderLabel} ₩${entry.menu.minimum_order_amount.toLocaleString(locale)}` : ""}</small>
                       <p>{entry.menu.cultural_description || entry.menu.description || dynamicCopy.catalogDescription}</p>
-                      <em>{language === "English" ? entry.metric_label : localizedMetricLabel}: {entry.metric_value.toLocaleString(locale)}</em>
                     </div>
                     <div className="action">
                       <strong>₩{entry.menu.price.toLocaleString(locale)}</strong>
@@ -148,6 +142,7 @@ export function ChannelMenu({ sessionId, language, locale, disabled = false, onC
                         type="button"
                         className="v2-search-submit"
                         disabled={disabled || !ranking?.snapshot_id}
+                        title={!ranking?.snapshot_id ? copy.unavailable : undefined}
                         onClick={() => void choose(entry.menu, ranking!.snapshot_id)}
                       >
                         {copy.selectMenu}
@@ -182,12 +177,13 @@ export function ChannelMenu({ sessionId, language, locale, disabled = false, onC
                     <p>{entry.description || entry.menu.cultural_description || entry.menu.description || dynamicCopy.catalogDescription}</p>
                     <div className="meta">
                       <strong>₩{entry.menu.price.toLocaleString(locale)}</strong>
-                      <span>{formatMinuteRange(entry.menu.eta_min, entry.menu.eta_max, locale)} · ₩{entry.menu.delivery_fee.toLocaleString(locale)}</span>
+                      <span>{v2.estimatedArrival} · {formatMinuteRange(entry.menu.eta_min, entry.menu.eta_max, locale)} · {productCopy.recommendation.deliveryFee} · ₩{entry.menu.delivery_fee.toLocaleString(locale)}</span>
                     </div>
                     <button
                       type="button"
                       className="v2-card-primary"
                       disabled={disabled || !feature?.snapshot_id}
+                      title={!feature?.snapshot_id ? copy.unavailable : undefined}
                       onClick={() => void choose(entry.menu, feature!.snapshot_id)}
                     >
                       {copy.selectMenu}

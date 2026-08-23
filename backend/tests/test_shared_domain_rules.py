@@ -88,3 +88,26 @@ def test_shared_localization_and_note_fallback_rules() -> None:
         "최대한 맵지 않게 부탁드립니다. 호텔 프런트에 맡겨 주세요. "
         "일회용 수저와 포크는 필요 없습니다."
     )
+
+
+@pytest.mark.parametrize(
+    ("note", "expected"),
+    [
+        (
+            "Please leave it at the door. Please include disposable cutlery. "
+            "Please ring the bell.",
+            "문 앞에 놓아 주세요. 일회용 수저와 포크를 포함해 주세요. "
+            "도착하면 벨을 눌러 주세요.",
+        ),
+        (
+            "Please meet me outside. No disposable cutlery. Please do not ring the bell.",
+            "건물 밖에서 직접 전달해 주세요. 일회용 수저와 포크는 필요 없습니다. "
+            "벨을 누르지 말아 주세요.",
+        ),
+    ],
+)
+def test_delivery_preference_note_fallback_covers_handoff_and_switches(
+    note: str,
+    expected: str,
+) -> None:
+    assert deterministic_korean_order_note(note) == expected

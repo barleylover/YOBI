@@ -33,16 +33,16 @@ export interface DynamicCopy {
 }
 
 const en: UiCopy = {
-  buddy: "Your Korean food buddy", ready: "Your delivery context is ready", checking: "Checking menu details…",
-  hello: "Hi, I’m YOBI. Tell me what you remember about the food—or how you want tonight’s meal to feel. I’ll turn that into clear menu choices.",
+  buddy: "Your Korean food buddy", ready: "Your delivery context is ready", checking: "Checking dish details…",
+  hello: "Hi, I’m YOBI. Tell me what you remember about the food—or how you want tonight’s meal to feel. I’ll turn that into clear dish choices.",
   you: "You", ask: "Ask YOBI", placeholder: "I saw a red rice cake dish on the street…", demoQuestion: "Try this question",
-  orderBuilder: "Order builder", close: "Close", options: "options", delivery: "delivery", review: "review", spice: "Spice level",
-  chooseMenu: "Choose this menu", whyMatch: "Why this match", evidence: "Evidence sources", addCart: "Add to cart",
-  added: "Added to cart", moreQuestion: "Would you like anything else from this restaurant?", moreDescription: "Browse its remaining compatible menus, or continue to delivery.",
-  yesMore: "Yes, show more menus", noDelivery: "No, continue to delivery", moreFrom: "More from this restaurant", swipeMore: "Swipe through compatible menus from the same restaurant.",
+  orderBuilder: "Order builder", close: "Close", options: "options", delivery: "delivery fee", review: "review", spice: "Spice level",
+  chooseMenu: "Choose this dish", whyMatch: "Why this match", evidence: "Evidence sources", addCart: "Add to cart",
+  added: "Added to cart", moreQuestion: "Would you like anything else from this restaurant?", moreDescription: "See more dishes from this restaurant, or continue to delivery.",
+  yesMore: "Yes, show more dishes", noDelivery: "No, continue to delivery", moreFrom: "More from this restaurant", swipeMore: "Swipe through compatible dishes from the same restaurant.",
   noMore: "No more items — continue to delivery", confirmDelivery: "Confirm delivery details", finalReview: "Final review", readyCheckout: "Ready to checkout",
   proceedPayment: "Proceed to payment", demoPayment: "Payment", paymentTitle: "Complete your order", pay: "Pay", simulateFailure: "Try again",
-  orderConfirmed: "Your first K-food order is in.", arrival: "Estimated arrival", handoff: "Handoff", anotherOrder: "Start another order", conversation: "View conversation",
+  orderConfirmed: "Your first K-food order is in.", arrival: "Estimated arrival", handoff: "How to hand it over", anotherOrder: "Start another order", conversation: "View conversation",
 };
 
 const packs: Record<SupportedLanguage, UiCopy> = {
@@ -93,7 +93,7 @@ export function getProfileCopy(language: SupportedLanguage) {
 }
 
 const dynamicPacks: Record<SupportedLanguage, DynamicCopy> = {
-  English: {fallbackResult:"I found grounded choices in the current catalog. Review the evidence and choose a menu to continue.",menuMatches:"Grounded menu matches",catalogDescription:"A menu available for the current catalog and delivery context.",matchReason:"Matched using your saved profile, catalog facts and current delivery context.",riskUnknown:"Kitchen cross-contamination is not verified.",evidenceDescription:"Review the evidence status and source identifier before choosing."},
+  English: {fallbackResult:"I found grounded choices in the current catalog. Review the evidence and choose a dish to continue.",menuMatches:"Grounded dish matches",catalogDescription:"A dish available for the current catalog and delivery context.",matchReason:"Matched using your saved profile, catalog facts and current delivery context.",riskUnknown:"Kitchen cross-contamination is not verified.",evidenceDescription:"Review the evidence status and source identifier before choosing."},
   "한국어": {fallbackResult:"현재 카탈로그에서 근거가 있는 선택지를 찾았어요. 근거를 확인하고 계속할 메뉴를 골라 주세요.",menuMatches:"근거 기반 추천 메뉴",catalogDescription:"현재 카탈로그와 배달 조건에 맞는 메뉴입니다.",matchReason:"저장한 프로필, 카탈로그 정보와 현재 배달 조건을 사용해 추천했습니다.",riskUnknown:"주방 교차 오염 여부는 확인되지 않았습니다.",evidenceDescription:"선택하기 전에 근거 상태와 출처 식별자를 확인해 주세요."},
   "日本語": {fallbackResult:"現在のカタログから根拠のある候補を見つけました。根拠を確認してメニューを選んでください。",menuMatches:"根拠に基づくおすすめ",catalogDescription:"現在のカタログと配達条件で利用できるメニューです。",matchReason:"保存したプロフィール、カタログ情報、配達条件を使って選びました。",riskUnknown:"厨房での交差接触は確認されていません。",evidenceDescription:"選ぶ前に根拠の状態と出典IDを確認してください。"},
   "中文（简体）": {fallbackResult:"已从当前目录中找到有依据的选项。请核对依据后选择菜单。",menuMatches:"有依据的菜单推荐",catalogDescription:"当前目录和配送条件下可用的菜单。",matchReason:"使用已保存的资料、目录事实和配送条件进行匹配。",riskUnknown:"厨房交叉接触尚未核实。",evidenceDescription:"选择前请查看依据状态和来源标识。"},
