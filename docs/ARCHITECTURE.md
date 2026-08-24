@@ -85,8 +85,11 @@ The recommendation batch itself still has at most one explanation dispatch.
 The post-address common navigation exposes two non-recommendation browse reads.
 `food-rankings` produces a service-area-filtered snapshot using external source review
 counts (with order/popularity explicitly derived as demo proxies); only source-less
-synthetic fixture rows use stable ID-derived fallback values.
-`featured/kpop-demon-hunters` maps five general dish concepts to available menus.
+synthetic fixture rows use stable ID-derived fallback values. A shared SQLite/Oracle
+post-query policy keeps metric order while favoring distinct merchants and concepts.
+`featured/kpop-demon-hunters` maps the fixed Gimbap, Tteokbokki, Hotteok, Naengmyeon,
+and Eomuk concepts to available menus. The English feature layer adds reviewed static
+story copy and a fixed unavailable state without writing translations or calling an LLM.
 Both authorize later selection through a snapshot; neither treats popularity proxies
 or general Wiki prose as a restaurant recipe, certification, or safety fact.
 

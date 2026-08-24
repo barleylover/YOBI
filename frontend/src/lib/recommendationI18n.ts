@@ -52,7 +52,7 @@ export interface RecommendationCopy {
 }
 
 const en: RecommendationCopy = {
-  selectorEyebrow: "Find your meal", selectorTitle: "What sounds good?", selectorDescription: "Choose the qualities you want. You can pick more than one in each section.", multiSelect: "Multiple choices are welcome", selectedSummary: "Your choices", selectedCount: (count) => `${count} selected`, clearCategory: "Clear section", clearAll: "Clear all", complete: "Show my recommendations", loadingChoices: "Loading today’s available choices…", catalogFailed: "We couldn’t load the available food choices.", savedCatalog: "Showing the most recently loaded choices. Refresh before submitting if anything looks out of date.", retry: "Try again", dietaryTitle: "Dietary preferences", halal: "Only show halal-certified restaurants", halalHelp: "Certification is checked for the restaurant or menu scope shown in this experience.", vegan: "Look for vegan options", veganHelp: "Menus with confirmed animal ingredients are excluded. Some options may still need a restaurant check.", spiceTitle: "Maximum spice level", spiceHelp: "Choose the hottest level you would be comfortable eating. Food examples are a guide, not an exact measurement.", koreanReference: "Korean examples", usReference: "U.S. examples", maxSpice: (level) => `Up to level ${level}`, retrieving: "Checking menus that fit your choices…", generating: "YOBI is reading the food Wiki and preparing your matches…", restoring: "Restoring your recommendation…", resultsTitle: "Picked for your preferences", searchFallbackTitle: "Closest matching menus", searchFallbackDescription: "The recommendation explanation could not be completed, so these are search results closest to your saved choices.", noResultsTitle: "No menu fits every choice yet", noResultsDescription: "Nothing was loosened automatically. Change one or two choices and try again.", failedTitle: "We couldn’t finish the recommendation", failedDescription: "Your choices are saved. You can retry the same request or adjust them.", chooseMenu: "Choose this menu", similar: "Show different menus", editCriteria: "Edit choices", compare: "Compare these menus", evidence: "View Wiki evidence", hideEvidence: "Hide evidence", tryAgain: "Try recommendation again", matchedPreferences: "Why it fits", halalCertified: "Halal certification included", halalScope: "Certification scope", veganLikely: "Vegan-friendly evidence found", veganChecks: "Check before ordering", noHiddenRelaxation: "YOBI keeps every active choice unless you change it.", experienceNotice: "Restaurant and order information is prepared for this experience. No real order or charge is made.", editProfile: "Edit my information",
+  selectorEyebrow: "Find your meal", selectorTitle: "What sounds good?", selectorDescription: "Choose the qualities you want. You can pick more than one in each section.", multiSelect: "Multiple choices are welcome", selectedSummary: "Your choices", selectedCount: (count) => `${count} selected`, clearCategory: "Clear section", clearAll: "Clear all", complete: "Show my recommendations", loadingChoices: "Loading today’s available choices…", catalogFailed: "We couldn’t load the available food choices.", savedCatalog: "Showing the most recently loaded choices. Refresh before submitting if anything looks out of date.", retry: "Try again", dietaryTitle: "Dietary preferences", halal: "Only show halal-friendly profiles", halalHelp: "This compatibility profile is not certification. Confirm ingredients and preparation with the restaurant.", vegan: "Look for vegan options", veganHelp: "Dishes with confirmed animal ingredients are excluded. Some options may still need a restaurant check.", spiceTitle: "Maximum spice level", spiceHelp: "Choose the hottest level you would be comfortable eating. Food examples are a guide, not an exact measurement.", koreanReference: "Korean examples", usReference: "U.S. examples", maxSpice: (level) => `Up to level ${level}`, retrieving: "Checking dishes that fit your choices…", generating: "YOBI is reading the food Wiki and preparing your matches…", restoring: "Restoring your recommendation…", resultsTitle: "Picked for your preferences", searchFallbackTitle: "Closest matching dishes", searchFallbackDescription: "The recommendation explanation could not be completed, so these are search results closest to your saved choices.", noResultsTitle: "No dish fits every choice yet", noResultsDescription: "Nothing was loosened automatically. Change one or two choices and try again.", failedTitle: "We couldn’t finish the recommendation", failedDescription: "Your choices are saved. You can retry the same request or adjust them.", chooseMenu: "Choose this dish", similar: "Show different dishes", editCriteria: "Edit choices", compare: "Compare these dishes", evidence: "View Wiki evidence", hideEvidence: "Hide evidence", tryAgain: "Try recommendation again", matchedPreferences: "Why it fits", halalCertified: "Halal-friendly profile · not certified", halalScope: "Profile scope", veganLikely: "Likely vegan · check with the restaurant", veganChecks: "Check with the restaurant before ordering", noHiddenRelaxation: "YOBI keeps every active choice unless you change it.", experienceNotice: "Restaurant and order information is prepared for this experience. No real order or charge is made.", editProfile: "Edit my information",
 };
 
 const packs: Record<SupportedLanguage, RecommendationCopy> = {
@@ -85,7 +85,7 @@ export function getRecommendationCopy(language: SupportedLanguage) {
       halalCertified: "Halal-friendly information included",
       halalScope: "Information scope",
       spiceTitle: "Preferred spice level",
-      spiceHelp: "Compare the menu with the familiar spice baseline for your selected country.",
+      spiceHelp: "Choose an inclusive range from level 1 to 5. Levels 2 and 4 include familiar Scoville-based examples.",
       experienceNotice: "Review the menu and delivery details before continuing.",
     };
   }
@@ -97,7 +97,7 @@ export function getRecommendationCopy(language: SupportedLanguage) {
       halalCertified: "할랄 친화 정보 있음",
       halalScope: "정보 범위",
       spiceTitle: "선호하는 맵기",
-      spiceHelp: "선택한 국가에서 익숙한 맵기를 기준으로 비교해 고르세요.",
+      spiceHelp: "1단계부터 5단계 사이에서 원하는 맵기 범위를 고르세요. 2단계와 4단계에는 스코빌 기준 예시가 있어요.",
       experienceNotice: "계속하기 전 메뉴와 배달 정보를 확인해 주세요.",
     };
   }
@@ -108,7 +108,7 @@ export function getRecommendationCopy(language: SupportedLanguage) {
     halalCertified: "ハラール対応の情報あり",
     halalScope: "情報の範囲",
     spiceTitle: "好みの辛さ",
-    spiceHelp: "選択した国で慣れ親しんだ辛さを基準に選んでください。",
+    spiceHelp: "レベル1〜5から希望する辛さの範囲を選んでください。レベル2と4にはスコヴィル値を使った目安があります。",
     experienceNotice: "続ける前にメニューと配達情報を確認してください。",
   };
 }

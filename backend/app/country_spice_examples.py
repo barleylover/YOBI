@@ -63,6 +63,48 @@ def representative_dish(country_code: str, locale: str) -> str:
     ]
 
 
+_SPICE_SCALE_ANCHORS: dict[str, dict[LanguageCode, tuple[dict[str, object], ...]]] = {
+    "US": {
+        "en": (
+            {"level": 2, "familiar_dish": "Pepperoncini-topped pizza", "korean_dish": "Mild kimchi fried rice", "approximate_shu": 300, "approximate_shu_min": 100, "approximate_shu_max": 500},
+            {"level": 4, "familiar_dish": "Jalapeño poppers", "korean_dish": "Tteokbokki", "approximate_shu": 5_250, "approximate_shu_min": 2_500, "approximate_shu_max": 8_000},
+        ),
+        "ko": (
+            {"level": 2, "familiar_dish": "페페론치니 피자", "korean_dish": "순한 김치볶음밥", "approximate_shu": 300, "approximate_shu_min": 100, "approximate_shu_max": 500},
+            {"level": 4, "familiar_dish": "할라피뇨 파퍼", "korean_dish": "떡볶이", "approximate_shu": 5_250, "approximate_shu_min": 2_500, "approximate_shu_max": 8_000},
+        ),
+        "ja": (
+            {"level": 2, "familiar_dish": "ペペロンチーニをのせたピザ", "korean_dish": "マイルドなキムチチャーハン", "approximate_shu": 300, "approximate_shu_min": 100, "approximate_shu_max": 500},
+            {"level": 4, "familiar_dish": "ハラペーニョポッパー", "korean_dish": "トッポッキ", "approximate_shu": 5_250, "approximate_shu_min": 2_500, "approximate_shu_max": 8_000},
+        ),
+    },
+    "JP": {
+        "en": (
+            {"level": 2, "familiar_dish": "Grilled shishito peppers", "korean_dish": "Mild kimchi fried rice", "approximate_shu": 125, "approximate_shu_min": 50, "approximate_shu_max": 200},
+            {"level": 4, "familiar_dish": "Shin Ramyun", "korean_dish": "Tteokbokki", "approximate_shu": 3_400, "approximate_shu_min": 3_400, "approximate_shu_max": 3_400},
+        ),
+        "ko": (
+            {"level": 2, "familiar_dish": "구운 시시토 고추", "korean_dish": "순한 김치볶음밥", "approximate_shu": 125, "approximate_shu_min": 50, "approximate_shu_max": 200},
+            {"level": 4, "familiar_dish": "신라면", "korean_dish": "떡볶이", "approximate_shu": 3_400, "approximate_shu_min": 3_400, "approximate_shu_max": 3_400},
+        ),
+        "ja": (
+            {"level": 2, "familiar_dish": "焼きししとう", "korean_dish": "マイルドなキムチチャーハン", "approximate_shu": 125, "approximate_shu_min": 50, "approximate_shu_max": 200},
+            {"level": 4, "familiar_dish": "辛ラーメン", "korean_dish": "トッポッキ", "approximate_shu": 3_400, "approximate_shu_min": 3_400, "approximate_shu_max": 3_400},
+        ),
+    },
+}
+
+
+def spice_scale_anchors(country_code: str, locale: str) -> list[dict[str, object]]:
+    """Return optional, explicitly approximate demo anchors for the UI control."""
+
+    # Demo scope: Japan gets Japan-specific anchors. Every other country uses
+    # the well-tested U.S. examples until country-specific references are curated.
+    reference_country = "JP" if country_code.upper() == "JP" else "US"
+    anchors = _SPICE_SCALE_ANCHORS[reference_country].get(effective_language(locale), ())
+    return [dict(anchor) for anchor in anchors]
+
+
 def example_seed_hash(seed: str, country_code: str, language_code: LanguageCode) -> str:
     value = f"{seed}|country-spice-example-v1|{country_code}|{language_code}"
     return sha256(value.encode("utf-8")).hexdigest()

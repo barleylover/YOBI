@@ -63,12 +63,13 @@ describe("post-address discovery navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open YOBI discoveries" }));
     fireEvent.click(screen.getByRole("button", { name: "Food rankings" }));
 
-    expect(await screen.findByText("Rankings for the current delivery area.")).toBeInTheDocument();
+    expect(await screen.findByText(/Prepared ranking for this delivery area/)).toBeInTheDocument();
     expect(screen.queryByText("Backend-only ranking basis.")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Review count:/)).not.toBeInTheDocument();
     expect(document.querySelectorAll(".food-ranking-list > li")).toHaveLength(20);
     fireEvent.click(screen.getByRole("tab", { name: "Most ordered" }));
     await waitFor(() => expect(rankings).toHaveBeenLastCalledWith("session_1", "order_count", expect.any(AbortSignal)));
-    fireEvent.click(screen.getAllByRole("button", { name: "Choose this menu" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Choose this dish" })[0]);
     await waitFor(() => expect(onChoose).toHaveBeenCalledWith(expect.objectContaining({ menu_id: "menu_discovery_1" }), "ranking_snapshot_1"));
   });
 
@@ -83,10 +84,10 @@ describe("post-address discovery navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open YOBI discoveries" }));
     fireEvent.click(screen.getByRole("button", { name: "K-pop feature" }));
 
-    const hero = await screen.findByRole("img", { name: /K-food on screen/i });
+    const hero = await screen.findByRole("img", { name: /K-food from K-pop Demon Hunters/i });
     expect(hero).toHaveAttribute("src", "/yobi-gimbap-feature-hero.png");
     expect(document.querySelector(".ranking-position")).not.toBeInTheDocument();
-    fireEvent.click(await screen.findByRole("button", { name: "Choose this menu" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Choose this dish" }));
     await waitFor(() => expect(onChoose).toHaveBeenCalledWith(menu, "feature_snapshot_1"));
   });
 
@@ -131,8 +132,8 @@ describe("post-address discovery navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: copy.expand }));
     fireEvent.click(screen.getByRole("button", { name: copy.foodRankings }));
 
-    await screen.findByText((_, element) => element?.textContent?.startsWith(`${copy.reviews}:`) ?? false);
-    expect(screen.getByText("External catalog detail: crisp seaweed around seasoned rice.")).toBeInTheDocument();
+    expect(await screen.findByText("External catalog detail: crisp seaweed around seasoned rice.")).toBeInTheDocument();
+    expect(screen.queryByText((_, element) => element?.textContent?.startsWith(`${copy.reviews}:`) ?? false)).not.toBeInTheDocument();
     expect(screen.queryByText(/Review count|English server ranking basis/)).not.toBeInTheDocument();
     expect(screen.queryByText(/اصطناعي|synthetic/i)).not.toBeInTheDocument();
   });

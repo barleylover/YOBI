@@ -9,6 +9,7 @@ from scripts.build_synthetic_enrichment_release import (
     _synthetic_family_id,
 )
 
+from app.country_spice_examples import spice_scale_anchors
 from app.db.sqlite_repository import SQLiteYobiRepository
 from app.demo_enrichment import (
     COUNTRY_CODES,
@@ -156,6 +157,42 @@ def test_enrichment_guards_obvious_pork_and_animal_options() -> None:
         }
     }
     assert halal_ids
+
+
+def test_enrichment_rejects_obvious_offal_and_meat_aliases_from_vegan_fit() -> None:
+    rows = build_enrichment_rows(
+        release_id="release-animal-aliases",
+        seed="stable-seed",
+        menus=[
+            EnrichmentMenu("m-gopchang", "소고기 곱창구이", ("GRILLED",), "Grilled beef intestine"),
+            EnrichmentMenu("m-galbi", "양념 갈비", ("GRILLED",), "Marinated short ribs"),
+            EnrichmentMenu("m-octopus", "타코와사비", ("COLD",), "Tako wasabi"),
+            EnrichmentMenu("m-clam", "바지락생면칼국수", ("SOUP",), "Fresh clam kalguksu"),
+            EnrichmentMenu("m-vegetable", "구운 채소", ("VEGETABLE", "GRILLED")),
+        ],
+    )
+
+    profiles = {row["menu_id"]: row for row in rows["menus"]}
+    assert profiles["m-gopchang"]["vegan_fit"] == 0
+    assert profiles["m-galbi"]["vegan_fit"] == 0
+    assert profiles["m-octopus"]["vegan_fit"] == 0
+    assert profiles["m-clam"]["vegan_fit"] == 0
+
+
+def test_us_and_japan_spice_guides_have_two_localized_approximate_anchors() -> None:
+    us = spice_scale_anchors("US", "en")
+    japan = spice_scale_anchors("JP", "ja")
+
+    assert [anchor["level"] for anchor in us] == [2, 4]
+    assert [anchor["level"] for anchor in japan] == [2, 4]
+    assert all(int(anchor["approximate_shu"]) > 0 for anchor in [*us, *japan])
+    assert all(
+        int(anchor["approximate_shu_min"]) <= int(anchor["approximate_shu_max"])
+        for anchor in [*us, *japan]
+    )
+    assert us[0]["familiar_dish"] == "Pepperoncini-topped pizza"
+    assert japan[0]["familiar_dish"] == "焼きししとう"
+    assert spice_scale_anchors("KR", "en") == us
 
 
 def test_production_size_coverage_counts_are_exact() -> None:

@@ -69,6 +69,7 @@ from app.domain.models import (
     Session,
     UserMessage,
 )
+from app.domain.preference_catalog import normalize_preference_locale
 from app.domain.structured_recommendation import (
     FeaturedMenuCollection,
     FoodRankingCollection,
@@ -89,7 +90,7 @@ from app.services.address_ocr import AddressCandidateTokenCodec, choose_address_
 from app.services.chat_service import ChatService
 from app.services.demo_control import DemoControl, FailureMode
 from app.services.menu_presentation import MenuPresentationService
-from app.services.option_localization import OptionLocalizationService, project_demo_options
+from app.services.option_localization import OptionLocalizationService
 from app.services.restaurant_note_translation import RestaurantNoteTranslationService
 from app.services.structured_recommendation import StructuredRecommendationService
 
@@ -536,6 +537,33 @@ def _resolve_session_profile(
     return session, profile
 
 
+def _etag_matches(if_none_match: str | None, current_etag: str) -> bool:
+    """Accept weak/strong validators for GET revalidation through gzip proxies."""
+
+    if not if_none_match:
+        return False
+    current_opaque = current_etag.removeprefix("W/").strip()
+    for candidate in if_none_match.split(","):
+        normalized = candidate.strip()
+        if normalized == "*":
+            return True
+        if normalized.removeprefix("W/").strip() == current_opaque:
+            return True
+    return False
+
+
+def _preference_catalog_etag(payload: dict[str, Any]) -> str:
+    """Bind the validator to every locale-specific field that reaches the browser."""
+
+    canonical_payload = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f'"{hashlib.sha256(canonical_payload.encode()).hexdigest()}"'
+
+
 @app.get("/api/v1/recommendation/preferences/catalog")
 def get_recommendation_preference_catalog(
     response: Response,
@@ -547,19 +575,14 @@ def get_recommendation_preference_catalog(
         payload = repository.get_preference_catalog(locale)
     except Exception as exc:
         raise _structured_recommendation_http_error(exc) from exc
-    etag_seed = ":".join(
-        (
-            str(payload.get("catalog_version", "")),
-            str(payload.get("knowledge_release_id", "")),
-            str(payload.get("support_manifest_sha256", "")),
-            str(payload.get("feature_manifest_sha256", "")),
-            str(payload.get("ranking_policy_version", "")),
-        )
-    )
-    etag = f'"{hashlib.sha256(etag_seed.encode()).hexdigest()}"'
+    payload = {
+        **payload,
+        "locale": normalize_preference_locale(str(payload.get("locale") or locale)),
+    }
+    etag = _preference_catalog_etag(payload)
     response.headers["ETag"] = etag
     response.headers["Cache-Control"] = "private, max-age=300"
-    if if_none_match == etag:
+    if _etag_matches(if_none_match, etag):
         response.status_code = status.HTTP_304_NOT_MODIFIED
         return None
     return payload
@@ -941,26 +964,16 @@ def get_menu_options(
     option_localization_service: OptionLocalizationService = Depends(
         get_option_localization_service
     ),
-    current_settings: Settings = Depends(get_settings),
 ) -> list[dict[str, Any]]:
     if session_id is not None:
         _require_session(repository, session_id)
-    # Discovery collections are explicitly deterministic mock views. Their
-    # option setup must not synchronously dispatch a fresh model call before a
-    # known cross-merchant cart conflict can be resolved. The repository still
-    # applies the active release's validated/precomputed localization for the
-    # session language; only runtime generation is skipped.
-    if precomputed_only:
-        groups = list(repository.get_options(menu_id, session_id=session_id))
-        if current_settings.demo_mode:
-            groups = project_demo_options(
-                groups,
-                group_limit=current_settings.demo_option_group_limit,
-                items_per_group_limit=current_settings.demo_option_items_per_group_limit,
-                total_item_limit=current_settings.demo_option_item_total_limit,
-            )
-    else:
-        groups = option_localization_service.get_options(menu_id, session_id)
+    # Discovery collections remain deterministic: the service can read complete
+    # release/runtime localizations but precomputed_only has no generation path.
+    groups = option_localization_service.get_options(
+        menu_id,
+        session_id,
+        precomputed_only=precomputed_only,
+    )
     return [
         group.model_dump(mode="json")
         for group in groups

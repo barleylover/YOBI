@@ -25,6 +25,24 @@ RUNTIME_TABLES = (
 )
 
 
+def test_option_readiness_distinguishes_release_and_runtime_localizations(
+    tmp_path: Path,
+) -> None:
+    repository = SQLiteYobiRepository(tmp_path / "readiness.db")
+    repository.initialize()
+
+    counts = repository.status()["knowledge_supplemental_counts"]
+
+    assert counts["localized_option_groups"] == counts[
+        "release_localized_option_groups"
+    ]
+    assert counts["localized_option_items"] == counts[
+        "release_localized_option_items"
+    ]
+    assert counts["runtime_localized_option_groups"] >= 0
+    assert counts["runtime_localized_option_items"] >= 0
+
+
 def _runtime_snapshot(repository: SQLiteYobiRepository) -> dict[str, list[tuple[object, ...]]]:
     with repository._connection() as connection:
         return {

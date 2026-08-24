@@ -39,6 +39,8 @@ const cart: CartPreview = {
     unit_price: 9000,
     options: [],
     line_total: 9000,
+    user_note: "Please leave the sauce on the side.",
+    korean_note: "소스는 따로 담아 주세요.",
   }],
   subtotal: 9000,
   delivery_fee: 2000,
@@ -47,6 +49,15 @@ const cart: CartPreview = {
   dietary_warnings: [],
   minimum_order_amount: 0,
   minimum_order_shortfall: 0,
+  delivery_preference: {
+    handoff_method: "front_desk",
+    cutlery: true,
+    ring_bell: false,
+    front_desk: true,
+    user_note: "Please leave it at the hotel front desk. Please include disposable cutlery. Please do not ring the bell.",
+    korean_note: "호텔 프런트에 맡겨 주세요. 일회용 수저와 포크를 포함해 주세요. 벨을 누르지 말아 주세요.",
+    back_translation: "Please leave it at the hotel front desk.",
+  },
   ready_to_checkout: true,
   confirmed: true,
 };
@@ -76,12 +87,17 @@ describe("Yogiyo handoff", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "Ready to order" })).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Back to menus" })).toHaveLength(2);
+    expect(screen.getByText(/Restaurant request:/)).toBeInTheDocument();
+    expect(screen.getByText(/Please leave the sauce on the side/)).toBeInTheDocument();
+    expect(screen.getByText("소스는 따로 담아 주세요.")).toBeInTheDocument();
+    expect(screen.getByText("Courier handoff request")).toBeInTheDocument();
+    expect(screen.getByText(/hotel front desk.*disposable cutlery/i)).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Back to dishes" })).toHaveLength(2);
     expect(document.body.textContent).not.toMatch(/demo|mock|synthetic/i);
     fireEvent.click(screen.getByRole("button", { name: /Open in Yogiyo/ }));
     expect(await screen.findByRole("heading", { name: "Continue your order in Yogiyo" })).toBeInTheDocument();
     expect(screen.getByText("Review the basket, then continue to Yogiyo.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Back to menus" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Back to dishes" })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Back to YOBI" })).toHaveLength(1);
     expect(createCheckout).not.toHaveBeenCalled();
     expect(paymentSuccess).not.toHaveBeenCalled();

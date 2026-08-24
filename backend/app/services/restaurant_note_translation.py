@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from app.core.config import Settings
 from app.db.repository import YobiRepository
 from app.domain.models import RestaurantNoteTranslation, RestaurantNoteTranslationInput
+from app.domain.preference_catalog import normalize_preference_locale
 from app.genai.contracts import GenAIErrorCode, GenAIProvider, GenAIProviderError
 from app.genai.providers import choose_genai_provider
 from app.genai.response_contract import parse_json_object
@@ -128,6 +129,12 @@ class RestaurantNoteTranslationService:
         session_id: str,
         data: RestaurantNoteTranslationInput,
     ) -> RestaurantNoteTranslation:
+        data = data.model_copy(
+            update={
+                "source_language": normalize_preference_locale(data.source_language),
+                "source_text": data.source_text.strip(),
+            }
+        )
         canonical = json.dumps(
             {
                 "session_id": session_id,
@@ -143,6 +150,21 @@ class RestaurantNoteTranslationService:
         cached = self.repository.get_restaurant_note_translation_by_hash(session_id, request_hash)
         if cached is not None:
             return cached
+
+        if data.source_language == "ko":
+            return self.repository.save_restaurant_note_translation(
+                session_id,
+                translation_id=f"note_{uuid4().hex}",
+                source_language="ko",
+                source_text=data.source_text,
+                korean_text=data.source_text,
+                back_translation=data.source_text,
+                provider="deterministic",
+                model_id="DETERMINISTIC_KOREAN_PASSTHROUGH",
+                status="SUCCEEDED",
+                error_code=None,
+                request_hash=request_hash,
+            )
 
         configured_models = list(
             dict.fromkeys(

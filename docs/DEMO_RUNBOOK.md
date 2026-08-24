@@ -101,8 +101,11 @@ Allow roughly two minutes from the welcome screen to the handoff mock.
 11. Optionally open **Food rankings**. Point out the `demo_basis`: external ranking
     uses source menu/merchant review counts, order/popularity are derived demo proxies,
     and only source-less synthetic fixture rows use stable ID-derived values. No view is
-    a live Yogiyo-wide statistic. Open the K-POP feature and
-    show its five general dish concepts; its Wiki copy is not a merchant recipe.
+    a live Yogiyo-wide statistic. The English top 10 keeps metric order while preventing
+    one merchant from filling the list. Open the K-POP feature and show the fixed
+    Gimbap, Tteokbokki, Hotteok, Naengmyeon, and Eomuk trail. Its story source is linked,
+    its general food copy is not a merchant recipe, and an unavailable nearby match is
+    shown honestly instead of being replaced.
 12. Choose **Choose this menu**. The app records a snapshot-backed selection event and
     scrolls to the existing order builder; it does not send a chat turn or another
     generation request.

@@ -18,14 +18,15 @@ export function emptyCriteria(profile?: Profile | null): RecommendationCriteriaV
     food_forms: [],
     temperatures: [],
     price_bands: [],
-    price_range_krw: { min: 8_000, max: 25_000 },
+    price_range_krw: { min: 6_000, max: 50_000 },
     textures: [],
     cooking_methods: [],
     dietary_filters: {
       halal_certified_only: false,
       vegan: false,
     },
-    max_spice_level: 3,
+    max_spice_level: 5,
+    spice_range: { min: 1, max: 5 },
     spice_preference: "SIMILAR",
     spice_reference_country: (profile?.country_code ?? (profile?.preferred_language === "한국어" ? "KR" : "US")) as RecommendationCriteriaV2["spice_reference_country"],
   };

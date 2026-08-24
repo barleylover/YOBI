@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { actionableError, api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
-import { asSupportedLanguage } from "../lib/locale";
+import { asSupportedLanguage, localizeDemoAddressSummary } from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
 import { getRedesignCopy } from "../lib/redesignI18n";
 import { useSessionStore } from "../stores/session";
@@ -100,6 +100,8 @@ export function HandoffPage() {
                   <div>
                     <strong>{item.display_name || (language === "한국어" ? item.menu_name_ko : item.menu_name)} ×{item.quantity}</strong>
                     <small>{item.options.map((option) => option.display_name || (language === "한국어" ? option.name_ko : option.name_en)).join(" · ") || journeyCopy.included}</small>
+                    {item.user_note && <small><b>{v2.restaurantRequest}:</b> {item.user_note}</small>}
+                    {item.korean_note && <small lang="ko">{item.korean_note}</small>}
                   </div>
                   <strong>{won(item.line_total)}</strong>
                 </div>
@@ -109,6 +111,13 @@ export function HandoffPage() {
             <div className="v2-price-row"><span>{v2.subtotal}</span><strong>{won(cart.subtotal)}</strong></div>
             <div className="v2-price-row"><span>{productCopy.recommendation.deliveryFee}</span><strong>{won(cart.delivery_fee)}</strong></div>
             <div className="v2-price-row total big"><span>{journeyCopy.total}</span><strong>{won(cart.total_price)}</strong></div>
+            {cart.delivery_preference && (
+              <div className="v2-review-request">
+                <strong>{v2.courierRequest}</strong>
+                <small>{cart.delivery_preference.user_note}</small>
+                <p lang="ko">{cart.delivery_preference.korean_note}</p>
+              </div>
+            )}
           </section>
         )}
 
@@ -116,8 +125,8 @@ export function HandoffPage() {
           <section className="v2-summary-card address" aria-label={v2.deliverTo}>
             <img src="/figma/logo-mark.svg" alt="" width={38} height={38} style={{ borderRadius: 12, opacity: 0.9 }} />
             <div>
-              <strong>{addressSummary.split(" · ")[0]}</strong>
-              <small>{addressSummary.split(" · ").slice(1).join(" · ")}</small>
+              <strong>{localizeDemoAddressSummary(addressSummary, language).split(" · ")[0]}</strong>
+              <small>{localizeDemoAddressSummary(addressSummary, language).split(" · ").slice(1).join(" · ")}</small>
             </div>
             <Link to={`/profile?edit=1&returnTo=/handoff`}>{v2.editChip}</Link>
           </section>

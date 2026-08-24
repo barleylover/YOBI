@@ -1045,6 +1045,23 @@ CREATE TABLE IF NOT EXISTS menu_source_description_localization (
   PRIMARY KEY(release_id, menu_id, language_code)
 );
 
+CREATE TABLE IF NOT EXISTS runtime_menu_source_description_localization (
+  release_id TEXT NOT NULL REFERENCES synthetic_enrichment_release(release_id),
+  menu_id TEXT NOT NULL REFERENCES menu(menu_id),
+  language_code TEXT NOT NULL CHECK (
+    language_code IN (
+      'en','ko','ja','zh-CN','zh-TW','es','fr','de','it','pt','th','vi','id','ar','hi','ru'
+    )
+  ),
+  prompt_version TEXT NOT NULL,
+  description_text TEXT NOT NULL CHECK (length(trim(description_text)) > 0),
+  model_id TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  validation_status TEXT NOT NULL CHECK (validation_status = 'VALID'),
+  generated_at TEXT NOT NULL,
+  PRIMARY KEY(release_id, menu_id, language_code, prompt_version)
+);
+
 CREATE TABLE IF NOT EXISTS synthetic_country_spice_example (
   release_id TEXT NOT NULL,
   country_code TEXT NOT NULL,
@@ -1080,6 +1097,33 @@ CREATE TABLE IF NOT EXISTS menu_presentation_cache (
   evidence_map_json TEXT,
   personalization_applied INTEGER,
   updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS country_aware_menu_presentation_cache (
+  cache_key TEXT PRIMARY KEY,
+  release_id TEXT NOT NULL REFERENCES synthetic_enrichment_release(release_id),
+  menu_id TEXT NOT NULL REFERENCES menu(menu_id),
+  language_code TEXT NOT NULL CHECK (
+    language_code IN (
+      'en','ko','ja','zh-CN','zh-TW','es','fr','de','it','pt','th','vi','id','ar','hi','ru'
+    )
+  ),
+  user_country_code TEXT NOT NULL,
+  spice_reference_country_code TEXT NOT NULL,
+  localized_subtitle TEXT NOT NULL,
+  short_explanation TEXT NOT NULL,
+  long_explanation TEXT NOT NULL,
+  review_summary TEXT NOT NULL,
+  evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+  review_ids_json TEXT NOT NULL DEFAULT '[]',
+  evidence_map_json TEXT NOT NULL DEFAULT '{}',
+  model_id TEXT NOT NULL,
+  prompt_version TEXT NOT NULL,
+  content_schema_version TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  personalization_applied INTEGER NOT NULL DEFAULT 0 CHECK (personalization_applied IN (0,1)),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS menu_presentation_generation_lease (
@@ -1162,6 +1206,12 @@ CREATE INDEX IF NOT EXISTS idx_menu_localization_lookup
   ON menu_localization(release_id, language_code, menu_id);
 CREATE INDEX IF NOT EXISTS idx_menu_presentation_lookup
   ON menu_presentation_cache(release_id, menu_id, language_code, country_code);
+CREATE INDEX IF NOT EXISTS idx_runtime_menu_source_locale
+  ON runtime_menu_source_description_localization(release_id, language_code, menu_id);
+CREATE INDEX IF NOT EXISTS idx_country_aware_presentation_lookup
+  ON country_aware_menu_presentation_cache(
+    release_id, menu_id, language_code, user_country_code, spice_reference_country_code
+  );
 CREATE INDEX IF NOT EXISTS idx_menu_source_description_lookup
   ON menu_source_description_localization(release_id, language_code, menu_id);
 CREATE INDEX IF NOT EXISTS idx_country_spice_example_lookup

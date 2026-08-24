@@ -501,22 +501,43 @@ class RecommendationGenerationValidator:
         if schema_version == "3":
             try:
                 spice_level = int(pool_item["synthetic_spice_level"])
-                baseline = int(pool_item["country_spice_baseline"])
             except (KeyError, TypeError, ValueError):
                 raise _grounding_rejected(
                     RecommendationGroundingRejectionCode.SHORTLIST_SPICE_INVALID
                 ) from None
-            preference = str(criteria.get("spice_preference") or "SIMILAR")
-            spice_matches = {
-                "LESS": spice_level < baseline,
-                "SIMILAR": spice_level == baseline,
-                "MORE": spice_level > baseline,
-            }
-            if preference not in spice_matches:
-                raise _grounding_rejected(
-                    RecommendationGroundingRejectionCode.CRITERIA_SPICE_INVALID
-                )
-            if not spice_matches[preference]:
+            spice_range = criteria.get("spice_range")
+            if isinstance(spice_range, dict):
+                try:
+                    minimum_spice = int(spice_range["min"])
+                    maximum_spice = int(spice_range["max"])
+                except (KeyError, TypeError, ValueError):
+                    raise _grounding_rejected(
+                        RecommendationGroundingRejectionCode.CRITERIA_SPICE_INVALID
+                    ) from None
+                if not 1 <= minimum_spice <= maximum_spice <= 5:
+                    raise _grounding_rejected(
+                        RecommendationGroundingRejectionCode.CRITERIA_SPICE_INVALID
+                    )
+                spice_matches_selected = minimum_spice <= spice_level <= maximum_spice
+            else:
+                try:
+                    baseline = int(pool_item["country_spice_baseline"])
+                except (KeyError, TypeError, ValueError):
+                    raise _grounding_rejected(
+                        RecommendationGroundingRejectionCode.SHORTLIST_SPICE_INVALID
+                    ) from None
+                preference = str(criteria.get("spice_preference") or "SIMILAR")
+                spice_matches = {
+                    "LESS": spice_level < baseline,
+                    "SIMILAR": spice_level == baseline,
+                    "MORE": spice_level > baseline,
+                }
+                if preference not in spice_matches:
+                    raise _grounding_rejected(
+                        RecommendationGroundingRejectionCode.CRITERIA_SPICE_INVALID
+                    )
+                spice_matches_selected = spice_matches[preference]
+            if not spice_matches_selected:
                 raise _grounding_rejected(
                     RecommendationGroundingRejectionCode.SPICE_LEVEL_VIOLATION
                 )

@@ -12,6 +12,7 @@ import pytest
 
 from app.core.config import Settings
 from app.domain.models import (
+    CountryAwareMenuPresentationCacheEntry,
     EvidenceStatus,
     MenuPresentationCacheEntry,
     MenuSummary,
@@ -20,6 +21,7 @@ from app.domain.models import (
     MerchantMenuPresentationRequest,
     OptionGroup,
     OptionItem,
+    RuntimeMenuSourceDescriptionLocalizationEntry,
 )
 from app.domain.recommendation_copy import deterministic_presentation_copy
 from app.domain.structured_recommendation import EvidencePoolItem
@@ -51,12 +53,19 @@ class PresentationRepository:
         self.page = page
         self.options = options or []
         self.cache: dict[str, MenuPresentationCacheEntry] = {}
+        self.country_cache: dict[str, CountryAwareMenuPresentationCacheEntry] = {}
+        self.runtime_sources: dict[
+            tuple[str, str, str, str, str],
+            RuntimeMenuSourceDescriptionLocalizationEntry,
+        ] = {}
         self.leases: dict[str, str] = {}
         self.lock = Lock()
         self.saved_option_localizations: list[
             tuple[str, str, dict[str, str], dict[str, str], str]
         ] = []
-        self.saved_menu_localizations: list[tuple[str, str, str, str, str, str]] = []
+        self.saved_menu_localizations: list[
+            tuple[str, str, str | None, str | None, str, str]
+        ] = []
 
     def list_merchant_menu_presentations(
         self,
@@ -74,6 +83,49 @@ class PresentationRepository:
     def save_menu_presentation_cache_entry(self, entry: MenuPresentationCacheEntry) -> None:
         with self.lock:
             self.cache.setdefault(entry.cache_key, entry)
+
+    def get_country_aware_menu_presentation_cache(
+        self, cache_key: str
+    ) -> CountryAwareMenuPresentationCacheEntry | None:
+        return self.country_cache.get(cache_key)
+
+    def save_country_aware_menu_presentation_cache_entry(
+        self, entry: CountryAwareMenuPresentationCacheEntry
+    ) -> None:
+        self.country_cache.setdefault(entry.cache_key, entry)
+
+    def get_runtime_menu_source_description_localization(
+        self,
+        release_id: str,
+        menu_id: str,
+        language_code: str,
+        prompt_version: str,
+        source_hash: str,
+    ) -> RuntimeMenuSourceDescriptionLocalizationEntry | None:
+        return self.runtime_sources.get(
+            (release_id, menu_id, language_code, prompt_version, source_hash)
+        )
+
+    def save_runtime_menu_source_description_localization(
+        self, entry: RuntimeMenuSourceDescriptionLocalizationEntry
+    ) -> None:
+        self.runtime_sources[
+            (
+                entry.release_id,
+                entry.menu_id,
+                entry.language_code,
+                entry.prompt_version,
+                entry.source_hash,
+            )
+        ] = entry
+
+    def get_session(self, session_id: str) -> Any:
+        del session_id
+        return SimpleNamespace(profile_id="profile-1")
+
+    def get_profile(self, profile_id: str) -> Any:
+        del profile_id
+        return SimpleNamespace(preferred_language="English", country_code="US")
 
     def acquire_menu_presentation_lease(self, cache_key: str, owner_token: str, **_: Any) -> bool:
         with self.lock:
@@ -109,8 +161,8 @@ class PresentationRepository:
         self,
         session_id: str,
         menu_id: str,
-        localized_title: str,
-        localized_source_description: str,
+        localized_title: str | None,
+        localized_source_description: str | None,
         model_id: str,
         prompt_version: str,
     ) -> None:
@@ -464,6 +516,12 @@ def test_presentation_request_uses_compact_model_owned_schema_and_output_cap() -
     }
     input_payload = json.loads(request["input"][0]["content"])
     assert "evidence_type" not in input_payload["menus"][0]["wiki_passages"][0]
+    instructions = str(request["instructions"])
+    assert "prioritize supported taste, perceived heat, how it is commonly eaten" in instructions
+    assert 'gopbaegi as "extra-large portion"' in instructions
+    assert 'jeon as "savory Korean pancake"' in instructions
+    assert "dosirak" in instructions and '"Korean lunchbox"' in instructions
+    assert "Avoid encyclopedic taxonomy" in instructions
 
 
 def test_presentation_retries_explicit_output_truncation_once_with_double_limit() -> None:
@@ -670,7 +728,9 @@ def test_phonetic_yogiyo_description_uses_safe_field_fallback_and_caches_other_c
     assert page.items[0].generation_model == "xai.grok-4.3+SAFE_FIELD_FALLBACK"
     assert page.items[0].source_description == ""
     assert len(repository.cache) == 1
-    assert repository.saved_menu_localizations[0][3] == ""
+    assert repository.saved_menu_localizations[0][3] is None
+    cached = next(iter(repository.cache.values()))
+    assert "localized_source_description" not in cached.evidence_map
 
 
 def test_english_presentation_replaces_only_the_hangul_field() -> None:
@@ -1062,6 +1122,266 @@ def test_selected_menu_fallback_keeps_validated_target_language_yogiyo_copy() ->
     assert presented["menu-1"].source_description == "Chewy rice cakes cooked to order."
 
 
+def _country_aware_item(
+    *,
+    spice_country: str,
+    representative_dish: str,
+    localized_source_description: str | None = None,
+) -> EvidencePoolItem:
+    return EvidencePoolItem(
+        menu=_menu(),
+        knowledge_release_id="knowledge-1",
+        catalog_release_id="catalog-1",
+        recommendation_release_family_id="family-1",
+        synthetic_enrichment_release_id="release-1",
+        localized_title="Tteokbokki",
+        localized_source_description=localized_source_description,
+        synthetic_spice_level=4,
+        country_spice_baseline=3,
+        spice_reference_country_code=spice_country,
+        spice_reference_dish_en=representative_dish,
+        country_preference={
+            "country_code": spice_country,
+            "preference_percent": 71,
+            "sample_size": 220,
+        },
+    )
+
+
+def test_country_aware_us_and_gb_caches_are_separate_but_source_translation_is_reused() -> None:
+    repository = PresentationRepository(MerchantMenuPresentationPage(items=[]))
+    provider = PresentationProvider()
+    settings = Settings(country_aware_presentation_enabled=True)
+    service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        settings,
+        generator=MenuPresentationGenerator(settings, provider=provider),
+    )
+
+    us = service.present_selected(
+        [_country_aware_item(spice_country="US", representative_dish="Buffalo wings")],
+        session_id="session-1",
+        language_code="en",
+        country_code="US",
+    )["menu-1"]
+    second_payload = _generated_payload()
+    second_payload["items"][0]["localized_source_description"] = (
+        "A different but otherwise safe rice-cake description."
+    )
+    provider.output = json.dumps(second_payload)
+    gb = service.present_selected(
+        [
+            _country_aware_item(
+                spice_country="GB",
+                representative_dish="Chicken tikka masala",
+            )
+        ],
+        session_id="session-1",
+        language_code="en",
+        country_code="GB",
+    )["menu-1"]
+
+    assert us.menu.menu_id == gb.menu.menu_id == "menu-1"
+    assert us.cache_key != gb.cache_key
+    assert len(repository.country_cache) == 2
+    assert len(repository.runtime_sources) == 1
+    assert gb.source_description == us.source_description == "Chewy rice cakes cooked to order."
+    request_contexts = [
+        json.loads(request["input"][0]["content"])["menus"][0][
+            "presentation_country_context"
+        ]
+        for request in provider.requests
+    ]
+    assert request_contexts[0]["user_country_code"] == "US"
+    assert request_contexts[0]["representative_dish_en"] == "Buffalo wings"
+    assert request_contexts[1]["user_country_code"] == "GB"
+    assert request_contexts[1]["representative_dish_en"] == "Chicken tikka masala"
+    assert all(
+        "country_preference"
+        not in json.loads(request["input"][0]["content"])["menus"][0]
+        for request in provider.requests
+    )
+    assert all(
+        "localized_source_description" not in entry.evidence_map
+        for entry in repository.country_cache.values()
+    )
+
+
+def test_country_aware_cache_identity_uses_profile_country_not_preference_statistic() -> None:
+    service = MenuPresentationService(
+        PresentationRepository(MerchantMenuPresentationPage(items=[])),  # type: ignore[arg-type]
+        Settings(country_aware_presentation_enabled=True),
+    )
+    base = _presentation(country_code="US").model_copy(
+        update={
+            "evidence_map": {
+                **_presentation().evidence_map,
+                "presentation_country_context": {
+                    "user_country_code": "GB",
+                    "spice_reference_country_code": "JP",
+                },
+            }
+        }
+    )
+    changed_statistic = base.model_copy(
+        update={
+            "country_preference": {
+                "country_code": "FR",
+                "preference_percent": 91,
+                "sample_size": 999,
+            }
+        }
+    )
+    changed_user_country = base.model_copy(
+        update={
+            "evidence_map": {
+                **base.evidence_map,
+                "presentation_country_context": {
+                    "user_country_code": "US",
+                    "spice_reference_country_code": "JP",
+                },
+            }
+        }
+    )
+
+    gb = service._with_cache_identity(base, country_aware=True)
+    same_gb = service._with_cache_identity(changed_statistic, country_aware=True)
+    us = service._with_cache_identity(changed_user_country, country_aware=True)
+
+    assert gb.cache_key == same_gb.cache_key
+    assert gb.cache_key != us.cache_key
+
+
+_EXTENDED_LOCALE_COPY = {
+    "zh-CN": "这是为点餐准备的菜单说明。",
+    "zh-TW": "這是為點餐準備的菜單說明。",
+    "es": "Descripción clara del menú para realizar el pedido.",
+    "fr": "Description claire du menu pour passer la commande.",
+    "de": "Klare Menübeschreibung für die Bestellung.",
+    "it": "Descrizione chiara del menu per effettuare l'ordine.",
+    "pt": "Descrição clara do menu para fazer o pedido.",
+    "th": "คำอธิบายเมนูที่ชัดเจนสำหรับการสั่งอาหาร",
+    "vi": "Mô tả thực đơn rõ ràng để đặt món.",
+    "id": "Deskripsi menu yang jelas untuk memesan makanan.",
+    "ar": "وصف واضح لقائمة الطعام من أجل الطلب.",
+    "hi": "ऑर्डर करने के लिए मेनू का स्पष्ट विवरण।",
+    "ru": "Понятное описание меню для оформления заказа.",
+}
+
+
+@pytest.mark.parametrize(("locale", "copy"), _EXTENDED_LOCALE_COPY.items())
+def test_country_aware_generator_accepts_each_extended_locale(
+    locale: str, copy: str
+) -> None:
+    presentation = _presentation(language_code=locale, source_description="요기요 원문")
+    presentation = presentation.model_copy(
+        update={
+            "evidence_map": {
+                **presentation.evidence_map,
+                "presentation_country_context": {
+                    "user_country_code": "US",
+                    "spice_reference_country_code": None,
+                    "representative_dish_en": None,
+                    "spice_baseline": None,
+                    "menu_spice_level": None,
+                    "spice_relationship": None,
+                    "comparison_is_complete": False,
+                },
+            }
+        }
+    )
+    payload = _generated_payload()
+    payload["items"][0].update(
+        {
+            "localized_subtitle": copy,
+            "localized_source_description": copy,
+            "yobi_short_explanation": copy,
+            "yobi_long_explanation": f"{copy} {copy}",
+            "review_summary": copy,
+        }
+    )
+    provider = PresentationProvider(output=json.dumps(payload, ensure_ascii=False))
+
+    generated = MenuPresentationGenerator(Settings(), provider=provider).generate_country_aware(
+        items=[
+            MenuPresentationService._generation_payload(
+                presentation,
+                country_aware=True,
+            )
+        ],
+        locale=locale,
+    )
+
+    assert generated.items[0].localized_source_description == copy
+    assert generated.field_fallbacks == {}
+
+
+def test_extended_locale_provider_failure_returns_english_fallback_without_cache() -> None:
+    repository = PresentationRepository(MerchantMenuPresentationPage(items=[]))
+    provider = AlwaysRateLimitedPresentationProvider()
+    settings = Settings(country_aware_presentation_enabled=True)
+    service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        settings,
+        generator=MenuPresentationGenerator(settings, provider=provider),
+    )
+
+    result = service.present_selected(
+        [
+            _country_aware_item(
+                spice_country="US",
+                representative_dish="Buffalo wings",
+                localized_source_description="Chewy rice cakes cooked to order.",
+            )
+        ],
+        session_id="session-1",
+        language_code="es",
+        country_code="US",
+    )["menu-1"]
+
+    assert result.generation_model == "DETERMINISTIC_GROUNDED_FALLBACK"
+    assert result.source_description == "Chewy rice cakes cooked to order."
+    assert repository.country_cache == {}
+
+
+def test_extended_locale_invalid_narrative_keeps_safe_source_without_caching_narrative() -> None:
+    repository = PresentationRepository(MerchantMenuPresentationPage(items=[]))
+    payload = _generated_payload()
+    payload["items"][0].update(
+        {
+            "localized_subtitle": "잘못된 문자권 부제",
+            "localized_source_description": "Descripción fiel del restaurante.",
+            "yobi_short_explanation": "잘못된 문자권 설명",
+            "yobi_long_explanation": "잘못된 문자권 긴 설명",
+            "review_summary": "잘못된 문자권 리뷰",
+        }
+    )
+    provider = PresentationProvider(output=json.dumps(payload, ensure_ascii=False))
+    settings = Settings(country_aware_presentation_enabled=True)
+    service = MenuPresentationService(
+        repository,  # type: ignore[arg-type]
+        settings,
+        generator=MenuPresentationGenerator(settings, provider=provider),
+    )
+
+    result = service.present_selected(
+        [
+            _country_aware_item(
+                spice_country="US",
+                representative_dish="Buffalo wings",
+            )
+        ],
+        session_id="session-1",
+        language_code="es",
+        country_code="US",
+    )["menu-1"]
+
+    assert result.generation_model == "DETERMINISTIC_GROUNDED_FALLBACK"
+    assert result.source_description == "Descripción fiel del restaurante."
+    assert len(repository.runtime_sources) == 1
+    assert repository.country_cache == {}
+
+
 def test_deterministic_source_fallback_rejects_old_phonetic_localizations() -> None:
     source = "매콤한 떡볶이와 불향가득 차돌박이를 정성껏 준비했습니다"
 
@@ -1373,6 +1693,29 @@ def test_partial_cache_hit_batches_only_missing_presentations() -> None:
     assert [item.menu.menu_id for item in page.items] == ["menu-1", "menu-2"]
 
 
+def test_empty_legacy_cached_source_is_ignored_in_favor_of_safe_existing_copy() -> None:
+    original = _presentation(source_description="Chewy rice cakes cooked to order.")
+    repository = PresentationRepository(MerchantMenuPresentationPage(items=[original]))
+    service = MenuPresentationService(repository, Settings())  # type: ignore[arg-type]
+    prepared = service._with_cache_identity(original)
+    cached = service._cache_entry(prepared).model_copy(
+        update={
+            "evidence_map": {
+                **prepared.evidence_map,
+                "localized_source_description": "",
+            }
+        }
+    )
+    repository.save_menu_presentation_cache_entry(cached)
+
+    page = service.list_presentations(
+        "session-1", "merchant-1", MerchantMenuPresentationRequest()
+    )
+
+    assert page.items[0].source_description == "Chewy rice cakes cooked to order."
+    assert "localized_source_description" not in page.items[0].evidence_map
+
+
 def test_source_language_country_and_prompt_changes_each_invalidate_cache() -> None:
     repository = PresentationRepository(MerchantMenuPresentationPage(items=[_presentation()]))
     provider = PresentationProvider()
@@ -1455,7 +1798,7 @@ def test_current_prompt_and_schema_logically_invalidate_legacy_cache_without_del
     )
 
     assert current_settings.menu_presentation_prompt_version == (
-        "yobi-menu-presentation-v18-compact-output"
+        "yobi-menu-presentation-v19-traveler-tone"
     )
     assert current_settings.menu_presentation_schema_version == "7"
     assert provider.requested_ids == [["menu-1"]]

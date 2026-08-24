@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  menuHasObviousVeganConflict,
   optionDietaryConflicts,
   optionGroupHasNoneChoice,
   planDefaultOptionSelections,
   selectedOptionsPriceDelta,
   toggledOptionSelection,
 } from "../src/lib/orderFlow";
-import type { OptionGroup, OptionItem } from "../src/types";
+import type { MenuSummary, OptionGroup, OptionItem } from "../src/types";
 
 function option(
   option_item_id: string,
@@ -43,6 +44,39 @@ function group(
 }
 
 describe("order-flow option logic", () => {
+  it("keeps obvious animal dishes out of vegan same-restaurant browsing", () => {
+    const menu = (name_ko: string, name_en: string): MenuSummary => ({
+      menu_id: name_ko,
+      merchant_id: "merchant-1",
+      merchant_name: "merchant",
+      name_en,
+      name_ko,
+      category: "demo",
+      description: "",
+      cultural_description: "",
+      price: 10_000,
+      delivery_fee: 0,
+      eta_min: 10,
+      eta_max: 20,
+      spice_level: 1,
+      serves_min: 1,
+      serves_max: 1,
+      dietary_summary: "",
+      evidence_status: "UNKNOWN",
+      match_reasons: [],
+      risk_hints: [],
+      evidence_ids: [],
+      grounded_claim_ids: [],
+      grounded_passage_ids: [],
+      is_synthetic: false,
+    });
+
+    expect(menuHasObviousVeganConflict(menu("타코와사비", "Tako wasabi"))).toBe(true);
+    expect(menuHasObviousVeganConflict(menu("새우계란볶음밥", "Shrimp egg fried rice"))).toBe(true);
+    expect(menuHasObviousVeganConflict(menu("바지락생면칼국수", "Fresh clam kalguksu"))).toBe(true);
+    expect(menuHasObviousVeganConflict(menu("가지버섯덮밥", "Eggplant mushroom rice bowl"))).toBe(false);
+  });
+
   it("keeps option toggles within the group maximum", () => {
     const multiple = group("sides", [option("a"), option("b"), option("c")], {
       min_select: 0,

@@ -149,11 +149,50 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
     );
 
     await screen.findByTestId("cart-review");
-    fireEvent.click(screen.getByRole("button", { name: "Prepare this order · ₩12,000" }));
+    expect(screen.getByText("The final amount is confirmed in Yogiyo before payment.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Place order · ₩12,000" }));
 
     await waitFor(() => expect(confirmCart).toHaveBeenCalledWith(session.session_id));
     expect(createCheckout).not.toHaveBeenCalled();
     await screen.findByText("Yogiyo handoff page");
+  });
+
+  it("explains why checkout is disabled when the restaurant minimum is unmet", async () => {
+    useSessionStore.setState({
+      profile,
+      session,
+      addressRefId: "address_checkout_test",
+      addressSummary: "YOBI hotel",
+      cartQuantity: 1,
+    });
+    const shortfallCart: CartPreview = {
+      ...cart,
+      minimum_order_amount: 15_000,
+      minimum_order_shortfall: 5_000,
+      missing_slots: ["minimum_order_amount"],
+      ready_to_checkout: false,
+    };
+    vi.spyOn(api, "getOptions").mockResolvedValue([]);
+    vi.spyOn(api, "getCart").mockResolvedValue(shortfallCart);
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <Routes><Route path="/chat" element={(
+          <OrderFlowPanel
+            sessionId={session.session_id}
+            menu={menu}
+            addressRefId="address_checkout_test"
+            onClose={() => undefined}
+          />
+        )} /></Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByTestId("cart-review");
+    const checkout = screen.getByRole("button", { name: "Place order · ₩12,000" });
+    expect(checkout).toBeDisabled();
+    expect(checkout).toHaveAttribute("aria-describedby", "checkout-disabled-reason");
+    expect(screen.getByText(/Restaurant minimum: ₩10,000 \/ ₩15,000 · add ₩5,000/)).toBeInTheDocument();
   });
 
   it("requires an explicit cart clear before configuring a menu from another restaurant", async () => {
@@ -340,6 +379,8 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[1]);
     expect(await screen.findByRole("heading", { name: "Spice" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Hot/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Done" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
     expect(await screen.findByRole("heading", { name: "How should we say it?" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add to cart" }));
 
@@ -379,7 +420,21 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
       ready_to_checkout: false,
     };
     const addCartItem = vi.spyOn(api, "addCartItem").mockResolvedValue(serverCart);
-    const deliveredCart = { ...serverCart, version: 3, missing_slots: [], ready_to_checkout: true };
+    const deliveredCart: CartPreview = {
+      ...serverCart,
+      version: 3,
+      missing_slots: [],
+      ready_to_checkout: true,
+      delivery_preference: {
+        handoff_method: "front_desk",
+        cutlery: true,
+        ring_bell: false,
+        front_desk: true,
+        user_note: "Please leave it at the hotel front desk. Please include disposable cutlery.",
+        korean_note: "호텔 프런트에 맡겨 주세요. 일회용 수저와 포크를 포함해 주세요.",
+        back_translation: "Please leave it at the hotel front desk with cutlery.",
+      },
+    };
     const updateDelivery = vi.spyOn(api, "updateDelivery").mockResolvedValue(deliveredCart);
     const confirmCart = vi.spyOn(api, "confirmCart").mockResolvedValue({ ...deliveredCart, version: 4, confirmed: true });
 
@@ -412,14 +467,34 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
     expect(screen.queryByTestId(/option-group-/)).not.toBeInTheDocument();
 
     expect(screen.queryByText("Would you like anything else from this restaurant?")).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Leave at the hotel front desk" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("radio", { name: "Leave at my door" })).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("radio", { name: "Meet me outside" })).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("switch", { name: "Include disposable cutlery" })).not.toBeChecked();
+    expect(screen.queryByRole("switch", { name: "Ring the bell on arrival" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: "Leave at my door" }));
+    expect(screen.getByRole("switch", { name: "Ring the bell on arrival" })).not.toBeChecked();
+    fireEvent.click(screen.getByRole("radio", { name: "Leave at the hotel front desk" }));
     fireEvent.click(await screen.findByRole("button", { name: "Confirm delivery details" }));
-    await waitFor(() => expect(updateDelivery).toHaveBeenCalledWith(session.session_id, "address_checkout_test"));
+    await waitFor(() => expect(updateDelivery).toHaveBeenCalledWith(
+      session.session_id,
+      "address_checkout_test",
+      {
+        handoff_method: "front_desk",
+        cutlery: false,
+        ring_bell: false,
+        front_desk: true,
+        user_note: "Please leave it at the hotel front desk. No disposable cutlery.",
+      },
+    ));
     const review = await screen.findByTestId("cart-review");
     expect(review).toHaveTextContent("Server-selected external gimbap");
     expect(review).toHaveTextContent("₩12,345");
     expect(review).toHaveTextContent("₩15,555");
+    expect(review).toHaveTextContent("Courier handoff request");
+    expect(review).toHaveTextContent("호텔 프런트에 맡겨 주세요");
 
-    fireEvent.click(screen.getByRole("button", { name: "Prepare this order · ₩15,555" }));
+    fireEvent.click(screen.getByRole("button", { name: "Place order · ₩15,555" }));
     await waitFor(() => expect(confirmCart).toHaveBeenCalledWith(session.session_id));
     await screen.findByText("Yogiyo no-option handoff");
   });
@@ -437,7 +512,7 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
     const translation = {
       translation_id: "note-translation-1",
       source_text: sourceText,
-      source_language: "English",
+      source_language: "en",
       korean_text: "소스는 따로 담아 주세요.",
       back_translation: "Please pack the sauce separately.",
       model_id: "gpt-oss-20b",
@@ -461,6 +536,9 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
     );
 
     const note = await screen.findByRole("textbox");
+    expect(note).toHaveValue("");
+    expect(note).toHaveAttribute("maxlength", "200");
+    expect(note).toHaveAccessibleName("How should we say it? Restaurant note");
     fireEvent.change(note, { target: { value: sourceText } });
     expect(screen.getByRole("button", { name: "Add to cart" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Translate to Korean" }));
@@ -469,13 +547,65 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
     expect(screen.getByRole("button", { name: "Add to cart" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Add to cart" }));
 
-    await waitFor(() => expect(translate).toHaveBeenCalledWith(session.session_id, sourceText, "English"));
+    await waitFor(() => expect(translate).toHaveBeenCalledWith(session.session_id, sourceText, "en"));
     await waitFor(() => expect(addCartItem).toHaveBeenCalledWith(
       session.session_id,
       menu.menu_id,
       [],
       sourceText,
       translation.translation_id,
+    ));
+  });
+
+  it.each([
+    ["한국어", "ko", "한국어로 번역"],
+    ["日本語", "ja", "韓国語に翻訳"],
+  ])("sends the canonical %s restaurant-note language code", async (
+    preferredLanguage,
+    expectedCode,
+    translateLabel,
+  ) => {
+    useSessionStore.setState({
+      profile: { ...profile, preferred_language: preferredLanguage },
+      session,
+      addressRefId: "address_checkout_test",
+      addressSummary: "YOBI hotel",
+      cartQuantity: 0,
+    });
+    vi.spyOn(api, "getOptions").mockResolvedValue([]);
+    const sourceText = expectedCode === "ko" ? "소스는 따로 주세요." : "ソースは別にしてください。";
+    const translate = vi.spyOn(api, "translateRestaurantNote").mockResolvedValue({
+      translation_id: `note-translation-${expectedCode}`,
+      source_text: sourceText,
+      source_language: expectedCode,
+      korean_text: "소스는 따로 주세요.",
+      back_translation: sourceText,
+      model_id: expectedCode === "ko" ? "DETERMINISTIC_KOREAN_PASSTHROUGH" : "gpt-oss-20b",
+      status: "SUCCEEDED",
+      created_at: new Date().toISOString(),
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <Routes><Route path="/chat" element={(
+          <OrderFlowPanel
+            sessionId={session.session_id}
+            menu={menu}
+            addressRefId="address_checkout_test"
+            onClose={() => undefined}
+          />
+        )} /></Routes>
+      </MemoryRouter>,
+    );
+
+    const note = await screen.findByRole("textbox");
+    fireEvent.change(note, { target: { value: sourceText } });
+    fireEvent.click(screen.getByRole("button", { name: translateLabel }));
+
+    await waitFor(() => expect(translate).toHaveBeenCalledWith(
+      session.session_id,
+      sourceText,
+      expectedCode,
     ));
   });
 
@@ -511,8 +641,9 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
 
     fireEvent.change(await screen.findByRole("textbox"), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "Add to cart" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Yes, show more menus" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Yes, show more dishes" }));
     await waitFor(() => expect(document.querySelectorAll(".v2-merchant-menu-carousel .v2-alimtalk-card")).toHaveLength(12));
+    expect(screen.getByRole("log", { name: "Would you like anything else from this restaurant?" })).toHaveTextContent("Yes, show more dishes");
 
     const carousel = document.querySelector<HTMLElement>(".v2-merchant-menu-carousel")!;
     Object.defineProperties(carousel, {
@@ -530,6 +661,45 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
       limit: 12,
       exclude_menu_ids: [menu.menu_id],
     });
+  });
+
+  it("falls back to same-restaurant catalog menus when Wiki presentations are empty", async () => {
+    useSessionStore.setState({
+      profile,
+      session,
+      addressRefId: "address_checkout_test",
+      addressSummary: "YOBI hotel",
+      cartQuantity: 0,
+    });
+    vi.spyOn(api, "getOptions").mockResolvedValue([]);
+    vi.spyOn(api, "addCartItem").mockResolvedValue(cart);
+    const catalogMenu = {
+      ...presentation(7).menu,
+      localized_title: null,
+      name_en: "Catalog-only restaurant dish",
+    };
+    const getMerchantMenus = vi.spyOn(api, "getMerchantMenus").mockResolvedValue([catalogMenu]);
+    vi.spyOn(api, "getMerchantMenuPresentations").mockResolvedValue({ items: [], next_cursor: null });
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <Routes><Route path="/chat" element={(
+          <OrderFlowPanel
+            sessionId={session.session_id}
+            menu={menu}
+            addressRefId="address_checkout_test"
+            onClose={() => undefined}
+          />
+        )} /></Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add to cart" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Yes, show more dishes" }));
+
+    expect(await screen.findByRole("heading", { name: "Catalog-only restaurant dish" })).toBeInTheDocument();
+    expect(screen.getByText("A dish available for the current catalog and delivery context.")).toBeInTheDocument();
+    expect(getMerchantMenus).toHaveBeenCalledTimes(2);
   });
 
   it("renders localized option group and item display names", async () => {
@@ -577,6 +747,7 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
 
     expect(await screen.findByRole("heading", { name: "Localized spice level" })).toBeInTheDocument();
     expect(getOptions).toHaveBeenCalledWith(menu.menu_id, session.session_id, true);
+    expect(screen.getByText("Options: +₩0")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Localized mild/ })).toBeInTheDocument();
     expect(screen.queryByText("맵기")).not.toBeInTheDocument();
   });
@@ -681,9 +852,15 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
 
     expect(await screen.findByRole("heading", { name: "Optional garnish" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "None" }));
+    expect(screen.getByRole("heading", { name: "Optional garnish" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Done" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
     expect(await screen.findByRole("heading", { name: "Required rice" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "None" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /White rice/ }));
+    expect(screen.getByRole("heading", { name: "Required rice" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Done" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
     expect(await screen.findByRole("heading", { name: "Toppings" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "None" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Seaweed/ }));
@@ -720,7 +897,7 @@ describe("OrderFlowPanel Yogiyo handoff contract", () => {
     vi.spyOn(api, "translateRestaurantNote").mockResolvedValue({
       translation_id: "failed-translation",
       source_text: sourceText,
-      source_language: "English",
+      source_language: "en",
       korean_text: null,
       back_translation: null,
       model_id: "all-configured-models",

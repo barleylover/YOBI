@@ -306,8 +306,9 @@ never treats unavailable evidence as a hidden constraint.
 history. External ranking values use source menu/merchant review counts; order and
 popularity are explicitly derived demo proxies. Only synthetic fixture menus with no
 source counts use stable ID-derived values. None are persisted platform-wide Yogiyo
-statistics. The five-item feature is a reviewed general-concept
-mapping for Gimbap, Gukbap, Hotteok, Seolleongtang, and Eomuk. Its Wiki text remains
+statistics. Ranking membership favors different merchants and concepts but preserves
+source/proxy metric order. The five-item feature is a reviewed general-concept mapping
+for Gimbap, Tteokbokki, Hotteok, Naengmyeon, and Eomuk. Its Wiki text remains
 general food knowledge and never becomes a merchant recipe or dietary assertion.
 
 Migrations `001`-`012` are append-only and checksum-protected. `005`-`012` use

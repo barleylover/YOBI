@@ -13,6 +13,7 @@ from app.domain.dialogue import (
     ReadinessDecision,
     RecommendationResult,
 )
+from app.domain.presentation_localization import SupportedPresentationLocale
 
 
 class ChatState(str, Enum):
@@ -310,7 +311,7 @@ class MerchantMenuPresentation(BaseModel):
     review_ids: list[str] = Field(default_factory=list)
     generation_model: str
     release_id: str | None = Field(default=None, exclude=True)
-    language_code: Literal["ko", "en", "ja"] | None = Field(default=None, exclude=True)
+    language_code: SupportedPresentationLocale | None = Field(default=None, exclude=True)
     cache_key: str | None = Field(default=None, exclude=True)
     source_hash: str | None = Field(default=None, exclude=True)
     prompt_version: str | None = Field(default=None, exclude=True)
@@ -326,6 +327,41 @@ class MenuPresentationCacheEntry(BaseModel):
     language_code: Literal["ko", "en", "ja"]
     country_code: str = Field(min_length=2, max_length=2)
     localized_title: str = Field(min_length=1, max_length=300)
+    localized_subtitle: str = Field(min_length=1, max_length=500)
+    short_explanation: str = Field(min_length=1, max_length=1000)
+    long_explanation: str = Field(min_length=1, max_length=3000)
+    review_summary: str = Field(min_length=1, max_length=1500)
+    evidence_ids: list[str] = Field(default_factory=list)
+    review_ids: list[str] = Field(default_factory=list)
+    evidence_map: dict[str, Any] = Field(default_factory=dict)
+    model_id: str = Field(min_length=1, max_length=120)
+    prompt_version: str = Field(min_length=1, max_length=80)
+    content_schema_version: str = Field(min_length=1, max_length=40)
+    source_hash: str = Field(min_length=64, max_length=64)
+    personalization_applied: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+
+class RuntimeMenuSourceDescriptionLocalizationEntry(BaseModel):
+    release_id: str = Field(min_length=1, max_length=160)
+    menu_id: str = Field(min_length=1, max_length=160)
+    language_code: SupportedPresentationLocale
+    prompt_version: str = Field(min_length=1, max_length=80)
+    description_text: str = Field(min_length=1, max_length=4000)
+    model_id: str = Field(min_length=1, max_length=120)
+    source_hash: str = Field(min_length=64, max_length=64)
+    validation_status: Literal["VALID"] = "VALID"
+    generated_at: datetime
+
+
+class CountryAwareMenuPresentationCacheEntry(BaseModel):
+    cache_key: str = Field(min_length=64, max_length=128)
+    release_id: str = Field(min_length=1, max_length=160)
+    menu_id: str = Field(min_length=1, max_length=160)
+    language_code: SupportedPresentationLocale
+    user_country_code: str = Field(min_length=2, max_length=2)
+    spice_reference_country_code: str = Field(min_length=2, max_length=2)
     localized_subtitle: str = Field(min_length=1, max_length=500)
     short_explanation: str = Field(min_length=1, max_length=1000)
     long_explanation: str = Field(min_length=1, max_length=3000)
@@ -371,6 +407,18 @@ class CartLine(BaseModel):
     unit_price: int
     options: list[dict[str, Any]]
     line_total: int
+    user_note: str | None = None
+    korean_note: str | None = None
+
+
+class DeliveryPreferenceSummary(BaseModel):
+    handoff_method: Literal["front_desk", "door", "meet_outside"]
+    cutlery: bool
+    ring_bell: bool
+    front_desk: bool
+    user_note: str
+    korean_note: str
+    back_translation: str
 
 
 class CartPreview(BaseModel):
@@ -385,6 +433,7 @@ class CartPreview(BaseModel):
     dietary_warnings: list[str]
     minimum_order_amount: int = 0
     minimum_order_shortfall: int = 0
+    delivery_preference: DeliveryPreferenceSummary | None = None
     ready_to_checkout: bool
     confirmed: bool
 
@@ -392,10 +441,10 @@ class CartPreview(BaseModel):
 class DeliveryPreferenceInput(BaseModel):
     address_ref_id: str | None = None
     handoff_method: Literal["front_desk", "door", "meet_outside"] = "front_desk"
-    cutlery: bool = False
+    cutlery: bool = True
     ring_bell: bool = False
     front_desk: bool = True
-    user_note: str = "Please leave it at the hotel front desk."
+    user_note: str = "Please leave it at the hotel front desk and include disposable cutlery."
 
 
 class CheckoutCreate(BaseModel):

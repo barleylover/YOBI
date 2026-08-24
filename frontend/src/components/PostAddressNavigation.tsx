@@ -52,12 +52,6 @@ export function PostAddressNavigation({ sessionId, language, locale, disabled = 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [featureIndex, setFeatureIndex] = useState(0);
-  const localizedMetricLabel = sort === "review_count"
-    ? copy.reviews
-    : sort === "order_count"
-      ? copy.orders
-      : copy.koreanPopularity;
-
   useEffect(() => {
     function outside(event: PointerEvent) {
       if (view || !expanded || navRef.current?.contains(event.target as Node)) return;
@@ -187,7 +181,6 @@ export function PostAddressNavigation({ sessionId, language, locale, disabled = 
                         <strong>{menuName(entry.menu, language)}</strong>
                         <small>{merchantName(entry.menu.merchant_name, language)}</small>
                         <p>{entry.menu.cultural_description || entry.menu.description || dynamicCopy.catalogDescription}</p>
-                        <span>{language === "English" ? entry.metric_label : localizedMetricLabel}: {entry.metric_value.toLocaleString(locale)}</span>
                       </div>
                       <div className="ranking-menu-action">
                         <strong>₩{entry.menu.price.toLocaleString(locale)}</strong>

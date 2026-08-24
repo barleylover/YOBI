@@ -88,7 +88,7 @@ export type SpiceReferenceCountry =
   | "US" | "GB" | "CA" | "AU" | "NZ" | "IE" | "KR" | "JP" | "CN" | "TW"
   | "HK" | "SG" | "ES" | "MX" | "AR" | "CO" | "FR" | "BE" | "DE" | "AT"
   | "CH" | "IT" | "PT" | "BR" | "TH" | "VN" | "ID" | "MY" | "SA" | "AE"
-  | "EG" | "IN" | "RU" | "PH" | "TR" | "NL";
+  | "EG" | "IN" | "RU" | "PH" | "TR" | "NL" | "ZZ";
 
 export interface DietaryFiltersV2 {
   halal_certified_only: boolean;
@@ -108,6 +108,7 @@ export interface RecommendationCriteriaV2 {
   cooking_methods: string[];
   dietary_filters: DietaryFiltersV2;
   max_spice_level: 1 | 2 | 3 | 4 | 5;
+  spice_range?: { min: 1 | 2 | 3 | 4 | 5; max: 1 | 2 | 3 | 4 | 5 } | null;
   spice_preference?: "LESS" | "SIMILAR" | "MORE";
   spice_reference_country: SpiceReferenceCountry;
 }
@@ -151,6 +152,15 @@ export interface SpiceReferenceGroup {
   levels: SpiceReferenceLevel[];
 }
 
+export interface SpiceScaleAnchor {
+  level: 2 | 4;
+  familiar_dish: string;
+  korean_dish: string;
+  approximate_shu: number;
+  approximate_shu_min: number;
+  approximate_shu_max: number;
+}
+
 export interface PreferenceCatalog {
   schema_version: "2" | "3";
   catalog_version: string;
@@ -163,6 +173,7 @@ export interface PreferenceCatalog {
     country_code: SpiceReferenceCountry;
     spice_baseline: 1 | 2 | 3 | 4 | 5;
     representative_dish: string;
+    spice_scale_anchors?: SpiceScaleAnchor[];
   }>;
   synthetic_enrichment_release_id?: string | null;
   capabilities?: {
@@ -337,6 +348,7 @@ export type FoodRankingSort = "review_count" | "order_count" | "korean_popularit
 
 export interface FoodRankingEntry {
   position: number;
+  dish_name?: string;
   metric_label: string;
   metric_value: number;
   menu: MenuSummary;
@@ -667,6 +679,8 @@ export interface CartPreview {
     unit_price: number;
     options: Array<{ option_item_id: string; name_en: string; name_ko: string; display_name?: string | null; price_delta: number }>;
     line_total: number;
+    user_note?: string | null;
+    korean_note?: string | null;
   }>;
   subtotal: number;
   delivery_fee: number;
@@ -675,6 +689,15 @@ export interface CartPreview {
   dietary_warnings: string[];
   minimum_order_amount: number;
   minimum_order_shortfall: number;
+  delivery_preference?: {
+    handoff_method: "front_desk" | "door" | "meet_outside";
+    cutlery: boolean;
+    ring_bell: boolean;
+    front_desk: boolean;
+    user_note: string;
+    korean_note: string;
+    back_translation: string;
+  } | null;
   ready_to_checkout: boolean;
   confirmed: boolean;
 }

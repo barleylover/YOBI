@@ -3,7 +3,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { RecommendationResults } from "../src/components/RecommendationResults";
 import { getRecommendationCopy } from "../src/lib/recommendationI18n";
 import { getRedesignCopy } from "../src/lib/redesignI18n";
-import type { MenuSummary, RecommendationBatchV2 } from "../src/types";
+import type { MenuSummary, PreferenceCatalog, RecommendationBatchV2 } from "../src/types";
+
+const spiceCatalog = {
+  country_spice_profiles: [{
+    country_code: "US",
+    spice_baseline: 3,
+    representative_dish: "Buffalo wings",
+  }],
+} as PreferenceCatalog;
 
 const menu: MenuSummary = {
   menu_id: "menu_chat_1",
@@ -85,6 +93,8 @@ describe("chat-style recommendation results", () => {
     render(
       <RecommendationResults
         batch={batch}
+        catalog={spiceCatalog}
+        spiceReferenceCountry="US"
         copy={getRecommendationCopy("English")}
         v2={getRedesignCopy("English")}
         timestamp="10:05"
@@ -96,23 +106,53 @@ describe("chat-style recommendation results", () => {
 
     expect(screen.getAllByText("Gimbap").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Haru Beer - Dongguk Univ. Branch").length).toBeGreaterThan(0);
-    expect(screen.queryByText("하루비어-동국대점")).not.toBeInTheDocument();
+    expect(screen.getAllByText("하루비어-동국대점").length).toBeGreaterThan(0);
     expect(screen.getByText("Seasoned rice and fillings rolled in seaweed")).toBeInTheDocument();
     expect(screen.getAllByText("YOBI:").length).toBeGreaterThan(0);
     expect(screen.getAllByText("YOGIYO:").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Minimum order ₩15,000").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Halal-friendly: yes").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Spice 1/5").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/less spicy than Buffalo wings/)).not.toBeInTheDocument();
+    expect(screen.getAllByText("No obvious pork or alcohol detected · not halal-certified").length).toBeGreaterThan(0);
     expect(screen.queryByText("Halal: yes")).not.toBeInTheDocument();
     expect(screen.queryByText("Legacy selection reason must stay hidden.")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /compare/i })).not.toBeInTheDocument();
     expect(document.querySelector(".rank-bar")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getAllByRole("button", { name: "View additional explanation" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Why YOBI picked this" })[0]);
     expect(screen.getByText(/This is a rice-based Korean meal/)).toBeInTheDocument();
     expect(screen.getByText(/United States.*82%/)).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "82%" })).toBeInTheDocument();
     expect(screen.getByText(/Guests often mention balanced flavour/)).toBeInTheDocument();
     expect(screen.queryByText(/Gimbap wraps rice/)).not.toBeInTheDocument();
+  });
+
+  it("marks a clearly unfamiliar offal dish as adventurous without changing its rank", () => {
+    const adventurousBatch: RecommendationBatchV2 = {
+      ...batch,
+      request_id: "request-adventurous",
+      recommendations: [{
+        ...batch.recommendations[0],
+        menu: { ...menu, name_en: "Gopchang rice bowl", name_ko: "곱창덮밥" },
+        localized_title: "Gopchang rice bowl",
+        source_description: "A spicy beef intestine rice bowl.",
+      }],
+    };
+
+    render(
+      <RecommendationResults
+        batch={adventurousBatch}
+        copy={getRecommendationCopy("English")}
+        v2={getRedesignCopy("English")}
+        timestamp="10:05"
+        language="English"
+        locale="en-US"
+        onChoose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Adventurous choice · check the texture and ingredients")).toBeInTheDocument();
+    expect(adventurousBatch.recommendations[0].rank).toBe(1);
   });
 
   it("uses English copy for a selected language outside Korean, English, and Japanese", () => {
@@ -139,7 +179,7 @@ describe("chat-style recommendation results", () => {
     );
 
     expect(screen.getByText(groundedDescription)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Choose this menu" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Choose this dish" })).toBeInTheDocument();
     expect(screen.queryByText(/وجبة اصطناعية|synthetic menu/i)).not.toBeInTheDocument();
   });
 
@@ -170,6 +210,68 @@ describe("chat-style recommendation results", () => {
 
     expect(screen.queryByText("번역되지 않은 식당 원문 설명")).not.toBeInTheDocument();
     expect(screen.queryByText("YOGIYO:")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { countryPreference: null, label: "missing" },
+    {
+      countryPreference: { country_code: "", preference_percent: 54, sample_size: 120 },
+      label: "blank",
+    },
+    {
+      countryPreference: { country_code: "ZZ", preference_percent: 54, sample_size: 120 },
+      label: "unknown",
+    },
+  ])("hides the country-preference block for $label country data", ({ countryPreference }) => {
+    const hiddenCountryBatch: RecommendationBatchV2 = {
+      ...batch,
+      recommendations: [{
+        ...batch.recommendations[0],
+        country_preference: countryPreference,
+      }],
+    };
+
+    render(
+      <RecommendationResults
+        batch={hiddenCountryBatch}
+        copy={getRecommendationCopy("English")}
+        v2={getRedesignCopy("English")}
+        timestamp="10:05"
+        language="English"
+        locale="en-US"
+        onChoose={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Why YOBI picked this" }));
+    expect(screen.queryByText(getRedesignCopy("English").countryPreference)).not.toBeInTheDocument();
+    expect(screen.queryByText(/ZZ.*54%/)).not.toBeInTheDocument();
+  });
+
+  it("keeps a valid United Kingdom country-preference block", () => {
+    const gbBatch: RecommendationBatchV2 = {
+      ...batch,
+      recommendations: [{
+        ...batch.recommendations[0],
+        country_preference: { country_code: "GB", preference_percent: 73, sample_size: 315 },
+      }],
+    };
+
+    render(
+      <RecommendationResults
+        batch={gbBatch}
+        copy={getRecommendationCopy("English")}
+        v2={getRedesignCopy("English")}
+        timestamp="10:05"
+        language="English"
+        locale="en-GB"
+        onChoose={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Why YOBI picked this" }));
+    expect(screen.getByText(/United Kingdom.*73%/)).toBeInTheDocument();
+    expect(screen.getByText("Based on 315 visitors")).toBeInTheDocument();
   });
 
   it("renders every recommendation in the horizontal card carousel", () => {

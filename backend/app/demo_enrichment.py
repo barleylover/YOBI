@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -50,7 +51,7 @@ COUNTRY_CODES = (
     "TR",
     "NL",
 )
-GENERATOR_VERSION = "yobi-synthetic-enrichment-v8-halal-alias-coverage"
+GENERATOR_VERSION = "yobi-synthetic-enrichment-v11-animal-alias-coverage"
 SOURCE_TYPE = "SYNTHETIC_DEMO"
 LANGUAGE_CODES: tuple[LanguageCode, ...] = ("ko", "en", "ja")
 
@@ -149,26 +150,121 @@ _HALAL_EXCLUSION_TOKENS = _PORK_TOKENS + (
 )
 _ANIMAL_TOKENS = _PORK_TOKENS + (
     "BEEF",
+    "MEAT",
+    "GALBI",
+    "SHORT RIB",
+    "GOPCHANG",
+    "DAECHANG",
+    "MAKCHANG",
+    "TRIPE",
+    "INTESTINE",
+    "BLOOD SAUSAGE",
     "CHICKEN",
     "FISH",
     "SEAFOOD",
+    "OCTOPUS",
+    "SQUID",
+    "SHRIMP",
+    "PRAWN",
+    "CRAB",
+    "LOBSTER",
+    "TUNA",
+    "SALMON",
+    "MACKEREL",
+    "EEL",
+    "CLAM",
+    "SHELLFISH",
+    "MUSSEL",
+    "OYSTER",
+    "SCALLOP",
+    "ANCHOVY",
+    "POLLOCK",
+    "FISH CAKE",
+    "DUCK",
+    "LAMB",
+    "STEAK",
     "EGG",
     "DAIRY",
+    "MAYONNAISE",
+    "BUTTER",
+    "YOGURT",
+    "HONEY",
     "돼지",
     "삼겹",
     "제육",
     "소고기",
     "쇠고기",
+    "고기",
+    "갈비",
+    "곱창",
+    "대창",
+    "막창",
+    "내장",
+    "양곱창",
     "닭",
     "치킨",
     "생선",
     "새우",
     "오징어",
+    "문어",
+    "낙지",
+    "주꾸미",
+    "쭈꾸미",
+    "타코와사비",
+    "연어",
+    "참치",
+    "고등어",
+    "장어",
+    "명태",
+    "꼬막",
+    "조개",
+    "홍합",
+    "전복",
+    "바지락",
+    "가리비",
+    "골뱅이",
+    "소라",
+    "해삼",
+    "멸치",
+    "어묵",
+    "게장",
+    "대게",
+    "아귀",
+    "황태",
+    "북어",
+    "코다리",
+    "꽁치",
+    "갈치",
+    "조기",
+    "도미",
+    "광어",
+    "우럭",
+    "방어",
+    "복어",
+    "게살",
+    "꽃게",
+    "킹크랩",
+    "랍스터",
+    "사시미",
+    "육회",
+    "회덮밥",
+    "오리",
+    "양고기",
+    "양갈비",
+    "우삼겹",
+    "차돌",
+    "사골",
+    "스테이크",
     "해물",
     "계란",
     "달걀",
     "치즈",
     "우유",
+    "마요네즈",
+    "버터",
+    "요거트",
+    "요구르트",
+    "꿀",
 )
 _HALAL_PREFERRED_TOKENS = (
     "VEGETABLE",
@@ -230,7 +326,21 @@ def _number(seed: str, *parts: str) -> int:
 
 def _contains(text: str, tokens: tuple[str, ...]) -> bool:
     upper = text.upper()
-    return any(token.upper() in upper for token in tokens)
+    return any(
+        (
+            re.search(rf"(?<![A-Z]){re.escape(token.upper())}(?![A-Z])", upper)
+            is not None
+        )
+        if token.isascii()
+        else token.upper() in upper
+        for token in tokens
+    )
+
+
+def has_obvious_animal_ingredient(*text_parts: str) -> bool:
+    """Fail closed for obvious animal aliases in synthetic vegan demo data."""
+
+    return _contains(" ".join(part for part in text_parts if part), _ANIMAL_TOKENS)
 
 
 def build_country_profiles(release_id: str, seed: str) -> list[dict[str, Any]]:
@@ -272,7 +382,7 @@ def build_menu_profiles(
         basis = " ".join((menu.name_ko, menu.name_en, menu.description, *menu.feature_codes))
         basis_by_menu[menu.menu_id] = basis
         value = _number(seed, "menu", menu.menu_id)
-        has_animal = _contains(basis, _ANIMAL_TOKENS)
+        has_animal = has_obvious_animal_ingredient(basis)
         if not has_animal:
             eligible_for_vegan.append(menu.menu_id)
         vegan = not has_animal and value % 5 == 0

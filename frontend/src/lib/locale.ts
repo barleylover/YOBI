@@ -35,6 +35,7 @@ export const COUNTRIES = [
   ["Thailand", "TH"], ["Vietnam", "VN"], ["Indonesia", "ID"], ["Malaysia", "MY"],
   ["Saudi Arabia", "SA"], ["United Arab Emirates", "AE"], ["Egypt", "EG"], ["India", "IN"],
   ["Russia", "RU"], ["Philippines", "PH"], ["Türkiye", "TR"], ["Netherlands", "NL"],
+  ["Other", "ZZ"],
 ] as const;
 
 export const LANGUAGE_COUNTRIES: Record<SupportedLanguage, string[]> = {
@@ -88,17 +89,181 @@ const DEMO_ROAD_ADDRESSES: Record<string, string> = {
   "서울특별시 중구 데모로 21": "21 Demo-ro, Jung-gu, Seoul",
 };
 
+const DEMO_ROAD_ADDRESSES_JA: Record<string, string> = {
+  "서울특별시 중구 을지로 21": "ソウル特別市 中区 乙支路21",
+  "서울특별시 중구 데모로 21": "ソウル特別市 中区 デモ路21",
+  "21 Eulji-ro, Jung-gu, Seoul": "ソウル特別市 中区 乙支路21",
+  "21 Demo-ro, Jung-gu, Seoul": "ソウル特別市 中区 デモ路21",
+};
+
 const DEMO_MERCHANT_NAMES: Record<string, string> = {
   "하루비어-동국대점": "Haru Beer - Dongguk Univ. Branch",
   "피자마루-약수점": "Pizza Maru - Yaksu Branch",
   "파스타입니다-종로점": "Pasta Imnida - Jongno Branch",
   "미친피자-본점": "Crazy Pizza - Main Branch",
   "국밥생각-충정로점": "Gukbap Saenggak - Chungjeongno Branch",
+  "미도인덮밥,스테이크-대학로점": "Midoin Deopbap & Steak - Daehak-ro Branch",
+  "남경중화요리-남대문시장점": "Namgyeong Chinese Restaurant - Namdaemun Market",
+  "비빔밥입니다-공덕점": "Bibimbap-imnida - Gongdeok Branch",
+  "맛단(맛있는다이어트식단)-종로점": "Matdan - Jongno Branch",
+  "본도시락-서울시청점": "Bon Dosirak - Seoul City Hall Branch",
+  "김밥천국-명동본점": "Gimbap Cheonguk - Myeongdong Main Branch",
 };
+
+const DEMO_MERCHANT_NAMES_JA: Record<string, string> = {
+  "하루비어-동국대점": "ハルビア・東国大学店",
+  "피자마루-약수점": "ピザマル・薬水店",
+  "파스타입니다-종로점": "パスタイムニダ・鍾路店",
+  "미친피자-본점": "ミチンピザ・本店",
+  "국밥생각-충정로점": "クッパセンガク・忠正路店",
+  "미도인덮밥,스테이크-대학로점": "ミドイン丼＆ステーキ・大学路店",
+  "남경중화요리-남대문시장점": "南京中華料理・南大門市場店",
+  "비빔밥입니다-공덕점": "ビビンバイムニダ・孔徳店",
+  "맛단(맛있는다이어트식단)-종로점": "マッタン（おいしいダイエット食）・鍾路店",
+  "본도시락-서울시청점": "ボン弁当・ソウル市庁店",
+  "김밥천국-명동본점": "キンパ天国・明洞本店",
+};
+
+const DEMO_MERCHANT_TERMS_JA: Array<[RegExp, string]> = [
+  [/SPECIAL/gi, "スペシャル"],
+  [/Boneless Korean fried chicken/gi, "骨なし韓国フライドチキン"],
+  [/Spicy stir-fried pork/gi, "辛口豚炒め"],
+  [/Bean sprout gukbap/gi, "もやしクッパ"],
+  [/Cheese pork cutlet/gi, "チーズとんかつ"],
+  [/Grilled mackerel/gi, "サバ焼き"],
+  [/Beef jjajangmyeon/gi, "牛肉チャジャン麺"],
+  [/Jjajang fried rice/gi, "チャジャン炒飯"],
+  [/Chocolate croffle/gi, "チョコレートクロッフル"],
+  [/Chicken Kalguksu/gi, "鶏カルグクス"],
+  [/Bibim naengmyeon/gi, "ビビン冷麺"],
+  [/Bibim kalguksu/gi, "ビビンカルグクス"],
+  [/Bulgogi gimbap/gi, "プルコギキンパ"],
+  [/Bulgogi pizza/gi, "プルコギピザ"],
+  [/Kimchi mandu/gi, "キムチマンドゥ"],
+  [/Kimchi stew/gi, "キムチチゲ"],
+  [/Korean baekban/gi, "韓国定食"],
+  [/Spicy tangsuyuk/gi, "辛口酢豚"],
+  [/Cheese tteokbokki/gi, "チーズトッポッキ"],
+  [/Bibim guksu/gi, "ビビングクス"],
+  [/Eomuk udon/gi, "オムクうどん"],
+  [/Soft Tofu/gi, "スンドゥブ"],
+  [/Hong Kong Banjeom/gi, "香港飯店"],
+  [/No More Pizza/gi, "ノーモアピザ"],
+  [/Yeopgi Tteokbokki/gi, "ヨプギトッポッキ"],
+  [/Myeongdong/gi, "明洞"],
+  [/Hongdae/gi, "弘大"],
+  [/Gangnam/gi, "江南"],
+  [/Euljiro/gi, "乙支路"],
+  [/Cheonggye/gi, "清渓"],
+  [/Jongno/gi, "鍾路"],
+  [/Namsan/gi, "南山"],
+  [/Seoul/gi, "ソウル"],
+  [/Hanok/gi, "韓屋"],
+  [/Eulji/gi, "乙支"],
+  [/Rose/gi, "ロゼ"],
+  [/Tteokbokki/gi, "トッポッキ"],
+  [/Tteok/gi, "トック"],
+  [/Kalguksu/gi, "カルグクス"],
+  [/Bibimbap/gi, "ビビンバ"],
+  [/Gimbap/gi, "キンパ"],
+  [/Crisp Chicken/gi, "サクサクチキン"],
+  [/Samgyetang/gi, "サムゲタン"],
+  [/Jjajang/gi, "チャジャン"],
+  [/Bulgogi/gi, "プルコギ"],
+  [/Hotteok/gi, "ホットク"],
+  [/Japchae/gi, "チャプチェ"],
+  [/Jjamppong/gi, "チャンポン"],
+  [/Gukbap/gi, "クッパ"],
+  [/Seolleongtang/gi, "ソルロンタン"],
+  [/Eomuk/gi, "オムク"],
+  [/Bingsu/gi, "ピンス"],
+  [/Dosirak/gi, "お弁当"],
+  [/Sundubu jjigae/gi, "スンドゥブチゲ"],
+  [/Garden/gi, "ガーデン"],
+  [/Workshop/gi, "工房"],
+  [/Kitchen/gi, "キッチン"],
+  [/Dining/gi, "ダイニング"],
+  [/Table/gi, "食堂"],
+  [/House/gi, "店"],
+  [/Room/gi, "店"],
+];
+
+const DEMO_MERCHANT_TERMS_KO_JA: Array<[RegExp, string]> = [
+  [/미국식/g, "アメリカ風"],
+  [/중화요리/g, "中華料理"],
+  [/중식/g, "中華"],
+  [/한식/g, "韓国料理"],
+  [/일식/g, "日本料理"],
+  [/양식/g, "洋食"],
+  [/분식/g, "軽食"],
+  [/덮밥/g, "丼"],
+  [/국밥/g, "クッパ"],
+  [/여수/g, "麗水"],
+  [/수산/g, "水産"],
+  [/명동/g, "明洞"],
+  [/종로/g, "鍾路"],
+  [/홍대/g, "弘大"],
+  [/강남/g, "江南"],
+  [/을지로/g, "乙支路"],
+  [/동대문/g, "東大門"],
+  [/남대문/g, "南大門"],
+  [/본점/g, "本店"],
+  [/지점/g, "店"],
+  [/피자/g, "ピザ"],
+  [/파스타/g, "パスタ"],
+  [/카페/g, "カフェ"],
+  [/커피/g, "コーヒー"],
+  [/치킨/g, "チキン"],
+  [/스시/g, "スシ"],
+  [/김밥/g, "キンパ"],
+  [/떡볶이/g, "トッポッキ"],
+  [/족발/g, "チョッパル"],
+  [/보쌈/g, "ポッサム"],
+  [/곱창/g, "コプチャン"],
+  [/돈가스|돈까스/g, "トンカツ"],
+  [/라멘|라면/g, "ラーメン"],
+  [/냉면/g, "冷麺"],
+  [/만두/g, "マンドゥ"],
+  [/바베큐|바비큐/g, "バーベキュー"],
+  [/키친/g, "キッチン"],
+  [/다이닝/g, "ダイニング"],
+  [/푸드/g, "フード"],
+  [/하우스/g, "ハウス"],
+  [/점/g, "店"],
+];
 
 const HANGUL_INITIALS = ["g", "kk", "n", "d", "tt", "r", "m", "b", "pp", "s", "ss", "", "j", "jj", "ch", "k", "t", "p", "h"];
 const HANGUL_VOWELS = ["a", "ae", "ya", "yae", "eo", "e", "yeo", "ye", "o", "wa", "wae", "oe", "yo", "u", "wo", "we", "wi", "yu", "eu", "ui", "i"];
 const HANGUL_FINALS = ["", "k", "k", "ks", "n", "n", "nh", "t", "l", "lk", "lm", "lb", "ls", "lt", "lp", "lh", "m", "p", "ps", "t", "t", "ng", "t", "t", "k", "t", "p", "h"];
+
+const HANGUL_VOWEL_TO_KATAKANA_COLUMN = [
+  0, 1, 5, 6, 2, 1, 7, 6, 2, 9, 10, 10, 7, 3, 12, 10, 11, 8, 3, 11, 4,
+] as const;
+
+const HANGUL_INITIAL_TO_KATAKANA_ROW = [
+  "g", "k", "n", "d", "t", "r", "m", "b", "p", "s", "s", "vowel", "j", "j", "ch", "k", "t", "p", "h",
+] as const;
+
+const KATAKANA_ROWS: Record<(typeof HANGUL_INITIAL_TO_KATAKANA_ROW)[number], readonly string[]> = {
+  vowel: ["ア", "エ", "オ", "ウ", "イ", "ヤ", "イェ", "ヨ", "ユ", "ワ", "ウェ", "ウィ", "ウォ"],
+  g: ["ガ", "ゲ", "ゴ", "グ", "ギ", "ギャ", "ギェ", "ギョ", "ギュ", "グァ", "グェ", "グィ", "グォ"],
+  k: ["カ", "ケ", "コ", "ク", "キ", "キャ", "キェ", "キョ", "キュ", "クァ", "クェ", "クィ", "クォ"],
+  n: ["ナ", "ネ", "ノ", "ヌ", "ニ", "ニャ", "ニェ", "ニョ", "ニュ", "ヌァ", "ヌェ", "ヌィ", "ヌォ"],
+  d: ["ダ", "デ", "ド", "ドゥ", "ディ", "デャ", "デェ", "デョ", "デュ", "ドァ", "ドェ", "ドィ", "ドォ"],
+  t: ["タ", "テ", "ト", "トゥ", "ティ", "テャ", "テェ", "テョ", "テュ", "トァ", "トェ", "トィ", "トォ"],
+  r: ["ラ", "レ", "ロ", "ル", "リ", "リャ", "リェ", "リョ", "リュ", "ルァ", "ルェ", "ルィ", "ルォ"],
+  m: ["マ", "メ", "モ", "ム", "ミ", "ミャ", "ミェ", "ミョ", "ミュ", "ムァ", "ムェ", "ムィ", "ムォ"],
+  b: ["バ", "ベ", "ボ", "ブ", "ビ", "ビャ", "ビェ", "ビョ", "ビュ", "ブァ", "ブェ", "ブィ", "ブォ"],
+  p: ["パ", "ペ", "ポ", "プ", "ピ", "ピャ", "ピェ", "ピョ", "ピュ", "プァ", "プェ", "プィ", "プォ"],
+  s: ["サ", "セ", "ソ", "ス", "シ", "シャ", "シェ", "ショ", "シュ", "スァ", "スェ", "スィ", "スォ"],
+  j: ["ジャ", "ジェ", "ジョ", "ジュ", "ジ", "ジャ", "ジェ", "ジョ", "ジュ", "ジュァ", "ジュェ", "ジュィ", "ジュォ"],
+  ch: ["チャ", "チェ", "チョ", "チュ", "チ", "チャ", "チェ", "チョ", "チュ", "チュァ", "チュェ", "チュィ", "チュォ"],
+  h: ["ハ", "ヘ", "ホ", "フ", "ヒ", "ヒャ", "ヒェ", "ヒョ", "ヒュ", "ファ", "フェ", "フィ", "フォ"],
+};
+
+const KATAKANA_FINALS = [
+  "", "ク", "ク", "クス", "ン", "ン", "ン", "ッ", "ル", "ルク", "ルム", "ルプ", "ルス", "ルト", "ルプ", "ル", "ム", "プ", "プス", "ッ", "ッ", "ン", "ッ", "ッ", "ク", "ッ", "プ", "ッ",
+] as const;
 
 function romanizeHangul(value: string) {
   const romanized = Array.from(value, (character) => {
@@ -112,8 +277,46 @@ function romanizeHangul(value: string) {
   return romanized.replace(/(^|[\s·-])([a-z])/g, (_, prefix: string, letter: string) => `${prefix}${letter.toUpperCase()}`);
 }
 
+function transliterateHangulToKatakana(value: string) {
+  return Array.from(value, (character) => {
+    const code = character.charCodeAt(0) - 0xac00;
+    if (code < 0 || code > 11171) return character;
+    const initial = Math.floor(code / 588);
+    const vowel = Math.floor((code % 588) / 28);
+    const final = code % 28;
+    const row = KATAKANA_ROWS[HANGUL_INITIAL_TO_KATAKANA_ROW[initial]];
+    return `${row[HANGUL_VOWEL_TO_KATAKANA_COLUMN[vowel]]}${KATAKANA_FINALS[final]}`;
+  }).join("");
+}
+
 export function merchantName(name: string, language: string) {
-  if (asEffectiveLanguage(language) === "한국어" || !/[가-힣]/.test(name)) return name;
+  const effectiveLanguage = asEffectiveLanguage(language);
+  if (effectiveLanguage === "한국어") return name;
+  if (effectiveLanguage === "日本語") {
+    const koreanName = DEMO_MERCHANT_NAMES[name]
+      ? name
+      : Object.entries(DEMO_MERCHANT_NAMES).find(([, englishName]) => englishName === name)?.[0];
+    if (koreanName && DEMO_MERCHANT_NAMES_JA[koreanName]) {
+      return DEMO_MERCHANT_NAMES_JA[koreanName];
+    }
+    const semanticallyLocalized = DEMO_MERCHANT_TERMS_KO_JA.reduce(
+      (localized, [pattern, replacement]) => localized.replace(pattern, replacement),
+      name,
+    );
+    const japaneseName = /[가-힣]/.test(semanticallyLocalized)
+      ? transliterateHangulToKatakana(semanticallyLocalized)
+      : semanticallyLocalized;
+    return DEMO_MERCHANT_TERMS_JA.reduce(
+      (localized, [pattern, replacement]) => localized.replace(pattern, replacement),
+      japaneseName,
+    )
+      .replace(/\(/g, "（")
+      .replace(/\)/g, "）")
+      .replace(/&/g, "＆")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+  if (!/[가-힣]/.test(name)) return name;
   const knownName = DEMO_MERCHANT_NAMES[name];
   if (knownName) return knownName;
   return romanizeHangul(name)
@@ -123,8 +326,46 @@ export function merchantName(name: string, language: string) {
 }
 
 export function demoRoadAddress(address: string, language: string) {
-  if (asEffectiveLanguage(language) === "한국어") return address;
+  const effectiveLanguage = asEffectiveLanguage(language);
+  if (effectiveLanguage === "한국어") return address;
+  if (effectiveLanguage === "日本語") return DEMO_ROAD_ADDRESSES_JA[address] ?? address;
   return DEMO_ROAD_ADDRESSES[address] ?? address;
+}
+
+export function demoHotelName(name: string, language: string) {
+  if (asEffectiveLanguage(language) !== "日本語") return name;
+  if (["YOBI Myeongdong Hotel", "YOBI Hotel Myeongdong", "요비호텔"].includes(name)) {
+    return "YOBI明洞ホテル";
+  }
+  const demoHotel = /^YOBI Demo Hotel (\d+)$/i.exec(name);
+  return demoHotel ? `YOBIデモホテル ${demoHotel[1]}` : name;
+}
+
+export function localizeDemoAddressSummary(summary: string, language: string) {
+  if (!summary) return summary;
+  const [hotel, ...addressParts] = summary.split(" · ");
+  const address = addressParts.join(" · ");
+  const localizedHotel = demoHotelName(hotel, language);
+  return address ? `${localizedHotel} · ${demoRoadAddress(address, language)}` : localizedHotel;
+}
+
+export function localizedVeganWarning(
+  status: "LIKELY_FIT" | "POSSIBLE_WITH_CHECKS" | "CONFLICT" | "UNKNOWN" | null | undefined,
+  language: string,
+  originalWarning?: string | null,
+) {
+  const effectiveLanguage = asEffectiveLanguage(language);
+  if (effectiveLanguage === "English") return originalWarning ?? "";
+  if (effectiveLanguage === "日本語") {
+    if (status === "CONFLICT") return "動物性の原材料が確認されているため、ヴィーガン条件には合いません。";
+    if (status === "POSSIBLE_WITH_CHECKS") return "ヴィーガン対応か、注文前に原材料とオプションを店舗へ確認してください。";
+    if (status === "LIKELY_FIT") return "ヴィーガン対応候補です。選んだオプションを注文前に確認してください。";
+    return "ヴィーガン対応は未確認です。原材料とオプションをご確認ください。";
+  }
+  if (status === "CONFLICT") return "동물성 재료가 확인되어 비건 조건과 맞지 않습니다.";
+  if (status === "POSSIBLE_WITH_CHECKS") return "주문 전 가게에 재료와 옵션의 비건 여부를 확인해 주세요.";
+  if (status === "LIKELY_FIT") return "비건 가능 메뉴입니다. 주문 전 선택한 옵션을 확인해 주세요.";
+  return "비건 여부가 확인되지 않았습니다. 재료와 옵션을 확인해 주세요.";
 }
 
 export function formatMinuteRange(minimum: number, maximum: number, locale: string) {
@@ -137,11 +378,36 @@ export function formatMinuteRange(minimum: number, maximum: number, locale: stri
 }
 
 export function countryCode(country: string) {
-  return COUNTRIES.find(([name]) => name === country)?.[1] ?? "US";
+  return COUNTRIES.find(([name]) => name === country)?.[1] ?? "ZZ";
 }
 
 export function countryName(country: string, locale: string) {
   const region = COUNTRIES.find(([name]) => name === country)?.[1];
   if (!region) return country;
+  if (region === "ZZ") return country;
   return new Intl.DisplayNames([locale], { type: "region" }).of(region) ?? country;
+}
+
+export function countryFlag(countryCodeValue: string) {
+  if (!/^[A-Z]{2}$/.test(countryCodeValue) || countryCodeValue === "ZZ") return "🌐";
+  return String.fromCodePoint(...Array.from(countryCodeValue, (letter) => 127397 + letter.charCodeAt(0)));
+}
+
+const ADVENTUROUS_DISH_PATTERN = /곱창|대창|막창|내장|홍어|산낙지|번데기|순대|gopchang|daechang|makchang|intestine|tripe|hongeo|raw octopus|silkworm|blood sausage/i;
+
+export function isAdventurousDish(...values: Array<string | null | undefined>) {
+  return ADVENTUROUS_DISH_PATTERN.test(values.filter(Boolean).join(" "));
+}
+
+export function travelerOptionLabel(value: string, language: string) {
+  if (language !== "English") return value;
+  const normalized = value.trim().toLowerCase();
+  if (["gopbaegi add-on", "gopbaegi addon", "add gopbaegi"].includes(normalized)) {
+    return normalized.startsWith("add ")
+      ? "Extra-large portion (gopbaegi)"
+      : "Portion size";
+  }
+  if (["no gopbaegi", "without gopbaegi"].includes(normalized)) return "Regular portion";
+  if (normalized === "nostalgic sausage jeon") return "Nostalgic sausage pancake (jeon)";
+  return value;
 }

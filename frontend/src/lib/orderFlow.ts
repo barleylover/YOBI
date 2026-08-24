@@ -1,4 +1,39 @@
-import type { DietaryFiltersV2, OptionGroup, OptionItem } from "../types";
+import type { DietaryFiltersV2, MenuSummary, OptionGroup, OptionItem } from "../types";
+
+const OBVIOUS_ANIMAL_MENU_TOKENS = [
+  "PORK", "BEEF", "MEAT", "CHICKEN", "FISH", "SEAFOOD", "SHRIMP", "PRAWN",
+  "OCTOPUS", "TAKO WASABI", "SQUID", "CRAB", "LOBSTER", "TUNA", "SALMON",
+  "MACKEREL", "EEL", "CLAM", "SHELLFISH", "MUSSEL", "OYSTER", "SCALLOP",
+  "ANCHOVY", "POLLOCK", "FISH CAKE", "DUCK", "LAMB", "STEAK", "EGG",
+  "CHEESE", "MILK", "DAIRY", "MAYONNAISE", "BUTTER", "YOGURT", "HONEY",
+  "GALBI", "GOPCHANG", "DAECHANG", "MAKCHANG",
+  "돼지", "한돈", "삼겹", "제육", "족발", "보쌈", "돈가스", "돈까스", "돈카츠",
+  "돈코츠", "차슈", "베이컨", "햄", "소시지", "페퍼로니", "소고기", "쇠고기",
+  "비프", "갈비", "곱창", "대창", "막창", "닭", "치킨", "생선", "새우", "오징어",
+  "문어", "낙지", "주꾸미", "쭈꾸미", "타코와사비", "연어", "참치", "고등어",
+  "장어", "명태", "꼬막", "조개", "홍합", "전복", "바지락", "가리비", "골뱅이",
+  "소라", "해삼", "멸치", "어묵", "게장", "대게", "아귀", "황태", "북어",
+  "코다리", "꽁치", "갈치", "조기", "도미", "광어", "우럭", "방어", "복어",
+  "게살", "꽃게", "킹크랩", "랍스터", "사시미", "육회", "회덮밥", "오리",
+  "양고기", "양갈비", "우삼겹", "차돌", "사골", "스테이크", "해물", "계란",
+  "달걀", "치즈", "우유", "마요네즈", "버터", "요거트", "요구르트", "꿀",
+] as const;
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function menuHasObviousVeganConflict(menu: MenuSummary) {
+  const text = [menu.name_ko, menu.name_en, menu.description, menu.cultural_description]
+    .filter(Boolean)
+    .join(" ")
+    .toUpperCase();
+  return OBVIOUS_ANIMAL_MENU_TOKENS.some((token) => (
+    /^[A-Z ]+$/.test(token)
+      ? new RegExp(`(?<![A-Z])${escapeRegExp(token)}(?![A-Z])`).test(text)
+      : text.includes(token)
+  ));
+}
 
 export interface OptionConflicts {
   breaksHalal: boolean;

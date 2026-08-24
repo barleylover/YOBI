@@ -2,7 +2,13 @@ import { ChangeEvent, FormEvent, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { actionableError, api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
-import { asSupportedLanguage, countryCode, demoRoadAddress } from "../lib/locale";
+import {
+  asSupportedLanguage,
+  countryCode,
+  demoHotelName,
+  demoRoadAddress,
+  localizeDemoAddressSummary,
+} from "../lib/locale";
 import { getProductCopy } from "../lib/productI18n";
 import { getRedesignCopy } from "../lib/redesignI18n";
 import { useSessionStore } from "../stores/session";
@@ -124,7 +130,11 @@ export function OnboardingPage() {
     setError("");
     try {
       const result = await api.confirmAddress(createdContext.session.session_id, candidate);
-      finish(result.address_ref_id, `${candidate.hotel_name} · ${demoRoadAddress(candidate.road_address, language)}`, createdContext.session);
+      finish(
+        result.address_ref_id,
+        `${demoHotelName(candidate.hotel_name, language)} · ${demoRoadAddress(candidate.road_address, language)}`,
+        createdContext.session,
+      );
     } catch (cause) {
       setError(actionableError(cause, selectionCopy.confirmError, language));
     } finally {
@@ -161,8 +171,6 @@ export function OnboardingPage() {
 
   function switchMode(mode: AddressMode) {
     setAddressMode(mode);
-    setCandidates([]);
-    setSelectedCandidateId("");
   }
 
   return (
@@ -191,7 +199,7 @@ export function OnboardingPage() {
         {editMode && addressRefId && (
           <div className="v2-select-card selected">
             <div>
-              <strong>{addressSummary}</strong>
+              <strong>{localizeDemoAddressSummary(addressSummary, language)}</strong>
               <small>{productCopy.address.currentAddress}</small>
             </div>
             <button
@@ -224,6 +232,13 @@ export function OnboardingPage() {
           </button>
         </div>
 
+        <label className="v2-consent">
+          <input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} />
+          <span className="box" aria-hidden="true" />
+          <span>{productCopy.address.consent}</span>
+        </label>
+        {!consent && <p className="v2-action-hint" role="status">{redesignCopy.searchConsentHint}</p>}
+
         {addressMode === "search" && (
           <div className="v2-search-field bordered" role="tabpanel">
             <img src="/figma/search-icon.svg" alt="" />
@@ -246,7 +261,7 @@ export function OnboardingPage() {
               <span>PNG · JPEG · WebP · 8MB</span>
               <input type="file" accept="image/png,image/jpeg,image/webp" onChange={fileChanged} />
             </label>
-            <div style={{ display: "flex", gap: 10 }}>
+            <div className="v2-upload-actions">
               <button
                 type="submit"
                 className="v2-cta compact secondary"
@@ -284,7 +299,7 @@ export function OnboardingPage() {
                   disabled={loading}
                 >
                   <div>
-                    <strong>{candidate.hotel_name}</strong>
+                    <strong>{demoHotelName(candidate.hotel_name, language)}</strong>
                     <small>{demoRoadAddress(candidate.road_address, language)}</small>
                   </div>
                   {selected
@@ -296,11 +311,9 @@ export function OnboardingPage() {
           </div>
         )}
 
-        <label className="v2-consent">
-          <input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} />
-          <span className="box" aria-hidden="true" />
-          <span>{productCopy.address.consent}</span>
-        </label>
+        {consent && !selectedCandidateId && !(editMode && addressRefId) && (
+          <p className="v2-action-hint" role="status">{redesignCopy.selectAddressHint}</p>
+        )}
 
         <div className="v2-banner">
           <p>{redesignCopy.demoDeliveryBanner}</p>
@@ -313,8 +326,10 @@ export function OnboardingPage() {
         <button
           type="button"
           className="v2-cta"
-          onClick={() => void confirmSelectedCandidate()}
-          disabled={!consent || loading || !selectedCandidateId}
+          onClick={() => void (
+            selectedCandidateId ? confirmSelectedCandidate() : keepCurrentAddress()
+          )}
+          disabled={!consent || loading || (!selectedCandidateId && !(editMode && addressRefId))}
         >
           {redesignCopy.continueWithAddress}
         </button>

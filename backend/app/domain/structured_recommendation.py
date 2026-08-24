@@ -55,6 +55,7 @@ SpiceReferenceCountry = Literal[
     "PH",
     "TR",
     "NL",
+    "ZZ",
 ]
 SpicePreferenceV3 = Literal["LESS", "SIMILAR", "MORE"]
 VeganEvidenceStatus = Literal[
@@ -111,6 +112,19 @@ class PriceRangeKrwV3(BaseModel):
         return self
 
 
+class SpiceRangeV3(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    min: int = Field(ge=1, le=5)
+    max: int = Field(ge=1, le=5)
+
+    @model_validator(mode="after")
+    def validate_order(self) -> SpiceRangeV3:
+        if self.min > self.max:
+            raise ValueError("SPICE_RANGE_ORDER_INVALID")
+        return self
+
+
 class RecommendationCriteriaV2(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -126,6 +140,10 @@ class RecommendationCriteriaV2(BaseModel):
     cooking_methods: list[str] = Field(default_factory=list, max_length=20)
     dietary_filters: DietaryFiltersV2 = Field(default_factory=DietaryFiltersV2)
     max_spice_level: int = Field(default=5, ge=1, le=5)
+    # New v3 clients send an inclusive absolute range. The legacy relative
+    # preference remains accepted so persisted criteria and older clients can
+    # be replayed without changing their meaning.
+    spice_range: SpiceRangeV3 | None = None
     spice_preference: SpicePreferenceV3 = "SIMILAR"
     spice_reference_country: SpiceReferenceCountry = "KR"
 
@@ -355,6 +373,8 @@ class EvidencePoolItem(BaseModel):
     source_description_source_hash: str | None = None
     synthetic_spice_level: int | None = Field(default=None, ge=1, le=5)
     country_spice_baseline: int | None = Field(default=None, ge=1, le=5)
+    spice_reference_country_code: str | None = Field(default=None, min_length=2, max_length=2)
+    spice_reference_dish_en: str | None = Field(default=None, max_length=300)
     country_preference: dict[str, Any] | None = None
     synthetic_reviews: list[dict[str, Any]] = Field(default_factory=list)
     menu_components: list[dict[str, str]] = Field(default_factory=list)
@@ -391,6 +411,8 @@ class EvidencePoolItem(BaseModel):
             "spice_level": self.menu.spice_level,
             "synthetic_spice_level": self.synthetic_spice_level,
             "country_spice_baseline": self.country_spice_baseline,
+            "spice_reference_country_code": self.spice_reference_country_code,
+            "spice_reference_dish_en": self.spice_reference_dish_en,
             "halal_certified": self.halal_certified,
             "halal_scope_label": self.halal_scope_label,
             "vegan_status": self.vegan_status,
@@ -461,6 +483,7 @@ FoodRankingSort = Literal["review_count", "order_count", "korean_popularity"]
 
 class FoodRankingEntry(BaseModel):
     position: int = Field(ge=1, le=20)
+    dish_name: str = ""
     metric_label: str
     metric_value: int = Field(ge=0)
     menu: MenuSummary

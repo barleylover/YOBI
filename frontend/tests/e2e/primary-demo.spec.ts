@@ -53,10 +53,10 @@ test("primary tourist flow selects criteria, recommends once and reaches the ord
   expect(carouselSizing.snapType).toContain("mandatory");
   await expect(page.getByText("YOBI:").first()).toBeVisible();
   await expect(page.getByText("YOGIYO:").first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "View additional explanation" }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Why YOBI picked this" }).first()).toBeVisible();
   expect(await page.locator(".v2-quick-replies").evaluate((element) => getComputedStyle(element).flexDirection)).toBe("column");
   await expect(page.locator("body")).not.toContainText(/demo|mock|synthetic/i);
-  await page.getByRole("button", { name: "Choose this menu" }).first().click();
+  await page.getByRole("button", { name: "Choose this dish" }).first().click();
   await expect(page.getByTestId("order-flow")).toBeVisible();
   if (process.env.YOBI_E2E_LIVE_MODEL_ROLES === "1") {
     const note = await reachCurrentRestaurantNote(page);
@@ -71,7 +71,7 @@ test("primary tourist flow selects criteria, recommends once and reaches the ord
     await completeCurrentOptions(page);
   }
 
-  await expect(page.getByRole("button", { name: "Yes, show more menus" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Yes, show more dishes" })).toBeVisible();
   expect(recommendationModes).toEqual(["INITIAL"]);
   expect(conversationEvents[0]).toBe("SELECT_MENU");
   expect(consoleErrors).toEqual([]);

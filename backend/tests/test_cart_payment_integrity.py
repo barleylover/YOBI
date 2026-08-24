@@ -146,6 +146,75 @@ def test_cart_falls_back_to_korean_name_when_external_english_name_is_unknown(
     assert "COALESCE(m.name_en,m.name_ko,m.menu_id) AS menu_name" in oracle_source
 
 
+def test_cart_round_trip_includes_restaurant_and_delivery_requests(
+    repository: SQLiteYobiRepository,
+    profile_data: ProfileCreate,
+) -> None:
+    profile = repository.create_profile(profile_data)
+    session = repository.create_session(profile.profile_id)
+    source_note = "Please leave the sauce on the side."
+    translated_note = "소스는 따로 담아 주세요."
+    repository.save_restaurant_note_translation(
+        session.session_id,
+        translation_id="note-round-trip",
+        source_language="en",
+        source_text=source_note,
+        korean_text=translated_note,
+        back_translation="Please pack the sauce separately.",
+        provider="fake",
+        model_id="fake-model",
+        status="SUCCEEDED",
+        error_code=None,
+        request_hash="note-round-trip-hash",
+    )
+    repository.add_cart_item(
+        session.session_id,
+        CartItemInput(
+            menu_id="menu_001_01",
+            option_item_ids=["oi_001_01_spice_mild", "oi_001_01_size_regular"],
+            user_note=source_note,
+            note_translation_id="note-round-trip",
+        ),
+    )
+    candidate = repository.resolve_address("YOBI Myeongdong Hotel")[0]
+    address_ref_id = repository.save_address(session.session_id, candidate)
+    delivery_note = (
+        "Please leave it at the door. No disposable cutlery. Please ring the bell."
+    )
+
+    preview = repository.update_delivery(
+        session.session_id,
+        DeliveryPreferenceInput(
+            address_ref_id=address_ref_id,
+            handoff_method="door",
+            cutlery=False,
+            ring_bell=True,
+            front_desk=False,
+            user_note=delivery_note,
+        ),
+    )
+    restored = repository.get_cart(session.session_id)
+
+    for cart_preview in (preview, restored):
+        assert cart_preview.items[0].user_note == source_note
+        assert cart_preview.items[0].korean_note == translated_note
+        assert cart_preview.delivery_preference is not None
+        assert cart_preview.delivery_preference.handoff_method == "door"
+        assert cart_preview.delivery_preference.cutlery is False
+        assert cart_preview.delivery_preference.ring_bell is True
+        assert cart_preview.delivery_preference.front_desk is False
+        assert cart_preview.delivery_preference.user_note == delivery_note
+        assert cart_preview.delivery_preference.korean_note == (
+            "문 앞에 놓아 주세요. 일회용 수저와 포크는 필요 없습니다. "
+            "도착하면 벨을 눌러 주세요."
+        )
+
+    oracle_source = " ".join(inspect.getsource(OracleYobiRepository.get_cart).split())
+    assert "user_note=_oracle_logical_text(row.get(\"user_note\"))" in oracle_source
+    assert "korean_note=_oracle_logical_text(row.get(\"korean_note\"))" in oracle_source
+    assert "delivery_preference=(" in oracle_source
+
+
 def test_checkout_and_order_are_idempotent(
     repository: SQLiteYobiRepository, profile_data: ProfileCreate
 ) -> None:

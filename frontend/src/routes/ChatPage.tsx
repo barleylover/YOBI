@@ -72,6 +72,7 @@ export function ChatPage() {
   const [cartOpen, setCartOpen] = useState(false);
   const [cartRevision, setCartRevision] = useState(0);
   const [wizardStartSection, setWizardStartSection] = useState<"core" | "conditions">("core");
+  const [editingCriteria, setEditingCriteria] = useState(false);
   const [pollRevision, setPollRevision] = useState(0);
   const stateVersionRef = useRef(session?.state_version ?? 0);
   const pollCountRef = useRef(0);
@@ -82,6 +83,9 @@ export function ChatPage() {
   const previewAbortRef = useRef<AbortController | null>(null);
   const previewValidationAbortRef = useRef<AbortController | null>(null);
   const lastPreviewCriteriaRef = useRef("");
+  const criteriaReturnPhaseRef = useRef(recommendationPhase);
+  const criteriaReturnMenuRef = useRef<MenuSummary | null>(null);
+  const criteriaReturnPrecomputedRef = useRef(false);
   const criteriaRequestKey = `yobi-pending-criteria-request-${sessionId}`;
 
   const applyBatch = useCallback((batch: RecommendationBatchV2) => {
@@ -347,8 +351,11 @@ export function ChatPage() {
       visibleSelectionChanged = true;
     }
     if (next.schema_version === "3") {
-      const priceCatalog = catalog.price_range_krw ?? { min: 8_000, max: 25_000, step: 1_000 };
-      const selectedPrice = next.price_range_krw ?? { min: priceCatalog.min, max: priceCatalog.max };
+      const priceCatalog = catalog.price_range_krw ?? { min: 4_000, max: 50_000, step: 1_000 };
+      const selectedPrice = next.price_range_krw ?? {
+        min: Math.max(priceCatalog.min, 6_000),
+        max: Math.min(priceCatalog.max, 50_000),
+      };
       const clampedPrice = {
         min: Math.max(priceCatalog.min, Math.min(selectedPrice.min, priceCatalog.max - priceCatalog.step)),
         max: Math.min(priceCatalog.max, Math.max(selectedPrice.max, priceCatalog.min + priceCatalog.step)),
@@ -357,8 +364,8 @@ export function ChatPage() {
         next.price_range_krw = clampedPrice;
         changed = true;
       }
-      if (!next.spice_preference) {
-        next.spice_preference = "SIMILAR";
+      if (!next.spice_range) {
+        next.spice_range = { min: 1, max: 5 };
         changed = true;
       }
       next.price_bands = [];
@@ -395,11 +402,8 @@ export function ChatPage() {
         .map((option) => option.label);
     });
     if (transcriptCriteria.schema_version === "3") {
-      labels.push({
-        LESS: v2.spiceLess,
-        SIMILAR: v2.spiceSimilar,
-        MORE: v2.spiceMore,
-      }[transcriptCriteria.spice_preference ?? "SIMILAR"]);
+      const spiceRange = transcriptCriteria.spice_range ?? { min: 1, max: 5 };
+      labels.push(v2.spiceRangeSelection(spiceRange.min, spiceRange.max));
       if (transcriptCriteria.price_range_krw) {
         labels.push(
           `₩${transcriptCriteria.price_range_krw.min.toLocaleString(locale)}–₩${transcriptCriteria.price_range_krw.max.toLocaleString(locale)}`,
@@ -449,6 +453,7 @@ export function ChatPage() {
 
   async function submitCriteria() {
     if (!catalog || busy) return;
+    setEditingCriteria(false);
     const cancellationRevision = cancellationRevisionRef.current;
     setBusy(true);
     setError("");
@@ -562,7 +567,10 @@ export function ChatPage() {
         menu_id: menu.menu_id,
       });
       setPrecomputedOptionsOnly(true);
-      setSelectedMenu(result.selected_menu ?? menu);
+      setSelectedMenu({
+        ...(result.selected_menu ?? menu),
+        localized_title: menu.localized_title ?? result.selected_menu?.localized_title,
+      });
       setRecommendationPhase("ORDERING");
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (cause) {
@@ -602,10 +610,24 @@ export function ChatPage() {
 
   function editCriteria() {
     setWizardStartSection("core");
+    criteriaReturnPhaseRef.current = recommendationPhase;
+    criteriaReturnMenuRef.current = selectedMenu;
+    criteriaReturnPrecomputedRef.current = precomputedOptionsOnly;
+    setEditingCriteria(true);
     if (committedCriteria) setDraftCriteria(committedCriteria);
     setSelectedMenu(null);
     setPrecomputedOptionsOnly(false);
     setRecommendationPhase("SELECTING");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function cancelCriteriaEdit() {
+    if (committedCriteria) setDraftCriteria(committedCriteria);
+    setSelectedMenu(criteriaReturnMenuRef.current);
+    setPrecomputedOptionsOnly(criteriaReturnPrecomputedRef.current);
+    setRecommendationPhase(criteriaReturnPhaseRef.current);
+    setEditingCriteria(false);
+    setError("");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -695,7 +717,8 @@ export function ChatPage() {
           onChange={applyDraftCriteria}
           onValidateAdd={(nextCriteria) => checkCriteriaPreview(nextCriteria, true)}
           onComplete={() => void submitCriteria()}
-          onBack={editProfile}
+          onBack={editingCriteria ? cancelCriteriaEdit : editProfile}
+          onCancel={editingCriteria ? cancelCriteriaEdit : undefined}
         />
       </main>
     );
@@ -713,7 +736,7 @@ export function ChatPage() {
   return (
     <main className="v2-screen v2-chat">
       <header className="v2-chat-header">
-        <button type="button" className="v2-icon-button" aria-label={recommendationCopy.editCriteria} onClick={editCriteria}>
+        <button type="button" className="v2-icon-button" aria-label={v2.back} onClick={editCriteria}>
           <img src="/figma/back-chevron.svg" alt="" width={9} height={16} />
         </button>
         <div className="v2-chat-title">
@@ -723,7 +746,7 @@ export function ChatPage() {
         <button
           type="button"
           className="v2-cart-button"
-          aria-label={language === "English" ? `${journeyCopy.openCart}, ${cartQuantity} items` : `${journeyCopy.openCart}, ${journeyCopy.quantity} ${cartQuantity}`}
+          aria-label={language === "English" ? `${journeyCopy.openCart}, ${cartQuantity} item${cartQuantity === 1 ? "" : "s"}` : `${journeyCopy.openCart}, ${journeyCopy.quantity} ${cartQuantity}`}
           onClick={openCart}
         >
           <span className="cart-box" aria-hidden="true" />
@@ -766,6 +789,8 @@ export function ChatPage() {
         {showsRecommendationTranscript && latestRecommendation && catalog && (
           <RecommendationResults
             batch={latestRecommendation}
+            catalog={catalog}
+            spiceReferenceCountry={(committedCriteria ?? draftCriteria).spice_reference_country}
             copy={recommendationCopy}
             v2={v2}
             language={language}

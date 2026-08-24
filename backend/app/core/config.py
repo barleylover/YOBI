@@ -90,9 +90,14 @@ class Settings(BaseSettings):
     llm_max_tool_calls_per_response: int = Field(default=4, ge=1, le=14)
     tool_call_max_steps: int = Field(default=6, ge=1, le=12)
     recommendation_prompt_version: str = "yobi-structured-rag-v4-compact-id-selection"
-    menu_presentation_prompt_version: str = "yobi-menu-presentation-v18-compact-output"
+    menu_presentation_prompt_version: str = "yobi-menu-presentation-v19-traveler-tone"
     menu_presentation_schema_version: str = "7"
-    option_localization_prompt_version: str = "yobi-option-localization-v8-control-token-fix"
+    country_aware_presentation_enabled: bool = False
+    country_aware_presentation_prompt_version: str = (
+        "yobi-country-aware-presentation-v2-traveler-tone"
+    )
+    country_aware_presentation_schema_version: str = "1"
+    option_localization_prompt_version: str = "yobi-option-localization-v9-traveler-glossary"
     restaurant_note_prompt_version: str = "yobi-restaurant-note-v3-validated-order-context"
     menu_presentation_wait_seconds: float = Field(default=10.0, ge=0.0, le=30.0)
     menu_presentation_poll_seconds: float = Field(default=0.25, ge=0.05, le=2.0)

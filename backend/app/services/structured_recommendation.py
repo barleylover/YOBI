@@ -13,13 +13,14 @@ from uuid import uuid4
 from app.core.config import Settings
 from app.core.logging import log_event
 from app.db.repository import YobiRepository
+from app.demo_enrichment import has_obvious_animal_ingredient
 from app.domain.concept_ranking import RANKING_POLICY_VERSION
 from app.domain.dialogue import (
     RecommendationCandidate,
     RecommendationResult,
     RecommendationSnapshot,
 )
-from app.domain.models import Profile, Session
+from app.domain.models import MenuSummary, Profile, Session
 from app.domain.preference_catalog import PREFERENCE_OPTIONS, normalize_preference_locale
 from app.domain.recommendation_copy import (
     deterministic_presentation_copy,
@@ -91,6 +92,8 @@ def compact_generation_payload(
         "menu_facts",
         "localized_title",
         "country_preference",
+        "spice_reference_country_code",
+        "spice_reference_dish_en",
         "synthetic_reviews",
     ):
         payload.pop(operational_key, None)
@@ -364,6 +367,14 @@ class StructuredRecommendationService:
             raw_hits_per_value=self.settings.recommendation_raw_hits_per_value,
             passages_per_menu=self.settings.recommendation_passages_per_menu,
         )
+        if criteria_record.criteria.dietary_filters.vegan:
+            # Active synthetic rows can outlive a newer enrichment generator. Do not let an
+            # obviously animal-derived menu pass a stale vegan_fit flag in the demo runtime.
+            evidence_pool = [
+                item
+                for item in evidence_pool
+                if not self._has_obvious_animal_ingredient(item.menu)
+            ]
         retrieval_ms = int((monotonic() - retrieval_started) * 1000)
         metrics_reader = getattr(
             self.repository,
@@ -467,6 +478,11 @@ class StructuredRecommendationService:
             return self._batch_from_record(completed)
 
         display_locale, _display_language = _effective_display_language(profile.preferred_language)
+        presentation_locale = (
+            normalize_preference_locale(profile.preferred_language)
+            if self.settings.country_aware_presentation_enabled
+            else display_locale
+        )
         # Selection must be identical for equivalent criteria regardless of
         # nationality/language. Visitor context is consumed only by presentation.
         soft_profile_context: dict[str, Any] = {}
@@ -544,7 +560,7 @@ class StructuredRecommendationService:
                 presentations = self.presentation_service.present_selected(
                     selected_evidence,
                     session_id=session.session_id,
-                    language_code=display_locale,
+                    language_code=presentation_locale,
                     country_code=profile.country_code or "ZZ",
                     on_provider_attempt=lambda *args: record_provider_attempt(
                         "PRESENTATION", *args
@@ -737,6 +753,15 @@ class StructuredRecommendationService:
             }
             frozen.append(item.model_copy(update={"server_rank": rank, "ranking_trace": trace}))
         return frozen
+
+    @staticmethod
+    def _has_obvious_animal_ingredient(menu: MenuSummary) -> bool:
+        return has_obvious_animal_ingredient(
+            str(menu.name_ko or ""),
+            str(menu.name_en or ""),
+            str(menu.description or ""),
+            str(menu.cultural_description or ""),
+        )
 
     @staticmethod
     def _log_terminal_timing(
@@ -1078,6 +1103,11 @@ class StructuredRecommendationService:
         )
         refreshed: list[StructuredRecommendationView] = []
         for item in batch.recommendations:
+            if (
+                criteria_record.criteria.dietary_filters.vegan
+                and self._has_obvious_animal_ingredient(item.menu)
+            ):
+                continue
             state = live_states.get(item.menu.menu_id)
             if state is None:
                 continue
@@ -1154,7 +1184,13 @@ class StructuredRecommendationService:
                 f"KRW {record.criteria.price_range_krw.min:,}–"
                 f"{record.criteria.price_range_krw.max:,}"
             )
-            values.append(record.criteria.spice_preference.lower())
+            if record.criteria.spice_range is not None:
+                values.append(
+                    f"spice {record.criteria.spice_range.min}–"
+                    f"{record.criteria.spice_range.max}/5"
+                )
+            else:
+                values.append(record.criteria.spice_preference.lower())
         elif record.criteria.price_bands:
             values.append(
                 "/".join(

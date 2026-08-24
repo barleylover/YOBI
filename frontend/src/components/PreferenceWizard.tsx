@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import type {
   PreferenceCatalog,
   PreferenceCatalogCategory,
@@ -40,6 +40,7 @@ interface Props {
   onValidateAdd?: (criteria: RecommendationCriteriaV2) => Promise<boolean>;
   onComplete: () => void;
   onBack: () => void;
+  onCancel?: () => void;
 }
 
 function countCriteria(criteria: RecommendationCriteriaV2) {
@@ -54,6 +55,8 @@ export function PreferenceWizard({
   copy,
   v2,
   busy = false,
+  previewLoading = false,
+  preview = null,
   previewMessage = "",
   canSubmitUnchanged = false,
   conflictMessage,
@@ -63,9 +66,22 @@ export function PreferenceWizard({
   onValidateAdd,
   onComplete,
   onBack,
+  onCancel,
 }: Props) {
   const [section, setSection] = useState<WizardSection>(initialSection);
+  const [pendingSpiceEndpoint, setPendingSpiceEndpoint] = useState<number | null>(null);
   const sectionIndex = SECTION_ORDER.indexOf(section);
+  const priceCatalog = catalog.price_range_krw ?? { min: 4_000, max: 50_000, step: 1_000 };
+  const defaultPrice = {
+    min: Math.max(priceCatalog.min, 6_000),
+    max: Math.min(priceCatalog.max, 50_000),
+  };
+  const selectedPrice = criteria.price_range_krw ?? defaultPrice;
+  const selectedSpiceRange = criteria.spice_range ?? { min: 1 as const, max: 5 as const };
+  const hasCustomExactCriteria = selectedPrice.min !== defaultPrice.min
+    || selectedPrice.max !== defaultPrice.max
+    || selectedSpiceRange.min !== 1
+    || selectedSpiceRange.max !== 5;
 
   const grouped = useMemo(() => ({
     core: catalog.categories.filter((category) => category.group === "core"),
@@ -79,7 +95,8 @@ export function PreferenceWizard({
     taste: grouped.taste.reduce((total, category) => total + criteria[category.code].length, 0),
     conditions: grouped.conditions.reduce((total, category) => total + criteria[category.code].length, 0)
       + Number(criteria.dietary_filters.halal_certified_only)
-      + Number(criteria.dietary_filters.vegan),
+      + Number(criteria.dietary_filters.vegan)
+      + Number(hasCustomExactCriteria),
   };
 
   const ingredientCodes = new Set(criteria.main_ingredients);
@@ -96,9 +113,9 @@ export function PreferenceWizard({
     conditions: v2.sectionConditions,
   };
   const stepLabels: Record<WizardSection, string> = {
-    core: v2.stepOf(2, 4, v2.sectionPreferences),
-    taste: v2.stepOf(3, 4, v2.sectionTaste),
-    conditions: v2.stepOf(4, 4, v2.sectionConditions),
+    core: v2.stepPreferences,
+    taste: v2.stepPreferencesTaste,
+    conditions: v2.stepPreferencesConditions,
   };
 
   async function toggle(category: PreferenceCategoryCode, code: string) {
@@ -128,12 +145,13 @@ export function PreferenceWizard({
   }
 
   function clearAll() {
-    const priceRange = catalog.price_range_krw ?? { min: 8_000, max: 25_000, step: 1_000 };
+    setPendingSpiceEndpoint(null);
     onChange({
       ...criteria,
       ...Object.fromEntries(CATEGORY_KEYS.map((key) => [key, []])),
       price_bands: [],
-      price_range_krw: { min: priceRange.min, max: priceRange.max },
+      price_range_krw: defaultPrice,
+      spice_range: { min: 1, max: 5 },
       spice_preference: "SIMILAR",
       dietary_filters: { halal_certified_only: false, vegan: false },
     } as RecommendationCriteriaV2);
@@ -154,7 +172,9 @@ export function PreferenceWizard({
     window.scrollTo({ top: 0 });
   }
 
-  const completeEnabled = (selectedCount > 0 || canSubmitUnchanged) && !hasConflict;
+  const completeEnabled = (
+    criteria.schema_version === "3" || selectedCount > 0 || canSubmitUnchanged
+  ) && !hasConflict;
   const nextDisabled = busy || (section === "conditions" && !completeEnabled);
 
   function categoryCard(category: PreferenceCatalogCategory) {
@@ -183,7 +203,6 @@ export function PreferenceWizard({
                 title={option.description ?? undefined}
                 onClick={() => void toggle(category.code, option.code)}
               >
-                {selected && <img src="/figma/radio-check.svg" alt="" width={12} height={10} />}
                 {option.label}
               </button>
             );
@@ -193,24 +212,25 @@ export function PreferenceWizard({
     );
   }
 
-  const priceCatalog = catalog.price_range_krw ?? { min: 8_000, max: 25_000, step: 1_000 };
-  const selectedPrice = criteria.price_range_krw ?? { min: priceCatalog.min, max: priceCatalog.max };
   const countrySpiceProfile = catalog.country_spice_profiles?.find(
     (item) => item.country_code === criteria.spice_reference_country,
-  );
-  const spiceCountryName = useMemo(() => {
-    try {
-      return new Intl.DisplayNames([catalog.locale || "en"], { type: "region" })
-        .of(criteria.spice_reference_country) ?? criteria.spice_reference_country;
-    } catch {
-      return criteria.spice_reference_country;
-    }
-  }, [catalog.locale, criteria.spice_reference_country]);
+  ) ?? catalog.country_spice_profiles?.find((item) => item.country_code === "US");
 
   function changePrice(edge: "min" | "max", value: number) {
     const min = edge === "min" ? Math.min(value, selectedPrice.max - priceCatalog.step) : selectedPrice.min;
     const max = edge === "max" ? Math.max(value, selectedPrice.min + priceCatalog.step) : selectedPrice.max;
     onChange({ ...criteria, price_range_krw: { min, max }, price_bands: [] });
+  }
+
+  function selectSpiceEndpoint(level: 1 | 2 | 3 | 4 | 5) {
+    if (pendingSpiceEndpoint == null) {
+      setPendingSpiceEndpoint(level);
+      return;
+    }
+    const minimum = Math.min(pendingSpiceEndpoint, level) as 1 | 2 | 3 | 4 | 5;
+    const maximum = Math.max(pendingSpiceEndpoint, level) as 1 | 2 | 3 | 4 | 5;
+    setPendingSpiceEndpoint(null);
+    onChange({ ...criteria, spice_range: { min: minimum, max: maximum } });
   }
 
   return (
@@ -224,14 +244,14 @@ export function PreferenceWizard({
           type="button"
           className="v2-appbar-action"
           onClick={clearAll}
-          disabled={busy || selectedCount === 0}
+          disabled={busy || (selectedCount === 0 && !hasCustomExactCriteria)}
         >
           {copy.clearAll}
         </button>
       </header>
       <div className="v2-progress" aria-hidden="true">
-        {[0, 1, 2, 3].map((step) => (
-          <span key={step} className={step <= sectionIndex + 1 ? "active" : ""} />
+        {[0, 1, 2].map((step) => (
+          <span key={step} className={step <= 1 ? "active" : ""} />
         ))}
       </div>
       <div className="v2-section-tabs" role="tablist" aria-label={v2.sectionPreferences}>
@@ -260,6 +280,14 @@ export function PreferenceWizard({
 
         {notice && <p className="v2-status" role="status">{notice}</p>}
 
+        <div className="v2-live-preview" role="status" aria-live="polite">
+          {previewLoading
+            ? <span>{copy.loadingChoices}</span>
+            : preview
+              ? <strong>{v2.liveCount(preview.eligible_menu_count, preview.eligible_merchant_count)}</strong>
+              : <span>{v2.craveSubtitle}</span>}
+        </div>
+
         {previewMessage && <p className="v2-error" role="status">{previewMessage}</p>}
 
         {section !== "conditions" && grouped[section].map((category) => categoryCard(category))}
@@ -271,34 +299,61 @@ export function PreferenceWizard({
                 <h2>{copy.spiceTitle}</h2>
               </header>
               <p className="v2-card-help">{copy.spiceHelp}</p>
-              {countrySpiceProfile && (
-                <p className="v2-spice-reference" data-testid="country-spice-reference">
-                  {v2.representativeSpice(
-                    spiceCountryName,
-                    countrySpiceProfile.representative_dish,
-                    countrySpiceProfile.spice_baseline,
-                  )}
-                </p>
-              )}
-              <div className="v2-relative-spice" role="radiogroup" aria-label={copy.spiceTitle}>
-                {([
-                  ["LESS", v2.spiceLess],
-                  ["SIMILAR", v2.spiceSimilar],
-                  ["MORE", v2.spiceMore],
-                ] as const).map(([value, label]) => (
-                  <button
-                    type="button"
-                    role="radio"
-                    key={value}
-                    aria-checked={(criteria.spice_preference ?? "SIMILAR") === value}
-                    className={(criteria.spice_preference ?? "SIMILAR") === value ? "selected" : ""}
-                    disabled={busy}
-                    onClick={() => onChange({ ...criteria, spice_preference: value })}
-                  >
-                    {label}
-                  </button>
-                ))}
+              <div className="v2-spice-range-summary" aria-live="polite">
+                <strong>{v2.spiceRangeSelection(selectedSpiceRange.min, selectedSpiceRange.max)}</strong>
+                <small>{v2.spiceRangeInstruction(pendingSpiceEndpoint)}</small>
               </div>
+              <div
+                className="v2-spice-range"
+                role="group"
+                aria-label={copy.spiceTitle}
+                data-testid="spice-range-selector"
+                style={{
+                  "--spice-range-start": `${10 + ((selectedSpiceRange.min - 1) / 4) * 80}%`,
+                  "--spice-range-width": `${((selectedSpiceRange.max - selectedSpiceRange.min) / 4) * 80}%`,
+                } as CSSProperties}
+              >
+                <span className="v2-spice-range-track" aria-hidden="true" />
+                <span className="v2-spice-range-fill" aria-hidden="true" />
+                {([1, 2, 3, 4, 5] as const).map((level) => {
+                  const inRange = level >= selectedSpiceRange.min && level <= selectedSpiceRange.max;
+                  const endpoint = level === selectedSpiceRange.min || level === selectedSpiceRange.max;
+                  return (
+                    <button
+                      type="button"
+                      key={level}
+                      className={[
+                        inRange ? "in-range" : "",
+                        endpoint ? "endpoint" : "",
+                        pendingSpiceEndpoint === level ? "pending" : "",
+                      ].filter(Boolean).join(" ")}
+                      aria-pressed={inRange}
+                      aria-label={`${copy.spiceTitle} ${level}/5`}
+                      disabled={busy}
+                      onClick={() => selectSpiceEndpoint(level)}
+                    >
+                      {level}
+                    </button>
+                  );
+                })}
+              </div>
+              {Boolean(countrySpiceProfile?.spice_scale_anchors?.length) && (
+                <div className="v2-spice-guide" data-testid="country-spice-reference">
+                  <small>{v2.spiceScaleGuide}</small>
+                  <div className="v2-spice-anchor-grid">
+                    {countrySpiceProfile!.spice_scale_anchors!.map((anchor) => (
+                      <p key={anchor.level} style={{ gridColumn: anchor.level }}>
+                        {v2.spiceScaleAnchor(
+                          anchor.level,
+                          anchor.familiar_dish,
+                          anchor.approximate_shu_min,
+                          anchor.approximate_shu_max,
+                        )}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              )}
             </section>
 
             <section className="v2-pref-card" data-category="price_range_krw">
@@ -379,10 +434,15 @@ export function PreferenceWizard({
       </div>
 
       <footer className="v2-sticky-bar">
+        {onCancel && (
+          <button type="button" className="v2-text-button v2-wizard-cancel" onClick={onCancel} disabled={busy}>
+            {v2.cancelChanges}
+          </button>
+        )}
         <div className="v2-selection-bar">
           <p>{copy.selectedCount(selectedCount)}</p>
           <button type="button" className="v2-selection-next" onClick={goNext} disabled={nextDisabled}>
-            {section === "conditions" ? v2.findMyDish : v2.next}
+            {section === "conditions" ? (onCancel ? v2.saveChanges : v2.findMyDish) : v2.next}
             <img src="/figma/right-chevron-white.svg" alt="" width={7} height={14} />
           </button>
         </div>

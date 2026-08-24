@@ -126,6 +126,33 @@ describe("welcome and address flow", () => {
     expect(useSessionStore.getState().draftLanguage).toBe("العربية");
   });
 
+  it("searches countries by aliases and accents without duplicate names, with Other and an empty state", async () => {
+    render(
+      <MemoryRouter initialEntries={["/start?tab=country"]}>
+        <Routes><Route path="/start" element={<LocalePage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText(/Country helps YOBI localize comparisons/)).toBeInTheDocument();
+    expect(screen.getAllByText("United States")).toHaveLength(1);
+    const search = screen.getByRole("textbox", { name: "Search country" });
+
+    fireEvent.change(search, { target: { value: "Britain" } });
+    expect(screen.getByRole("button", { name: "United Kingdom" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "United States" })).not.toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: "turkiye" } });
+    expect(screen.getByRole("button", { name: "Türkiye" })).toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: "country-that-does-not-exist" } });
+    expect(screen.getByRole("status")).toHaveTextContent("No matching results.");
+
+    fireEvent.change(search, { target: { value: "elsewhere" } });
+    fireEvent.click(screen.getByRole("button", { name: "Other" }));
+    expect(useSessionStore.getState().draftCountry).toBe("Other");
+    expect(document.querySelector(".v2-country-flag")?.textContent).toBe("🌐");
+  });
+
   it("starts a new journey in the newly selected language instead of a stale profile language", async () => {
     useSessionStore.setState({
       profile: { ...profile, preferred_language: "한국어" },
@@ -188,7 +215,10 @@ describe("welcome and address flow", () => {
 
     expect(screen.queryByText(/Age range|Religion|Favourite comfort foods/i)).not.toBeInTheDocument();
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual(["Search address", "Booking image"]);
-    fireEvent.click(screen.getByRole("checkbox", { name: /use this address for this session only/i }));
+    expect(screen.getByRole("button", { name: "Search" })).toBeDisabled();
+    expect(screen.getByText("Allow address use before searching.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: /allow YOBI to use this address/i }));
+    expect(screen.getByText("Search for and select an address to continue.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
 
     await waitFor(() => expect(createProfile).toHaveBeenCalledWith(expect.objectContaining({
@@ -202,6 +232,10 @@ describe("welcome and address flow", () => {
     expect(document.body.textContent).not.toMatch(/demo|mock|synthetic/i);
     expect(screen.getByText("21 Eulji-ro, Jung-gu, Seoul")).toBeInTheDocument();
     expect(screen.queryByText("서울특별시 중구 을지로 21")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Booking image" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Search address" }));
+    expect(screen.getByRole("button", { name: "Continue with this address" })).toBeEnabled();
+    expect(screen.getByText("21 Eulji-ro, Jung-gu, Seoul")).toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "Continue with this address" }));
     expect(await screen.findByText("Chat route")).toBeInTheDocument();
     expect(useSessionStore.getState().addressRefId).toBe("address_ref_1");
@@ -225,7 +259,7 @@ describe("welcome and address flow", () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(screen.getByRole("checkbox", { name: /use this address for this session only/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /allow YOBI to use this address/i }));
     fireEvent.click(screen.getByRole("tab", { name: "Booking image" }));
     fireEvent.click(screen.getByRole("button", { name: "Use the sample booking image" }));
     await waitFor(() => expect(uploadAddress).toHaveBeenCalledWith(
@@ -234,5 +268,35 @@ describe("welcome and address flow", () => {
     ));
     expect(await screen.findByText(candidate.road_address)).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/demo|mock|synthetic/i);
+  });
+
+  it("lets an editing user keep the current address from the main CTA", async () => {
+    resetStore();
+    useSessionStore.setState({
+      profile,
+      session,
+      addressRefId: "address_existing",
+      addressSummary: "YOBI Myeongdong Hotel · 21 Eulji-ro, Jung-gu, Seoul",
+    });
+    const updateProfile = vi.spyOn(api, "updateProfile").mockResolvedValue(profile);
+
+    render(
+      <MemoryRouter initialEntries={[`/profile?edit=1&returnTo=${encodeURIComponent(`/chat/${session.session_id}`)}`]}>
+        <Routes>
+          <Route path="/profile" element={<OnboardingPage />} />
+          <Route path={`/chat/${session.session_id}`} element={<div>Returned to chat</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const mainCta = screen.getByRole("button", { name: "Continue with this address" });
+    expect(mainCta).toBeEnabled();
+    fireEvent.click(mainCta);
+    await waitFor(() => expect(updateProfile).toHaveBeenCalledWith(
+      profile.profile_id,
+      expect.objectContaining({ country_code: "US" }),
+    ));
+    expect(await screen.findByText("Returned to chat")).toBeInTheDocument();
+    expect(useSessionStore.getState().addressRefId).toBe("address_existing");
   });
 });

@@ -10,7 +10,11 @@ from pathlib import Path
 
 import pytest
 
-from app.db.browse_rankings import food_ranking_sql, synthetic_demo_ranking_metrics
+from app.db.browse_rankings import (
+    food_ranking_sql,
+    select_diverse_ranking_rows,
+    synthetic_demo_ranking_metrics,
+)
 from app.db.concept_query import (
     build_candidate_recall_channel_query,
     build_concept_candidate_query,
@@ -28,6 +32,7 @@ from app.domain.concept_ranking import (
     merge_candidate_channels,
     rank_concept_candidates,
 )
+from app.domain.discovery_demo import english_discovery_title
 from app.domain.structured_recommendation import RecommendationCriteriaV2
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -469,6 +474,47 @@ def test_v3_query_fails_closed_without_active_synthetic_release() -> None:
     assert "synthetic_enrichment_release_id" not in query.parameters
 
 
+def test_v3_absolute_spice_range_is_inclusive_and_country_independent() -> None:
+    connection = _connection()
+    try:
+        for level in range(1, 6):
+            menu_id = f"menu-level-{level}"
+            _insert_menu(
+                connection,
+                menu_id=menu_id,
+                merchant_id=f"merchant-level-{level}",
+                concept_id=f"concept-level-{level}",
+            )
+            _insert_synthetic_profile(connection, menu_id=menu_id, spice_level=level)
+
+        criteria = RecommendationCriteriaV2.model_validate(
+            {
+                "schema_version": "3",
+                "price_range_krw": {"min": 6_000, "max": 50_000},
+                "spice_range": {"min": 2, "max": 4},
+                "spice_preference": "MORE",
+                "spice_reference_country": "ZZ",
+            }
+        )
+        query = _query(
+            criteria,
+            limit=None,
+            synthetic_enrichment_release_id="enrichment-v1",
+        )
+        rows = connection.execute(query.sql, query.parameters).fetchall()
+
+        assert {row["menu_id"] for row in rows} == {
+            "menu-level-2",
+            "menu-level-3",
+            "menu-level-4",
+        }
+        assert "synthetic_country_profile" not in query.sql
+        assert query.parameters["spice_min_level"] == 2
+        assert query.parameters["spice_max_level"] == 4
+    finally:
+        connection.close()
+
+
 def test_v3_requires_ordered_price_range_and_v2_snapshot_remains_readable() -> None:
     with pytest.raises(ValueError, match="PRICE_RANGE_REQUIRED"):
         RecommendationCriteriaV2.model_validate({"schema_version": "3"})
@@ -477,6 +523,14 @@ def test_v3_requires_ordered_price_range_and_v2_snapshot_remains_readable() -> N
             {
                 "schema_version": "3",
                 "price_range_krw": {"min": 25000, "max": 8000},
+            }
+        )
+    with pytest.raises(ValueError, match="SPICE_RANGE_ORDER_INVALID"):
+        RecommendationCriteriaV2.model_validate(
+            {
+                "schema_version": "3",
+                "price_range_krw": {"min": 6_000, "max": 50_000},
+                "spice_range": {"min": 4, "max": 2},
             }
         )
 
@@ -957,7 +1011,33 @@ def test_exact_only_query_uses_materialized_wiki_eligibility_before_menu_join(
     assert "per_merchant_limit" not in preview.parameters
 
 
-def test_synthetic_demo_ranking_sql_is_stable_and_source_counts_take_priority() -> None:
+def test_prepared_ranking_diversity_preserves_order_without_one_merchant_wall() -> None:
+    rows = [
+        {"menu_id": "m1-a", "merchant_id": "merchant-1", "dish_name": "Dish A", "concept_id": "a"},
+        {"menu_id": "m1-b", "merchant_id": "merchant-1", "dish_name": "Dish B", "concept_id": "b"},
+        {"menu_id": "m2-a", "merchant_id": "merchant-2", "dish_name": "Dish A", "concept_id": "a"},
+        {"menu_id": "m3-c", "merchant_id": "merchant-3", "dish_name": "Dish C", "concept_id": "c"},
+        {"menu_id": "m2-d", "merchant_id": "merchant-2", "dish_name": "Dish D", "concept_id": "d"},
+    ]
+
+    selected = select_diverse_ranking_rows(rows, 4)
+
+    assert [row["menu_id"] for row in selected] == ["m1-a", "m1-b", "m3-c", "m2-d"]
+    assert select_diverse_ranking_rows(rows, 0) == []
+    assert [row["menu_id"] for row in select_diverse_ranking_rows(rows, 4)] == [
+        row["menu_id"] for row in selected
+    ]
+
+
+def test_english_discovery_title_uses_reviewed_title_then_safe_concept_fallback() -> None:
+    assert english_discovery_title("스팸김밥", "스팸김밥", "Gimbap") == "Spam Gimbap"
+    assert english_discovery_title("Rose Tteokbokki", "로제떡볶이", "Tteokbokki") == (
+        "Rose Tteokbokki"
+    )
+    assert english_discovery_title("미번역 메뉴", "미번역 메뉴", "Naengmyeon") == "Naengmyeon"
+
+
+def test_synthetic_demo_ranking_sql_is_stable_and_blends_source_counts() -> None:
     expressions = food_ranking_sql(
         "sqlite",
         menu_id="menu_id",
@@ -995,10 +1075,11 @@ def test_synthetic_demo_ranking_sql_is_stable_and_source_counts_take_priority() 
             """
         ).fetchone()
         assert source_row is not None
+        prepared_source_metrics = synthetic_demo_ranking_metrics("menu-source")
         assert dict(source_row) == {
             "review_count": 42,
-            "order_count": 309,
-            "korean_popularity": 67,
+            "order_count": prepared_source_metrics["order_count"] + 309,
+            "korean_popularity": prepared_source_metrics["korean_popularity"] + 67,
             "basis": "SOURCE_COUNTS",
         }
     finally:
@@ -1055,5 +1136,17 @@ def test_featured_collection_has_same_bounded_hard_filter_shape_in_both_database
         assert "concept_rank<=20" in source
         assert "_menu_hard_constraint_conflicts" in source
         assert "seen_dishes" in source
+        assert "KPOP_DEMON_HUNTERS_DEMO_DISHES" in source
+        assert "english_discovery_title" in source
         assert "mapping.confidence_band='high'" in source
         assert "menu.availability='AVAILABLE'" in source
+
+
+def test_food_rankings_have_same_diversity_and_english_title_shape_in_both_databases() -> None:
+    sqlite_source = inspect.getsource(SQLiteYobiRepository.list_food_rankings)
+    oracle_source = inspect.getsource(OracleYobiRepository.list_food_rankings)
+
+    for source in (sqlite_source, oracle_source):
+        assert "select_diverse_ranking_rows" in source
+        assert "english_discovery_title" in source
+        assert "dish_name" in source

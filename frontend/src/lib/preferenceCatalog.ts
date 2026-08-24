@@ -9,6 +9,8 @@ import type {
   SpiceReferenceLevel,
 } from "../types";
 
+const DEMO_PRICE_MAX_KRW = 50_000;
+
 export interface PreferenceCatalogCache {
   etag: string;
   catalog: PreferenceCatalog;
@@ -113,7 +115,9 @@ function normalizePriceRange(value: unknown) {
   const step = Number(item.step);
   if (!Number.isInteger(min) || !Number.isInteger(max) || !Number.isInteger(step)) return undefined;
   if (min < 0 || max <= min || step !== 1_000) return undefined;
-  return { min, max, step };
+  const displayMax = Math.min(max, DEMO_PRICE_MAX_KRW);
+  if (displayMax <= min) return undefined;
+  return { min, max: displayMax, step };
 }
 
 function fallbackRepresentativeDish(countryCode: string, locale: string) {
@@ -140,6 +144,29 @@ function normalizeCountrySpiceProfiles(value: unknown, locale: string) {
     if (!/^[A-Z]{2}$/.test(countryCode) || ![1, 2, 3, 4, 5].includes(spiceBaseline)) {
       return [];
     }
+    const spiceScaleAnchors = (Array.isArray(item.spice_scale_anchors)
+      ? item.spice_scale_anchors
+      : []).flatMap((entry) => {
+        const anchor = record(entry);
+        const level = Number(anchor.level);
+        const approximateShu = Number(anchor.approximate_shu);
+        const approximateShuMin = Number(anchor.approximate_shu_min ?? approximateShu);
+        const approximateShuMax = Number(anchor.approximate_shu_max ?? approximateShu);
+        const familiarDish = textValue(anchor.familiar_dish);
+        const koreanDish = textValue(anchor.korean_dish);
+        if (![2, 4].includes(level) || !Number.isFinite(approximateShu) || approximateShu < 0
+          || !Number.isFinite(approximateShuMin) || !Number.isFinite(approximateShuMax)
+          || approximateShuMin < 0 || approximateShuMin > approximateShuMax
+          || !familiarDish || !koreanDish) return [];
+        return [{
+          level: level as 2 | 4,
+          familiar_dish: familiarDish,
+          korean_dish: koreanDish,
+          approximate_shu: Math.round(approximateShu),
+          approximate_shu_min: Math.round(approximateShuMin),
+          approximate_shu_max: Math.round(approximateShuMax),
+        }];
+      });
     return [{
       country_code: countryCode as SpiceReferenceCountry,
       spice_baseline: spiceBaseline as 1 | 2 | 3 | 4 | 5,
@@ -147,6 +174,7 @@ function normalizeCountrySpiceProfiles(value: unknown, locale: string) {
         item.representative_dish,
         fallbackRepresentativeDish(countryCode, locale),
       ),
+      ...(spiceScaleAnchors.length ? { spice_scale_anchors: spiceScaleAnchors } : {}),
     }];
   });
   return profiles.length ? profiles : undefined;

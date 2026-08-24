@@ -118,6 +118,10 @@ class OptionRepository:
         self.groups = _groups()
         self.saved = False
         self.saved_prompt: str | None = None
+        self.preferred_language = "English"
+        self.release_group_names: dict[str, str] = {}
+        self.release_item_names: dict[str, str] = {}
+        self.runtime_override: tuple[dict[str, str], dict[str, str]] | None = None
 
     def get_options(self, menu_id: str, session_id: str | None = None) -> list[OptionGroup]:
         del menu_id, session_id
@@ -129,7 +133,15 @@ class OptionRepository:
 
     def get_profile(self, profile_id: str) -> Any:
         del profile_id
-        return SimpleNamespace(preferred_language="English")
+        return SimpleNamespace(preferred_language=self.preferred_language)
+
+    def load_release_option_localizations(
+        self,
+        session_id: str,
+        menu_id: str,
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        del session_id, menu_id
+        return dict(self.release_group_names), dict(self.release_item_names)
 
     def option_localizations_complete(
         self,
@@ -149,6 +161,8 @@ class OptionRepository:
         prompt_version: str,
     ) -> tuple[dict[str, str], dict[str, str]]:
         del session_id, menu_id
+        if self.runtime_override is not None:
+            return self.runtime_override
         if not self.saved or self.saved_prompt != prompt_version:
             return {}, {}
         return (
@@ -198,6 +212,27 @@ class BrokenOptionCacheRepository(OptionRepository):
     ) -> None:
         del session_id, menu_id, group_names, item_names, model_id, prompt_version
         raise RuntimeError("OPTION_CACHE_WRITE_UNAVAILABLE")
+
+
+def _catalog_fallback_groups(language_code: str) -> list[OptionGroup]:
+    return [
+        group.model_copy(
+            update={
+                "display_name": group.name_ko if language_code == "ko" else group.name_en,
+                "items": [
+                    item.model_copy(
+                        update={
+                            "display_name": (
+                                item.name_ko if language_code == "ko" else item.name_en
+                            )
+                        }
+                    )
+                    for item in group.items
+                ],
+            }
+        )
+        for group in _groups()
+    ]
 
 
 def test_generator_maps_ordered_strings_without_model_owned_ids() -> None:
@@ -430,6 +465,10 @@ def test_selected_menu_options_generate_once_then_use_prompt_versioned_cache() -
     assert first[0].items[0].display_name == "Add Coca-Cola 355ml"
     assert second == first
     assert len(provider.calls) == 1
+    instructions = str(provider.calls[0]["instructions"])
+    assert '곱빼기 as "Extra-large portion (gopbaegi)"' in instructions
+    assert '"savory Korean pancake (jeon)"' in instructions
+    assert '"Korean lunchbox (dosirak)"' in instructions
     assert repository.saved_prompt == service._cache_prompt_version()
 
 
@@ -732,6 +771,106 @@ def test_missing_option_string_preserves_safe_partial_recovery_without_cache() -
         "None",
     ]
     assert repository.saved is False
+
+
+def test_precomputed_only_uses_complete_runtime_cache_without_provider_call() -> None:
+    repository = OptionRepository()
+    repository.preferred_language = "日本語"
+    repository.groups = _catalog_fallback_groups("en")
+    repository.runtime_override = (
+        {"group-1": "ドリンク追加"},
+        {"item-1": "コカ・コーラ355ml追加", "item-2": "選択しない"},
+    )
+    provider = OptionProvider({"groups": []})
+    settings = Settings()
+    service = OptionLocalizationService(
+        repository,  # type: ignore[arg-type]
+        settings,
+        generator=OptionLocalizationGenerator(settings, provider=provider),
+    )
+
+    result = service.get_options("menu-1", "session-1", precomputed_only=True)
+
+    assert result[0].display_name == "ドリンク追加"
+    assert [item.display_name for item in result[0].items] == [
+        "コカ・コーラ355ml追加",
+        "選択しない",
+    ]
+    assert provider.calls == []
+
+
+def test_precomputed_only_ignores_incomplete_runtime_cache_as_one_bundle() -> None:
+    repository = OptionRepository()
+    repository.preferred_language = "日本語"
+    repository.groups = _catalog_fallback_groups("en")
+    repository.runtime_override = (
+        {"group-1": "ドリンク追加"},
+        {"item-1": "コカ・コーラ355ml追加"},
+    )
+    provider = OptionProvider({"groups": []})
+    settings = Settings()
+    service = OptionLocalizationService(
+        repository,  # type: ignore[arg-type]
+        settings,
+        generator=OptionLocalizationGenerator(settings, provider=provider),
+    )
+
+    result = service.get_options("menu-1", "session-1", precomputed_only=True)
+
+    assert result[0].display_name == repository.groups[0].name_en
+    assert [item.display_name for item in result[0].items] == [
+        item.name_en for item in repository.groups[0].items
+    ]
+    assert provider.calls == []
+
+
+def test_precomputed_only_keeps_release_localizations_ahead_of_runtime() -> None:
+    repository = OptionRepository()
+    repository.preferred_language = "日本語"
+    repository.groups = _catalog_fallback_groups("en")
+    repository.runtime_override = (
+        {"group-1": "runtime group"},
+        {"item-1": "runtime item 1", "item-2": "runtime item 2"},
+    )
+    repository.release_group_names = {"group-1": "release group"}
+    repository.release_item_names = {"item-1": "release item 1"}
+    provider = OptionProvider({"groups": []})
+    settings = Settings()
+    service = OptionLocalizationService(
+        repository,  # type: ignore[arg-type]
+        settings,
+        generator=OptionLocalizationGenerator(settings, provider=provider),
+    )
+
+    result = service.get_options("menu-1", "session-1", precomputed_only=True)
+
+    assert result[0].display_name == "release group"
+    assert [item.display_name for item in result[0].items] == [
+        "release item 1",
+        "runtime item 2",
+    ]
+    assert provider.calls == []
+
+
+def test_precomputed_only_preserves_english_and_korean_catalog_fallbacks() -> None:
+    provider = OptionProvider({"groups": []})
+    settings = Settings()
+    for preferred_language, language_code in (("English", "en"), ("한국어", "ko")):
+        repository = OptionRepository()
+        repository.preferred_language = preferred_language
+        repository.groups = _catalog_fallback_groups(language_code)
+        service = OptionLocalizationService(
+            repository,  # type: ignore[arg-type]
+            settings,
+            generator=OptionLocalizationGenerator(settings, provider=provider),
+        )
+
+        result = service.get_options("menu-1", "session-1", precomputed_only=True)
+
+        assert result[0].display_name == (
+            result[0].name_ko if language_code == "ko" else result[0].name_en
+        )
+    assert provider.calls == []
 
 
 def test_concurrent_duplicate_option_requests_share_one_generation() -> None:

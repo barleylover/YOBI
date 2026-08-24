@@ -12,7 +12,7 @@ const labels = {
     craving: "What are you craving?",
     next: "Next",
     find: "Find my dish",
-    choose: "Choose this menu",
+    choose: "Choose this dish",
   },
   "한국어": {
     languageButton: /Language.*English/,
@@ -98,7 +98,9 @@ export async function reachCurrentRestaurantNote(page: Page) {
     note.waitFor({ state: "visible" }),
   ]);
   if (await optionGroup.isVisible().catch(() => false)) {
-    await page.getByRole("button", { name: /Use defaults for the rest|나머지는 기본값 사용|残りは標準設定/ }).click();
+    await page.getByRole("button", {
+      name: /Use defaults for (?:the rest|remaining options)|나머지는 기본값 사용|残りは標準設定/,
+    }).click();
   }
   await expect(note).toBeVisible();
   return note;
